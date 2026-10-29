@@ -2,6 +2,7 @@ import { useCallback, useRef } from "react";
 import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
 import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
+import { cancelOperationRequest } from "../api/operationsClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
   emptyAssistantMessage,
@@ -10,7 +11,7 @@ import {
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
 import { deriveIntentTitle } from "./deriveIntentTitle.js";
-import { nextFlowAfterToolResult } from "./agentFlowStatus.js";
+import { flowAfterOperation, nextFlowAfterToolResult } from "./agentFlowStatus.js";
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
@@ -45,7 +46,11 @@ import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/apply
 import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
 import { fetchChapterPaper } from "../api/workingDraftClient.js";
 import { patchChapterFlagsFromPaper } from "../utils/bookUtils.js";
+import { ENDED_OPERATION_STATES, projectOperationEverywhere, projectOperationProgressEverywhere } from "../workspace/operationCards.js";
 import { aiErrorAfterWriteBody, aiErrorBody } from "../lib/ai-error-text.js";
+import { pageLeaving } from "../lib/page-leaving.js";
+import { reconnectOperations } from "../workspace/operationReconnect.js";
+import { cardOf } from "../utils/messageCards.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 /** 回合收尾等盘上重读最多等这么久（读盘卡住不能一直占着工作区）。 */
@@ -103,6 +108,19 @@ function chapterStamp(): { readonly chapter?: number } {
   return typeof chapter === "number" && chapter > 0 ? { chapter } : {};
 }
 
+/** 这一轮是作者哪句话发起的（写作版本 P2a）：消息号 + 发出时间，随消息存、随请求发；重发沿用存下的。 */
+export interface MessageRef {
+  readonly messageId: string;
+  readonly issuedAt: string;
+}
+
+/** 作者的一句话：带消息号（UUID）、发出时间、所在章；ref 是随请求发的那两样。 */
+export function authorMessage(content: string): { readonly message: ChapterMessage; readonly ref: MessageRef } {
+  const id = `user-${crypto.randomUUID()}`;
+  const issuedAt = new Date().toISOString();
+  return { message: { id, role: "user", content, issuedAt, ...chapterStamp() }, ref: { messageId: id, issuedAt } };
+}
+
 export function useChat(params: UseChatParams): UseChatResult {
   const {
     projectPath,
@@ -135,7 +153,17 @@ export function useChat(params: UseChatParams): UseChatResult {
    */
   // M3：当前在跑的 agent 流的中止器，供「停止」按钮调用；每轮开始时置入、收尾清空。
   const agentAbortRef = useRef<AbortController | null>(null);
+  // 这一轮交上、还在做的操作（写作版本 P2a）：「停止」停的是它——服务端先记下停掉再掐在途请求，这一轮跟着它收尾；
+  // 还没交上（模型在想、在调别的工具）才掐连接。
+  const liveOperationRef = useRef<{ readonly projectPath: string; readonly opId: string } | null>(null);
   const stopAgent = useCallback(() => {
+    const live = liveOperationRef.current;
+    if (live) {
+      void cancelOperationRequest(live.projectPath, live.opId).catch((error: unknown) => {
+        useNavigationStore.getState().showToast(`没停成：${error instanceof Error ? error.message : String(error)}`, 5000);
+      });
+      return;
+    }
     agentAbortRef.current?.abort();
   }, []);
 
@@ -145,6 +173,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       conversation: readonly { readonly role: "user" | "assistant"; readonly content: string }[],
       /** 结构化动作（「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
       action?: AgentUserAction,
+      /** 这一轮是作者哪句话发起的（重试沿用原来那句的）。 */
+      ref?: MessageRef,
     ): Promise<void> => {
       if (!projectPath) {
         setChatError("请先打开真实本地项目。");
@@ -230,6 +260,16 @@ export function useChat(params: UseChatParams): UseChatResult {
       let finishedWrite: "draft" | "revise" | null = null;
       // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
       const appendErrorMessage = (message: string, retryable: boolean, reason?: AiErrorReason) => {
+        // 关页 / 刷新掐断的流不是出错：不记错误卡（交了的操作重开书会接上）。
+        if (pageLeaving()) return;
+        // 这一轮交的操作还没结束：断的只是对话这条流，操作照做——不说「没做完」、不给重试，接着订阅它（P2a 第九节「重连」）。
+        const turnMessage = useChatStore.getState().messages.find((item) => item.id === assistantMsgId);
+        const live = turnMessage ? cardOf(turnMessage, "operation")?.op : undefined;
+        if (live && !ENDED_OPERATION_STATES.has(live.state)) {
+          appendMessage({ id: `assistant-agent-error-${Date.now()}`, role: "assistant", content: `${live.what}还在做，做完上面这张卡会更新。` });
+          if (projectPath) reconnectOperations(projectPath);
+          return;
+        }
         appendMessage({
           id: `assistant-agent-error-${Date.now()}`,
           role: "assistant",
@@ -245,6 +285,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                   permission: "safe_read" as const,
                   requiresConfirmation: false,
                   endpoint: text,
+                  ...(ref ? { retryOf: ref } : {}),
                 },
               ],
             }
@@ -355,9 +396,25 @@ export function useChat(params: UseChatParams): UseChatResult {
             ...(lastTurnUndoHint ? { lastTurnUndoHint } : {}),
             ...(pickedText && typeof currentChapterNumber === "number" ? { pickedDirection: { chapter: currentChapterNumber, text: pickedText } } : {}),
             ...(action ? { action } : {}),
+            ...(ref ? { messageId: ref.messageId, issuedAt: ref.issuedAt } : {}),
           },
           {
             onTextDelta: (delta) => project({ type: "text-delta", text: delta }),
+            // 这一轮交上的操作（写作版本 P2a）：操作卡跟着变（挂着同一次的别的卡也变），做完了挂结果卡、推进流程态。
+            onOperation: (view) => {
+              if (!ownsCurrentWorkspace()) return;
+              projectOperationEverywhere(view, assistantMsgId, { announced: ENDED_OPERATION_STATES.has(view.state) });
+              liveOperationRef.current = view.allowed.includes("cancel") && view.state !== "paused" ? { projectPath, opId: view.opId } : null;
+              if (view.state === "succeeded") {
+                const flowBefore = useBookStore.getState().workspace.flowStatus;
+                const flow = flowAfterOperation(view, flowBefore);
+                if (flow !== flowBefore && view.chapter === operation.chapter) useBookStore.getState().updateWorkspace({ flowStatus: flow });
+              }
+            },
+            onOperationProgress: ({ opId, text: progress }) => {
+              if (!ownsCurrentWorkspace()) return;
+              projectOperationProgressEverywhere(opId, progress);
+            },
             // R4：服务端裁了历史窗口/其它状态说明，照实投影成助手消息前的一条系统提示，不静默吞掉。
             onStatus: (message) => project({ type: "status", text: message }),
             onUsage: (usage) => project({ type: "usage", usage }),
@@ -477,19 +534,20 @@ export function useChat(params: UseChatParams): UseChatResult {
               const apply = (): void => {
                 // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）：按这时的当前章判。
                 const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
-                // 核账结果记下核的是哪一版：服务端报了就用它（它读的那份文件）；没报（老服务端）才用这时稿纸上的版本。
-                // 之后稿子变了就显示「核过后改过稿」。AI 出完稿紧接着核账时稿纸可能还没换上新稿，不能拿稿纸的版本。
-                if (info.toolName === "check_continuity" && !chapterMismatch) {
-                  useChatStore.getState().stampCardVersion(assistantMsgId, "continuity", info.checkedVersion ?? useDraftStore.getState().baseVersion);
-                }
                 // 定稿预览一到就弹出定稿清单（重构 P6）；记下预览的是哪一版，稿子没再变时再点「定稿」直接打开这份。
                 if (info.toolName === "commit_preview" && !chapterMismatch) {
-                  useChatStore.getState().stampCardVersion(assistantMsgId, "commit-preview", useDraftStore.getState().baseVersion);
+                  useChatStore.getState().stampPreviewVersion(assistantMsgId, useDraftStore.getState().baseVersion);
                   openCommitSheet(assistantMsgId);
                 }
                 if (chapterMismatch) {
                   // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
                   if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
+                  // 只有真写了那一章（出稿 / 改稿 / 定稿回 refreshScope:"full"，或打了存档点）才重读它、提示一句；
+                  // 核账回执、定稿预览这类没写的，说「写的是第 N 章」就是瞎说。
+                  if (info.ok === false || (info.refreshScope !== "full" && info.snapshotId === undefined)) {
+                    unstickGeneratingFlow();
+                    return;
+                  }
                   // 那一章的稿子可能变了（AI 改了已定稿章的工作稿）：按盘上重读它的标记，底栏「N 章还没定稿」不用切过去才对（P11）。
                   const otherChapter = info.chapter as number;
                   if (projectPath) {
@@ -678,6 +736,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           finishWorkspaceOperation(operation);
         }
         agentAbortRef.current = null; // 本轮收尾，清掉中止器（避免「停止」误伤下一轮）。
+        liveOperationRef.current = null;
       }
     },
     [
@@ -789,12 +848,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
 
-      const userMessage: ChapterMessage = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: text,
-        ...chapterStamp(),
-      };
+      const { message: userMessage, ref } = authorMessage(text);
 
       const conversation = buildOutboundConversation(
         liveChat.messages,
@@ -828,7 +882,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
 
       // 输入框的字一律交给 AI（重构 P4）：不再拿「原话等于按钮文案」认回按钮动作；按钮自己发结构化动作（handleChapterButton）。
-      await runAgentDispatch(text, conversation);
+      await runAgentDispatch(text, conversation, undefined, ref);
     },
     [
       projectPath,
@@ -879,7 +933,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
+      const echo = authorMessage(text);
+      appendMessage(echo.message);
       await runAgentDispatch(text, conversation, {
         toolName: "commit_apply",
         chapter,
@@ -887,7 +942,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         ...(excluded.length > 0 ? { excluded } : {}),
         ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
         ...(dayEnd !== undefined ? { dayEndOverride: dayEnd } : {}),
-      });
+      }, echo.ref);
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
   );
@@ -909,8 +964,9 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
-      await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) });
+      const echo = authorMessage(text);
+      appendMessage(echo.message);
+      await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) }, echo.ref);
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
   );
@@ -933,14 +989,16 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
-      const picked = action.toolName === "generate_draft" ? pickedDirection(liveChat.messages, action.chapter) : undefined;
-      const goal = action.toolName === "generate_draft" ? action.chapterGoal : undefined;
+      const draftAction = !("kind" in action) && action.toolName === "generate_draft" ? action : undefined;
+      const picked = draftAction ? pickedDirection(liveChat.messages, draftAction.chapter) : undefined;
+      const goal = draftAction?.chapterGoal;
       const text = userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
+      const echo = authorMessage(text);
+      appendMessage(echo.message);
       // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
-      if (action.toolName === "generate_draft") useNavigationStore.getState().requestCenterView("desk");
-      await runAgentDispatch(text, conversation, action);
+      if (draftAction) useNavigationStore.getState().requestCenterView("desk");
+      await runAgentDispatch(text, conversation, action, echo.ref);
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
   );
@@ -1017,10 +1075,10 @@ export function useChat(params: UseChatParams): UseChatResult {
           handleChapterButton("write");
           return;
         case "quality-check":
-          handleChapterButton("quality_check");
+          handleChapterButton("quality");
           return;
         case "ai-review":
-          handleChapterButton("ai_review");
+          handleChapterButton("review");
           return;
         case "revision-preview":
           void handleSendMessage("按我的方向给这一章改一版，先出预览。");
@@ -1081,6 +1139,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           // agent 大脑失败后重试：用按钮 endpoint 携带的原始消息重跑 agent 派发，不重复 append 用户消息。
           const original = action.endpoint?.trim();
           if (!original) return;
+          // 重发沿用原来那句的消息号和发出时间（那句交过的操作认得出是同一次，写作版本 P2a）。
           void runAgentDispatch(
             original,
             buildOutboundConversation(
@@ -1088,6 +1147,8 @@ export function useChat(params: UseChatParams): UseChatResult {
               useChatStore.getState().activeArchivedCount,
               useChatStore.getState().chatHistoryBudget,
             ),
+            undefined,
+            action.retryOf,
           );
           return;
         }

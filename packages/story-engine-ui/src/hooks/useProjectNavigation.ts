@@ -21,6 +21,7 @@ import { flushAllSaves } from "../sync/saveAll.js";
 import { clearPaperNow, drainPaper, paperReadMark, replacePaperNow, UnsavedPaperError } from "../drafts/draftSync.js";
 import { markChatLoaded } from "../sync/chatSync.js";
 import { flowStatusForPaper } from "../workspace/applyOverview.js";
+import { reconnectOperations, stopOperationReconnect } from "../workspace/operationReconnect.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -491,6 +492,8 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         chapters,
       });
       setMessages(entryMessages);
+      // 关页、重开书之前还没结束的操作（检查……）：挂回原来那条消息接着看（写作版本 P2a）。
+      reconnectOperations(nextProjectPath);
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
@@ -561,6 +564,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         const bookWorkspace = workspaceFromBook(book);
         setWorkspace({ ...workspace, ...bookWorkspace });
         setMessages([]);
+        stopOperationReconnect();
       }
       setWorkspaceReady(true);
       if (options.updateUrl !== false) pushWorkspaceUrlForBook(book.id);

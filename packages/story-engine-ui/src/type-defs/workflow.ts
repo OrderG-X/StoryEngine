@@ -39,6 +39,8 @@ export interface SuggestedAction {
   readonly rewriteTarget?: { readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean };
   /** 「确认改设定」按钮带的写入（foundation-confirm 专用，foundation_write 被拦下的那次）。 */
   readonly foundationTarget?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
+  /** 「重试这一步」重发的是作者哪句话（写作版本 P2a：沿用那句的消息号和发出时间）。 */
+  readonly retryOf?: { readonly messageId: string; readonly issuedAt: string };
 }
 
 /**

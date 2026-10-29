@@ -7,7 +7,7 @@
 import { readDraftState } from "@actalk/story-core";
 import { isTerminal, listOperations, type OperationRecord } from "../../lib/operations/store.js";
 import { BACKFILL_KIND } from "../../lib/reader-backfill.js";
-import { operationView, type OperationView } from "./view.js";
+import { operationChapter, operationView, type OperationView } from "./view.js";
 
 export const OPERATION_SUMMARY_SCHEMA = "operation-summary/1" as const;
 
@@ -36,52 +36,6 @@ export interface OperationSummary {
   readonly operations: readonly OperationSummaryItem[];
 }
 
-const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  "inspect.run": { continuity: "核账", quality: "硬伤检查", review: "内容审阅", flavor: "查 AI 味" },
-};
-const KIND_LABELS: Readonly<Record<string, string>> = {
-  [BACKFILL_KIND]: "后台补读前文",
-  "inspect.run": "检查",
-};
-
-/** 一次操作做的什么（中文）：认不出的种类如实说「别的操作」，不把英文种类名给模型念。 */
-export function operationWhat(kind: string, mode: string | undefined, chapter: number | undefined): string {
-  const label = (mode !== undefined ? MODE_LABELS[kind]?.[mode] : undefined) ?? KIND_LABELS[kind] ?? "别的操作";
-  return chapter !== undefined ? `${label}·第 ${chapter} 章` : label;
-}
-
-const PAUSE_TEXT: Readonly<Record<string, string>> = {
-  interrupted: "写到一半停了（软件关过）",
-  attempt_unknown: "停着：有一步可能已经发出去、结果没收到（可能已经计费）",
-  budget: "停着：这次能用的调用次数用完了",
-  material: "停着：资料还没备好",
-};
-
-function stateText(record: OperationRecord): string {
-  switch (record.state) {
-    case "queued": return "排着";
-    case "running": return "在做";
-    case "waiting_author": return "等作者点按钮";
-    case "paused": return PAUSE_TEXT[record.pauseReason ?? "interrupted"] ?? "停着";
-    case "succeeded": return "做完了";
-    case "failed": return "没做成";
-    case "cancelled": return "停掉了";
-    case "obsolete": return "作废了";
-  }
-}
-
-function allowedOf(record: OperationRecord): readonly ("resume" | "cancel")[] {
-  if (record.state === "paused") return ["resume", "cancel"];
-  if (record.state === "queued" || record.state === "running" || record.state === "waiting_author") return ["cancel"];
-  return [];
-}
-
-function chapterOf(record: OperationRecord): number | undefined {
-  const fromParams = (record.params as { readonly chapter?: unknown } | null | undefined)?.chapter;
-  if (typeof fromParams === "number" && Number.isInteger(fromParams) && fromParams > 0) return fromParams;
-  return record.origin.chapter;
-}
-
 /**
  * 检查做完了、查的是工作稿某一版，稿子之后又改过（或删了）：结论是改稿前那一版的（Astra P2a 第 10 轮第 4 条）。
  * 停过再接着做查的是冻结的那份，期间作者可能改过稿。只读；读不到当没改。
@@ -89,7 +43,7 @@ function chapterOf(record: OperationRecord): number | undefined {
 export async function checkedDraftChanged(bookDir: string, record: OperationRecord): Promise<boolean> {
   if (record.kind !== "inspect.run" || record.state !== "succeeded") return false;
   const body = (record.result as { readonly body?: { readonly source?: unknown; readonly checkedVersion?: unknown } } | undefined)?.body;
-  const chapter = chapterOf(record);
+  const chapter = operationChapter(record);
   if (body?.source !== "draft" || typeof body.checkedVersion !== "string" || chapter === undefined) return false;
   const current = await readDraftState(bookDir, chapter).catch(() => undefined);
   return current !== undefined && current.version !== body.checkedVersion;
@@ -108,12 +62,12 @@ export async function buildOperationSummary(bookDir: string, limit: number = OPE
       const view = operationView(record);
       return {
         opId: record.opId,
-        what: operationWhat(record.kind, record.mode, chapterOf(record)),
+        what: view.what,
         state: record.state,
-        stateText: stateText(record),
+        stateText: view.stateText,
         ...(record.currentStep !== undefined ? { currentStep: record.currentStep } : {}),
         summary: view.summary,
-        allowed: allowedOf(record),
+        allowed: view.allowed,
         ...(await checkedDraftChanged(bookDir, record) ? { draftChanged: true as const } : {}),
         updatedAt: record.updatedAt,
       };

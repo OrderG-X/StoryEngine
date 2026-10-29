@@ -45,3 +45,36 @@ describe("消息卡读回：另外几版", () => {
     expect(readMessageCards([{ type: "draft-versions", versions: { versions: versions.versions } }])).toEqual([]);
   });
 });
+
+describe("消息卡读回：操作卡（写作版本 P2a）", () => {
+  const op = {
+    opId: "op-0123456789abcdef0123", kind: "inspect.run", mode: "quality", chapter: 3, what: "质检·第 3 章", state: "paused",
+    stateText: "停着：模型连不上", allowed: ["resume", "cancel", "resume", "删掉"], summary: "", progress: "在看第 3 章", eventSeq: 4,
+  };
+  it("号、种类、状态对得上才认；按钮去重只认两种；结束时说过结论跟着存", () => {
+    expect(readMessageCards([{ type: "operation", op }])).toEqual([{
+      type: "operation",
+      op: { ...op, allowed: ["resume", "cancel"] },
+    }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, state: "succeeded", allowed: [], progress: undefined, announced: true } }])).toEqual([{
+      type: "operation",
+      op: { opId: op.opId, kind: op.kind, mode: "quality", chapter: 3, what: op.what, state: "succeeded", stateText: op.stateText, allowed: [], summary: "", eventSeq: 4, announced: true },
+    }]);
+    for (const bad of [{ ...op, opId: "op-x" }, { ...op, kind: "" }, { ...op, state: "done" }]) {
+      expect(readMessageCards([{ type: "operation", op: bad }])).toEqual([]);
+    }
+  });
+
+  it("缺的给中性说法，长的截断；announced 只认 true", () => {
+    const [card] = readMessageCards([{ type: "operation", op: { opId: op.opId, kind: "inspect.run", state: "failed", summary: "字".repeat(3000), announced: "true" } }]);
+    expect(card).toMatchObject({ type: "operation", op: { what: "这次操作", stateText: "", allowed: [], eventSeq: 0 } });
+    expect(card?.type === "operation" ? card.op.summary.length : 0).toBe(2000);
+    expect(card?.type === "operation" ? card.op.announced : "x").toBeUndefined();
+  });
+
+  it("检查结果卡的查的是哪一版跟着存", () => {
+    expect(readMessageCards([{ type: "quality", report: { blocking: [] }, checkedVersion: "v3" }])).toEqual([{ type: "quality", report: { blocking: [] }, checkedVersion: "v3" }]);
+    expect(readMessageCards([{ type: "draft-review", review: { issues: [] }, checkedVersion: null }])).toEqual([{ type: "draft-review", review: { issues: [] }, checkedVersion: null }]);
+    expect(readMessageCards([{ type: "ai-flavor", report: { violations: [] }, checkedVersion: 5 }])).toEqual([{ type: "ai-flavor", report: { violations: [] } }]);
+  });
+});

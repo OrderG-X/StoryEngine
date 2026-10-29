@@ -12,6 +12,7 @@ import type {
   MessageCard,
   MessageCardType,
   NextStepPrompt,
+  OperationCardData,
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
@@ -53,10 +54,10 @@ function readMessageCard(value: unknown): MessageCard | undefined {
   switch (type) {
     case "ai-flavor":
       return isRecord(value.report)
-        ? withFixedIds({ type, report: value.report as unknown as AiFlavorReport }, value.fixedIds)
+        ? { ...withFixedIds({ type, report: value.report as unknown as AiFlavorReport }, value.fixedIds), ...checkedVersionOf(value) }
         : undefined;
     case "draft-review":
-      return isRecord(value.review) ? { type, review: value.review as unknown as DraftReviewView } : undefined;
+      return isRecord(value.review) ? { type, review: value.review as unknown as DraftReviewView, ...checkedVersionOf(value) } : undefined;
     case "continuity": {
       const card = cardFromContinuity(value.check);
       if (!card || card.type !== "continuity") return undefined;
@@ -69,7 +70,11 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       };
     }
     case "quality":
-      return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport } : undefined;
+      return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport, ...checkedVersionOf(value) } : undefined;
+    case "operation": {
+      const op = readOperationCard(value.op);
+      return op ? { type, op } : undefined;
+    }
     case "commit-preview": {
       const card = cardFromCommitPreview(value.preview);
       if (!card || card.type !== "commit-preview") return undefined;
@@ -107,6 +112,42 @@ function readMessageCard(value: unknown): MessageCard | undefined {
     default:
       return undefined;
   }
+}
+
+/** 结果卡记下的「查的是工作稿哪一版」（null＝没法比，查定稿时没有）。 */
+function checkedVersionOf(value: Record<string, unknown>): { readonly checkedVersion?: string | null } {
+  const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
+  return checkedVersion !== undefined ? { checkedVersion } : {};
+}
+
+const OPERATION_STATES: readonly OperationCardData["state"][] = ["queued", "running", "waiting_author", "paused", "succeeded", "failed", "cancelled", "obsolete"];
+
+/** 操作卡（写作版本 P2a）：号、种类、状态缺了就不认；中文说法截长。 */
+function readOperationCard(value: unknown): OperationCardData | undefined {
+  if (!isRecord(value)) return undefined;
+  const opId = readString(value.opId);
+  const kind = readString(value.kind);
+  const state = OPERATION_STATES.find((item) => item === value.state);
+  if (!opId || !/^op-[0-9a-f]{20}$/u.test(opId) || !kind || !state) return undefined;
+  const mode = readString(value.mode);
+  const chapter = readPositiveInteger(value.chapter);
+  const allowed = (Array.isArray(value.allowed) ? value.allowed : [])
+    .filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel");
+  const progress = readString(value.progress);
+  return {
+    opId,
+    kind,
+    ...(mode ? { mode } : {}),
+    ...(chapter !== undefined ? { chapter } : {}),
+    what: (readString(value.what) ?? "这次操作").slice(0, 200),
+    state,
+    stateText: (readStringAllowEmpty(value.stateText) ?? "").slice(0, 200),
+    allowed: [...new Set(allowed)],
+    summary: (readStringAllowEmpty(value.summary) ?? "").slice(0, 2000),
+    ...(progress ? { progress: progress.slice(0, 500) } : {}),
+    eventSeq: readNonNegativeInteger(value.eventSeq) ?? 0,
+    ...(value.announced === true ? { announced: true as const } : {}),
+  };
 }
 
 function dedupeByType(cards: readonly MessageCard[]): MessageCard[] {

@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { newInspectAction } from "../../../api/agentChatClient.js";
 import { NextStepChoicesRow } from "./AiChatCodex.js";
 import type { NextStepPrompt } from "./nextStepChoices.js";
 
@@ -65,7 +66,7 @@ describe("NextStepChoicesRow 点击分派（R4.7：有 action 直发结构化动
     const onSendMessage = vi.fn();
     render(
       <NextStepChoicesRow
-        nextStep={prompt([{ label: "再核一次", intent: "重新核第 5 章的账", action: { toolName: "check_continuity", chapter: 5 } }])}
+        nextStep={prompt([{ label: "再核一次", intent: "重新核第 5 章的账", action: newInspectAction("continuity", 5) }])}
         busy={false}
         onSendMessage={onSendMessage}
       />,

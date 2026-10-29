@@ -6,8 +6,8 @@ import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { blankToUndefined } from "../../lib/lenient-args.js";
 import { isOperationId, readOperation } from "../../lib/operations/store.js";
-import { buildOperationSummary, checkedDraftChanged, operationWhat, type OperationSummary } from "../../services/operations/summary.js";
-import { operationView, type OperationView } from "../../services/operations/view.js";
+import { buildOperationSummary, checkedDraftChanged, type OperationSummary } from "../../services/operations/summary.js";
+import { operationView, operationWhat, type OperationView } from "../../services/operations/view.js";
 import { readProjectDirFromContext } from "../request-context.js";
 
 const inputSchema = z.object({

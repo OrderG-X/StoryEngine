@@ -24,11 +24,10 @@ export function userActionChoiceText(
   /** 「写这一章」照作者挑中的走法写时，那种走法的名字（回显里写明照哪种写）。 */
   directionTitle?: string,
 ): string {
+  if ("kind" in action) return operationActionText(action);
   switch (action.toolName) {
     case "commit_preview":
       return `预览第 ${action.chapter} 章的定稿改动`;
-    case "check_continuity":
-      return action.fresh ? `再核一遍第 ${action.chapter} 章的账` : `核第 ${action.chapter} 章的账`;
     case "generate_draft":
       if (action.continueDraft) return `第 ${action.chapter} 章接着往下写`;
       return directionTitle ? `照「${directionTitle}」写第 ${action.chapter} 章的正文` : `写第 ${action.chapter} 章的正文`;
@@ -41,10 +40,6 @@ export function userActionChoiceText(
     case "foundation_decision":
       if (action.accept) return action.label ? `认下${action.label}` : "认下 AI 刚写的设定";
       return action.label ? `确认改设定：${action.label}` : "确认改设定";
-    case "ai_review":
-      return `审阅第 ${action.chapter} 章的内容`;
-    case "quality_check":
-      return `对第 ${action.chapter} 章做硬伤检查`;
     case "undo":
       return "撤销上一步";
     case "revise_draft":
@@ -62,5 +57,22 @@ export function userActionChoiceText(
         : `以第 ${action.truth.chapter} 章为准：「${action.truth.quote}」`;
     case "settle_apply":
       return "确认定论，改齐前文";
+  }
+}
+
+/** 操作按钮（写作版本 P2a）的回显：新检查按种类说；「接着做」「不要了」照按钮字。 */
+function operationActionText(action: import("../api/agentChatClient.js").OperationActionData): string {
+  if (action.kind === "resume") return "接着做";
+  if (action.kind === "cancel") return "不要了";
+  const chapter = action.params.chapter;
+  switch (action.mode) {
+    case "continuity":
+      return action.params.fresh ? `再核一遍第 ${chapter} 章的账` : `核第 ${chapter} 章的账`;
+    case "review":
+      return `审阅第 ${chapter} 章的内容`;
+    case "quality":
+      return `对第 ${chapter} 章做硬伤检查`;
+    case "flavor":
+      return `查第 ${chapter} 章的 AI 味`;
   }
 }

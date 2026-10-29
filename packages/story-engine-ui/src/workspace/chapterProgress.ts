@@ -24,7 +24,7 @@ export type ContinuityItem = ContinuityCheckItemData;
 export const STEP_HINTS = {
   write: "AI 照设定和前文写这一章的工作稿，要几分钟；写之前存档，能撤销。也可以直接在稿纸上自己写。",
   write_next: "AI 写下一章的工作稿，要几分钟；写之前存档，能撤销。",
-  check_continuity: "拿这一章对一遍前文和设定，找前后对不上的地方（人名、日子、谁知道什么……）。只看不改。",
+  continuity: "拿这一章对一遍前文和设定，找前后对不上的地方（人名、日子、谁知道什么……）。只看不改。",
   commit_preview: "这章写完了就定稿：先出一张清单给你过目（这章记进账本的人、事、线索），你点确认才定；能撤销。",
   show_issues: "在稿纸上看划线的那几句。",
 } as const satisfies Partial<Record<ChapterButton | "show_issues", string>>;
@@ -224,7 +224,7 @@ export function chapterProgress(input: {
       // 已定稿：去后面第一个没定稿的章（那章有稿就接着弄，没稿就在那儿挑走法或写），不在这儿直接出稿。
       ? input.nextChapter ? { kind: "open_next", label: `去第 ${input.nextChapter} 章` } : { kind: "write_next", label: "AI 写下一章" }
       : checkState === "none" || checkState === "stale"
-        ? { kind: "check_continuity", label: checkState === "stale" ? "再核一遍" : "核账" }
+        ? { kind: "continuity", label: checkState === "stale" ? "再核一遍" : "核账" }
         : checkState === "issues"
           ? { kind: "show_issues", label: `去看那 ${open.sure.length} 处` }
           : { kind: "commit_preview", label: "定稿" };

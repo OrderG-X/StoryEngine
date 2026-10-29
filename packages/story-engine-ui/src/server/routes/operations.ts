@@ -9,7 +9,7 @@ import { isOperationId, isTerminal, listOperations } from "../lib/operations/sto
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { guardProjectPath, readJsonBody, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
-import { cancelOperation, subscribeOperation, type OperationEvent } from "../services/operations/executor.js";
+import { cancelOperation, reconcileOnOpen, subscribeOperation, type OperationEvent } from "../services/operations/executor.js";
 import { operationView } from "../services/operations/view.js";
 
 const PATH = /^\/api\/operations(?:\/([^/]+)\/(events|cancel))?$/u;
@@ -44,6 +44,8 @@ export function registerOperationsRoutes(middlewares: MiddlewareStack): void {
           return;
         }
         if (!guardProjectPath(res, projectDir)) return;
+        // 这个进程开这本书以来还没对过账：先对（上个进程留下的「在做」其实没人管了，先改成停着再给人看、再停）。
+        await reconcileOnOpen(projectDir);
         const activeOnly = url.searchParams.get("active") === "1";
         const operations = (await listOperations(projectDir))
           .filter((record) => !activeOnly || !isTerminal(record.state))
@@ -65,6 +67,8 @@ export function registerOperationsRoutes(middlewares: MiddlewareStack): void {
           return;
         }
         if (!guardProjectPath(res, projectDir)) return;
+        // 这个进程开这本书以来还没对过账：先对（上个进程留下的「在做」其实没人管了，先改成停着再给人看、再停）。
+        await reconcileOnOpen(projectDir);
         const outcome = await cancelOperation(projectDir, opId!);
         if (!outcome) {
           writeJson(res, 404, { ok: false, error: "找不到这次操作了。" });
@@ -86,6 +90,8 @@ export function registerOperationsRoutes(middlewares: MiddlewareStack): void {
         return;
       }
       if (!guardProjectPath(res, projectDir)) return;
+      // 这个进程开这本书以来还没对过账：先对（上个进程留下的「在做」其实没人管了，先改成停着再给人看、再停）。
+      await reconcileOnOpen(projectDir);
 
       let open = true;
       let stopHeartbeat: (() => void) | undefined;

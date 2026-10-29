@@ -12,7 +12,7 @@
  *   getPlaceholder / formatMessageBlocks / renderRichText / ThinkingIndicator。
  * 工具步聚合复用 agentTimelineModel 的 buildTimelineModel；权限点复用 v2Utils.primaryPermission。
  */
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ToolStep, DraftReviewIssueView, ReaderCatchUpStatus } from "../../../api/types.js";
 import type { ChapterMessage, MessageCard, WritingWorkspaceLayoutProps, AiFlavorViolation } from "../../../types.js";
@@ -65,6 +65,8 @@ import {
 } from "./chatRenderShared.js";
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
+import { checkedBeforeEdit, OperationCard, runningOperationCaption } from "./OperationCard.js";
+import { isDraftDirty, useDraftStore } from "../../../stores/draftStore.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
@@ -415,6 +417,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 「建议下一步」是收尾的内部一步，不上字幕。
   const busyCaption = busy
     ? operationCaption(props.draftActionLoading)
+      ?? runningOperationCaption(lastAssistant ? cardOf(lastAssistant, "operation")?.op : undefined)
       ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running" && step.toolName !== "suggest_next_steps"))
       ?? "AI 在忙…"
     : null;
@@ -872,6 +875,10 @@ function MessageBubbles({
   /** 出错卡的「去设置」（没接上 AI、密钥不对时）。 */
   readonly onOpenSettings?: () => void;
 }) {
+  // 检查结果查的是工作稿哪一版（P2a 第 10 轮第 4 条）：稿纸上这一章之后又改过，卡上说一句（hooks 放在最前面，下面有提前返回）。
+  const paperChapter = useDraftStore((state) => state.chapter);
+  const paperVersion = useDraftStore((state) => state.baseVersion);
+  const paperDirty = useDraftStore((state) => isDraftDirty(state));
   if (message.role === "system") {
     // 操作历史里点的恢复：记一行，之前那轮的「下一步」到这儿为止（见 utils/restoreNote.ts）。
     if (message.kind === "restore") return <div className="msg msg-ai se-op-row">{message.content}</div>;
@@ -941,11 +948,17 @@ function MessageBubbles({
   const orderedCards = [...(message.cards ?? [])]
     .filter((card) => card.type !== "status-notes" && card.type !== "error")
     .sort((a, b) => CARD_ORDER.indexOf(a.type) - CARD_ORDER.indexOf(b.type));
+  const inspectedChapter = cardOf(message, "operation")?.op.chapter;
+  const withStaleNote = (key: string, checkedVersion: string | null | undefined, node: ReactNode) => (
+    checkedBeforeEdit(checkedVersion, inspectedChapter, { chapter: paperChapter, baseVersion: paperVersion, dirty: paperDirty })
+      ? <Fragment key={key}><p className="se-card-stale">查完之后稿子改过了，这是改之前的结果。</p>{node}</Fragment>
+      : node
+  );
   const renderCard = (card: MessageCard) => {
     switch (card.type) {
       case "ai-flavor":
         // 去 AI 味体检卡：随这条消息走（不再钉底部）。已改的违规标「已改 ✓」、与左侧正文黄高亮联动。
-        return (
+        return withStaleNote(card.type, card.checkedVersion,
           <AiFlavorCard
             key={card.type}
             report={card.report}
@@ -955,16 +968,16 @@ function MessageBubbles({
             batchPending={batchPendingForThisCard}
             onFix={onFixAiFlavorViolation ? (v) => onFixAiFlavorViolation(v, message.id) : undefined}
             onFixAll={onFixAllAiFlavorViolations ? (vs) => onFixAllAiFlavorViolations(vs, message.id) : undefined}
-          />
+          />,
         );
       case "draft-review":
         // AI 审稿问题清单卡：点「改这处」=给 agent 发改写意图（chat 驱动·唯一控制面），由 agent 先 read_draft 定位再 revise。
-        return (
+        return withStaleNote(card.type, card.checkedVersion,
           <DraftReviewCard
             key={card.type}
             report={card.review}
             onRevise={onSendMessage ? (issue) => onSendMessage(buildReviseIntent(issue)) : undefined}
-          />
+          />,
         );
       case "continuity":
         // 核账卡：本章原句 ↔ 前文原句，确定的列出、可能的收起；「改这处」给 agent 发只改这一处的意图。
@@ -981,7 +994,7 @@ function MessageBubbles({
         );
       case "quality":
         // 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。
-        return <QualityCheckCard key={card.type} report={card.report} />;
+        return withStaleNote(card.type, card.checkedVersion, <QualityCheckCard key={card.type} report={card.report} />);
       case "commit-preview":
         // 定稿预览卡（R3）：commit_preview 的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。
         return (
@@ -1021,6 +1034,17 @@ function MessageBubbles({
             {...(card.dropped ? { dropped: true } : {})}
             busy={chatLoading}
             {...(onSendUserAction ? { onAction: onSendUserAction } : {})}
+          />
+        );
+      case "operation":
+        // 操作卡（P2a）：在做的进度、停着的「接着做 / 不要了」；结束了这一轮说过结论就不显示。
+        return (
+          <OperationCard
+            key={card.type}
+            op={card.op}
+            inLiveTurn={chatLoading && isLiveAssistant}
+            busy={chatLoading}
+            onAction={onSendUserAction}
           />
         );
       case "next-steps":
@@ -1100,6 +1124,7 @@ function assistantHasAnything(message: ChapterMessage): boolean {
 
 /** 卡片在气泡里的固定次序。 */
 const CARD_ORDER: readonly MessageCard["type"][] = [
+  "operation",
   "ai-flavor",
   "draft-review",
   "continuity",

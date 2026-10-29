@@ -18,6 +18,8 @@ import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
 import { cardOf, hasCard } from "../utils/messageCards.js";
+import { cancelOperationRequest, listActiveOperations } from "../api/operationsClient.js";
+import { newInspectAction, type OperationViewData } from "../api/agentChatClient.js";
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
@@ -26,8 +28,16 @@ vi.mock("../api/client.js", () => ({
   restoreSnapshotApi: vi.fn(),
 }));
 
-vi.mock("../api/agentChatClient.js", () => ({
+vi.mock("../api/agentChatClient.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/agentChatClient.js")>(),
   streamAgentChat: vi.fn(),
+}));
+
+// 停掉在做的操作（写作版本 P2a）走操作接口，只断言调用。
+vi.mock("../api/operationsClient.js", () => ({
+  cancelOperationRequest: vi.fn(async () => ({ cancelled: true })),
+  listActiveOperations: vi.fn(async () => []),
+  followOperationEvents: vi.fn(async () => undefined),
 }));
 
 vi.mock("../api/chatSessionsClient.js", () => ({
@@ -779,8 +789,8 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     const unsavedDraft = "这是作者尚未保存的新版本，质检断流绝不能把它覆盖。";
     useDraftStore.getState().edit(unsavedDraft);
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "quality_check" });
-      handlers.onError("quality stream disconnected", true);
+      handlers.onToolCall({ toolName: "run_check" });
+      handlers.onError("check stream disconnected", true);
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
@@ -930,67 +940,127 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(refreshWorkspaceFromOverview).toHaveBeenCalledWith(overview);
   });
 
-  it("onToolResult for check_ai_flavor 把报告挂到这条 assistant 消息上（随消息走，不再落全局 store）", async () => {
+  const OP = "op-0123456789abcdef0123";
+  const opView = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: OP, kind: "inspect.run", mode: "flavor", chapter: 3, what: "查 AI 味·第 3 章", state: "running", stateText: "在做",
+    allowed: ["cancel"], summary: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
+  });
+  const flavorReport = {
+    ok: true,
+    summary: "有一处 AI 腔。",
+    usedFallback: false,
+    violations: [{ id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high" as const, suggestedFix: "改成具体动作" }],
+  };
+
+  it("检查做完（操作事件）→ 结果卡挂在这条助手消息上、带查的版本；这一轮说了结论，操作卡记下不再重复", async () => {
     window.localStorage.setItem("chatBrain", "agent");
-    const report = {
-      ok: true,
-      summary: "有一处 AI 腔。",
-      usedFallback: false,
-      violations: [
-        { id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high" as const, suggestedFix: "改成具体动作" },
-      ],
-    };
     scriptAgentStream((handlers) => {
-      // check_ai_flavor 只读，无 overview/refreshScope；报告随 project(output:info) 投影挂到这条消息。
-      handlers.onToolResult({ toolName: "check_ai_flavor", aiFlavorReport: report });
+      handlers.onOperation?.(opView());
+      handlers.onOperationProgress?.({ opId: OP, text: "在查第 3 章" });
+      handlers.onOperation?.(opView({ state: "succeeded", stateText: "做完了", allowed: [], summary: "有一处 AI 腔。", eventSeq: 3, inspect: { aiFlavorReport: flavorReport, checkedVersion: "v1" } }));
+      handlers.onTextDelta("有一处 AI 腔。");
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
-
     await act(async () => {
-      await result.current.handleSendMessage("帮我体检这章的 AI 味");
+      await result.current.handleSendMessage("帮我查这章的 AI 味");
     });
-
-    const carried = cardOf(lastAssistant()!, "ai-flavor")?.report;
-    expect(carried).toBeTruthy();
-    expect(carried?.violations).toHaveLength(1);
-    expect(carried?.violations[0].text).toBe("心中五味杂陈。");
+    const message = lastAssistant()!;
+    expect(cardOf(message, "ai-flavor")).toMatchObject({ checkedVersion: "v1", report: { violations: [{ text: "心中五味杂陈。" }] } });
+    expect(cardOf(message, "operation")?.op).toMatchObject({ opId: OP, state: "succeeded", announced: true });
   });
 
-  it("onToolResult for a failed check_ai_flavor (ok:false) 不把报告挂到消息上（失败不当结果）", async () => {
+  it("检查没做成：不挂结果卡，操作卡如实是没做成", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     scriptAgentStream((handlers) => {
-      handlers.onToolResult({
-        toolName: "check_ai_flavor",
-        aiFlavorReport: { ok: false, summary: "体检没成。", usedFallback: true, violations: [] },
+      handlers.onOperation?.(opView({ state: "failed", stateText: "没做成", allowed: [], summary: "模型没回", eventSeq: 2, failure: { message: "模型没回", retryable: true } }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("查 AI 味");
+    });
+    expect(cardOf(lastAssistant()!, "ai-flavor")).toBeUndefined();
+    expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ state: "failed", summary: "模型没回" });
+  });
+
+  it.each([
+    ["针对当前章", 3, "quality_checked"],
+    ["针对别的章", 8, "draft_ready"],
+  ] as const)("硬伤检查做完（%s）→ 流程态 %s", async (_label, chapter, expected) => {
+    window.localStorage.setItem("chatBrain", "agent");
+    useBookStore.setState({ workspace: { ...useBookStore.getState().workspace, flowStatus: "draft_ready" } });
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(opView({ mode: "quality", chapter, what: `硬伤检查·第 ${chapter} 章`, state: "succeeded", allowed: [], eventSeq: 2 }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("帮我查硬伤");
+    });
+    expect(useBookStore.getState().workspace.flowStatus).toBe(expected);
+  });
+
+  it("对话流断了、这一轮交的操作还在做：不说「没做完」、不给重试，接着订阅它", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(opView());
+      handlers.onError("network error", true);
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("查 AI 味");
+    });
+    const last = lastAssistant()!;
+    expect(hasCard(last, "error")).toBe(false);
+    expect(last.suggestedActions ?? []).toEqual([]);
+    expect(last.content).toBe("查 AI 味·第 3 章还在做，做完上面这张卡会更新。");
+    expect(vi.mocked(listActiveOperations)).toHaveBeenCalledWith(PROJECT, expect.anything());
+  });
+
+  it("关页 / 刷新掐断的流：不记错误卡", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => {
+      handlers.onTextDelta("好的，");
+      window.dispatchEvent(new Event("pagehide"));
+      handlers.onError("network error", true);
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    try {
+      await act(async () => {
+        await result.current.handleSendMessage("帮我看看这章");
       });
-      handlers.onDone();
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => {
-      await result.current.handleSendMessage("体检 AI 味");
-    });
-
-    expect(cardOf(lastAssistant()!, "ai-flavor")?.report).toBeUndefined();
+    } finally {
+      window.dispatchEvent(new Event("pageshow"));
+    }
+    expect(messages().some((m) => hasCard(m, "error"))).toBe(false);
   });
 
-  it("纯 agent 流程：质检工具（只读·无 overview）也把 flowStatus 推进到 quality_checked（A 修复，不再卡在写稿）", async () => {
+  it("在做的时候点停止：交给服务端停掉这次操作（不掐断这一轮，等它如实收尾）", async () => {
     window.localStorage.setItem("chatBrain", "agent");
-    useBookStore.setState({
-      workspace: { ...useBookStore.getState().workspace, flowStatus: "draft_ready" },
-    });
-    scriptAgentStream((handlers) => {
-      handlers.onToolResult({ toolName: "quality_check", ok: true }); // 只读，不带 overview/draftBody
+    const gate = deferred<void>();
+    let aborted = false;
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers, signal) => {
+      signal?.addEventListener("abort", () => { aborted = true; });
+      handlers.onOperation?.(opView());
+      await gate.promise;
+      handlers.onOperation?.(opView({ state: "cancelled", stateText: "停掉了", allowed: [], eventSeq: 4 }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
-
+    let sending!: Promise<void>;
     await act(async () => {
-      await result.current.handleSendMessage("帮我质检这章");
+      sending = result.current.handleSendMessage("查 AI 味");
+      await Promise.resolve();
     });
-
-    expect(useBookStore.getState().workspace.flowStatus).toBe("quality_checked");
+    act(() => result.current.stopAgent());
+    expect(vi.mocked(cancelOperationRequest)).toHaveBeenCalledWith(PROJECT, OP);
+    expect(aborted).toBe(false);
+    gate.resolve();
+    await act(async () => {
+      await sending;
+    });
+    expect(cardOf(lastAssistant()!, "operation")?.op.state).toBe("cancelled");
   });
 
   it("tool-error settles the running toolStep + card to failed (no longer stuck running) and appends a retryable error", async () => {
@@ -1249,7 +1319,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   it("出稿写了另一章（跨章 tool-result 直接 return）→ 当前章立即退出「正在生成工作稿…」，不挂到回合结束", async () => {
     scriptAgentStream((handlers) => {
       handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g1", ok: true, chapter: 4, summary: "第 4 章已出稿。" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g1", ok: true, chapter: 4, refreshScope: "full", summary: "第 4 章已出稿。" });
       handlers.onTextDelta("第 4 章的工作稿已经写好了。");
       handlers.onDone();
     });
@@ -1262,6 +1332,19 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     // 稿纸上本就有第 3 章的稿子 → 诚实复位成 draft_ready，而不是谎报「正在生成」。
     expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
     expect(useNavigationStore.getState().toast ?? "").toContain("第 4 章");
+  });
+
+  it("别的章的只读结果（核账回执这类）：不说「写的是第 N 章」，也不动当前章", async () => {
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "run_check", toolCallId: "r1" });
+      handlers.onToolResult({ toolName: "run_check", toolCallId: "r1", ok: true, chapter: 7, summary: "交了。" });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("核一下第 7 章");
+    });
+    expect(useNavigationStore.getState().toast ?? "").not.toContain("第 7 章");
   });
 
   it("出稿阶段（拟章纲 / 写正文）推给稿纸；回合结束清掉", async () => {
@@ -1690,7 +1773,7 @@ describe("handleSendUserAction：「下一步」选项的结构化动作直达�
     useChatStore.setState({ chatLoading: true });
     const before = messages();
     await act(async () => {
-      await result.current.handleSendUserAction({ toolName: "check_continuity", chapter: 5 });
+      await result.current.handleSendUserAction(newInspectAction("continuity", 5));
     });
     expect(mockedStreamAgentChat).not.toHaveBeenCalled();
     expect(messages()).toBe(before);
@@ -1707,13 +1790,15 @@ describe("handleChapterButton：写作区固定按钮直接发结构化动作（
     scriptAgentStream((handlers) => handlers.onDone());
   });
 
-  it("「内容审阅」带当前章号发 ai_review 动作；「撤销上一步」发 undo", async () => {
+  it("「内容审阅」带当前章号交一次检查（请求号、交的时间按钮出的时候给）；「撤销上一步」发 undo", async () => {
     const { result } = renderHook(() => useChat(buildParams({})));
     const chapter = useBookStore.getState().workspace.currentChapter.chapterNumber;
 
-    act(() => result.current.handleChapterButton("ai_review"));
+    act(() => result.current.handleChapterButton("review"));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
-    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "ai_review", chapter });
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({
+      kind: "new", type: "inspect.run", mode: "review", params: { chapter }, requestKey: expect.any(String), issuedAt: expect.any(String),
+    });
 
     await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(false));
     act(() => result.current.handleChapterButton("undo"));

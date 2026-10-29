@@ -6,6 +6,7 @@
  *   - tool-call    { toolCallId, toolName, args }           → onToolCall({ toolName })
  *   - tool-result  { toolCallId, toolName, output }         → onToolResult({ toolName, overview, refreshScope, snapshotId })
  *   - tool-error   { toolCallId, toolName, error, retryable } → onToolError({ toolCallId, toolName, message, retryable })
+ *   - operation    { type: snapshot|record, operation } / { type: live, opId, event } → onOperation / onOperationProgress（写作版本 P2a）
  *   - error        { error, retryable, reason }             → onError(message, retryable, reason)
  *   - done         { finishReason? }                        → onDone()
  *
@@ -43,17 +44,55 @@ export interface StreamAgentChatRequest {
   readonly pickedDirection?: { readonly chapter: number; readonly text: string };
   /** 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
   readonly action?: AgentUserAction;
+  /** 这一轮是作者哪条消息发起的（写作版本 P2a）：消息号随消息存、重发沿用；对话里交的操作按它去重（一条消息只做一件）。 */
+  readonly messageId?: string;
+  readonly issuedAt?: string;
+}
+
+/** 检查的四种（服务端 inspect.run 的 mode）。 */
+export type InspectModeData = "continuity" | "quality" | "review" | "flavor";
+export const INSPECT_MODES: readonly InspectModeData[] = ["continuity", "quality", "review", "flavor"];
+
+/**
+ * 操作按钮（写作版本 P2a，与服务端 agent/user-actions.ts 的 OperationAction 同形）：交一次新的检查（请求号在按钮出的时候给，
+ * 连点两下只做一次）、停着的「接着做」、「不要了」。
+ */
+export type OperationActionData =
+  | {
+    readonly kind: "new";
+    readonly type: "inspect.run";
+    readonly mode: InspectModeData;
+    readonly params: { readonly chapter: number; readonly fresh?: true };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  | { readonly kind: "resume"; readonly opId: string }
+  | { readonly kind: "cancel"; readonly opId: string };
+
+/** 一个新检查按钮（请求号这时候给）。 */
+export function newInspectAction(mode: InspectModeData, chapter: number, options: { readonly fresh?: boolean } = {}): OperationActionData {
+  return {
+    kind: "new",
+    type: "inspect.run",
+    mode,
+    params: { chapter, ...(mode === "continuity" && options.fresh ? { fresh: true as const } : {}) },
+    requestKey: crypto.randomUUID(),
+    issuedAt: new Date().toISOString(),
+  };
+}
+
+/** 是操作按钮（不是按工具名的老按钮）。 */
+export function isOperationAction(action: AgentUserAction): action is OperationActionData {
+  return "kind" in action;
 }
 
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
+  | OperationActionData
   | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number; readonly dayEndOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
-  | { readonly toolName: "ai_review"; readonly chapter: number }
-  | { readonly toolName: "quality_check"; readonly chapter: number }
   | { readonly toolName: "undo" }
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
@@ -119,7 +158,7 @@ export function readSettingRef(value: unknown): SettingRefData | undefined {
   return { label, ...(kind ? { kind } : {}), ...(card ? { card } : {}) };
 }
 
-/** check_continuity 结果（投影到消息上渲染「核账」卡）。 */
+/** 核账结果（投影到消息上渲染「核账」卡）。 */
 export interface ContinuityCheckView {
   readonly chapter: number;
   readonly sure: readonly ContinuityCheckItem[];
@@ -197,20 +236,8 @@ export interface AgentToolResult {
   readonly snapshotId?: string;
   /** 写类/出稿工具实际操作的章号：透传给投影层回写进 turnSnapshots，供「撤销到此回合」写回该回合实际操作的章。 */
   readonly chapter?: number;
-  /** check_ai_flavor 专属：整份去 AI 味体检报告（含 violations/usedFallback）。
-   *  这俩字段不在 read/draft 工具的轻量投影白名单里，故为体检工具专门透传整份报告，
-   *  前端据此落 store 渲染体检卡。 */
-  readonly aiFlavorReport?: AiFlavorReport;
-  /** ai_review 专属：整份审稿报告（含 issues 问题清单）。前端据此渲染「审校问题清单」可点卡。 */
-  readonly draftReview?: DraftReviewView;
   /** commit_apply 专属：整份入库报告（CommitReport）。前端据此渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。 */
   readonly commitReport?: unknown;
-  /** quality_check 专属：分层质检报告（RefinedQualityReport 子集）。前端据此渲染「质检」明细卡。 */
-  readonly qualityReport?: QualityCardReport;
-  /** check_continuity 专属：核账结果。 */
-  readonly continuityCheck?: ContinuityCheckView;
-  /** check_continuity 专属：核的是工作稿哪一版（服务端按读到的文件算）；核的是定稿正文时没有。 */
-  readonly checkedVersion?: string;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
   /** generate_draft 专属：一次写几版时落选的几版全文（「另外几版」卡）。 */
@@ -219,9 +246,6 @@ export interface AgentToolResult {
   readonly settle?: SettleCardData;
   /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
   readonly settleToken?: string;
-  /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
-   *  前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
-  readonly continuityPending?: { readonly done: number; readonly total: number };
   /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。
    *  choice.action（R4.7）：服务端自己生成的确定性选项带结构化动作，点击直接发 body.action 不经模型；
    *  模型生成的选项没有 action。 */
@@ -277,6 +301,43 @@ export interface LedgerConfirmTarget extends ProposalBasis {
   readonly label?: string;
 }
 
+/** 操作的状态（与服务端 lib/operations/store.ts 的 OperationState 同形）。 */
+export type OperationStateData = "queued" | "running" | "waiting_author" | "paused" | "succeeded" | "failed" | "cancelled" | "obsolete";
+const OPERATION_STATES: readonly OperationStateData[] = ["queued", "running", "waiting_author", "paused", "succeeded", "failed", "cancelled", "obsolete"];
+
+/** 检查做完的结果卡（按检查种类映射回原来的卡片字段）。checkedVersion＝查的是工作稿哪一版（查定稿时没有）。 */
+export interface InspectCardsData {
+  readonly continuityCheck?: ContinuityCheckView;
+  readonly qualityReport?: QualityCardReport;
+  readonly draftReview?: DraftReviewView;
+  readonly aiFlavorReport?: AiFlavorReport;
+  readonly checkedVersion?: string;
+}
+
+/** 一次操作给界面看的样子（服务端 operationView 的子集，防御解析）。中文说法（what / stateText）都是服务端给的。 */
+export interface OperationViewData {
+  readonly opId: string;
+  readonly kind: string;
+  readonly mode?: string;
+  readonly chapter?: number;
+  /** 做的什么（「核账·第 3 章」）。 */
+  readonly what: string;
+  readonly state: OperationStateData;
+  readonly stateText: string;
+  /** 作者能点的（接着做 / 不要了）。 */
+  readonly allowed: readonly ("resume" | "cancel")[];
+  readonly pauseReason?: string;
+  readonly currentStep?: string;
+  /** 给作者看的一句（结论或没成的原因）。 */
+  readonly summary: string;
+  readonly failure?: { readonly message: string; readonly retryable: boolean };
+  readonly eventSeq: number;
+  /** 谁交的（对话 / 按钮 / 后台）和那句话、那个按钮的号：重开书时找回这次操作挂在哪条消息上。 */
+  readonly origin: { readonly kind: string; readonly messageId?: string };
+  /** 检查做完了的结果卡。 */
+  readonly inspect?: InspectCardsData;
+}
+
 export interface AgentToolError {
   readonly toolCallId?: string;
   readonly toolName: string;
@@ -297,6 +358,10 @@ export interface AgentChatHandlers {
   readonly onDraftPhase?: (info: { readonly chapter: number; readonly phase: "plan" | "write" | "check" }) => void;
   readonly onToolCall: (info: { readonly toolCallId?: string; readonly toolName: string }) => void;
   readonly onToolResult: (info: AgentToolResult) => void;
+  /** 这一轮交上的操作（写作版本 P2a）：每次记录变了发一份（先一份当前的）。 */
+  readonly onOperation?: (operation: OperationViewData) => void;
+  /** 操作的一句进度（「核账员在读第 3 章」）。 */
+  readonly onOperationProgress?: (info: { readonly opId: string; readonly text: string }) => void;
   /** 工具内部抛错：携带 toolCallId/toolName，让上层把对应步骤/卡片收尾为 failed，再 append 错误。 */
   readonly onToolError: (info: AgentToolError) => void;
   readonly onError: (message: string, retryable: boolean, reason?: AiErrorReason) => void;
@@ -360,6 +425,7 @@ export async function streamAgentChat(
         ...(input.lastTurnUndoHint ? { lastTurnUndoHint: input.lastTurnUndoHint } : {}),
         ...(input.pickedDirection ? { pickedDirection: input.pickedDirection } : {}),
         ...(input.action ? { action: input.action } : {}),
+        ...(input.messageId && input.issuedAt ? { messageId: input.messageId, issuedAt: input.issuedAt } : {}),
       }),
       signal: idleController.signal,
     });
@@ -465,15 +531,6 @@ export async function streamAgentChat(
             ...(typeof output.undone === "boolean" && (parsed.toolName === "undo_last_change" || parsed.toolName === "manage_snapshots")
               ? { undone: output.undone }
               : {}),
-            // check_ai_flavor 专属：整份体检报告（violations/usedFallback 不在上面的轻量白名单里），
-            // 仅在该工具且 output 形状符合 AiFlavorReport 时透传，前端据此落 store 渲染体检卡。
-            ...(parsed.toolName === "check_ai_flavor" && isAiFlavorReport(output)
-              ? { aiFlavorReport: output as unknown as AiFlavorReport }
-              : {}),
-            // ai_review 专属：整份审稿报告（review.issues 不在轻量白名单里），透传给投影层挂到消息→渲染「审校问题清单」可点卡。
-            ...(parsed.toolName === "ai_review" && isDraftReview(output)
-              ? { draftReview: (output as { review?: unknown }).review as DraftReviewView }
-              : {}),
             // suggest_next_steps 专属：agent 提议的下一步选项（question/choices 不在轻量白名单里），透传给投影层挂到消息。
             // choice.action（R4.7）按白名单防御解析（toNextStepPrompt）：只放行下一步级的只读/写稿工具，
             // commit_apply、prune_snapshots 这类授权写盘动作必须走各自的确认按钮，不许藏在选项里被点击直达。
@@ -483,12 +540,6 @@ export async function streamAgentChat(
             // commit_apply 专属：入库成功且带 report（整份 CommitReport，不在轻量白名单里）→ 透传，前端渲染「入库」delta 卡。
             ...(parsed.toolName === "commit_apply" && output.committed === true && isRecord(output.report)
               ? { commitReport: output.report }
-              : {}),
-            // check_continuity 专属：核账结果（确定 / 可能两档，两边原句）→ 透传，前端渲染「核账」卡。
-            // ok:false（还在读 / 出错 / 没正文）一律不建卡——sure/maybe 空数组只说明「没有条目」，不代表「没问题」，
-            // 否则会显成「没发现对不上」的假成功卡（R4.1/验收 3.1）。没核成就只留工具文字如实说。
-            ...(parsed.toolName === "check_continuity" && output.ok !== false && typeof output.chapter === "number" && (Array.isArray(output.sure) || Array.isArray(output.maybe))
-              ? { continuityCheck: { chapter: output.chapter, sure: toContinuityItems(output.sure), maybe: toContinuityItems(output.maybe), ...(toContinuityItems(output.earlierOpen).length > 0 ? { earlierOpen: toContinuityItems(output.earlierOpen) } : {}) } }
               : {}),
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
@@ -504,19 +555,6 @@ export async function streamAgentChat(
               : {}),
             ...(parsed.toolName === "settle_apply" && output.ok === true && typeof output.settleToken === "string"
               ? { settleToken: output.settleToken }
-              : {}),
-            ...(parsed.toolName === "check_continuity" && typeof output.checkedVersion === "string" && output.checkedVersion
-              ? { checkedVersion: output.checkedVersion }
-              : {}),
-            // check_continuity 专属：还在读的结构化进度（pending 只在「还在读、没核」时出现）→ 透传。
-            // 前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。
-            ...(parsed.toolName === "check_continuity" && isPendingProgress(output.pending)
-              ? { continuityPending: output.pending }
-              : {}),
-            // quality_check 专属：分层报告 refined（blocking/soft/reference 不在轻量白名单里）→ 透传，前端渲染「质检」明细卡。
-            // ok:false 不透传（防御：质检失败今天走抛错→tool-error，但 ok:false+refined 一旦出现不能显成「质检通过」卡）。
-            ...(parsed.toolName === "quality_check" && output.ok !== false && isRecord(output.refined)
-              ? { qualityReport: output.refined as unknown as QualityCardReport }
               : {}),
             // commit_preview 专属：结构化定稿预览（R3）→ 透传，前端渲染固定「定稿预览」卡。裁决/阻断项不靠模型
             // 转述（模型可能把硬阻断说成「小问题」或干脆不提）。字段防御解析：缺 chapter/canCommit 的残缺输出不挂卡。
@@ -608,6 +646,18 @@ export async function streamAgentChat(
             snapshotId: typeof output.snapshotId === "string" ? output.snapshotId : undefined,
             chapter: typeof output.chapter === "number" ? output.chapter : undefined,
           });
+          return;
+        }
+        case "operation": {
+          if (parsed.type === "live") {
+            const live = isRecord(parsed.event) ? parsed.event : undefined;
+            if (typeof parsed.opId === "string" && live?.type === "progress" && typeof live.text === "string") {
+              handlers.onOperationProgress?.({ opId: parsed.opId, text: live.text });
+            }
+            return;
+          }
+          const operation = readOperationView(parsed.operation);
+          if (operation) handlers.onOperation?.(operation);
           return;
         }
         case "tool-error":
@@ -728,8 +778,78 @@ function isCommitConfirmAction(value: unknown): value is { readonly chapter: num
   return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
 }
 
-/** check_ai_flavor 输出形状校验：必须有 boolean ok + 数组 violations + boolean usedFallback。
- *  形状不符就不透传（防把别的工具输出误当体检报告）。 */
+/**
+ * 一次操作的样子（防御解析）：号、种类、状态缺了就不认。检查做完了（succeeded）按种类把结果映射回原来的卡片字段。
+ * 章号从 origin.chapter 取（对话、按钮交的都带）。
+ */
+export function readOperationView(value: unknown): OperationViewData | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.opId !== "string" || !value.opId || typeof value.kind !== "string") return undefined;
+  const state = OPERATION_STATES.find((item) => item === value.state);
+  if (!state) return undefined;
+  const origin = isRecord(value.origin) ? value.origin : {};
+  // 针对的章是服务端视图给的（参数里的章，不是交的时候所在的章）。
+  const chapter = typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0 ? value.chapter : undefined;
+  const failure = isRecord(value.failure) && typeof value.failure.message === "string"
+    ? { message: value.failure.message, retryable: value.failure.retryable !== false }
+    : undefined;
+  const mode = typeof value.mode === "string" ? value.mode : undefined;
+  const result = isRecord(value.result) ? value.result : undefined;
+  const inspect = state === "succeeded" && value.kind === "inspect.run" && mode && result ? readInspectCards(mode, result.body) : undefined;
+  const allowed = Array.isArray(value.allowed)
+    ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
+    : [];
+  return {
+    opId: value.opId,
+    kind: value.kind,
+    ...(mode ? { mode } : {}),
+    ...(chapter !== undefined ? { chapter } : {}),
+    what: typeof value.what === "string" && value.what ? value.what : "这次操作",
+    state,
+    stateText: typeof value.stateText === "string" ? value.stateText : "",
+    allowed,
+    ...(typeof value.pauseReason === "string" ? { pauseReason: value.pauseReason } : {}),
+    ...(typeof value.currentStep === "string" ? { currentStep: value.currentStep } : {}),
+    summary: typeof value.summary === "string" ? value.summary : "",
+    ...(failure ? { failure } : {}),
+    eventSeq: typeof value.eventSeq === "number" ? value.eventSeq : 0,
+    origin: {
+      kind: typeof origin.kind === "string" ? origin.kind : "",
+      ...(typeof origin.messageId === "string" && origin.messageId ? { messageId: origin.messageId } : {}),
+    },
+    ...(inspect ? { inspect } : {}),
+  };
+}
+
+/**
+ * 检查结果 → 卡片字段（结构化结果的形状沿用原来四个检查工具的输出）。没查成（ok:false、审稿走了回退）不出卡：
+ * 空清单不等于「没问题」，只留结论那句如实说（R4.1）。
+ */
+export function readInspectCards(mode: string, value: unknown): InspectCardsData | undefined {
+  if (!isRecord(value)) return undefined;
+  const checkedVersion = value.source === "draft" && typeof value.checkedVersion === "string" && value.checkedVersion ? { checkedVersion: value.checkedVersion } : {};
+  switch (mode) {
+    case "continuity": {
+      if (value.ok === false || typeof value.chapter !== "number" || (!Array.isArray(value.sure) && !Array.isArray(value.maybe))) return undefined;
+      const earlierOpen = toContinuityItems(value.earlierOpen);
+      return {
+        continuityCheck: { chapter: value.chapter, sure: toContinuityItems(value.sure), maybe: toContinuityItems(value.maybe), ...(earlierOpen.length > 0 ? { earlierOpen } : {}) },
+        ...checkedVersion,
+      };
+    }
+    case "quality":
+      return value.ok !== false && isRecord(value.refined) ? { qualityReport: value.refined as unknown as QualityCardReport, ...checkedVersion } : undefined;
+    case "review":
+      return isDraftReview(value) ? { draftReview: value.review as DraftReviewView, ...checkedVersion } : undefined;
+    case "flavor":
+      return isAiFlavorReport(value) && value.ok !== false ? { aiFlavorReport: value as unknown as AiFlavorReport, ...checkedVersion } : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** 查 AI 味结果形状校验：必须有 boolean ok + 数组 violations + boolean usedFallback。
+ *  形状不符就不出卡（防把别的结果误当体检报告）。 */
 function isAiFlavorReport(value: Record<string, unknown>): boolean {
   return typeof value.ok === "boolean"
     && Array.isArray(value.violations)
@@ -737,10 +857,10 @@ function isAiFlavorReport(value: Record<string, unknown>): boolean {
 }
 
 /**
- * ai_review 输出形状守卫：output.review 是对象且有 issues 数组（防把别的工具输出误当审稿报告）。
+ * 内容审阅结果形状守卫：review 是对象且有 issues 数组（防把别的结果误当审稿报告）。
  * **审稿没跑成（ok:false / usedFallback=true）→ 返回 false**：引擎此时回 fallback 报告（含一条假 issue「AI 审稿结果不可用」），
  * 不能当「审校问题」卡渲染（否则显成『1 处问题』+ 可点改这处，点了让 agent 去改不存在的问题）；
- * 让 agent 的文本摘要「这次没审完、要不要重试」如实告知。与 check_ai_flavor 的 ok!==false 守卫对称。
+ * 让结论那句「这次没审完、要不要重试」如实告知。与查 AI 味的 ok!==false 守卫对称。
  * ok:false 是 R4.1 同类排查补的防御位（今天 ok:false ⟺ usedFallback，字段双保险）。
  */
 function isDraftReview(value: Record<string, unknown>): boolean {
@@ -759,22 +879,19 @@ function isNextStepPrompt(value: Record<string, unknown>): boolean {
 
 /**
  * 「下一步」选项里允许直达的结构化动作白名单（R4.7）：只有下一步级的动作能藏在选项里被点击直达——
- * 定稿预览（只读）、核账（只读）、出稿（写工作稿、可撤销）。commit_apply / prune_snapshots 这类
+ * 定稿预览（只读）、检查（新操作，只读）、接着做 / 不要了、出稿（写工作稿、可撤销）。commit_apply / prune_snapshots 这类
  * 授权写盘动作**不在**白名单：定稿要走定稿预览卡的「确认定稿」、裁剪要走「确认裁剪」，各带各的授权语义。
+ * 按工具名的老检查按钮（check_continuity / ai_review / quality_check，P2a 前存下的）不认：那几个工具已经没了，选项照留、点了交给 AI。
  */
 export function parseNextStepUserAction(value: unknown): AgentUserAction | undefined {
   if (!isRecord(value)) return undefined;
+  if (value.kind !== undefined) return parseOperationActionData(value);
   const chapter = typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0
     ? value.chapter
     : undefined;
   if (chapter === undefined) return undefined;
   // 下面的逐个相等判断就是白名单本身：别的工具名（含 commit_apply / prune_snapshots）一律 undefined。
   if (value.toolName === "commit_preview") return { toolName: "commit_preview", chapter };
-  if (value.toolName === "check_continuity") {
-    return { toolName: "check_continuity", chapter, ...(value.fresh === true ? { fresh: true } : {}) };
-  }
-  if (value.toolName === "ai_review") return { toolName: "ai_review", chapter };
-  if (value.toolName === "quality_check") return { toolName: "quality_check", chapter };
   if (value.toolName === "generate_draft") {
     const chapterGoal = typeof value.chapterGoal === "string" && value.chapterGoal.trim()
       ? value.chapterGoal.trim().slice(0, 2000)
@@ -782,6 +899,28 @@ export function parseNextStepUserAction(value: unknown): AgentUserAction | undef
     return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(value.continueDraft === true ? { continueDraft: true } : {}) };
   }
   return undefined;
+}
+
+/** 操作按钮（防御解析，和服务端 user-actions 的 parseOperationAction 同一口径）。 */
+function parseOperationActionData(value: Record<string, unknown>): OperationActionData | undefined {
+  if (value.kind === "resume" || value.kind === "cancel") {
+    return typeof value.opId === "string" && /^op-[0-9a-f]{20}$/u.test(value.opId) ? { kind: value.kind, opId: value.opId } : undefined;
+  }
+  if (value.kind !== "new" || value.type !== "inspect.run") return undefined;
+  const mode = INSPECT_MODES.find((item) => item === value.mode);
+  const params = isRecord(value.params) ? value.params : {};
+  const chapter = params.chapter;
+  if (!mode || typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return undefined;
+  if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
+  if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
+  return {
+    kind: "new",
+    type: "inspect.run",
+    mode,
+    params: { chapter, ...(mode === "continuity" && params.fresh === true ? { fresh: true as const } : {}) },
+    requestKey: value.requestKey,
+    issuedAt: value.issuedAt,
+  };
 }
 
 /** suggest_next_steps 输出 → 「下一步」卡数据（choices 的 action 字段经白名单防御解析，坏的丢掉、选项保留）。 */
@@ -798,13 +937,6 @@ function toNextStepPrompt(output: Record<string, unknown>): NonNullable<AgentToo
     }];
   });
   return { question, choices };
-}
-
-/** check_continuity 的 pending 形状守卫：done/total 是整数、total>0（残缺的进度不当「还在读」透传）。 */
-function isPendingProgress(value: unknown): value is { readonly done: number; readonly total: number } {
-  return isRecord(value)
-    && typeof value.done === "number" && Number.isInteger(value.done) && value.done >= 0
-    && typeof value.total === "number" && Number.isInteger(value.total) && value.total > 0;
 }
 
 /** 从非 2xx 响应体里取服务端 `{ error }`；取不到返回 undefined（让调用方退回状态码文案）。 */

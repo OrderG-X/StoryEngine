@@ -38,7 +38,8 @@ export interface ChatStore {
   /** 定论卡改齐了（settle_apply 成功，按票号找那张卡）：记下服务端回的那句结果。 */
   markSettleApplied: (token: string, applied: string) => void;
   /** 核账 / 定稿预览结果到时记下稿纸版本（之后稿子变了就是「核过后改过稿」「要重新预览」）。 */
-  stampCardVersion: (messageId: string, type: "continuity" | "commit-preview", version: string | null) => void;
+  /** 定稿预览卡记下预览的是工作稿哪一版（检查的结果卡由服务端带 checkedVersion）。 */
+  stampPreviewVersion: (messageId: string, version: string | null) => void;
   setSessions: (sessions: readonly ChatSessionIndexEntry[], activeSessionId?: string) => void;
   setActiveSessionId: (activeSessionId: string) => void;
   setActiveArchivedCount: (activeArchivedCount: number) => void;
@@ -134,14 +135,10 @@ export const useChatStore = create<ChatStore>((set) => ({
         card.settle.token === token ? { ...card, applied: applied || "改齐了。" } : card
       ))),
     })),
-  stampCardVersion: (messageId, type, version) =>
+  stampPreviewVersion: (messageId, version) =>
     set((state) => ({
       messages: state.messages.map((message) => (
-        message.id !== messageId
-          ? message
-          : type === "continuity"
-            ? updateCard(message, "continuity", (card) => ({ ...card, checkedVersion: version }))
-            : updateCard(message, "commit-preview", (card) => ({ ...card, checkedVersion: version }))
+        message.id !== messageId ? message : updateCard(message, "commit-preview", (card) => ({ ...card, checkedVersion: version }))
       )),
     })),
   setSessions: (sessions, activeSessionId) => set({ sessions, ...(activeSessionId !== undefined ? { activeSessionId } : {}) }),

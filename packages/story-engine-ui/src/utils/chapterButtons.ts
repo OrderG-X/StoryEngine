@@ -4,15 +4,15 @@
  * 以前按钮发一句固定中文，前端再拿「输入框文字 === 按钮文案」认回动作（matchDeterministicChapterAction）——
  * 作者自己打出同样的字也会被当成按钮。现在按钮带的是动作本身；输入框的字一律交给 AI。
  */
-import type { AgentUserAction } from "../api/agentChatClient.js";
+import { newInspectAction, type AgentUserAction } from "../api/agentChatClient.js";
 import type { ChapterNavItem } from "../types.js";
 
 export type ChapterButton =
   | "write"
   | "write_next"
-  | "check_continuity"
-  | "ai_review"
-  | "quality_check"
+  | "continuity"
+  | "review"
+  | "quality"
   | "commit_preview"
   | "undo";
 
@@ -27,8 +27,9 @@ export function nextUncommittedChapter(current: number, chapters: readonly Chapt
 }
 
 /**
- * 按钮 → 结构化动作。要章号的按钮在没选章时返回 undefined（调用方如实提示「先选一章」）。纯函数。
- * write 带作者在方向框里写的方向（没写就不带，章纲按故事现状往下推）。
+ * 按钮 → 结构化动作。要章号的按钮在没选章时返回 undefined（调用方如实提示「先选一章」）。
+ * write 带作者在方向框里写的方向（没写就不带，章纲按故事现状往下推）。核账 / 审阅 / 硬伤检查交一次新检查（写作版本 P2a），
+ * 请求号这时候给（点下去就是这一次）。
  */
 export function chapterButtonAction(
   button: ChapterButton,
@@ -44,12 +45,10 @@ export function chapterButtonAction(
     }
     case "write_next":
       return { toolName: "generate_draft", chapter: nextUncommittedChapter(chapter, input.chapters) };
-    case "check_continuity":
-      return { toolName: "check_continuity", chapter };
-    case "ai_review":
-      return { toolName: "ai_review", chapter };
-    case "quality_check":
-      return { toolName: "quality_check", chapter };
+    case "continuity":
+    case "review":
+    case "quality":
+      return newInspectAction(button, chapter);
     case "commit_preview":
       return { toolName: "commit_preview", chapter };
   }

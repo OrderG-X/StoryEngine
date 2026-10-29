@@ -17,6 +17,9 @@ const TAIL_SKIP_TOOLS = new Set([
   "suggest_next_steps",
   "commit_preview",
   "commit_apply",
+  "run_check",
+  "read_operation",
+  // P2a 前的检查工具：只在存下的老会话里出现。
   "quality_check",
   "ai_review",
   "check_ai_flavor",

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamAgentChat } from "./agentChatClient.js";
+import { streamAgentChat, type OperationViewData } from "./agentChatClient.js";
 
 /** 把若干 SSE 帧拼成一个文本，返回带 body(ReadableStream) 的 Response。 */
 function sseResponse(frames: readonly string[], init?: { ok?: boolean; status?: number }): Response {
@@ -24,6 +24,35 @@ function sseResponse(frames: readonly string[], init?: { ok?: boolean; status?: 
 
 function frame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+const OP_ID = "op-0123456789abcdef0123";
+
+/** 服务端的操作视图（写作版本 P2a）：检查做完了，结果体照四个检查原来的输出形状。 */
+function opView(mode: string, body: unknown, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    opId: OP_ID, kind: "inspect.run", mode, what: "核账·第 8 章", chapter: 8, state: "succeeded", stateText: "做完了", allowed: [],
+    origin: { kind: "chat", messageId: "user-1", chapter: 3 }, summary: "做完了",
+    result: { schema: "operation-result/1", summary: "做完了", body }, pendingActions: [], eventSeq: 4, createdAt: "", updatedAt: "",
+    ...overrides,
+  };
+}
+
+/** 发几帧 operation 事件，收 onOperation / onOperationProgress。 */
+async function collectOperations(frames: readonly string[]) {
+  vi.stubGlobal("fetch", vi.fn(async () => sseResponse([...frames, frame("done", {})])));
+  const views: OperationViewData[] = [];
+  const progress: { opId: string; text: string }[] = [];
+  await streamAgentChat(
+    { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
+    {
+      onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: () => undefined, onToolError: () => undefined,
+      onError: () => undefined, onDone: () => undefined,
+      onOperation: (view) => { views.push(view); },
+      onOperationProgress: (item) => { progress.push(item); },
+    },
+  );
+  return { views, progress };
 }
 
 afterEach(() => {
@@ -293,45 +322,52 @@ describe("streamAgentChat", () => {
     expect(received?.ok).toBe(true);
   });
 
-  it("passes the check_ai_flavor report (violations/usedFallback) through onToolResult", async () => {
-    // 体检卡需要 violations/usedFallback——这俩字段不在 read/draft 工具的投影白名单里，
-    // 必须为 check_ai_flavor 专门透传整份 AiFlavorReport，否则前端拿不到违规清单。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "f1",
-          toolName: "check_ai_flavor",
-          output: {
-            ok: true,
-            summary: "有一处 AI 腔。",
-            usedFallback: false,
-            violations: [
-              { id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high", suggestedFix: "改成具体动作" },
-            ],
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
+  it("检查做完（operation 事件）→ 视图带针对的章；核账结果按原来的卡片字段解析（revisited、earlierOpen、查的版本）", async () => {
+    const twice = { quote: "还剩八天", earlierQuote: "还剩九天", earlierChapter: 7, reason: "天数", revisited: { from: "还剩九天。" } };
+    const bad = { quote: "她走了", earlierQuote: "她没走", earlierChapter: 7, reason: "去留", revisited: { from: 3 } };
+    const old = { quote: "走了五年", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年", againstSetting: { label: "人物卡" } };
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: opView("continuity", { ok: true, chapter: 8, source: "draft", checkedVersion: "abc123", sure: [], maybe: [twice, bad], earlierOpen: [old], failures: [], summary: "核了" }) }),
+    ]);
+    const { revisited: _ignored, ...plain } = bad;
+    expect(views[0]).toMatchObject({ opId: OP_ID, mode: "continuity", chapter: 8, what: "核账·第 8 章", state: "succeeded", origin: { kind: "chat", messageId: "user-1" } });
+    expect(views[0]?.inspect).toEqual({ continuityCheck: { chapter: 8, sure: [], maybe: [twice, plain], earlierOpen: [old] }, checkedVersion: "abc123" });
+  });
 
-    let received: { aiFlavorReport?: { ok: boolean; violations: readonly unknown[]; usedFallback: boolean } } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "体检这章 AI 味" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => {
-          received = info;
-        },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
+  it("硬伤检查 / 内容审阅 / 查 AI 味做完 → 各自的结果卡字段；查的是定稿时不带版本", async () => {
+    const refined = { passed: false, blocking: [{ type: "forbidden_reveal", label: "提前泄密", severity: "error", message: "m" }], soft: [], reference: [], summary: "s" };
+    const review = { issues: [{ id: "x", message: "m" }] };
+    const violations = [{ id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high", suggestedFix: "改成具体动作" }];
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: opView("quality", { ok: true, source: "draft", checkedVersion: "v1", refined }) }),
+      frame("operation", { type: "record", operation: opView("review", { ok: true, usedFallback: false, source: "committed", checkedVersion: "v1", review }) }),
+      frame("operation", { type: "record", operation: opView("flavor", { ok: true, usedFallback: false, source: "draft", checkedVersion: "v2", violations }) }),
+    ]);
+    expect(views[0]?.inspect).toEqual({ qualityReport: refined, checkedVersion: "v1" });
+    expect(views[1]?.inspect).toEqual({ draftReview: review });
+    expect(views[2]?.inspect).toMatchObject({ aiFlavorReport: { ok: true, usedFallback: false, violations }, checkedVersion: "v2" });
+  });
 
-    expect(received?.aiFlavorReport?.ok).toBe(true);
-    expect(received?.aiFlavorReport?.usedFallback).toBe(false);
-    expect(received?.aiFlavorReport?.violations).toHaveLength(1);
+  it("没查成的不出结果卡：ok:false、审稿走了回退、操作没做成（空清单不等于没问题）", async () => {
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: opView("continuity", { ok: false, chapter: 8, source: "draft", sure: [], maybe: [], failures: ["没跑成"] }) }),
+      frame("operation", { type: "record", operation: opView("quality", { ok: false, refined: { passed: true, blocking: [], soft: [], reference: [], summary: "s" } }) }),
+      frame("operation", { type: "record", operation: opView("review", { ok: true, usedFallback: true, review: { issues: [{ id: "x", message: "AI 审稿结果不可用" }] } }) }),
+      frame("operation", { type: "record", operation: opView("flavor", { ok: false, usedFallback: false, violations: [] }) }),
+      frame("operation", { type: "record", operation: opView("continuity", { ok: true, chapter: 8, sure: [], maybe: [] }, { state: "failed", failure: { code: "x", message: "模型没回", retryable: true } }) }),
+    ]);
+    expect(views).toHaveLength(5);
+    for (const view of views) expect(view.inspect).toBeUndefined();
+    expect(views[4]).toMatchObject({ state: "failed", failure: { message: "模型没回", retryable: true } });
+  });
+
+  it("进度（live）→ onOperationProgress；形状不对的不认", async () => {
+    const { progress } = await collectOperations([
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "progress", text: "核账员在读第 3 章" } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "progress" } }),
+      frame("operation", { type: "live", event: { type: "progress", text: "没有号" } }),
+    ]);
+    expect(progress).toEqual([{ opId: OP_ID, text: "核账员在读第 3 章" }]);
   });
 
   it("translates commit_apply output.report (真实字段名) → commitReport for the 入库 delta 卡", async () => {
@@ -421,171 +457,6 @@ describe("streamAgentChat", () => {
     expect(received[1]?.draftVersions).toBeUndefined();
   });
 
-  it("translates quality_check output.refined (真实字段名) → qualityReport for the 质检明细卡", async () => {
-    // quality_check 真实输出分层报告字段名是 refined（quality-check.ts）。测翻译层：原始帧给 refined，断言收到 qualityReport。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "q1",
-          toolName: "quality_check",
-          output: {
-            ok: true,
-            summary: "有 1 处硬伤。",
-            refined: { passed: false, blocking: [{ type: "forbidden_reveal", label: "提前泄密", severity: "error", message: "m" }], soft: [], reference: [], summary: "s" },
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { qualityReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "质检这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.qualityReport).toBeDefined();
-    expect((received?.qualityReport as { blocking?: readonly unknown[] }).blocking).toHaveLength(1);
-  });
-
-  it("check_continuity 没核成（ok:false：还在读 / 出错）→ 不透传 continuityCheck，不出「没发现对不上」卡；pending 透传 continuityPending（R4.1/验收 3.1）", async () => {
-    // 验收 3.1 的根因：只要有 sure/maybe 数组就建卡，空数组被渲染成「没发现对不上」的假成功卡。
-    // 现在 ok:false 一律不建卡（还在读、模型失败、没正文都一样），只留工具文字如实说。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "cc1",
-          toolName: "check_continuity",
-          output: {
-            ok: false,
-            chapter: 5,
-            source: "draft",
-            sure: [],
-            maybe: [],
-            failures: ["核账员还在读前文（第 4 / 57 章），这次没核"],
-            pending: { done: 4, total: 57 },
-            summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
-          },
-        }),
-        frame("tool-result", {
-          toolCallId: "cc2",
-          toolName: "check_continuity",
-          output: { ok: false, chapter: 5, source: "draft", sure: [], maybe: [], failures: ["第 1 遍（盯东西）没跑成"], summary: "第 5 章核账没跑成。" },
-        }),
-        frame("tool-result", {
-          toolCallId: "cc3",
-          toolName: "check_continuity",
-          output: { ok: false, chapter: 5, source: null, sure: [], maybe: [], summary: "第 5 章还没有正文，没法核账。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    const received: { continuityCheck?: unknown; continuityPending?: unknown }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received.push(info); },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received).toHaveLength(3);
-    for (const info of received) expect(info.continuityCheck).toBeUndefined();
-    // 「还在读」的结构化进度照透传（前端区分「还在读」和「出错」用这个字段，别解析 failures 文字）；
-    // 出错 / 没正文没有 pending。
-    expect(received[0]?.continuityPending).toEqual({ done: 4, total: 57 });
-    expect(received[1]?.continuityPending).toBeUndefined();
-    expect(received[2]?.continuityPending).toBeUndefined();
-  });
-
-  it("check_continuity ok:true 且 0 处 → 照旧透传 continuityCheck（渲染「没发现对不上」卡，正常路不回归）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "cc4",
-          toolName: "check_continuity",
-          output: { ok: true, chapter: 4, source: "draft", sure: [], maybe: [], failures: [], summary: "核了第 4 章，没发现和前文对不上的地方。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { continuityCheck?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.continuityCheck).toEqual({ chapter: 4, sure: [], maybe: [] });
-  });
-
-  it("check_continuity 的「可能」里带 revisited（上一遍按核账改过的句子）→ 透传；from 不是字符串的不带", async () => {
-    const twice = { quote: "还剩八天", earlierQuote: "还剩九天", earlierChapter: 12, reason: "天数", revisited: { from: "还剩九天。" } };
-    const bad = { quote: "她走了", earlierQuote: "她没走", earlierChapter: 12, reason: "去留", revisited: { from: 3 } };
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "cc6", toolName: "check_continuity", output: { ok: true, chapter: 12, source: "draft", sure: [], maybe: [twice, bad], failures: [], summary: "核了" } }),
-        frame("done", {}),
-      ]),
-    ));
-    let received: { continuityCheck?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      { onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: (info) => { received = info; }, onToolError: () => undefined, onError: () => undefined, onDone: () => undefined },
-    );
-    const { revisited: _ignored, ...plain } = bad;
-    expect(received?.continuityCheck).toEqual({ chapter: 12, sure: [], maybe: [twice, plain] });
-  });
-
-  it("check_continuity 带 earlierOpen（前面章节之前报过、没改的）→ 透传进 continuityCheck", async () => {
-    const old = { quote: "走了五年", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年", againstSetting: { label: "人物卡" } };
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "cc5",
-          toolName: "check_continuity",
-          output: { ok: true, chapter: 8, source: "draft", sure: [], maybe: [], earlierOpen: [old], failures: [], checkedVersion: "abc123", summary: "核了第 8 章，没发现和前文对不上的地方。第 3 章还有 1 处之前报过、还没改。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { continuityCheck?: unknown; checkedVersion?: string } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.continuityCheck).toEqual({ chapter: 8, sure: [], maybe: [], earlierOpen: [old] });
-    expect(received?.checkedVersion).toBe("abc123");
-  });
-
   it("定论（P12）：settle_preview / settle_fact 的卡防御解析后透传；没查成不建卡；settle_apply 成功带票号", async () => {
     const settle = {
       token: "0123456789abcdef",
@@ -635,7 +506,9 @@ describe("streamAgentChat", () => {
             question: "核账做完了，接下来？",
             choices: [
               { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
-              { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } },
+              { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" } },
+              // 操作按钮缺了请求号 / 交的时间：不透传（服务端也拒）。
+              { label: "缺请求号", intent: "w", action: { kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 5 } } },
               { label: "我自己改", intent: "我自己改，先放着" },
               // 白名单外（授权写盘动作不许藏在选项里直达）→ action 丢掉，选项照旧发文本。
               { label: "假确认定稿", intent: "x", action: { toolName: "commit_apply", chapter: 5 } },
@@ -661,80 +534,11 @@ describe("streamAgentChat", () => {
       },
     );
 
-    const prompt = received?.nextStepPrompt as { question: string; choices: { label: string; action?: { toolName: string } }[] };
+    const prompt = received?.nextStepPrompt as { question: string; choices: { label: string; action?: Record<string, unknown> }[] };
     expect(prompt.question).toBe("核账做完了，接下来？");
     expect(prompt.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview" } });
-    expect(prompt.choices[1]).toMatchObject({ label: "再细核一遍", action: { toolName: "check_continuity" } });
-    expect(prompt.choices[1].action).toMatchObject({ fresh: true });
-    expect(prompt.choices[2]).not.toHaveProperty("action");
-    expect(prompt.choices[3]).not.toHaveProperty("action");
-    expect(prompt.choices[4]).not.toHaveProperty("action");
-    expect(prompt.choices[5]).not.toHaveProperty("action");
-  });
-
-  it("quality_check ok:false（防御位）→ 不透传 refined 质检卡（今天失败走抛错，ok:false+refined 一旦出现不能显成「质检通过」卡）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "q2",
-          toolName: "quality_check",
-          output: {
-            ok: false,
-            summary: "没跑成。",
-            refined: { passed: true, blocking: [], soft: [], reference: [], summary: "s" },
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { qualityReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "质检这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.qualityReport).toBeUndefined();
-  });
-
-  it("ai_review ok:false（防御位）→ 不透传 draftReview 审稿卡（usedFallback 之外的失败位，空手不显成「1 处问题」卡）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "ar1",
-          toolName: "ai_review",
-          output: {
-            ok: false,
-            usedFallback: false,
-            review: { issues: [{ id: "x", message: "m" }] },
-            summary: "这次没审完。",
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { draftReview?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "审一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.draftReview).toBeUndefined();
+    expect(prompt.choices[1]).toMatchObject({ label: "再细核一遍", action: { kind: "new", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1" } });
+    for (const index of [2, 3, 4, 5, 6]) expect(prompt.choices[index]).not.toHaveProperty("action");
   });
 
   it("translates commit_preview 裁决（R3）→ commitPreview for 定稿预览卡（不靠模型转述）", async () => {

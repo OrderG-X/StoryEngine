@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { newInspectAction } from "../api/agentChatClient.js";
 
 import {
   DIRECT_WRITE_FALLBACK_GOAL,
@@ -37,11 +38,15 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText({ toolName: "settle_preview", chapter: 4, truth: { where: "setting", quote: "三年前过世", label: "人物卡" } })).toBe("以设定为准：人物卡「三年前过世」");
     expect(userActionChoiceText({ toolName: "settle_preview", statement: "杜长顺十年前去世" })).toBe("按定论查前文：「杜长顺十年前去世」");
     expect(userActionChoiceText({ toolName: "settle_apply", token: "0123456789abcdef", excluded: [] })).toBe("确认定论，改齐前文");
-    expect(userActionChoiceText({ toolName: "ai_review", chapter: 5 })).toBe("审阅第 5 章的内容");
-    expect(userActionChoiceText({ toolName: "quality_check", chapter: 5 })).toBe("对第 5 章做硬伤检查");
+    // 检查交给执行器（写作版本 P2a）：新的一次按种类说，停着的「接着做 / 不要了」。
+    expect(userActionChoiceText(newInspectAction("review", 5))).toBe("审阅第 5 章的内容");
+    expect(userActionChoiceText(newInspectAction("quality", 5))).toBe("对第 5 章做硬伤检查");
+    expect(userActionChoiceText(newInspectAction("flavor", 5))).toBe("查第 5 章的 AI 味");
     expect(userActionChoiceText({ toolName: "undo" })).toBe("撤销上一步");
-    expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5 })).toBe("核第 5 章的账");
-    expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5, fresh: true })).toBe("再核一遍第 5 章的账");
+    expect(userActionChoiceText(newInspectAction("continuity", 5))).toBe("核第 5 章的账");
+    expect(userActionChoiceText(newInspectAction("continuity", 5, { fresh: true }))).toBe("再核一遍第 5 章的账");
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123" })).toBe("接着做");
+    expect(userActionChoiceText({ kind: "cancel", opId: "op-0123456789abcdef0123" })).toBe("不要了");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 6 })).toBe("写第 6 章的正文");
     expect(userActionChoiceText({ toolName: "commit_apply", chapter: 5 })).toBe("确认定稿第 5 章");
     expect(userActionChoiceText({ toolName: "prune_snapshots" })).toBe("确认裁剪操作历史");

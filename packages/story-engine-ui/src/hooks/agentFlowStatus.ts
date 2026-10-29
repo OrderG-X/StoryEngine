@@ -11,7 +11,7 @@ import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
  * 题材中立、纯逻辑、无副作用：给 (toolName, info, current) → 下一个 flowStatus（不该推进就原样返回 current）。
  *  - ok===false（工具失败）不推进——绝不把失败当进度。
  *  - 已入库（committed/ready_for_next）后，打磨/预览类工具不再把状态往回拨。
- *  - 读类/资料类/check_ai_flavor 等不改本章生命周期，返回 current。
+ *  - 读类/资料类等不改本章生命周期，返回 current。检查（核账 / 硬伤检查 / 内容审阅）是操作，见 flowAfterOperation。
  */
 
 const TERMINAL: ReadonlySet<ChapterWorkflowState> = new Set<ChapterWorkflowState>(["committed", "ready_for_next"]);
@@ -30,10 +30,6 @@ export function agentFlowStatusForTool(
     case "revise_draft":
       // 写稿：出/改了正文 → 草稿待打磨。
       return failed ? current : "draft_ready";
-    case "quality_check":
-    case "ai_review":
-      // 打磨：质检/审稿过了（且尚未入库）→ 已打磨、可考虑入库。
-      return failed || TERMINAL.has(current) ? current : "quality_checked";
     case "commit_preview":
       // 入库前一步：预览生成 → 等你确认入库。
       return failed || TERMINAL.has(current) ? current : "waiting_commit_confirmation";
@@ -64,4 +60,16 @@ export function nextFlowAfterToolResult(
     if (unstuck) return unstuck;
   }
   return agentFlowStatusForTool(toolName, info, current);
+}
+
+/**
+ * 检查做完了（写作版本 P2a：检查是操作，不再是工具结果）：硬伤检查 / 内容审阅做完、本章还没定稿 → 已打磨、可考虑定稿。
+ * 核账、查 AI 味不改本章生命周期；没做完的不推进。
+ */
+export function flowAfterOperation(
+  operation: { readonly kind: string; readonly mode?: string; readonly state: string },
+  current: ChapterWorkflowState,
+): ChapterWorkflowState {
+  if (operation.kind !== "inspect.run" || operation.state !== "succeeded" || TERMINAL.has(current)) return current;
+  return operation.mode === "quality" || operation.mode === "review" ? "quality_checked" : current;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentFlowStatusForTool, nextFlowAfterToolResult } from "./agentFlowStatus.js";
+import type { OperationViewData } from "../api/agentChatClient.js";
+import { agentFlowStatusForTool, flowAfterOperation, nextFlowAfterToolResult } from "./agentFlowStatus.js";
 
 describe("nextFlowAfterToolResult 出稿失败收尾（含 ok=false 守卫拒绝走 tool-result 这条路）", () => {
   it("generate_draft ok=false + 卡在 draft_generating + 有草稿 → draft_ready（绝不停在「正在生成草稿」谎报）", () => {
@@ -19,7 +20,6 @@ describe("nextFlowAfterToolResult 出稿失败收尾（含 ok=false 守卫拒绝
   });
 
   it("其它工具结果照旧委托 agentFlowStatusForTool", () => {
-    expect(nextFlowAfterToolResult("quality_check", {}, "draft_ready", true)).toBe("quality_checked");
     expect(nextFlowAfterToolResult("commit_apply", { committed: true }, "waiting_commit_confirmation", true)).toBe("committed");
     expect(nextFlowAfterToolResult("read_foundation", {}, "draft_ready", true)).toBe("draft_ready");
   });
@@ -35,9 +35,16 @@ describe("agentFlowStatusForTool", () => {
     expect(agentFlowStatusForTool("revise_draft", {}, "quality_checked")).toBe("draft_ready");
   });
 
-  it("质检/审稿 → quality_checked（已有草稿时）", () => {
-    expect(agentFlowStatusForTool("quality_check", {}, "draft_ready")).toBe("quality_checked");
-    expect(agentFlowStatusForTool("ai_review", {}, "draft_ready")).toBe("quality_checked");
+  it("硬伤检查 / 内容审阅做完（操作）→ quality_checked；核账、查 AI 味、没做成的不推；已定稿不退", () => {
+    const op = (mode: string, state: OperationViewData["state"] = "succeeded"): OperationViewData => ({
+      opId: "op-0123456789abcdef0123", kind: "inspect.run", mode, chapter: 3, what: "检查", state, stateText: "", allowed: [], summary: "", eventSeq: 1, origin: { kind: "chat" },
+    });
+    expect(flowAfterOperation(op("quality"), "draft_ready")).toBe("quality_checked");
+    expect(flowAfterOperation(op("review"), "draft_ready")).toBe("quality_checked");
+    expect(flowAfterOperation(op("continuity"), "draft_ready")).toBe("draft_ready");
+    expect(flowAfterOperation(op("flavor"), "draft_ready")).toBe("draft_ready");
+    expect(flowAfterOperation(op("quality", "failed"), "draft_ready")).toBe("draft_ready");
+    expect(flowAfterOperation(op("quality"), "committed")).toBe("committed");
   });
 
   it("预览入库 → waiting_commit_confirmation", () => {

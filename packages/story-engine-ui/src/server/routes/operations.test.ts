@@ -29,6 +29,21 @@ beforeEach(async () => {
   let open!: () => void;
   const gate = new Promise<void>((resolve) => { open = resolve; });
   release = open;
+  registerWaitRecipe(gate);
+});
+afterEach(async () => {
+  release();
+  // 等在跑的都结束再删书（不然配方收尾写记录时目录被删一半）。
+  for (let i = 0; i < 200; i += 1) {
+    if ((await listOperations(book)).every((record) => isTerminal(record.state))) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  __resetRecipesForTests();
+  await rm(root, { recursive: true, force: true });
+});
+
+/** 一个停在「wait」那步、等 gate 开的配方。 */
+function registerWaitRecipe(gate: Promise<void>): void {
   registerRecipe<{ readonly secret: string }>({
     kind: "test.wait",
     version: 1,
@@ -47,17 +62,7 @@ beforeEach(async () => {
     stepBudget: () => 1,
     modelTasks: () => [],
   });
-});
-afterEach(async () => {
-  release();
-  // 等在跑的都结束再删书（不然配方收尾写记录时目录被删一半）。
-  for (let i = 0; i < 200; i += 1) {
-    if ((await listOperations(book)).every((record) => isTerminal(record.state))) break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  __resetRecipesForTests();
-  await rm(root, { recursive: true, force: true });
-});
+}
 
 async function submit(key: string): Promise<string> {
   const outcome = await submitOperation(book, { kind: "test.wait", params: { secret: "参数原文" }, requestKey: key, issuedAt: new Date().toISOString(), origin: { kind: "chat", messageId: key } });
@@ -65,10 +70,10 @@ async function submit(key: string): Promise<string> {
   return outcome.record.opId;
 }
 
-async function until(opId: string, state: string): Promise<void> {
+async function until(opId: string, state: string, step?: string): Promise<void> {
   for (let i = 0; i < 200; i += 1) {
     const stored = await readOperation(book, opId);
-    if (stored.kind === "record" && stored.record.state === state) return;
+    if (stored.kind === "record" && stored.record.state === state && (step === undefined || stored.record.currentStep === step)) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`没等到 ${state}`);
@@ -125,6 +130,19 @@ describe("GET /api/operations", () => {
     expect(operations[0]).not.toHaveProperty("requestHash");
     const active = await callRoute(registerOperationsRoutes, "GET", `/api/operations?project=${encodeURIComponent(book)}&active=1`);
     expect((active.payload.operations as Record<string, unknown>[]).map((view) => view.opId)).toEqual([running]);
+  });
+
+  it("上个进程留下的「在做」：先对账，报停着、给接着做，不报还在做", async () => {
+    const opId = await submit("chat:m1");
+    // 等它进了那一步、停在 gate 上（之后不再写记录），再当这个进程没了：不然它迟到的那笔写又把自己登记回调度表。
+    await until(opId, "running", "wait");
+    // 当这个进程没了、换了一个新进程：调度表、对账记忆都清掉（盘上的记录还是 running）。
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    __resetRecipesForTests();
+    registerWaitRecipe(new Promise(() => undefined));
+    const active = await callRoute(registerOperationsRoutes, "GET", `/api/operations?project=${encodeURIComponent(book)}&active=1`);
+    expect(active.payload.operations).toEqual([expect.objectContaining({ opId, state: "paused", allowed: ["resume", "cancel"] })]);
   });
 
   it("号不对 → 404；没给书 → 400", async () => {

@@ -31,6 +31,7 @@ import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { finishDraftTurn, parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { finishOperationTurn, followOperation, settlesTurn } from "../agent/operation-turn.js";
 import { SUBMIT_TOOL_NAMES } from "../agent/tools/op-tools.js";
+import { reconcileOnOpen } from "../services/operations/executor.js";
 import { buildOperationSummary, operationSummaryText } from "../services/operations/summary.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
@@ -589,6 +590,8 @@ async function handleAgentChat(
     }
 
     await assertStoryEngineProject(projectDir);
+    // 操作对账（写作版本 P2a）：上个进程留下的「在做」先改成停着，这一轮的操作摘要、交新操作才不会把它当成还在跑。
+    await reconcileOnOpen(projectDir);
 
     // H3：把用户当前所在章注入 RequestContext（工具缺省回退用）+ system 上下文（引导 agent 默认作用于该章）。
     const currentChapter = readCurrentChapter(body.currentChapter);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterMessage } from "../types.js";
+import type { OperationViewData } from "../api/agentChatClient.js";
 import {
   emptyAssistantMessage,
   presentationFor,
@@ -441,50 +442,6 @@ describe("projectAgentEvent", () => {
     expect(cardOf(failed, "draft-versions")).toBeUndefined();
   });
 
-  it("check_continuity ok:true 且 0 处 → 消息挂 continuityCheck（照旧出「没发现对不上」卡）、步骤 completed（R4.1）", () => {
-    let msg = emptyAssistantMessage("check-ok");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "c1",
-      toolName: "check_continuity",
-      endedAt: 2,
-      output: {
-        ok: true,
-        chapter: 4,
-        continuityCheck: { chapter: 4, sure: [], maybe: [] },
-        summary: "核了第 4 章，没发现和前文对不上的地方。",
-      },
-    });
-    expect(cardOf(msg, "continuity")?.check).toEqual({ chapter: 4, sure: [], maybe: [] });
-    expect(msg.toolSteps![0].status).toBe("completed");
-  });
-
-  it("check_continuity 没核成（ok:false，还在读/出错）→ 消息上没有 continuityCheck，不出「没发现对不上」卡（R4.1/验收 3.1）", () => {
-    // fixture 模拟「还在读」时投影层真实收到的 payload（客户端层只透传白名单字段：ok/summary/chapter/
-    // continuityPending；sure/maybe 根本不过来）。另故意塞一个 continuityCheck 验证第二道守卫：
-    // 即便某个上游把卡塞进来了，ok:false 也不许挂——空数组不是「没问题」。
-    let msg = emptyAssistantMessage("check-not-ready");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "c1",
-      toolName: "check_continuity",
-      endedAt: 2,
-      output: {
-        ok: false,
-        chapter: 5,
-        continuityPending: { done: 4, total: 57 },
-        continuityCheck: { chapter: 5, sure: [], maybe: [] },
-        summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
-      },
-    });
-    expect(cardOf(msg, "continuity")?.check).toBeUndefined();
-    // 步骤如实落 failed（不是绿色完成），详情带工具的真实 summary——只留工具文字，不装作核过。
-    expect(msg.toolSteps![0].status).toBe("failed");
-    expect(msg.toolSteps![0].detail).toContain("这次没有核");
-  });
-
   it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
     let msg = emptyAssistantMessage("preview-verdict");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
@@ -902,14 +859,41 @@ describe("作者档按钮投影（重构 P4：「重写这一章」「确认改�
   });
 });
 
-describe("质检明细投影（quality_check → message 的 quality 卡）", () => {
-  it("带 qualityReport → 挂到 message 的 quality 卡", () => {
-    const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };
-    const message = project([
-      { type: "tool-call", toolCallId: "q", toolName: "quality_check", startedAt: 1 },
-      { type: "tool-result", toolCallId: "q", toolName: "quality_check", endedAt: 2, output: { ok: true, qualityReport: refined } },
+describe("操作投影（写作版本 P2a：检查交给执行器做）", () => {
+  const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: "op-0123456789abcdef0123", kind: "inspect.run", mode: "quality", chapter: 4, what: "硬伤检查·第 4 章",
+    state: "running", stateText: "在做", allowed: ["cancel"], summary: "", eventSeq: 2, origin: { kind: "chat", messageId: "user-1" },
+    ...overrides,
+  });
+  const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };
+
+  it("在做 → 操作卡；进度只记给在做的那次；做完挂结果卡（带查的版本），进度清掉", () => {
+    let msg = project([{ type: "operation", operation: view() }]);
+    msg = projectAgentEvent(msg, { type: "operation-progress", opId: "op-0123456789abcdef0123", text: "在查第 4 章" });
+    msg = projectAgentEvent(msg, { type: "operation-progress", opId: "op-ffffffffffffffffffff", text: "别的那次" });
+    expect(cardOf(msg, "operation")?.op).toMatchObject({ state: "running", progress: "在查第 4 章", what: "硬伤检查·第 4 章" });
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ state: "succeeded", stateText: "做完了", allowed: [], summary: "有 1 处硬伤", eventSeq: 5, inspect: { qualityReport: refined, checkedVersion: "v3" } }), announced: true });
+    expect(cardOf(msg, "operation")?.op).toMatchObject({ state: "succeeded", summary: "有 1 处硬伤", announced: true });
+    expect(cardOf(msg, "operation")?.op).not.toHaveProperty("progress");
+    expect(cardOf(msg, "quality")).toEqual({ type: "quality", report: refined, checkedVersion: "v3" });
+  });
+
+  it("迟到的旧记录不盖新的；同一次做完的再来一遍不重挂结果卡（作者在卡上点过的不被冲掉）", () => {
+    let msg = project([{ type: "operation", operation: view({ state: "succeeded", eventSeq: 5, inspect: { qualityReport: refined } }) }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ state: "running", eventSeq: 3 }) });
+    expect(cardOf(msg, "operation")?.op.state).toBe("succeeded");
+    const marked = { ...msg, cards: msg.cards!.map((card) => (card.type === "quality" ? { ...card, report: { ...refined, summary: "作者看过" } } : card)) };
+    const again = projectAgentEvent(marked, { type: "operation", operation: view({ state: "succeeded", eventSeq: 6, inspect: { qualityReport: refined } }) });
+    expect(cardOf(again, "quality")?.report.summary).toBe("作者看过");
+  });
+
+  it("没做成：只换操作卡，不挂结果卡", () => {
+    const msg = project([
+      { type: "operation", operation: view() },
+      { type: "operation", operation: view({ state: "failed", stateText: "没做成", allowed: [], summary: "模型没回", eventSeq: 4, failure: { message: "模型没回", retryable: true } }) },
     ]);
-    expect(cardOf(message, "quality")?.report).toEqual(refined);
+    expect(cardOf(msg, "operation")?.op).toMatchObject({ state: "failed", summary: "模型没回" });
+    expect(cardOf(msg, "quality")).toBeUndefined();
   });
 });
 

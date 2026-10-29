@@ -10,7 +10,7 @@ import { z } from "zod";
 import { blankToUndefined, coerceBoolean, coerceEnum, coerceNumber } from "../../lib/lenient-args.js";
 import { submitOperation, type SubmitOutcome } from "../../services/operations/executor.js";
 import { INSPECT_KIND } from "../../services/operations/recipes/inspect-run.js";
-import { operationWhat } from "../../services/operations/summary.js";
+import { operationWhat } from "../../services/operations/view.js";
 import { checkAuthorQuote } from "./author-quote.js";
 import {
   readAuthorWordsFromContext,

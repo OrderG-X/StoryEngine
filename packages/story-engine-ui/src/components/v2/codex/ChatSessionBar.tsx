@@ -15,6 +15,7 @@ import { markChatLoaded } from "../../../sync/chatSync.js";
 import * as api from "../../../api/chatSessionsClient.js";
 import type { ChatSession, ChatSessionIndex } from "../../../type-defs/workspace.js";
 import { formatRelativeSessionTime } from "./formatRelativeSessionTime.js";
+import { reconnectOperations } from "../../../workspace/operationReconnect.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -80,6 +81,8 @@ export function ChatSessionBar({ onClear }: {
     // 刚从会话文件读来的：记成已存，免得原样回写一遍。
     if (projectPath) markChatLoaded(projectPath, result.index.activeSessionId, messages);
     setMessages(messages);
+    // 这个会话里还没结束的操作：挂回去接着看（写作版本 P2a）。
+    if (projectPath) reconnectOperations(projectPath);
     setActiveArchivedCount(result.session.archivedCount ?? 0);
   }
 

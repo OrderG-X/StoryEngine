@@ -174,6 +174,7 @@ export function readWorkspaceMessages(value: unknown): {
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
   readonly cards?: readonly MessageCard[];
   readonly chapter?: number;
+  readonly issuedAt?: string;
 }[] {
   if (!Array.isArray(value)) return [];
   const messages: {
@@ -196,6 +197,7 @@ export function readWorkspaceMessages(value: unknown): {
     tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
     cards?: readonly MessageCard[];
     chapter?: number;
+    issuedAt?: string;
   }[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
@@ -253,6 +255,8 @@ export function readWorkspaceMessages(value: unknown): {
       ...(cards.length > 0 ? { cards } : {}),
       // 作者发这句时在看哪一章（右栏「这一章的对话」按它分）：只收正整数。
       ...(typeof item.chapter === "number" && Number.isInteger(item.chapter) && item.chapter > 0 ? { chapter: item.chapter } : {}),
+      // 作者这句的发出时间（写作版本 P2a：和消息号一起认这句交的操作，重发沿用）：只记在作者的话上。
+      ...(item.role === "user" && readIssuedAt(item.issuedAt) ? { issuedAt: readIssuedAt(item.issuedAt) } : {}),
     });
   }
   // Sanity 上限（防病态膨胀），不是功能性截断。⚠️ 触顶会静默丢最旧消息且【绕过冷归档】
@@ -361,6 +365,8 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     // 「重写这一章」「接着往下写」「确认改设定」按钮的参数（重构 P4）：同理要进白名单，内容由服务端执行前再校验。
     const rewriteTarget = readWorkspaceRewriteTarget(item.rewriteTarget);
     const foundationTarget = readWorkspaceFoundationTarget(item.foundationTarget);
+    // 「重试这一步」重发的那句话的消息号和发出时间（写作版本 P2a）：不进白名单的话重开书后重试就成了一句新话。
+    const retryOf = readMessageRef(item.retryOf);
     actions.push({
       id,
       label,
@@ -375,9 +381,23 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       ...(ledgerTarget ? { ledgerTarget } : {}),
       ...(rewriteTarget ? { rewriteTarget } : {}),
       ...(foundationTarget ? { foundationTarget } : {}),
+      ...(retryOf ? { retryOf } : {}),
     });
   }
   return actions.slice(0, 8);
+}
+
+/** 作者一句话的消息号和发出时间（和服务端 parseMessageRef 同一口径）。 */
+function readMessageRef(value: unknown): { messageId: string; issuedAt: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const messageId = readString(value.messageId);
+  const issuedAt = readIssuedAt(value.issuedAt);
+  return messageId && /^[A-Za-z0-9_-]{1,64}$/u.test(messageId) && issuedAt ? { messageId, issuedAt } : undefined;
+}
+
+/** 发出时间：读得出的时间（不长于 40 字）才收。 */
+function readIssuedAt(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterGoal?: string; continueDraft?: true } | undefined {

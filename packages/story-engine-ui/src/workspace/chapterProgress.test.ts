@@ -45,7 +45,7 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
     expect(p.write.done).toBe(true);
     expect(p.write.text).toMatch(/比目标少/);
     expect(p.check).toMatchObject({ state: "none", done: false, text: "还没核" });
-    expect(p.primary).toEqual({ kind: "check_continuity", label: "核账" });
+    expect(p.primary).toEqual({ kind: "continuity", label: "核账" });
     expect(p.statusLine).toBe("还没核账");
   });
 
@@ -78,7 +78,7 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
   it("核过后稿子变了（版本变 / 还有没存的字）：再核一遍", () => {
     const moved = chapterProgress({ paper: paper({ baseVersion: "v2" }), result: result(), targetWords: null });
     expect(moved.check).toMatchObject({ state: "stale", done: false, text: "核过后改过稿" });
-    expect(moved.primary).toEqual({ kind: "check_continuity", label: "再核一遍" });
+    expect(moved.primary).toEqual({ kind: "continuity", label: "再核一遍" });
     const dirty = chapterProgress({ paper: paper({ body: `${BODY}又写一句。` }), result: result(), targetWords: null });
     expect(dirty.check.state).toBe("stale");
   });
@@ -186,21 +186,20 @@ describe("核账卡之后定论改齐了：改掉的条目不再算", () => {
   });
 });
 
-describe("chatStore：不是问题记在卡上、核完记版本", () => {
+describe("chatStore：不是问题记在卡上", () => {
   afterEach(() => useChatStore.setState({ messages: [] }));
 
-  it("记下 / 撤回，空了字段就去掉；版本只盖这张卡", () => {
+  it("记下 / 撤回，空了字段就去掉；只动这张卡，服务端带的版本留着", () => {
     useChatStore.setState({ messages: [
-      { id: "m1", role: "assistant", content: "", cards: [{ type: "continuity", check }] },
+      { id: "m1", role: "assistant", content: "", cards: [{ type: "continuity", check, checkedVersion: "v7" }] },
       { id: "m2", role: "assistant", content: "", cards: [{ type: "continuity", check }] },
     ] });
     const store = useChatStore.getState();
     store.setContinuityDismissed("m1", "k1", true);
     store.setContinuityDismissed("m1", "k1", true);
-    store.stampCardVersion("m1", "continuity", "v7");
     const card = () => useChatStore.getState().messages[0]!.cards![0]!;
     expect(card()).toMatchObject({ dismissed: ["k1"], checkedVersion: "v7" });
-    expect(useChatStore.getState().messages[1]!.cards![0]).not.toHaveProperty("checkedVersion");
+    expect(useChatStore.getState().messages[1]!.cards![0]).not.toHaveProperty("dismissed");
     useChatStore.getState().setContinuityDismissed("m1", "k1", false);
     expect(card()).not.toHaveProperty("dismissed");
   });

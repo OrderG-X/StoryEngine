@@ -19,10 +19,11 @@
  *   foundation_write    → foundationAgent（显示「资料助手」）
  * 未知工具仍 push 一个带可读标签的 toolStep（保证不静默、不崩），但不强造一张可能误导的卡。
  */
-import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
-import type { ChapterMessage, AiFlavorReport, MessageSegment, ProposalBasis } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, DraftVersionsCardData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
-import { cardOf, withCard, withCards } from "../utils/messageCards.js";
+import type { ChapterAgentCard, ToolStep } from "../api/types.js";
+import type { InspectCardsData, OperationViewData } from "../api/agentChatClient.js";
+import type { ChapterMessage, MessageCard, MessageSegment, ProposalBasis } from "../types.js";
+import type { BrainstormCardData, CommitPreviewCardData, DraftVersionsCardData, NextStepPrompt, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
+import { cardOf, updateCard, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
 function isVerdictToolName(toolName: string | undefined): boolean {
@@ -67,26 +68,15 @@ export interface AgentToolResultOutput {
   readonly snapshotId?: string;
   /** 写类/出稿工具实际操作的章号（agentChatClient 透传）。回写进 turnSnapshots，供「撤销到此回合」写回被撤销回合实际操作的章（治单聊天走天涯后在第5章撤销属于第1章的回合错写到第5章）。 */
   readonly chapter?: number;
-  /** check_ai_flavor 专属：体检报告（agentChatClient 透传）。投影时挂到该消息→时间线渲染体检卡。 */
-  readonly aiFlavorReport?: AiFlavorReport;
-  /** ai_review 专属：审稿报告（agentChatClient 透传）。投影时挂到该消息→渲染「审校问题清单」可点卡。 */
-  readonly draftReview?: DraftReviewView;
   /** suggest_next_steps 专属：agent 提议的下一步选项（agentChatClient 透传）。投影时挂到该消息→驱动「下一步」卡。 */
   readonly nextStepPrompt?: NextStepPrompt;
   /** commit_apply 专属：入库报告 CommitReport（agentChatClient 透传）。投影时挂到该消息→渲染「入库」delta 卡。 */
   readonly commitReport?: unknown;
-  /** quality_check 专属：分层质检报告（agentChatClient 透传）。投影时挂到该消息→渲染「质检」明细卡。 */
-  readonly qualityReport?: QualityCardReport;
-  /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
-  readonly continuityCheck?: ContinuityCheckData;
   readonly brainstorm?: BrainstormCardData;
   /** generate_draft 专属：落选的几版全文（「另外几版」卡）。 */
   readonly draftVersions?: DraftVersionsCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
-  /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
-   *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
-  readonly continuityPending?: { readonly done: number; readonly total: number };
   /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
   readonly commitPreview?: CommitPreviewCardData;
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
@@ -109,6 +99,10 @@ export type AgentProjectionEvent =
   | { readonly type: "status"; readonly text: string }
   | { readonly type: "usage"; readonly usage: { readonly input: number; readonly cachedInput: number; readonly output: number } }
   | { readonly type: "tool-call"; readonly toolCallId: string; readonly toolName: string; readonly startedAt: number }
+  /** 这一轮交上的操作又变了（写作版本 P2a）：操作卡跟着变；检查做完了挂结果卡。 */
+  | { readonly type: "operation"; readonly operation: OperationViewData; readonly announced?: true }
+  /** 操作的一句进度。 */
+  | { readonly type: "operation-progress"; readonly opId: string; readonly text: string }
   | {
       readonly type: "tool-result";
       readonly toolCallId: string;
@@ -175,7 +169,10 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   brainstorm_chapter: { stepLabel: "想走法", card: null },
   generate_draft: { stepLabel: "生成正文", card: null },
   revise_draft: { stepLabel: "修改工作稿", card: null },
-  // 审校簇
+  // 检查（写作版本 P2a）：交一次检查（核账 / 硬伤检查 / 内容审阅 / 查 AI 味）、查上次那次检查
+  run_check: { stepLabel: "检查", card: null },
+  read_operation: { stepLabel: "查上次的检查", card: null },
+  // P2a 前的检查工具（老会话回放仍显示原名）
   quality_check: { stepLabel: "硬伤检查", card: null },
   check_continuity: { stepLabel: "核账", card: null },
   ai_review: { stepLabel: "内容审阅", card: null },
@@ -214,9 +211,8 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "read_foundation",
   "generate_chapter_steering",
   "brainstorm_chapter",
-  "quality_check",
-  "check_continuity",
-  "ai_review",
+  "run_check",
+  "read_operation",
   "commit_preview",
   "settle_preview",
   "settle_fact",
@@ -269,6 +265,13 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       return { ...message, tokenUsage: event.usage };
     case "tool-call":
       return applyToolCall(message, event);
+    case "operation":
+      return applyOperation(message, event.operation, event.announced === true);
+    case "operation-progress":
+      // 只给还在做的那次记进度：结束了的不再被迟到的进度改回「在做」。
+      return updateCard(message, "operation", (card) => (
+        card.op.opId === event.opId && LIVE_OPERATION_STATES.has(card.op.state) ? { ...card, op: { ...card.op, progress: event.text } } : card
+      ));
     case "tool-result": {
       // 结构性防谎报 + 待确认 + 裁决：
       // - needsConfirmation===true（如删角色未确认）→「待确认」(暖色 pending，不是失败)，优先级最高。
@@ -292,15 +295,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 块级撤销的命门：snapshotId 已从后端流到 event.output（agentChatClient→onToolResult），
       // 这里把它（连同 refreshScope）回写到消息上，建立「回合↔git 快照」映射，供 M3 块脚「撤销到此」。
       const withEffects = recordTurnEffects(settled, event.toolName, event.output);
-      // 去 AI 味体检卡随这条消息走（替代旧的全局常驻挂件，治「一直钉底部」）：把报告挂到本条消息上，
-      // 在时间线里随对话滚动。ok:false（体检没成）不挂、不把失败当结果。
-      if (event.toolName === "check_ai_flavor" && event.output?.aiFlavorReport && event.output.aiFlavorReport.ok !== false) {
-        return withCard(withEffects, { type: "ai-flavor", report: event.output.aiFlavorReport });
-      }
-      // AI 审稿报告随这条消息走：渲染「审校问题清单」可点卡（点一条=给 agent 发改写意图）。
-      if (event.toolName === "ai_review" && event.output?.draftReview) {
-        return withCard(withEffects, { type: "draft-review", review: event.output.draftReview });
-      }
       // agent 主动提议的「下一步」选项：挂到这条消息，驱动「下一步」选项卡（替代写死选项）。
       if (event.toolName === "suggest_next_steps" && event.output?.nextStepPrompt) {
         return withCard(withEffects, { type: "next-steps", prompt: event.output.nextStepPrompt });
@@ -353,16 +347,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
-      // 质检明细：quality_check 的分层报告随消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。
-      if (event.toolName === "quality_check" && event.output?.qualityReport) {
-        return withCard(withEffects, { type: "quality", report: event.output.qualityReport });
-      }
-      // 核账卡随这条消息走（渲染「核账」卡）。ok:false（还在读 / 出错 / 没正文）不挂——
-      // sure/maybe 空数组不是「没问题」，否则显成「没发现对不上」的假成功卡（R4.1/验收 3.1），
-      // 只留工具文字如实说。与上面 check_ai_flavor 的 ok!==false 守卫同款（双保险：客户端层已先拦一道）。
-      if (event.toolName === "check_continuity" && event.output?.continuityCheck && event.output?.ok !== false) {
-        return withCard(withEffects, { type: "continuity", check: event.output.continuityCheck });
-      }
       // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
       if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
         return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
@@ -386,6 +370,47 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
     default:
       return message;
   }
+}
+
+/** 还在做的几种（进度只记给它们）。 */
+const LIVE_OPERATION_STATES: ReadonlySet<OperationCardData["state"]> = new Set(["queued", "running"]);
+
+/**
+ * 操作又变了（写作版本 P2a）：操作卡换成这一份（迟到的旧记录不盖新的；还在做的留着上一句进度）。检查头一回做完时按种类挂结果卡
+ * （核账卡、硬伤检查卡……，checkedVersion＝查的是工作稿哪一版）；同一次做完的记录再来一遍不重挂（作者在卡上点过的「不是问题」不被冲掉）。
+ */
+function applyOperation(message: ChapterMessage, view: OperationViewData, announced: boolean): ChapterMessage {
+  const current = cardOf(message, "operation")?.op;
+  const same = current?.opId === view.opId;
+  if (same && current.eventSeq > view.eventSeq) return message;
+  const op: OperationCardData = {
+    opId: view.opId,
+    kind: view.kind,
+    ...(view.mode !== undefined ? { mode: view.mode } : {}),
+    ...(view.chapter !== undefined ? { chapter: view.chapter } : {}),
+    what: view.what,
+    state: view.state,
+    stateText: view.stateText,
+    allowed: view.allowed,
+    summary: view.summary,
+    ...(same && current.progress && LIVE_OPERATION_STATES.has(view.state) ? { progress: current.progress } : {}),
+    eventSeq: view.eventSeq,
+    ...(announced || (same && current.announced) ? { announced: true as const } : {}),
+  };
+  const next = withCard(message, { type: "operation", op });
+  if (!view.inspect || (same && current.state === "succeeded")) return next;
+  return withCards(next, inspectCards(view.inspect));
+}
+
+/** 检查结果 → 卡（和 P2a 前四个检查工具的卡同一套）。 */
+function inspectCards(inspect: InspectCardsData): readonly MessageCard[] {
+  const version = inspect.checkedVersion !== undefined ? { checkedVersion: inspect.checkedVersion } : {};
+  return [
+    ...(inspect.continuityCheck ? [{ type: "continuity" as const, check: inspect.continuityCheck, ...version }] : []),
+    ...(inspect.qualityReport ? [{ type: "quality" as const, report: inspect.qualityReport, ...version }] : []),
+    ...(inspect.draftReview ? [{ type: "draft-review" as const, review: inspect.draftReview, ...version }] : []),
+    ...(inspect.aiFlavorReport ? [{ type: "ai-flavor" as const, report: inspect.aiFlavorReport, ...version }] : []),
+  ];
 }
 
 function applyToolCall(

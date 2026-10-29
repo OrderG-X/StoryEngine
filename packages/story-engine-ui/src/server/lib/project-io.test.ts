@@ -594,7 +594,8 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
           question: "核账做完了，接下来？",
           choices: [
             { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
-            { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } },
+            { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" } },
+            { label: "缺请求号丢", intent: "c", action: { kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 5 } } },
             { label: "我自己改", intent: "我自己改，先放着" },
             { label: "坏动作丢", intent: "a", action: { toolName: "commit_apply", chapter: 5 } },
             { label: "残缺动作丢", intent: "b", action: { toolName: "commit_preview" } },
@@ -605,10 +606,12 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     ]);
     const choices = cardOf(out[0], "next-steps")!.prompt.choices;
     expect(choices[0]).toEqual({ label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } });
-    expect(choices[1]).toEqual({ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
-    expect(choices[2]).not.toHaveProperty("action");
-    expect(choices[3]).not.toHaveProperty("action");
-    expect(choices[4]).not.toHaveProperty("action");
+    expect(choices[1]).toEqual({
+      label: "再细核一遍",
+      intent: "再细核一遍：这一章重新对一遍前文",
+      action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" },
+    });
+    for (const index of [2, 3, 4, 5]) expect(choices[index]).not.toHaveProperty("action");
   });
 
   it("isErrorNotice/errorDetail round-trip：错误卡字段保留，旧消息不多写", () => {

@@ -73,6 +73,11 @@ export interface ChapterMessage {
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
   /** 作者发这句时在看哪一章（只记在作者的话上；右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
   readonly chapter?: number;
+  /**
+   * 作者这句发出的时间（写作版本 P2a，只记在作者的话上）：和消息号一起随请求发，服务端按「消息号」认这一句交的操作；
+   * 重发沿用存下的这个，不重新取时间。
+   */
+  readonly issuedAt?: string;
 }
 
 /**
@@ -90,12 +95,14 @@ export type MessageCard =
    * checkedVersion＝结果到时稿纸的版本号（核的是这一版），稿纸版本变了就是「核过后改过稿」。
    */
   | { readonly type: "continuity"; readonly check: ContinuityCheckData; readonly dismissed?: readonly string[]; readonly checkedVersion?: string | null }
-  /** 审稿（ai_review）问题清单。 */
-  | { readonly type: "draft-review"; readonly review: DraftReviewView }
-  /** 硬伤检查（quality_check）。 */
-  | { readonly type: "quality"; readonly report: QualityCardReport }
-  /** 机器腔体检（check_ai_flavor）；fixedIds＝已点「改掉这句」改成功的几条。 */
-  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[] }
+  /** 内容审阅问题清单。checkedVersion＝审的是工作稿哪一版（审定稿时没有），和核账卡同一口径。 */
+  | { readonly type: "draft-review"; readonly review: DraftReviewView; readonly checkedVersion?: string | null }
+  /** 硬伤检查。 */
+  | { readonly type: "quality"; readonly report: QualityCardReport; readonly checkedVersion?: string | null }
+  /** 机器腔体检；fixedIds＝已点「改掉这句」改成功的几条。 */
+  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[]; readonly checkedVersion?: string | null }
+  /** 一次操作（写作版本 P2a：对话里、按钮交上的检查）：在做到哪、停着为什么停、能点什么。做完的结果另挂一张卡。 */
+  | { readonly type: "operation"; readonly op: OperationCardData }
   /** AI 提的「下一步」选项（suggest_next_steps）。 */
   | { readonly type: "next-steps"; readonly prompt: NextStepPrompt }
   /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错，reason＝服务端分的类（P11，老消息没有）。 */
@@ -114,6 +121,29 @@ export type MessageCard =
   | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string; readonly dropped?: true };
 
 export type MessageCardType = MessageCard["type"];
+
+/** 操作卡（服务端操作视图里给界面的那几样；中文说法都是服务端给的，界面不自己拼）。 */
+export interface OperationCardData {
+  readonly opId: string;
+  readonly kind: string;
+  readonly mode?: string;
+  readonly chapter?: number;
+  /** 做的什么（「核账·第 3 章」）。 */
+  readonly what: string;
+  readonly state: "queued" | "running" | "waiting_author" | "paused" | "succeeded" | "failed" | "cancelled" | "obsolete";
+  /** 状态的中文说法（停着的带为什么停）。 */
+  readonly stateText: string;
+  /** 作者能点的。 */
+  readonly allowed: readonly ("resume" | "cancel")[];
+  /** 结论或没成的原因。 */
+  readonly summary: string;
+  /** 在做的时候最新的一句进度（「核账员在读第 3 章」）；结束了清掉。 */
+  readonly progress?: string;
+  /** 记录到第几条事件（迟到的旧记录不盖新的）。 */
+  readonly eventSeq: number;
+  /** 结束时这一轮的话里已经说了结论（卡上不再重复）；后台做完、重开才收到的没有。 */
+  readonly announced?: true;
+}
 
 /** 定论卡：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
 export interface SettleCardData {

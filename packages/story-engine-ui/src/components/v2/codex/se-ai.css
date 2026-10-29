@@ -421,6 +421,13 @@
   .msg.se-op-row{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;text-align:left;font-size:13px;color:var(--faint);}
   .msg.se-op-row.is-running{color:var(--muted);}
   .se-op-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+  /* 操作卡（P2a 核账 / 检查交给执行器）：一行说在做什么、停着的带「接着做 / 不要了」 */
+  .se-op-card{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 0;font-size:13px;line-height:1.7;color:var(--muted);}
+  .se-op-card.is-ended{color:var(--faint);}
+  .se-op-card .se-op-text{flex:1 1 180px;min-width:0;}
+  .se-op-card .se-op-acts{display:flex;gap:6px;flex:none;}
+  /* 检查结果卡上方：查完之后稿子改过了 */
+  .se-card-stale{margin:6px 0 0;font-size:12px;line-height:1.6;color:var(--faint);}
 
   /* 历史会话 / 记忆浮层：标题淡字，当前会话只用底色区分，不再金字 */
   .cssp-head{color:var(--faint);letter-spacing:0;text-transform:none;font-weight:500;}

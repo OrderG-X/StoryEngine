@@ -28,7 +28,7 @@ export function PaperToolbar({
     : !progress.write.done
       ? [{ button: "write", label: "AI 写这一章" }]
       : [
-        { button: "check_continuity", label: check.state === "none" ? "核账" : "再核一遍" },
+        { button: "continuity", label: check.state === "none" ? "核账" : "再核一遍" },
         { button: "commit_preview", label: "定稿" },
       ];
   // 主按钮是「去看那 N 处」时，工具条上没有主按钮——状态那句本身就能点。

@@ -1,5 +1,5 @@
 /**
- * ContinuityCheckCard —— 「核账」结果卡（check_continuity，随对应 assistant 消息渲染）。
+ * ContinuityCheckCard —— 「核账」结果卡（检查操作 continuity 做完的结果，随对应 assistant 消息渲染）。
  *
  * 每条 = 本章原句 + 哪里对不上 + 一行小按钮（「对照第 N 章」点开看前文原句、「改这处」「不是问题」）。
  * 对的是设定卡的条目多一个「改设定卡」：错的可能是卡（尤其 AI 补的），点了翻到设定本那张卡，作者自己改。
