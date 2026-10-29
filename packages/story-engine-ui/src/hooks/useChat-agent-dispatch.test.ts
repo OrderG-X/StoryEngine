@@ -172,7 +172,7 @@ const DRAFT_OP = "op-draft56789abcdef0123";
 function draftView(overrides: Partial<OperationViewData> = {}): OperationViewData {
   return {
     opId: DRAFT_OP, kind: "draft.change", mode: "write", chapter: 3, what: "写第 3 章", state: "running", stateText: "在做",
-    allowed: ["cancel"], summary: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
+    allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
   };
 }
 
@@ -1009,7 +1009,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   const OP = "op-0123456789abcdef0123";
   const opView = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
     opId: OP, kind: "inspect.run", mode: "flavor", chapter: 3, what: "查 AI 味·第 3 章", state: "running", stateText: "在做",
-    allowed: ["cancel"], summary: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
+    allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
   });
   const flavorReport = {
     ok: true,
@@ -1077,10 +1077,12 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     await act(async () => {
       await result.current.handleSendMessage("查 AI 味");
     });
+    // 不另记一句「还在做」：卡自己跟着变。
     const last = lastAssistant()!;
+    expect(hasCard(last, "operation")).toBe(true);
     expect(hasCard(last, "error")).toBe(false);
     expect(last.suggestedActions ?? []).toEqual([]);
-    expect(last.content).toBe("查 AI 味·第 3 章还在做，做完上面这张卡会更新。");
+    expect(useChatStore.getState().messages.some((item) => item.content.includes("还在做"))).toBe(false);
     expect(vi.mocked(listActiveOperations)).toHaveBeenCalledWith(PROJECT, expect.anything());
   });
 

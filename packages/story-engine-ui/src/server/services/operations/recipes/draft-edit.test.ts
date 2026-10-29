@@ -70,7 +70,7 @@ describe("fix：核账卡改这处", () => {
     expect(record.state).toBe("succeeded");
     expect(fixCallModel).toHaveBeenCalledTimes(1);
     expect(await bodyOf(1)).toBe("他说那家店八几年就没了。老周点头。\n天快黑了。");
-    expect(summary).toBe("改好了 2 处（可撤销）。");
+    expect(summary).toBe("第 1 章改好了 2 处（可撤销）。");
     expect(body).toMatchObject({ kind: "draft.change", mode: "fix", ok: true, chapter: 1, failed: [] });
     expect(body?.changes).toEqual([{ from: "他说那家店八几年还开着。", to: "他说那家店八几年就没了。" }, { from: "天黑了。", to: "天快黑了。" }]);
     expect((await listSnapshots(book)).some((snapshot) => snapshot.id === body?.snapshotId)).toBe(true);
@@ -116,7 +116,7 @@ describe("deai：AI 味卡改掉这句 / 一键全修", () => {
     expect(await bodyOf(1)).toBe("他攥紧了拳头。门开了。仿佛整个世界都安静了。");
     expect(body?.changes).toEqual([{ from: "那一刻，他心中五味杂陈。", to: "他攥紧了拳头。" }]);
     expect(body?.failed.map((item) => item.target)).toEqual(["仿佛整个世界都安静了。"]);
-    expect(summary).toBe("改掉了 1 处机器腔（可撤销）。1 处没改成：没定位到，或 AI 没给出能用的改法。");
+    expect(summary).toBe("第 1 章改掉了 1 处机器腔（可撤销）。1 处没改成：没定位到，或 AI 没给出能用的改法。");
   });
 
   it("模型没跑成：记成没做成，稿子不动", async () => {
@@ -147,7 +147,7 @@ describe("revise：对话改稿", () => {
     }, fakeDraftDeps({ fixCallModel }));
     expect(await bodyOf(1)).toBe("门厅的灯换成了暖黄的。\n\n林远轻轻带上了那扇门，走廊尽头有光。");
     expect(prompts[1]).toContain("门厅的灯换成了暖黄的。");
-    expect(summary).toBe("改好了 2 处（可撤销）。");
+    expect(summary).toBe("第 1 章改好了 2 处（可撤销）。");
     expect(body).toMatchObject({ mode: "revise", ok: true });
   });
 
@@ -157,7 +157,7 @@ describe("revise：对话改稿", () => {
     const { summary } = await runDraftEdit(book, "revise", { chapter: 1, edits: [{ targetText: "一九八五年春", replacementText: "一九八七年春" }] }, fakeDraftDeps({ fixCallModel }));
     expect(fixCallModel).not.toHaveBeenCalled();
     expect(await bodyOf(1)).toBe("林秋，一九八七年春。");
-    expect(summary).toBe("按你给的原文换上了（可撤销）。");
+    expect(summary).toBe("第 1 章按你给的原文换上了（可撤销）。");
   });
 
   it("AI 去改了别处：这处没改成、照实说，稿子不动", async () => {
@@ -192,7 +192,7 @@ describe("revise preview：选中文字改写，先给作者看", () => {
     expect(done.state).toBe("succeeded");
     expect(fixCallModel).toHaveBeenCalledTimes(1);
     expect(await bodyOf(1)).toBe("他轻轻推开门。");
-    expect((done.result as { summary?: string }).summary).toBe("换上了（可撤销）。");
+    expect((done.result as { summary?: string }).summary).toBe("第 1 章换上了（可撤销）。");
   });
 
   it("「再改一版」：带着上一版重改、再停下等；最多改到第 5 版", async () => {

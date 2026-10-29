@@ -17,7 +17,7 @@ const report = {
 
 function view(overrides: Partial<OperationViewData> = {}): OperationViewData {
   return {
-    opId: "op-0123456789abcdef0123", kind: "draft.change", mode: "deai", chapter: 4, what: "去 AI 味·第 4 章", state: "succeeded", stateText: "", allowed: [], summary: "", eventSeq: 3,
+    opId: "op-0123456789abcdef0123", kind: "draft.change", mode: "deai", chapter: 4, what: "去 AI 味·第 4 章", state: "succeeded", stateText: "", allowed: [], summary: "", conclusion: "", eventSeq: 3,
     origin: { kind: "chat" },
     draft: { chapter: 4, applied: true, changes: [{ from: "那一刻，他\n明白了。", to: "他把信折好。" }] },
     ...overrides,

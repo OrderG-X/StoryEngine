@@ -386,6 +386,7 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     stateText: view.stateText,
     allowed: view.allowed,
     summary: view.summary,
+    ...(view.conclusion ? { conclusion: view.conclusion } : {}),
     ...(same && current.progress && LIVE_OPERATION_STATES.has(view.state) ? { progress: current.progress } : {}),
     eventSeq: view.eventSeq,
     ...(announced || (same && current.announced) ? { announced: true as const } : {}),

@@ -9,7 +9,7 @@ describe("agentFlowStatusForTool", () => {
 
   it("写稿做完了（操作）：换上了工作稿 → draft_ready（重写已定稿的章也是）；留成候选、没做成的不推", () => {
     const op = (applied: boolean | undefined, state: OperationViewData["state"] = "succeeded"): OperationViewData => ({
-      opId: "op-0123456789abcdef0123", kind: "draft.change", mode: "write", chapter: 3, what: "写稿", state, stateText: "", allowed: [], summary: "", eventSeq: 1, origin: { kind: "chat" },
+      opId: "op-0123456789abcdef0123", kind: "draft.change", mode: "write", chapter: 3, what: "写稿", state, stateText: "", allowed: [], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat" },
       ...(applied !== undefined ? { draft: { chapter: 3, applied } } : {}),
     });
     expect(flowAfterOperation(op(true), "draft_generating")).toBe("draft_ready");
@@ -20,7 +20,7 @@ describe("agentFlowStatusForTool", () => {
 
   it("硬伤检查 / 内容审阅做完（操作）→ quality_checked；核账、查 AI 味、没做成的不推；已定稿不退", () => {
     const op = (mode: string, state: OperationViewData["state"] = "succeeded"): OperationViewData => ({
-      opId: "op-0123456789abcdef0123", kind: "inspect.run", mode, chapter: 3, what: "检查", state, stateText: "", allowed: [], summary: "", eventSeq: 1, origin: { kind: "chat" },
+      opId: "op-0123456789abcdef0123", kind: "inspect.run", mode, chapter: 3, what: "检查", state, stateText: "", allowed: [], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat" },
     });
     expect(flowAfterOperation(op("quality"), "draft_ready")).toBe("quality_checked");
     expect(flowAfterOperation(op("review"), "draft_ready")).toBe("quality_checked");

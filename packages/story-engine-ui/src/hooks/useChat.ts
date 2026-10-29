@@ -265,10 +265,10 @@ export function useChat(params: UseChatParams): UseChatResult {
         // 关页 / 刷新掐断的流不是出错：不记错误卡（交了的操作重开书会接上）。
         if (pageLeaving()) return;
         // 这一轮交的操作还没结束：断的只是对话这条流，操作照做——不说「没做完」、不给重试，接着订阅它（P2a 第九节「重连」）。
+        // 也不另记一句「还在做」：卡自己跟着变（软件关过的停着、做完的结论），另记的那句会和卡对不上（杀进程真测 10-30）。
         const turnMessage = useChatStore.getState().messages.find((item) => item.id === assistantMsgId);
         const live = turnMessage ? cardOf(turnMessage, "operation")?.op : undefined;
         if (live && !ENDED_OPERATION_STATES.has(live.state)) {
-          appendMessage({ id: `assistant-agent-error-${Date.now()}`, role: "assistant", content: `${live.what}还在做，做完上面这张卡会更新。` });
           if (projectPath) reconnectOperations(projectPath);
           return;
         }

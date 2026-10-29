@@ -25,7 +25,7 @@ const OP_B = "op-bbbbbbbbbbbbbbbbbbbb";
 function view(opId: string, overrides: Partial<OperationViewData> = {}): OperationViewData {
   return {
     opId, kind: "inspect.run", mode: "quality", chapter: 3, what: "质检·第 3 章", state: "running", stateText: "在做", allowed: ["cancel"],
-    summary: "", eventSeq: 1, origin: { kind: "chat", messageId: "u1" },
+    summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "u1" },
     ...overrides,
   };
 }
@@ -86,6 +86,8 @@ describe("reconnectOperations", () => {
     const [, a1, , a2] = useChatStore.getState().messages;
     expect(cardOf(a1!, "operation")?.op).toMatchObject({ opId: OP_A, state: "succeeded", summary: "两处要看" });
     expect(cardOf(a1!, "operation")?.op.announced).toBeUndefined();
+    // 结论只在 owner 上（接着做那一轮说了，原来那条不再说一遍）。
+    expect(cardOf(a1!, "operation")?.op.conclusion).toBeUndefined();
     expect(cardOf(a1!, "quality")).toMatchObject({ checkedVersion: "v7" });
     expect(cardOf(a2!, "operation")?.op).toMatchObject({ opId: OP_B, state: "cancelled" });
   });
@@ -125,12 +127,14 @@ describe("projectOperationEverywhere", () => {
       ],
     });
     projectOperationEverywhere(view(OP_A, {
-      state: "succeeded", allowed: [], eventSeq: 4, summary: "没问题",
+      state: "succeeded", allowed: [], eventSeq: 4, summary: "没问题", conclusion: "第 3 章硬伤检查：没问题",
       inspect: { qualityReport: { blocking: [], soft: [] } as never },
     }), "a2", { announced: true });
     const [a1, a2] = useChatStore.getState().messages;
     expect(cardOf(a1!, "operation")?.op).toMatchObject({ state: "succeeded" });
     expect(cardOf(a1!, "operation")?.op.announced).toBeUndefined();
+    // 结论只在 owner 上（接着做那一轮说了，原来那条不再说一遍）。
+    expect(cardOf(a1!, "operation")?.op.conclusion).toBeUndefined();
     expect(cardOf(a1!, "quality")).toBeUndefined();
     expect(cardOf(a2!, "operation")?.op.announced).toBe(true);
     expect(cardOf(a2!, "quality")).toBeDefined();

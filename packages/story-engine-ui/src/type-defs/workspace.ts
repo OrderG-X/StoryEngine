@@ -133,6 +133,8 @@ export interface OperationCardData {
   readonly allowed: readonly ("resume" | "cancel")[];
   /** 结论或没成的原因。 */
   readonly summary: string;
+  /** 结束了的那一句（服务端拼好的，卡上照显示）；没结束是空串。 */
+  readonly conclusion?: string;
   /** 在做的时候最新的一句进度（「核账员在读第 3 章」）；结束了清掉。 */
   readonly progress?: string;
   /** 记录到第几条事件（迟到的旧记录不盖新的）。 */

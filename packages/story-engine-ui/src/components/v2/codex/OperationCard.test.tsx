@@ -34,11 +34,12 @@ describe("OperationCard", () => {
     expect((screen.getByRole("button", { name: "不要了" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("结束了：这一轮说过就不显示；后台做完的照实写一句结论", () => {
-    const { container, rerender } = render(<OperationCard op={op({ state: "succeeded", allowed: [], summary: "没发现对不上的", announced: true })} inLiveTurn={false} busy={false} />);
+  it("结束了：这一轮说过就不显示；后台做完的照服务端那句结论写，不再拿「做的什么」拼（不重复章号）", () => {
+    const done = { state: "succeeded" as const, allowed: [], summary: "核了第 3 章，没发现对不上的", conclusion: "核了第 3 章，没发现对不上的" };
+    const { container, rerender } = render(<OperationCard op={op({ ...done, announced: true })} inLiveTurn={false} busy={false} />);
     expect(container.textContent).toBe("");
-    rerender(<OperationCard op={op({ state: "succeeded", allowed: [], summary: "没发现对不上的" })} inLiveTurn={false} busy={false} />);
-    expect(screen.getByText("核账·第 3 章：没发现对不上的")).toBeTruthy();
+    rerender(<OperationCard op={op(done)} inLiveTurn={false} busy={false} />);
+    expect(container.textContent).toBe("核了第 3 章，没发现对不上的");
     rerender(<OperationCard op={op({ state: "failed", allowed: [], summary: "", stateText: "没做成" })} inLiveTurn={false} busy={false} />);
     expect(screen.getByText("核账·第 3 章：没做成")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();

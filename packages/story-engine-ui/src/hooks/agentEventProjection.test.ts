@@ -840,7 +840,7 @@ describe("作者档按钮投影（重构 P4：「重写这一章」「确认改�
 describe("操作投影（写作版本 P2a：检查交给执行器做）", () => {
   const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
     opId: "op-0123456789abcdef0123", kind: "inspect.run", mode: "quality", chapter: 4, what: "硬伤检查·第 4 章",
-    state: "running", stateText: "在做", allowed: ["cancel"], summary: "", eventSeq: 2, origin: { kind: "chat", messageId: "user-1" },
+    state: "running", stateText: "在做", allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 2, origin: { kind: "chat", messageId: "user-1" },
     ...overrides,
   });
   const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };

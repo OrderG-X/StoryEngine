@@ -1,7 +1,7 @@
 /**
  * 操作卡（写作版本 P2a）：核账、检查这类交给执行器做的事在对话里的样子。
  * 在做：一行带呼吸点 + 最新一句进度；停着：为什么停 +「接着做」「不要了」；结束了：这一轮的话里说过结论就不再显示，
- * 后台做完、重开才收到的照实写一句结论。字都是服务端给的（what / stateText / summary），界面不自己拼。
+ * 后台做完、重开才收到的照实写一句结论。字都是服务端给的（what / stateText / conclusion），界面不自己拼。
  */
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import type { OperationCardData } from "../../../type-defs/workspace.js";
@@ -38,7 +38,7 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
     if (op.announced) return null;
     return (
       <div className="se-op-card is-ended" role="status">
-        <span className="se-op-text">{op.what}：{op.summary || op.stateText}</span>
+        <span className="se-op-text">{op.conclusion || `${op.what}：${op.stateText}`}</span>
       </div>
     );
   }

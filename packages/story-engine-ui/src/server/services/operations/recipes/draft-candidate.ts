@@ -41,7 +41,7 @@ function candidateRecipe(kind: CandidateDecisionKind): Recipe<CandidateDecisionP
         const { already } = await ctx.publish("discard", pick, () => discardCandidateLocked(bookDir, pick));
         return {
           schema: "operation-result/1",
-          summary: already ? "那一版已经处理过了，不用再管。" : "AI 那一版不要了，稿子没动。",
+          summary: already ? `第 ${params.chapter} 章那一版已经处理过了，不用再管。` : `第 ${params.chapter} 章 AI 那一版不要了，稿子没动。`,
           body: { kind, chapter: params.chapter, applied: false },
         };
       }
@@ -51,7 +51,7 @@ function candidateRecipe(kind: CandidateDecisionKind): Recipe<CandidateDecisionP
       const hint = adopted.basisMoved ? "这一版写好之后前文或设定改过，可以再核一遍账。" : "";
       return {
         schema: "operation-result/1",
-        summary: `${adopted.unchanged ? "稿纸上已经是这一版了。" : "换上了 AI 这一版（可撤销）。"}${hint}`,
+        summary: `第 ${params.chapter} 章${adopted.unchanged ? "稿纸上已经是这一版了。" : "换上了 AI 这一版（可撤销）。"}${hint}`,
         body: {
           kind,
           chapter: params.chapter,

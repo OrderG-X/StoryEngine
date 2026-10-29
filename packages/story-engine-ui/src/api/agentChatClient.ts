@@ -454,6 +454,8 @@ export interface OperationViewData {
   readonly currentStep?: string;
   /** 给作者看的一句（结论或没成的原因）。 */
   readonly summary: string;
+  /** 结束了的那一句（对话收尾和卡上同一句，服务端拼好的）；没结束是空串。 */
+  readonly conclusion: string;
   readonly failure?: { readonly message: string; readonly retryable: boolean };
   readonly eventSeq: number;
   /** 谁交的（对话 / 按钮 / 后台）和那句话、那个按钮的号：重开书时找回这次操作挂在哪条消息上。 */
@@ -1029,6 +1031,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     ...(typeof value.pauseReason === "string" ? { pauseReason: value.pauseReason } : {}),
     ...(typeof value.currentStep === "string" ? { currentStep: value.currentStep } : {}),
     summary: typeof value.summary === "string" ? value.summary : "",
+    conclusion: typeof value.conclusion === "string" ? value.conclusion : "",
     ...(failure ? { failure } : {}),
     eventSeq: typeof value.eventSeq === "number" ? value.eventSeq : 0,
     origin: {

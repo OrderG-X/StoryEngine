@@ -25,6 +25,11 @@ export interface OperationView {
   readonly origin: OperationOrigin;
   /** 给作者看的一句（结果的结论，或没成的原因）；还没结论是空串。 */
   readonly summary: string;
+  /**
+   * 结束了的那一句：对话里收尾说的、卡上显示的同一句。做成的就是结论（结论自己说是哪章做的什么），
+   * 没成的「X 没做成：原因」，停掉的「X 停掉了。」；没结束是空串。界面不拿 what 和结论自己拼。
+   */
+  readonly conclusion: string;
   readonly result?: OperationResult;
   readonly failure?: { readonly code: string; readonly message: string; readonly retryable: boolean };
   /** 等作者点的按钮（决定的哈希不出去，只说点过没有）：卡上照 preview 摆给作者看、按 decisions 出按钮。 */
@@ -56,11 +61,14 @@ function resultOf(record: OperationRecord): OperationResult | undefined {
 export function operationView(record: OperationRecord): OperationView {
   const result = resultOf(record);
   const chapter = operationChapter(record);
+  const what = operationWhat(record.kind, record.mode, chapter);
+  const summary = scrubLocalAbsolutePaths(summaryLine(record));
+  const failureMessage = record.failure ? scrubLocalAbsolutePaths(record.failure.message) : undefined;
   return {
     opId: record.opId,
     kind: record.kind,
     ...(record.mode !== undefined ? { mode: record.mode } : {}),
-    what: operationWhat(record.kind, record.mode, chapter),
+    what,
     ...(chapter !== undefined ? { chapter } : {}),
     state: record.state,
     stateText: operationStateText(record),
@@ -68,9 +76,10 @@ export function operationView(record: OperationRecord): OperationView {
     ...(record.pauseReason !== undefined ? { pauseReason: record.pauseReason } : {}),
     ...(record.currentStep !== undefined ? { currentStep: record.currentStep } : {}),
     origin: record.origin,
-    summary: scrubLocalAbsolutePaths(summaryLine(record)),
+    summary,
+    conclusion: operationConclusion(record.state, what, summary, failureMessage),
     ...(result ? { result } : {}),
-    ...(record.failure ? { failure: { ...record.failure, message: scrubLocalAbsolutePaths(record.failure.message) } } : {}),
+    ...(record.failure ? { failure: { ...record.failure, message: failureMessage ?? "" } } : {}),
     pendingActions: record.pendingActions.map(({ actionId, kind, decisions, preview, decisionHash }) => ({
       actionId,
       kind,
@@ -101,6 +110,17 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
 export function operationWhat(kind: string, mode: string | undefined, chapter: number | undefined): string {
   const label = (mode !== undefined ? MODE_LABELS[kind]?.[mode] : undefined) ?? KIND_LABELS[kind] ?? "别的操作";
   return chapter !== undefined ? `${label}·第 ${chapter} 章` : label;
+}
+
+/** 结束了的那一句（见 OperationView.conclusion）。 */
+export function operationConclusion(state: OperationState, what: string, summary: string, failureMessage: string | undefined): string {
+  switch (state) {
+    case "succeeded": return summary || `${what}做完了。`;
+    case "failed":
+    case "obsolete": return `${what}没做成：${failureMessage ?? "原因没记下来"}`;
+    case "cancelled": return `${what}停掉了。`;
+    default: return "";
+  }
 }
 
 const PAUSE_TEXT: Readonly<Record<string, string>> = {

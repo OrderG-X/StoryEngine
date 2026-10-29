@@ -263,17 +263,19 @@ export function nothingChangedMessage(params: DraftEditParams, outcome: EditOutc
 
 /** 改好了的一句（还没说没改成的那几处）。 */
 function doneLine(params: DraftEditParams, outcome: EditOutcome): string {
+  // 结论自己说是哪章（卡上、重开书都只显示这一句）。
+  const at = `第 ${params.chapter} 章`;
   const count = outcome.changes.length;
-  if (params.mode === "deai") return `改掉了 ${count} 处机器腔（可撤销）。`;
+  if (params.mode === "deai") return `${at}改掉了 ${count} 处机器腔（可撤销）。`;
   if (params.mode === "fix") {
     const also = outcome.alsoChanged ? `本章别处说同一件事的 ${outcome.alsoChanged} 句跟着改了。` : "";
-    return `${params.fixes.length === 1 ? "改好了这一处（可撤销）。" : `改好了 ${count - (outcome.alsoChanged ?? 0)} 处（可撤销）。`}${also}`;
+    return `${params.fixes.length === 1 ? `${at}改好了这一处（可撤销）。` : `${at}改好了 ${count - (outcome.alsoChanged ?? 0)} 处（可撤销）。`}${also}`;
   }
-  if (outcome.exact) return "按你给的原文换上了（可撤销）。";
+  if (outcome.exact) return `${at}按你给的原文换上了（可撤销）。`;
   // 先给作者看过改法的：卡上已经摆过改了什么，换上了就一句。
-  if (params.preview) return params.edits.length === 1 ? "换上了（可撤销）。" : `换上了 ${count} 处（可撤销）。`;
-  if (outcome.brief) return `改好了：${outcome.brief}（可撤销）。`;
-  return params.edits.length === 1 ? "改好了这一处（可撤销）。" : `改好了 ${count} 处（可撤销）。`;
+  if (params.preview) return params.edits.length === 1 ? `${at}换上了（可撤销）。` : `${at}换上了 ${count} 处（可撤销）。`;
+  if (outcome.brief) return `${at}改好了：${outcome.brief}（可撤销）。`;
+  return params.edits.length === 1 ? `${at}改好了这一处（可撤销）。` : `${at}改好了 ${count} 处（可撤销）。`;
 }
 
 export function buildDraftEditResult(input: {

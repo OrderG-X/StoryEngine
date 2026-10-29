@@ -21,7 +21,7 @@ const carries = (message: ChapterMessage, opId: string): boolean => cardOf(messa
 export function projectOperationEverywhere(view: OperationViewData, ownerMessageId?: string, options: { readonly announced?: boolean } = {}): void {
   // 老的那几条只留一行记录：按钮、等作者点的改法、结论都只在 owner 上（点「再改一版」后不摆两份改法、两个「不要了」，结论不说两遍）。
   const { inspect: _inspect, draft: _draft, pending: _pending, ...rest } = view;
-  const bare: OperationViewData = { ...rest, allowed: [], summary: "" };
+  const bare: OperationViewData = { ...rest, allowed: [], summary: "", conclusion: "" };
   const store = useChatStore.getState();
   for (const message of store.messages) {
     if (message.id === ownerMessageId) {

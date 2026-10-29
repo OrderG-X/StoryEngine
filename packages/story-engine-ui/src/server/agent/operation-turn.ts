@@ -174,7 +174,7 @@ export async function finishOperationTurn(args: {
         sendNextSteps(args.sendEvent, next.question, next.choices);
         return;
       }
-      emitText(`${view.summary ? humanizeToolNames(view.summary) : `${what}做完了，结果在上面。`}${changed}`);
+      emitText(`${humanizeToolNames(view.conclusion)}${changed}`);
       // 换上了作者挑的那版 AI 稿：这版没核过账，核了再定稿。
       if (record.kind === DRAFT_ADOPT_KIND && chapter !== undefined && (result?.body as { readonly applied?: unknown } | undefined)?.applied === true) {
         sendNextSteps(args.sendEvent, "接下来？", [
@@ -186,7 +186,7 @@ export async function finishOperationTurn(args: {
     }
     case "failed":
     case "obsolete": {
-      emitText(`${what}没做成：${view.failure?.message ?? "原因没记下来"}`);
+      emitText(view.conclusion);
       if (record.kind === INSPECT_KIND && chapter !== undefined && record.mode !== undefined && view.failure?.retryable !== false) {
         sendNextSteps(args.sendEvent, "接下来？", [{
           label: "再来一次",
@@ -203,7 +203,7 @@ export async function finishOperationTurn(args: {
       return;
     }
     case "cancelled":
-      emitText(`${what}停掉了。`);
+      emitText(view.conclusion);
       return;
     case "paused":
       emitText(`${what}${PAUSED_TEXT[record.pauseReason ?? "interrupted"] ?? "停下了"}：点卡上的「接着做」接着，或「不要了」。`);
