@@ -11,6 +11,7 @@ import { registerUsageRoutes } from "./routes/usage.js";
 import { registerSearchSettingsRoutes } from "./routes/search-settings.js";
 import { registerAboutRoutes } from "./routes/about.js";
 import { registerStateOverviewRoutes } from "./routes/state-overview.js";
+import { registerOperationsRoutes } from "./routes/operations.js";
 import { registerReaderProgressRoutes } from "./routes/reader-progress.js";
 import { registerDraftRoutes } from "./routes/draft.js";
 import { registerDraftRevisionRoutes } from "./routes/draft-revision.js";
@@ -60,6 +61,7 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerChatSessionsRoutes(router);
   registerSnapshotsRoutes(router);
   registerAgentChatRoutes(router);
+  registerOperationsRoutes(router);
   registerContinuityDismissalsRoutes(router);
   registerStoryThreadsRoutes(router);
   registerStoryMapRoutes(router);

@@ -121,7 +121,7 @@ describe("取消", () => {
       if (stored.kind === "record" && stored.record.currentStep === "b") break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    expect(await cancelOperation(book, first.record.opId)).toMatchObject({ state: "cancelled", runEpoch: 2 });
+    expect(await cancelOperation(book, first.record.opId)).toMatchObject({ cancelled: true, record: { state: "cancelled", runEpoch: 2 } });
     hold.resolve();
     await new Promise((resolve) => setTimeout(resolve, 30));
     const stored = await readOperation(book, first.record.opId);

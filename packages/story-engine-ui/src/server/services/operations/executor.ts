@@ -271,15 +271,20 @@ async function settleError(operation: OperationContext, error: unknown): Promise
 /*  取消、接着做                                                        */
 /* ------------------------------------------------------------------ */
 
-/** 停掉一次操作：先持久记 cancelled、runEpoch + 1（书锁 → 记录锁），再掐在途请求。终态的不动。 */
-export async function cancelOperation(bookDir: string, opId: string): Promise<OperationRecord | undefined> {
+/**
+ * 停掉一次操作：先持久记 cancelled、runEpoch + 1（书锁 → 记录锁），再掐在途请求。终态的不动（cancelled = false，回它现在的样子）。
+ * 记录不在返回 undefined。
+ */
+export async function cancelOperation(bookDir: string, opId: string): Promise<{ readonly record: OperationRecord; readonly cancelled: boolean } | undefined> {
+  let cancelled = false;
   const record = await changeOperation(bookDir, opId, (current) => {
     if (isTerminal(current.state)) return undefined;
+    cancelled = true;
     const { currentStep: _step, pauseReason: _pause, ...rest } = current;
     return { ...rest, state: "cancelled", runEpoch: current.runEpoch + 1, result: { schema: OPERATION_RESULT_SCHEMA, summary: "这次停掉了。" } satisfies OperationResult };
   });
-  abortExecution(bookDir, opId, { type: "cancel" });
-  return record;
+  if (cancelled) abortExecution(bookDir, opId, { type: "cancel" });
+  return record ? { record, cancelled } : undefined;
 }
 
 export type ResumeOutcome =
