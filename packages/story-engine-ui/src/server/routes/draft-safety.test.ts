@@ -773,6 +773,166 @@ describe("稿纸不自己认底版、旧回执不复活提示（第 11 轮复核
   });
 });
 
+// Astra 第 12 轮探针改写（真稿纸、真路由、真核心事务，只控制请求 / 回执什么时候到；记号写盘故障在 rename 上注入）。
+describe("要不要存看改动号、提示只说稿纸不知道的盘上版本、序号先落盘（第 12 轮复核）", () => {
+  async function saveTitled(chapter: number, body: string, title: string): Promise<string> {
+    const baseVersion = (await readDraftState(book, chapter)).version;
+    const outcome = await runCommand(book, draftSave, { chapter, body, title, baseVersion }, { caller: "author" });
+    if (!outcome.ok) throw new Error(outcome.message);
+    return outcome.result.version;
+  }
+
+  it.each(["换成那一版", "保留我这版"])("Z1：选「%s」之后盘上又有了 D，选之前发出的那笔撞版本回来：作者看得见 D", async (action) => {
+    await save(1, "原稿 A。");
+    const started = barrier();
+    const deliver = barrier();
+    let puts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && ++puts === 1) {
+        started.release();
+        await deliver.promise; // 已经发出、还没到服务端
+      }
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    await save(1, "别处的 B。");
+    editDraft("作者的 C。");
+    expect(await refreshPaper()).toBe("incoming");
+    await started.promise;
+    expect(await (action === "换成那一版" ? acceptPaperIncoming() : keepPaperMine())).toEqual({ ok: true });
+    await save(1, "别处更新的 D。");
+    deliver.release();
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    const live = useDraftStore.getState();
+    expect((await readDraft(book, 1))?.body).toBe("别处更新的 D。");
+    expect(live.incoming).toMatchObject({ body: "别处更新的 D。" });
+  });
+
+  it("Z2：正文一样、章名不一样：别处改了章名、作者另起了章名，重读不收提示，重开也找得回作者的章名", async () => {
+    await saveTitled(1, "正文保持不变。", "原章名");
+    wireRealRoutes();
+    await openPaper(book, 1);
+    await saveTitled(1, "正文保持不变。", "别处的新章名");
+    editDraft("正文保持不变。", "作者要的章名");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState().incoming?.cause).toBe("conflict");
+    expect(await refreshPaper()).toBe("incoming");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState()).toMatchObject({ title: "作者要的章名", incoming: { cause: "conflict" } });
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", title: "作者要的章名" });
+    await openPaper(book, 1);
+    expect(useDraftStore.getState().incoming?.pending).toMatchObject({ kind: "recovery", title: "作者要的章名" });
+  });
+
+  it("Z3：撞版本的 C 进了恢复稿，作者又改回原稿 A：A 照存（进恢复稿），重读不拿 AI 的 B 换掉", async () => {
+    await save(1, "作者原稿 A。");
+    const sent = wireRoutesWith();
+    await openPaper(book, 1);
+    expect(await applyAiDraft(book, { chapter: 1, body: "AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
+    editDraft("作者临时 C。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ body: "作者临时 C。" });
+    editDraft("作者原稿 A。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(sent.map((input) => input.body)).toEqual(["作者临时 C。", "作者原稿 A。"]);
+    expect(await refreshPaper()).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ body: "作者原稿 A。", incoming: { cause: "conflict", body: "AI 的 B。" } });
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: "作者原稿 A。" });
+    expect((await readDraft(book, 1))?.body).toBe("AI 的 B。");
+  });
+
+  it.each([false, true])("Z4：最后那笔同文空写的序号记号写盘失败（%s）：迟到的旧笔不盖作者最后那份", async (failMark) => {
+    await save(1, "作者最后要的 A。");
+    const firstSent = barrier();
+    const deliverFirst = barrier();
+    const replies: { seq: unknown; status: number }[] = [];
+    let puts = 0;
+    let failOnce = false;
+    hooks.beforeRename = async (_from, to) => {
+      if (failOnce && to.includes("/agents/drafts/saves/")) {
+        failOnce = false;
+        throw eio("存稿记号写盘失败");
+      }
+    };
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const input = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      if (init?.method === "PUT") {
+        const nth = ++puts;
+        if (nth === 1) { firstSent.release(); await deliverFirst.promise; }
+        if (nth === 2) failOnce = failMark;
+      }
+      const result = await call(init?.method ?? "GET", url, input);
+      if (init?.method === "PUT") replies.push({ seq: input?.seq, status: result.status });
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    editDraft("已经放弃的 B。");
+    saveDraftKeepalive();
+    await firstSent.promise;
+    editDraft("作者最后要的 A。");
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    // 记号写不上：这笔不写、如实说没存上（不再报「存上了」）。
+    expect(replies[0]).toMatchObject({ seq: 2, status: failMark ? 503 : 200 });
+    deliverFirst.release();
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    await refreshPaper();
+    expect((await readDraft(book, 1))?.body).toBe("作者最后要的 A。");
+    expect(useDraftStore.getState()).toMatchObject({ body: "作者最后要的 A。", incoming: null });
+    expect(hasFailedUnsavedDraft()).toBe(false);
+  });
+
+  it("对照：先开读、后发存稿，存上之后迟到的读数不出旧提示（C123）", async () => {
+    await save(1, "原稿 A。");
+    const readCaptured = barrier();
+    const ack = barrier();
+    let holdRead = false;
+    wireRoutesWith(async (_result, init) => {
+      if (!init?.method && holdRead) {
+        holdRead = false;
+        readCaptured.release();
+        await ack.promise;
+      }
+    });
+    await openPaper(book, 1);
+    editDraft("作者的 B。");
+    holdRead = true;
+    const refreshing = refreshPaper();
+    await readCaptured.promise;
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    ack.release();
+    expect(await refreshing).toBe("unchanged");
+    expect(useDraftStore.getState()).toMatchObject({ body: "作者的 B。", incoming: null });
+  });
+
+  it("对照：更早那笔成功的回执晚于新的撞版本回来，不收起新提示（C122）", async () => {
+    await save(1, "原稿 A。");
+    const landed = barrier();
+    const ack = barrier();
+    let puts = 0;
+    wireRoutesWith(async (_result, init) => {
+      if (init?.method === "PUT" && ++puts === 1) {
+        landed.release();
+        await ack.promise;
+      }
+    });
+    await openPaper(book, 1);
+    editDraft("自己的 B。");
+    saveDraftKeepalive();
+    await landed.promise;
+    await save(1, "外部 D。");
+    editDraft("作者 C。");
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", body: "外部 D。" }));
+    ack.release();
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", body: "外部 D。" });
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ body: "作者 C。" });
+    expect((await readDraft(book, 1))?.body).toBe("外部 D。");
+  });
+});
+
 describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
   it("两步改稿：预览后作者改了设定，应用时不换上、留成候选（B2）", async () => {
     await save(1, "他推开门。");

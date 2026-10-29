@@ -199,6 +199,16 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         const reply = await withBookLock(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
           const mark = from ? await readSaveMark(projectDir, chapter, from.client) : undefined;
           if (from && mark && from.seq <= mark.seq) return { status: 409, payload: { ok: false, code: "stale_save", error: "这个窗口后来又存过，这笔旧的没写。" } };
+          // 序号先落盘、再写稿（第 12 轮复核 Z4）：它是挡迟到旧笔的那道闸，记不下来这笔就不写、如实说没存上（稿纸过一会儿再试）。
+          // 先写稿后记号的话，记号没写上时这笔照样报存上，之后迟到的旧笔会把作者最后那份盖掉。
+          if (from) {
+            try {
+              await writeSaveMark(projectDir, { chapter, from });
+            } catch (error) {
+              console.warn(`[working-draft] 第 ${chapter} 章存稿序号没记上，这笔没写：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`);
+              return { status: 503, payload: { ok: false, code: "save_mark_failed", error: "这一笔没存上（写盘没成功）。字还在稿纸上，稍后自动再试。" } };
+            }
+          }
           // 这个窗口自己接着写（见 ownLineage）：在盘上那版上存。
           const diskVersion = (await readDraftState(projectDir, chapter)).version;
           const lineage = ownLineage(mark, baseVersion, diskVersion);
@@ -210,18 +220,17 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             ...(title ? { title } : {}),
             baseVersion: lineage ? diskVersion : baseVersion,
           }, { caller: "author" });
-          // 记号没写上不影响这笔（存上的照样算存上）：只是这之后迟到的旧笔挡不住、补发的那笔接不上（撞版本，进恢复稿）。
-          // 只有这笔真写出了新版本才接进这个窗口的那一串；和盘上一样的空写只推序号——盘上那版可能是撤销、AI、别的窗口写的，
-          // 不能因为字碰巧一样就认成这个窗口的（第 8 轮复核 V3）。
-          if (from && (outcome.ok || outcome.code === "draft_conflict")) {
-            const created = outcome.ok && !outcome.result.unchanged;
-            await writeSaveMark(projectDir, { chapter, from, ...(created ? { saved: { base: baseVersion, version: outcome.result.version } } : {}) })
-              .catch((error: unknown) => console.warn(`[working-draft] 第 ${chapter} 章存稿记号没写上：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`));
+          // 只有这笔真写出了新版本才接进这个窗口的那一串（序号上面已经记了）；和盘上一样的空写不接——盘上那版可能是撤销、AI、
+          // 别的窗口写的，不能因为字碰巧一样就认成这个窗口的（第 8 轮复核 V3）。没接上不影响这笔（存上的照样算存上）：
+          // 只是这个窗口下一笔认不出是接着写的，撞版本、进恢复稿，不丢字；迟到的旧笔照样被序号挡住。
+          if (from && outcome.ok && !outcome.result.unchanged) {
+            await writeSaveMark(projectDir, { chapter, from, saved: { base: baseVersion, version: outcome.result.version } })
+              .catch((error: unknown) => console.warn(`[working-draft] 第 ${chapter} 章存稿记号没接上：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`));
           }
           if (outcome.ok) {
             if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, "author", wordsBefore);
             // 存上了：这个窗口的恢复稿、和这份一样的恢复稿没用了。清不掉不影响存稿（下次开章和工作稿一样也不提示）。
-            await clearSavedRecoveries(projectDir, chapter, text, from).catch(() => undefined);
+            await clearSavedRecoveries(projectDir, chapter, { body: text, ...(title ? { title } : {}) }, from).catch(() => undefined);
             return { status: 200, payload: { ok: true, version: outcome.result.version, unchanged: outcome.result.unchanged } };
           }
           if (outcome.code !== "draft_conflict") return { status: 400, payload: { ok: false, code: outcome.code, error: outcome.message } };

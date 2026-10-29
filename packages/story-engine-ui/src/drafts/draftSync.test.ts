@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChapterPaper, PendingDraft } from "../api/workingDraftClient.js";
-import { isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
+import { hasUnsavedEdits, isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, keepPaperMine, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
 
 const PROJECT = "/books/钟楼";
@@ -143,11 +143,49 @@ describe("稿纸状态", () => {
     expect(useDraftStore.getState()).toMatchObject({ body: "作者的 C。", incoming: null });
     // 存上了：说盘上别的版本的提示一并收起；AI 候选照旧留着等作者选。
     useDraftStore.getState().markConflict(conflict);
-    useDraftStore.getState().markSaved("c", "作者的 C。", "");
+    useDraftStore.getState().markSaved("c", "作者的 C。", "", useDraftStore.getState().rev);
     expect(useDraftStore.getState().incoming).toBeNull();
     useDraftStore.getState().loadPaper(PROJECT, { ...paper(1, { body: "C。", version: "c" }), pending: { kind: "candidate", id: "k1", sha: "s", body: "AI 的。", reason: "draft_moved" } });
-    useDraftStore.getState().markSaved("d", "C。", "");
+    useDraftStore.getState().markSaved("d", "C。", "", useDraftStore.getState().rev);
     expect(useDraftStore.getState().incoming).toMatchObject({ cause: "candidate" });
+  });
+
+  it("要不要存看改动号：字改回和底版一样也是没存；存稿回执只确认它发出的那一下（第 12 轮复核 Z3）", () => {
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+    useDraftStore.getState().edit("A。");
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false); // 没变不算动
+    useDraftStore.getState().edit("C。");
+    const sentRev = useDraftStore.getState().rev;
+    useDraftStore.getState().edit("A。");
+    // 字和底版一样，但作者动过：重读盘上的新版只出提示，不换。
+    expect(isDraftDirty(useDraftStore.getState())).toBe(false);
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "B。", version: "b" }))).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ body: "A。", incoming: { body: "B。", cause: "update" } });
+    // 更早发出的那一下存上了：底版跟上，最后这一下还没存。
+    useDraftStore.getState().markSaved("c", "C。", "", sentRev);
+    expect(useDraftStore.getState()).toMatchObject({ baseVersion: "c", body: "A。" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+    // 在提示上选也算一下：「换成那一版」之后盘上确认过；「保留我这版」存上之前都算没存。
+    useDraftStore.getState().markConflict({ current: { chapter: 1, body: "D。", version: "d" }, currentVersion: "d" });
+    useDraftStore.getState().acceptIncoming();
+    expect(useDraftStore.getState()).toMatchObject({ body: "D。", baseVersion: "d" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+    useDraftStore.getState().edit("E。");
+    useDraftStore.getState().markConflict({ current: { chapter: 1, body: "F。", version: "f" }, currentVersion: "f" });
+    useDraftStore.getState().keepMine();
+    expect(useDraftStore.getState()).toMatchObject({ body: "E。", baseVersion: "f" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+  });
+
+  it("章名也算稿的一部分：盘上正文一样、章名不一样，不当成作者那份已经存上（第 12 轮复核 Z2）", () => {
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "正文。", version: "a", title: "原章名" }));
+    useDraftStore.getState().setTitle("作者的章名");
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "b", title: "别处的章名" }))).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ title: "作者的章名", savedTitle: "原章名", incoming: { title: "别处的章名" } });
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "c", title: "作者的章名" }))).toBe("own");
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
   });
 
   it("别的章、别的书的新版本不收", () => {

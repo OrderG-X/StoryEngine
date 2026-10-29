@@ -104,6 +104,20 @@ function splitTitle(input: { readonly title?: string; readonly body: string }): 
   return { ...(parsed.title ? { title: parsed.title } : {}), body: parsed.body };
 }
 
+/** 一份稿的内容：正文 + 章名。 */
+export interface DraftContent {
+  readonly title?: string;
+  readonly body: string;
+}
+
+/** 是不是同一份稿：拆开章名行后，正文（去首尾空白）和章名都一样（第 12 轮复核 Z2：只比正文会漏掉另起的章名）。没有稿算不一样。 */
+export function sameDraftContent(a: DraftContent, b: DraftContent | undefined): boolean {
+  if (!b) return false;
+  const left = splitTitle(a);
+  const right = splitTitle(b);
+  return left.body.trim() === right.body.trim() && (left.title ?? "") === (right.title ?? "");
+}
+
 /* ------------------------------- AI 稿候选 ------------------------------- */
 
 export async function saveDraftCandidate(projectDir: string, input: {
@@ -166,9 +180,9 @@ export async function removeDraftCandidate(projectDir: string, id: string): Prom
  * 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的、和眼下工作稿一样的不算。
  * 先挑掉一样的再取最新：最新那份碰巧和工作稿一样时，更早那份作者还没处理的照样提示（第 4 轮复核 R4）。
  */
-export async function pendingDraftCandidate(projectDir: string, chapter: number, draftBody?: string): Promise<DraftCandidate | undefined> {
+export async function pendingDraftCandidate(projectDir: string, chapter: number, draft?: DraftContent): Promise<DraftCandidate | undefined> {
   const candidates = (await readEntries(candidatesDir(projectDir), DraftCandidateFile))
-    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && candidate.body.trim() !== draftBody && !writingNow.has(candidate.id))
+    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && !sameDraftContent(candidate, draft) && !writingNow.has(candidate.id))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return candidates[0];
 }
@@ -266,8 +280,8 @@ export async function consumeDraftRecovery(projectDir: string, recovery: DraftRe
 /** 清空了的恢复稿留多久（挡迟到的旧请求；一个星期前发出的请求不会再到了）。 */
 const SETTLED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** 作者存上了（调用方在书锁里）：这个窗口的那份清掉（留着这次的序号），别的窗口和存上的这份一样的也清。 */
-export async function clearSavedRecoveries(projectDir: string, chapter: number, savedBody: string, from?: { readonly client: string; readonly seq: number }): Promise<void> {
+/** 作者存上了（调用方在书锁里）：这个窗口的那份清掉（留着这次的序号），别的窗口和存上的这份一样（正文和章名）的也清。 */
+export async function clearSavedRecoveries(projectDir: string, chapter: number, saved: DraftContent, from?: { readonly client: string; readonly seq: number }): Promise<void> {
   const now = Date.now();
   for (const recovery of await readEntries(recoveryDir(projectDir), DraftRecoveryFile)) {
     if (!recovery.body && now - Date.parse(recovery.updatedAt) > SETTLED_KEEP_MS) {
@@ -278,7 +292,7 @@ export async function clearSavedRecoveries(projectDir: string, chapter: number, 
     // 本窗口的：只清这笔之前的（迟到的旧笔恰好和盘上一样也算存上，但它之后那几笔还在恢复稿里，不能顺手清掉，第 4 轮复核 R2）。
     if (from && recovery.client === from.client) {
       if (from.seq >= recovery.seq) await settleRecovery(projectDir, recovery, from.seq);
-    } else if (recovery.body.trim() && recovery.body.trim() === savedBody.trim()) await settleRecovery(projectDir, recovery);
+    } else if (recovery.body.trim() && sameDraftContent(recovery, saved)) await settleRecovery(projectDir, recovery);
   }
 }
 
@@ -352,13 +366,14 @@ export type PendingDraft =
   | { readonly kind: "candidate"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string; readonly reason: DraftKeptReason };
 
 export async function pendingDraftFor(projectDir: string, chapter: number): Promise<PendingDraft | undefined> {
-  const draftBody = (await readDraft(projectDir, chapter))?.body.trim() ?? "";
+  // 和工作稿是同一份（正文和章名都一样）才不提示：只比正文，作者另起的章名就找不回了（第 12 轮复核 Z2）。
+  const draft = await readDraft(projectDir, chapter);
   const recoveries = (await readEntries(recoveryDir(projectDir), DraftRecoveryFile))
-    .filter((recovery) => recovery.chapter === chapter && recovery.body.trim() && recovery.body.trim() !== draftBody)
+    .filter((recovery) => recovery.chapter === chapter && recovery.body.trim() && !sameDraftContent(recovery, draft))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const recovery = recoveries[0];
   if (recovery) return { kind: "recovery", id: recovery.id, ...(recovery.title ? { title: recovery.title } : {}), body: recovery.body, sha: sha256(recovery.body) };
-  const candidate = await pendingDraftCandidate(projectDir, chapter, draftBody);
+  const candidate = await pendingDraftCandidate(projectDir, chapter, draft);
   if (!candidate) return undefined;
   return {
     kind: "candidate",

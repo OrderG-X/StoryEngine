@@ -1,7 +1,10 @@
 /**
  * 稿纸（重构 P5）：工作稿只有这一个主人。
  *
- * - `body` 是作者眼前的字；`savedBody` 是盘上 `baseVersion` 那一版的字。两者不一样 = 有没存的字。
+ * - `body` 是作者眼前的字；`savedBody` 是盘上 `baseVersion` 那一版的字。
+ * - **有没有没存的字只看改动号**（第 12 轮复核 Z3）：作者在稿纸上的每个动作（打字、改章名、在提示上选）都让 `rev` 加一；
+ *   `cleanRev` 是盘上确认过的那一下（读盘时盘上就是这份、或存稿回执说存的就是这一下）。两者不一样就是没存，
+ *   哪怕字改回了和底版一样——撞版本之后改回原稿也是作者的选择，要存（进工作稿或恢复稿），不能被重读换掉。
  * - 盘上来了新版本（AI 写完、撤销后、打开章节）：没有没存的字就直接换上；有就放进 `incoming`，
  *   由作者选「换成那一版」还是「保留我这版」，绝不悄悄互相覆盖。
  * - 存稿撞版本（409）同样进 `incoming`（作者手上那份服务端已另存成恢复稿，不会丢）。
@@ -49,13 +52,17 @@ export interface DraftStoreState {
   readonly saveError: string | null;
   readonly incoming: PaperIncoming | null;
   readonly streaming: string | null;
+  /** 作者在稿纸上动过几下（打字、改章名、在提示上选；换稿纸也算）。只增不减。 */
+  readonly rev: number;
+  /** 盘上确认过的是哪一下（null = 选了「保留我这版」之后还没存上）。和 rev 不一样 = 有没存的字。 */
+  readonly cleanRev: number | null;
 
   /** 打开一章：整份换上，不管有没有没存的字（调用方先存掉旧章）。 */
   /** 换上盘上这一章。章名只认盘上的：导航上的占位名（「下一章」「第 N 章」）只用来显示，不当章名写进稿子。 */
   readonly loadPaper: (projectPath: string, paper: ChapterPaper) => void;
   /**
    * 盘上来了新版本：作者手上没有没存的字就换上，有就提示（谁改的都一样，撤销也不直接盖）。
-   * 「没存的字」看存稿调度的统一待存状态（`unsaved`：没落定、没存上、或手上和盘上不一样），不只比手上和底版（第 10 轮复核 X2）。
+   * 「没存的字」= 作者动过、盘上还没确认（hasUnsavedEdits），或存稿调度说还没落定、没存上（`unsaved`，第 10 轮复核 X2）。
    * 盘上那版是不是这个窗口自己早先存的，稿纸不猜（第 11 轮复核 Y1）：接着存一笔，服务端按窗口的存稿记号认得出就顺着存上，
    * 认不出就撞版本、存成恢复稿。
    * 返回怎么处理的：unchanged 盘上没变；own 盘上就是作者眼前的字；replaced 换上了；incoming 出了提示；skipped 不是这一章。
@@ -70,8 +77,8 @@ export interface DraftStoreState {
   /** 改章名（不动正文）。 */
   readonly setTitle: (title: string) => void;
   readonly markSaving: () => void;
-  /** 存成功：sentBody 是这次发出去的字（发出后作者可能又打了字）。 */
-  readonly markSaved: (version: string, sentBody: string, sentTitle: string) => void;
+  /** 存成功：sentBody / sentTitle / sentRev 是这次发出去的那一下（发出后作者可能又动过，那就还是没存）。 */
+  readonly markSaved: (version: string, sentBody: string, sentTitle: string, sentRev: number) => void;
   readonly markSaveError: (message: string) => void;
   /** 存稿撞版本（recoveryId：服务端把作者手上这份另存成的恢复稿）。 */
   /** 存稿撞了版本：盘上那份和它此刻的版本号（没有稿也有版本号；旧服务没给就用那份稿的）。 */
@@ -101,6 +108,9 @@ const EMPTY = {
   incoming: null,
   streaming: null,
 } satisfies Partial<DraftStoreState>;
+
+/** 稿纸换成盘上那一份：改动号往前走一下，盘上确认的就是这一下。 */
+const freshRev = (state: Pick<DraftStoreState, "rev">) => ({ rev: state.rev + 1, cleanRev: state.rev + 1 });
 
 function pendingIncoming(pending: PendingDraft | undefined): PaperIncoming | null {
   if (!pending) return null;
@@ -134,11 +144,15 @@ function diskText(paper: ChapterPaper): { readonly body: string; readonly title?
 export const useDraftStore = create<DraftStoreState>((set, get) => ({
   ...EMPTY,
 
+  rev: 0,
+  cleanRev: 0,
+
   loadPaper: (projectPath, paper) => {
     const disk = diskText(paper);
     const title = disk.title ?? "";
-    set({
+    set((state) => ({
       ...EMPTY,
+      ...freshRev(state),
       projectPath,
       chapter: paper.chapter,
       title,
@@ -149,14 +163,14 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       committed: paper.committed,
       loaded: true,
       incoming: pendingIncoming(paper.pending),
-    });
+    }));
   },
 
   receivePaper: (projectPath, paper, sync) => {
     const state = get();
     if (state.projectPath !== projectPath || state.chapter !== paper.chapter) return "skipped";
     const disk = diskText(paper);
-    const dirty = (sync?.unsaved ?? false) || isDraftDirty(state);
+    const dirty = (sync?.unsaved ?? false) || hasUnsavedEdits(state);
     // 版本号是盘上全文的哈希：一样 = 盘上没变（只有定稿那份可能变了）。没有工作稿时按字比。
     const unchanged = disk.version !== null
       ? disk.version === state.baseVersion
@@ -165,9 +179,10 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       set({ committed: paper.committed, incoming: keepOrPending(state.incoming, paper, disk.version) });
       return "unchanged";
     }
-    // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突；说盘上别的版本的提示没得选了。
-    if (dirty && sameText(disk.body, state.body)) {
-      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(aboutDisk(state.incoming) ? null : state.incoming, paper, disk.version) });
+    // 盘上那版就是作者眼前的整份稿（正文和章名都一样；自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突；
+    // 说盘上别的版本的提示没得选了。只比正文会把「别处改了章名、作者另起了章名」当成存好了（第 12 轮复核 Z2）。
+    if (dirty && sameDraft(disk, state)) {
+      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, cleanRev: state.rev, committed: paper.committed, incoming: keepOrPending(aboutDisk(state.incoming) ? null : state.incoming, paper, disk.version) });
       return "own";
     }
     if (!dirty) {
@@ -175,6 +190,7 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       // 沿用眼前的会一直显示改过的那个。
       const title = disk.title ?? "";
       set({
+        ...freshRev(state),
         title,
         savedTitle: title,
         body: disk.body,
@@ -195,17 +211,21 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
     return "incoming";
   },
 
-  edit: (body, title) => set({ body, ...(title !== undefined ? { title } : {}) }),
+  edit: (body, title) => set((state) => (body === state.body && (title === undefined || title === state.title)
+    ? state
+    : { body, ...(title !== undefined ? { title } : {}), rev: state.rev + 1 })),
 
-  setTitle: (title) => set({ title }),
+  setTitle: (title) => set((state) => (title === state.title ? state : { title, rev: state.rev + 1 })),
 
   markSaving: () => set({ saveStatus: "saving", saveError: null }),
 
-  // 存上了 = 盘上就是作者这份：说盘上别的版本的提示都过时了（第 11 轮复核 Y2）；AI 候选、恢复稿不在工作稿里，照旧等作者选。
-  markSaved: (version, sentBody, sentTitle) => set((state) => ({
+  // 存上了 = 盘上就是发出去的那一下：说盘上别的版本的提示都过时了（第 11 轮复核 Y2）；AI 候选、恢复稿不在工作稿里，照旧等作者选。
+  // 发出之后作者又动过（打字、在提示上选了），cleanRev 停在发出的那一下，接着存。
+  markSaved: (version, sentBody, sentTitle, sentRev) => set((state) => ({
     baseVersion: version,
     savedBody: sentBody,
     savedTitle: sentTitle,
+    cleanRev: sentRev,
     saveStatus: "saved",
     saveError: null,
     incoming: aboutDisk(state.incoming) ? null : state.incoming,
@@ -227,7 +247,9 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
   acceptIncoming: () => {
     const incoming = get().incoming;
     if (!incoming || (incoming.cause !== "conflict" && incoming.cause !== "update")) return;
+    // 稿纸就是盘上那一版：这一下盘上确认过。之前发出、还没回来的存稿回执说的是更早那一下，回来也不算这一下存上（见 markSaved）。
     set((state) => ({
+      ...freshRev(state),
       title: incoming.title ?? state.title,
       savedTitle: incoming.title ?? state.title,
       body: incoming.body,
@@ -242,17 +264,28 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
   keepMine: () => {
     const incoming = get().incoming;
     if (!incoming || (incoming.cause !== "conflict" && incoming.cause !== "update")) return;
-    // 以盘上那一版为底再存一次：savedBody 记成盘上的字，作者的字和它不一样 → 下一笔存稿照写。
-    set({ baseVersion: incoming.version, savedBody: incoming.body, savedTitle: incoming.title ?? "", incoming: null, saveStatus: "idle", saveError: null });
+    // 以盘上那一版为底再存一次：savedBody 记成盘上的字；这一下是作者的选择，存上之前都算没存。
+    set((state) => ({ baseVersion: incoming.version, savedBody: incoming.body, savedTitle: incoming.title ?? "", rev: state.rev + 1, incoming: null, saveStatus: "idle", saveError: null }));
   },
 
   clearIncoming: () => set({ incoming: null }),
 
   setStreaming: (text) => set({ streaming: text }),
 
-  reset: () => set({ ...EMPTY }),
+  reset: () => set((state) => ({ ...EMPTY, ...freshRev(state) })),
 }));
 
+/** 作者动过、还没被盘上确认（存稿要发、重读不能换）。 */
+export function hasUnsavedEdits(state: Pick<DraftStoreState, "rev" | "cleanRev">): boolean {
+  return state.rev !== state.cleanRev;
+}
+
+/** 盘上那份和稿纸上的是不是同一份稿：正文（按显示一样比）和章名都一样。 */
+function sameDraft(disk: { readonly body: string; readonly title?: string }, paper: Pick<DraftStoreState, "body" | "title">): boolean {
+  return sameText(disk.body, paper.body) && (disk.title ?? "").trim() === paper.title.trim();
+}
+
+/** 稿纸上的字和底版那一版不一样（核账、定稿按版本认结果时用：字一样就是同一版）。存不存看 hasUnsavedEdits。 */
 export function isDraftDirty(state: Pick<DraftStoreState, "body" | "savedBody" | "title" | "savedTitle">): boolean {
   return state.body !== state.savedBody || state.title !== state.savedTitle;
 }
