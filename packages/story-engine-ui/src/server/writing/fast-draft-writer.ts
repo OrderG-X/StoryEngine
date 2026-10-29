@@ -40,6 +40,13 @@ import { describeErrorBriefly } from "../book/project-store.js";
 import { readBibleTolerant } from "./setting-pack.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
+
+/** 降级的 catch：这次被停了（取消、暂停、栅栏不过）照样抛，别吞成「这一段没写成、照常往下走」。 */
+const undefinedUnlessStopped = (error: unknown): undefined => {
+  rethrowIfStopped(error);
+  return undefined;
+};
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
 
@@ -345,7 +352,7 @@ async function generateBySegments(input: {
     const retry = await input.writerClient.generateDraft({
       context: withSectionContent(firstContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
       maxOutputTokens: input.maxOutputTokens,
-    }).catch(() => undefined);
+    }).catch(undefinedUnlessStopped);
     const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
     const retryCopied = retryBody && previousText ? findReplayedParagraphs(previousText, retryBody).length : copied.length;
     if (retry && retryBody && retryCopied < copied.length) {
@@ -400,7 +407,7 @@ async function generateBySegments(input: {
       const retry = await input.writerClient.generateDraft({
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
-      }).catch(() => undefined);
+      }).catch(undefinedUnlessStopped);
       const retryBody = retry ? cleanSecond(retry.content) : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
@@ -424,7 +431,7 @@ async function generateBySegments(input: {
       const retry = await input.writerClient.generateDraft({
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
-      }).catch(() => undefined);
+      }).catch(undefinedUnlessStopped);
       const retryBody = retry ? cleanSecond(retry.content) : "";
       const retryLength = countDraftChineseCharacters(retryBody);
       const used = retryLength > before && findReplayedParagraphs(alreadyWritten, retryBody).length <= replayedRemaining;
@@ -440,6 +447,7 @@ async function generateBySegments(input: {
       info: { split, replayedFound: replays.length, retried, replayedRemaining, copiedFromPrevious: copied.length, copiedRemaining, ...(lengthRetry ? { lengthRetry } : {}) },
     };
   } catch (error) {
+    rethrowIfStopped(error);
     input.restream?.(firstVisible);
     return {
       generated: first,
@@ -510,7 +518,7 @@ async function generateContinuation(input: {
     const context = contextFor(written, goal);
     const first = required
       ? await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens })
-      : await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
+      : await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens }).catch(undefinedUnlessStopped);
     let body = first ? dropEchoedLead(written, clean(first.content)) : "";
     if (!body) {
       if (required) throw new Error("接着写的那段是空的");
@@ -525,7 +533,7 @@ async function generateContinuation(input: {
         goal,
         `【上一次接着写的那段把已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从已写部分最后一句之后往前推进新的事。`,
       ].join("\n");
-      const retry = await input.writerClient.generateDraft({ context: contextFor(written, retryGoal), maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
+      const retry = await input.writerClient.generateDraft({ context: contextFor(written, retryGoal), maxOutputTokens: input.maxOutputTokens }).catch(undefinedUnlessStopped);
       const retryBody = retry ? dropEchoedLead(written, clean(retry.content)) : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
@@ -580,7 +588,7 @@ async function generateContinuation(input: {
       `【上一次只写了 ${before} 个字，还差 ${input.minLength - added} 字】这次要写够 ${target} 个中文字符：场面写足（动作、对话、人物的反应、环境），不要加和前文对不上的新事，不要跳天。`,
     ].join("\n");
     input.restream?.(shownThrough(pieces.slice(0, -1)));
-    const retry = await writeOnce(written, shownThrough(pieces.slice(0, -1)), goal, false).catch(() => undefined);
+    const retry = await writeOnce(written, shownThrough(pieces.slice(0, -1)), goal, false).catch(undefinedUnlessStopped);
     const after = retry ? countDraftChineseCharacters(retry.body) : before;
     const replaysBefore = findReplayedParagraphs(previousText ? `${written}\n${previousText}` : written, lastPiece).length;
     const used = retry !== undefined && after > before && retry.remaining <= replaysBefore;
@@ -629,6 +637,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     });
     context = input.rankContext ? input.rankContext(builtContext) : builtContext;
   } catch (error) {
+    rethrowIfStopped(error);
     // 上下文不存在时没有真实 section 可统计——给空壳包底的零值指纹/统计，报告结构仍完整诚实。
     const emptyContext = emptyWriterContext(input.chapter);
     return withFastDraftDiagnostics(input.projectDir, {
@@ -812,6 +821,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       issues: writingRulesFailure,
     }, latencyTimer);
   } catch (error) {
+    rethrowIfStopped(error);
     return withFastDraftDiagnostics(input.projectDir, {
       chapter: input.chapter,
       passed: false,
@@ -869,6 +879,7 @@ async function withFastDraftDiagnostics(
     },
   });
   } catch (error) {
+    rethrowIfStopped(error);
     return {
       ...report,
       issues: [...report.issues, `诊断记录写入失败（${describeErrorBriefly(error, projectDir)}），不影响本次出稿结果。`],

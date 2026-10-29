@@ -9,7 +9,7 @@
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
 import { applyUnitEdits, numberedText, prepareUnitReplacement, readDraftFile, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
-import { appendFixLog } from "../editorial/continuity/check-memory.js";
+import { appendFixLog } from "../lib/fix-log.js";
 import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
 import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
 import { readTruthBasisForWork } from "../book/truth-basis.js";
@@ -251,7 +251,7 @@ export async function fixDraftByUnits(input: {
   });
 }
 
-/** 按核账改出来的句子记下来：再核时核账员又说这句不对，就知道是两遍说法相反（check-memory 的改句记录）。记不上不影响改稿。 */
+/** 按核账改出来的句子记下来：再核时核账员又说这句不对，就知道是两遍说法相反（lib/fix-log 的改句记录）。记不上不影响改稿。 */
 export async function recordUnitFixes(projectDir: string, chapter: number, outcome: Pick<UnitFixOutcome, "changes">): Promise<void> {
   await appendFixLog(projectDir, chapter, outcome.changes).catch((error) => {
     console.warn("[unit-fix] 改句记录没存上（不影响这次改稿）", error);

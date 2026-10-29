@@ -36,7 +36,8 @@ import {
   type ContinuityIssueV2,
   type EarlierText,
 } from "./check-chapter.js";
-import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory, type CheckMemory, type FixRecord } from "./check-memory.js";
+import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory, type CheckMemory } from "./check-memory.js";
+import { readFixLog, type FixRecord } from "../../lib/fix-log.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";

@@ -13,7 +13,8 @@ import { syncLegacyMirror } from "../../book/mirror/sync.js";
 import { chapterCommit, decisionRecord, readTruthBasis, runCommand } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import type { ContinuityIssueV2 } from "./check-chapter.js";
-import { appendFixLog, hashBody, hashEarlier, readFixLog, writeCheckMemory } from "./check-memory.js";
+import { hashBody, hashEarlier, writeCheckMemory } from "./check-memory.js";
+import { appendFixLog, readFixLog } from "../../lib/fix-log.js";
 import { addDismissal } from "./dismissals.js";
 
 const CH1 = "客人把怀表放在绒布上就走了。周婶说这表是前天送来的。";

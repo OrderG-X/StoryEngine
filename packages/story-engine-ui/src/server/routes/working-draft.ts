@@ -44,7 +44,7 @@ import {
   ownLineage,
   readSaveMark,
   recoveryClientOf,
-  removeDraftCandidate,
+  settleDraftCandidate,
   saveDraftRecovery,
   writeSaveMark,
   type DraftRecovery,
@@ -134,7 +134,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
               // 不要了：已经不在也算成（重发、两个窗口各点一次）。
               if (!live) return { status: 200, payload: { ok: true } };
               if (sha !== undefined && sha !== sha256(live.body)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
-              await removeDraftCandidate(projectDir, id);
+              await settleDraftCandidate(projectDir, id);
               return { status: 200, payload: { ok: true } };
             }
             // 恢复稿已经清空了（找回了、别处不要了）也算成；清空的那份也交给它推进序号（第 5 轮复核 S10）。
@@ -166,7 +166,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             };
           }
           if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, kind === "candidate" ? "ai" : "author", wordsBefore);
-          if (kind === "candidate") await removeDraftCandidate(projectDir, id);
+          if (kind === "candidate") await settleDraftCandidate(projectDir, id);
           else await consumeDraftRecovery(projectDir, live as DraftRecovery);
           return { status: 200, payload: { ok: true, version: outcome.result.version, ...(snapshotId ? { snapshotId } : {}) } };
         });

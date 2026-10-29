@@ -10,8 +10,11 @@
  * - **开书对账**（6.5）：本进程调度表里的不碰；其余 queued / running：有没处理的结果不明 → paused:attempt_unknown，
  *   后台配方登记了自动续 → 接着跑，其余 → paused:interrupted；配方版本对不上 → obsolete。
  */
-import { bookKey, readBookEpoch, withBookLock } from "@actalk/story-core";
+import { bookKey, opCommandKey, readBookEpoch, readCommandReceipt, withBookLock } from "@actalk/story-core";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { clearCandidateTombstones } from "../../lib/draft-candidates.js";
+import { clearFixLogKeys } from "../../lib/fix-log.js";
+import { clearWordStatsKeys } from "../../lib/word-stats.js";
 import { freezeModelChoices, frozenCompatAllowance, isFrozenModels, type FrozenModels, type ModelTaskProfileKey } from "../../lib/llm-client.js";
 import { readOperationInput } from "../../lib/operations/inputs.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
@@ -32,6 +35,7 @@ import { stoppedError, withFence } from "../../lib/operations/fence.js";
 import { emitLive, onLive, type LiveEvent } from "../../lib/operations/live.js";
 import {
   acceptOperation,
+  appliedEffectOf,
   BOOT_ID,
   changeOperation,
   isScheduledHere,
@@ -79,6 +83,17 @@ export interface RecipeContext<P> {
    * fn 里不许写书（设计零.3），能写的只有本操作自己的目录和按内容键整份覆盖的缓存。
    */
   step<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T>;
+  /**
+   * 应用一步（设计第三节、6.4）：写真相的那一笔（applyAiDraft、核心命令），一步只走一个核心命令。步骤语义同 step；
+   * 里面的核心命令带 `op:{opId, stepId}`（幂等键 = opId:stepId，有回执就回放、不再写）和栅栏 precondition。
+   * 开始前记「在应用」，做完按回执记进 appliedEffects（崩在中间：这次执行一结束按回执补记）。
+   */
+  apply<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T>;
+  /**
+   * 发布一步不进核心事务的产物（候选、改句记录、出稿统计以外别的按键发布的）：fn 拿着书锁、过了栅栏才跑，
+   * 必须按 key（`opId:stepId`）幂等：键在就不再写。输出落盘了才算发布完。
+   */
+  publish<T>(id: string, input: unknown, fn: (key: string) => Promise<T>): Promise<T>;
   /** 一句进度（只推给订阅，不落盘）。 */
   progress(text: string): void;
 }
@@ -250,30 +265,70 @@ async function execute(bookDir: string, record: OperationRecord): Promise<void> 
 function contextFor(record: OperationRecord, operation: OperationContext): RecipeContext<unknown> {
   const { bookDir, opId, runEpoch } = operation;
   let currentExec = `${runEpoch}:`;
+  const runStep = async <T>(id: string, input: unknown, fn: () => Promise<T>, kind: "step" | "apply" | "publish"): Promise<T> => {
+    const inputHash = inputHashOf(input);
+    const saved = await readCheckpoint(bookDir, opId, id);
+    if (saved && saved.inputHash === inputHash) return saved.output as T;
+    if (operation.signal.aborted) throw stoppedError(operation);
+    const exec = `${runEpoch}:${id}`;
+    currentExec = exec;
+    await changeOperation(bookDir, opId, (current) => {
+      if (current.state !== "running" || current.runEpoch !== runEpoch) return undefined;
+      const applying = kind === "apply" && !current.applying?.includes(id) ? { applying: [...(current.applying ?? []), id] } : {};
+      return current.currentStep !== id || "applying" in applying ? { ...current, currentStep: id, ...applying } : undefined;
+    });
+    emitLive(bookDir, opId, { type: "step", step: id, exec });
+    const output = await runInStep(id, exec, fn);
+    if (operation.signal.aborted) throw stoppedError(operation);
+    await withFence(operation, async () => {
+      await writeCheckpoint(bookDir, opId, { schema: "operation-step/1", stepId: id, inputHash, exec, output: output ?? null, finishedAt: new Date().toISOString() });
+      if (kind === "apply") await recordApplied(operation, id);
+    });
+    return output;
+  };
   return {
     bookDir,
     record,
     params: record.params,
     signal: operation.signal,
     operation,
-    async step<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T> {
-      const inputHash = inputHashOf(input);
-      const saved = await readCheckpoint(bookDir, opId, id);
-      if (saved && saved.inputHash === inputHash) return saved.output as T;
-      if (operation.signal.aborted) throw stoppedError(operation);
-      const exec = `${runEpoch}:${id}`;
-      currentExec = exec;
-      await changeOperation(bookDir, opId, (current) => (current.state === "running" && current.runEpoch === runEpoch && current.currentStep !== id ? { ...current, currentStep: id } : undefined));
-      emitLive(bookDir, opId, { type: "step", step: id, exec });
-      const output = await runInStep(id, exec, fn);
-      if (operation.signal.aborted) throw stoppedError(operation);
-      await withFence(operation, () => writeCheckpoint(bookDir, opId, { schema: "operation-step/1", stepId: id, inputHash, exec, output: output ?? null, finishedAt: new Date().toISOString() }));
-      return output;
+    step<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T> {
+      return runStep(id, input, fn, "step");
+    },
+    apply<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T> {
+      return runStep(id, input, fn, "apply");
+    },
+    publish<T>(id: string, input: unknown, fn: (key: string) => Promise<T>): Promise<T> {
+      return runStep(id, input, () => withFence(operation, () => fn(`${opId}:${id}`)), "publish");
     },
     progress(text: string) {
       emitLive(bookDir, opId, { type: "progress", text, exec: currentExec });
     },
   };
+}
+
+/** 清理一次操作时清它在书里留的发布键（调用方拿着书锁）。 */
+async function clearPublishedKeys(bookDir: string, opId: string): Promise<void> {
+  await clearFixLogKeys(bookDir, opId);
+  await clearWordStatsKeys(bookDir, opId);
+  await clearCandidateTombstones(bookDir, opId);
+}
+
+/** 一步应用做完（拿着书锁、过了栅栏）：有回执就记进 appliedEffects；没有（这一步没写真相，比如留成了候选）只从 applying 去掉。 */
+async function recordApplied(operation: OperationContext, stepId: string): Promise<void> {
+  const { bookDir, opId, runEpoch } = operation;
+  const receipt = await readCommandReceipt(bookDir, opCommandKey({ opId, stepId }));
+  await changeOperation(bookDir, opId, (current) => {
+    if (current.state !== "running" || current.runEpoch !== runEpoch) return undefined;
+    const applying = (current.applying ?? []).filter((id) => id !== stepId);
+    const known = (current.appliedEffects ?? []).some((effect) => effect.stepId === stepId);
+    const { applying: _applying, ...rest } = current;
+    return {
+      ...rest,
+      ...(applying.length > 0 ? { applying } : {}),
+      ...(receipt && !known ? { appliedEffects: [...(current.appliedEffects ?? []), appliedEffectOf(stepId, receipt)] } : {}),
+    };
+  });
 }
 
 /** 配方跑完：书锁里核还是这一次在跑、书的纪元没换，才记成功；纪元换了记 obsolete。书不在了读不到记录，什么都不写。 */
@@ -413,7 +468,7 @@ export async function reconcileOperations(bookDir: string): Promise<{ readonly r
       if (started?.state === "running") resumed.push(record.opId);
     }
   }
-  await withBookLock(bookDir, () => pruneOperations(bookDir, (record) => summaryLine(record))).catch((error) => {
+  await withBookLock(bookDir, () => pruneOperations(bookDir, (record) => summaryLine(record), new Date(), (opId) => clearPublishedKeys(bookDir, opId))).catch((error) => {
     console.warn("[operations] 清理过期的操作没成（不影响开书）", error);
   });
   return { resumed };

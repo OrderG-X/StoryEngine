@@ -11,17 +11,25 @@
  *
  * 存档点在换上前、同一把书锁里打（真要写才打）：撤销、定稿切不进中间，没换上的不在操作历史里多出一条。
  * 调用方不要把模型调用放进书锁：作者存稿会被卡住。同一章的 AI 改稿要排队的，用 oneAiWriterPerChapter。
+ *
+ * 在操作的应用步骤里（写作版本 P2a 设计第三节、6.3、6.4）：不先存「在写」的候选（这版在前面步骤的检查点里）；核心命令带
+ * `op`（幂等键 = opId:stepId，有回执就回放、不再写）和 precondition（书锁里先核栅栏、再核写稿用过的材料，回放之后才核）；
+ * 换上了，同一次持锁里按键记改句记录、字数；没换上，留稳定号的候选（作者处理过的不复活）。栅栏不过 → 抛 OperationStopped。
+ * 换上之后的事出了意外：查回执，有就报换上了 + 警告，不改成「没成功」。
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { draftApplyGenerated, draftPath, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { draftApplyGenerated, draftPath, fail, opCommandKey, readCommandReceipt, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
 import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
 import { MIRROR_FILES } from "../book/mirror/build.js";
 import { MIRROR_MARKER } from "../book/mirror/sync.js";
-import { removeDraftCandidate, saveDraftCandidate, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
+import { keepOperationCandidateLocked, saveDraftCandidate, settleDraftCandidate, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
+import { publishFixLogLocked, type FixRecord } from "./fix-log.js";
+import { currentOperation, OperationStopped, type OperationContext } from "./operations/context.js";
+import { checkFence } from "./operations/fence.js";
 import { scrubLocalAbsolutePaths } from "./local-path-scrubber.js";
 import { runWithLazySnapshot } from "./snapshot.js";
-import { chapterWordsNow, recordChapterWords } from "./word-stats.js";
+import { chapterWordsNow, publishChapterWordsLocked, recordChapterWords } from "./word-stats.js";
 import { TURN_ABORTED_MESSAGE, turnAborted } from "./turn-abort.js";
 
 export class AiDraftWriteError extends Error {
@@ -49,8 +57,10 @@ export interface AiDraftInput {
   readonly source: DraftCandidateSource;
   /** 换上前打的存档点叫什么（操作历史里看的）；不给用核心的「AI 写稿：第 N 章」。 */
   readonly snapshotLabel?: string;
-  /** 开写时已经存下的那份候选（出稿流程）：就用它，不另存一份。 */
+  /** 开写时已经存下的那份候选（出稿流程）：就用它，不另存一份。操作里不用（候选号由操作的号定）。 */
   readonly candidateId?: string;
+  /** 操作里：这次按核账改了哪些句子（零条也给），换上时同一次持锁里记进改句记录。 */
+  readonly fixes?: readonly FixRecord[];
 }
 
 export type AiDraftOutcome =
@@ -64,6 +74,8 @@ export type AiDraftOutcome =
     /** 盘上原来就是这一版，这次没写。 */
     readonly unchanged: boolean;
     readonly snapshotId?: string;
+    /** 换上之后的收尾没做全（字数、改句记录没记上……），一句一条。 */
+    readonly warnings?: readonly string[];
   }
   | {
     readonly applied: false;
@@ -71,6 +83,8 @@ export type AiDraftOutcome =
     readonly candidateId: string;
     /** 给作者看的一句：为什么没换上、这版在哪。 */
     readonly message: string;
+    /** 作者已经处理过这一版（换上 / 不要了）：没再留。 */
+    readonly handled?: true;
   };
 
 function whyNotApplied(reason: DraftKeptReason, detail?: string): string {
@@ -100,6 +114,8 @@ export function keptMessage(chapter: number, reason: DraftKeptReason, detail?: s
 const errorText = (error: unknown): string => scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
 
 export async function applyAiDraft(projectDir: string, input: AiDraftInput): Promise<AiDraftOutcome> {
+  const operation = currentOperation();
+  if (operation) return applyInOperation(projectDir, input, operation);
   const title = input.title?.trim();
   const path = join(projectDir, draftPath(input.chapter));
   const candidateOf = (status: "writing" | "ready", reason?: Exclude<DraftKeptReason, "interrupted">, id?: string) => saveDraftCandidate(projectDir, {
@@ -150,7 +166,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
       if (!result.ok && result.code === "draft_conflict") return keep("draft_moved");
       if (!result.ok) return keep("apply_failed", result.message);
       // 换上了：只删这一份（别的候选作者还没处理，不动）。
-      if (candidateId) await removeDraftCandidate(projectDir, candidateId);
+      if (candidateId) await settleDraftCandidate(projectDir, candidateId);
       if (!result.result.unchanged) await recordChapterWords(projectDir, input.chapter, "ai", wordsBefore);
       const content = await readFile(path, "utf-8");
       return { applied: true, path, content, version: result.result.version, unchanged: result.result.unchanged, ...(snapshotId ? { snapshotId } : {}) };
@@ -161,7 +177,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
     outcome = await keep("apply_failed", errorText(error));
   }
   if (outcome === "aborted") {
-    if (candidateId) await removeDraftCandidate(projectDir, candidateId);
+    if (candidateId) await settleDraftCandidate(projectDir, candidateId);
     throw new AiDraftWriteError("turn_aborted", TURN_ABORTED_MESSAGE);
   }
   return outcome;
@@ -182,5 +198,98 @@ export async function oneAiWriterPerChapter<T>(projectDir: string, chapter: numb
     return await run;
   } finally {
     if (queues.get(key) === tail) queues.delete(key);
+  }
+}
+
+/** 栅栏不过的失败码（checkFence 给的）：这次停了，不留候选、不当成「没换上」。 */
+const FENCE_CODES: ReadonlySet<string> = new Set(["operation_stopped", "book_gone", "book_epoch_changed"]);
+
+async function applyInOperation(projectDir: string, input: AiDraftInput, operation: OperationContext): Promise<AiDraftOutcome> {
+  if (resolve(operation.bookDir) !== resolve(projectDir)) throw new OperationStopped("cross_book_write", "这次操作只写它自己那本书，别的书没有写。");
+  const stepId = operation.step?.id;
+  if (!stepId) throw new AiDraftWriteError("not_in_step", "AI 稿只在操作的应用步骤里换上。");
+  const op = { opId: operation.opId, stepId };
+  const key = `${op.opId}:${op.stepId}`;
+  const title = input.title?.trim();
+  const path = join(projectDir, draftPath(input.chapter));
+  const keep = async (reason: Exclude<DraftKeptReason, "interrupted">, detail?: string): Promise<AiDraftOutcome> => {
+    let kept;
+    try {
+      kept = await keepOperationCandidateLocked(projectDir, {
+        chapter: input.chapter,
+        ...(title ? { title } : {}),
+        body: input.body,
+        baseVersion: input.baseVersion,
+        basisDigest: input.basis.digest,
+        source: input.source,
+        reason,
+        op,
+      });
+    } catch (error) {
+      throw new AiDraftWriteError("not_kept", `第 ${input.chapter} 章 AI 这版没换上（${whyNotApplied(reason, detail)}），也没能另外存下来：${errorText(error)}`);
+    }
+    if (kept.kind === "handled") {
+      return { applied: false, reason, candidateId: kept.id, handled: true, message: `第 ${input.chapter} 章 AI 这版你已经处理过了，这次没再留。` };
+    }
+    return { applied: false, reason, candidateId: kept.candidate.id, message: keptMessage(input.chapter, reason, detail) };
+  };
+  const applied = async (version: string, unchanged: boolean, warnings: string[], snapshotId?: string): Promise<AiDraftOutcome> => {
+    const content = await readFile(path, "utf-8");
+    return { applied: true, path, content, version, unchanged, ...(snapshotId ? { snapshotId } : {}), ...(warnings.length > 0 ? { warnings } : {}) };
+  };
+  try {
+    return await withBookLock(projectDir, async (): Promise<AiDraftOutcome> => {
+      let moved: MovedMaterial | undefined;
+      const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
+      const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
+        runCommand(projectDir, draftApplyGenerated, {
+          chapter: input.chapter,
+          body: input.body,
+          ...(title ? { title } : {}),
+          baseVersion: input.baseVersion,
+        }, {
+          caller: "ai",
+          snapshot,
+          basis: input.basis,
+          op,
+          // 回放回执之后才跑：已经换上过的不再核（核了反而会把自己换上的那一下当成材料变了）。
+          precondition: async () => {
+            const blocked = await checkFence(operation);
+            if (blocked) return blocked;
+            moved = await firstMovedMaterial(projectDir, input.materials);
+            return moved ? fail("material_moved", describeMovedMaterial(moved)) : undefined;
+          },
+        }), input.snapshotLabel);
+      if (!result.ok) {
+        if (FENCE_CODES.has(result.code)) throw new OperationStopped(result.code, result.message);
+        if (result.code === "material_moved") return keep("basis_moved", moved ? describeMovedMaterial(moved) : undefined);
+        if (result.code === "basis_changed") return keep("basis_moved");
+        if (result.code === "draft_conflict") return keep("draft_moved");
+        return keep("apply_failed", result.message);
+      }
+      // 换上了（或回放：上次换上了、之后崩了）。之后的事同一次持锁里做完，出意外只记警告。
+      const warnings: string[] = [];
+      if (!result.result.unchanged) {
+        const counted = await publishChapterWordsLocked(projectDir, input.chapter, key, result.replayed ? undefined : wordsBefore);
+        if (counted && result.replayed) warnings.push("这次的字数没按来源记上（记成了「其他」）。");
+      }
+      if (input.fixes) {
+        try {
+          await publishFixLogLocked(projectDir, input.chapter, key, input.fixes);
+        } catch (error) {
+          warnings.push(`改句记录没记上：${errorText(error)}`);
+        }
+      }
+      return applied(result.result.version, result.result.unchanged, warnings, result.replayed ? undefined : snapshotId);
+    });
+  } catch (error) {
+    if (error instanceof AiDraftWriteError || error instanceof OperationStopped) throw error;
+    // 核心提交之后的事（存档点收尾、读回盘上那份）出了意外：有回执就是换上了。
+    const receipt = await readCommandReceipt(projectDir, opCommandKey(op)).catch(() => undefined);
+    if (receipt) {
+      const result = receipt.result as { readonly version?: unknown; readonly unchanged?: unknown };
+      if (typeof result.version === "string") return applied(result.version, result.unchanged === true, [`换上之后的收尾没做全：${errorText(error)}`]);
+    }
+    return withBookLock(projectDir, () => keep("apply_failed", errorText(error)));
   }
 }

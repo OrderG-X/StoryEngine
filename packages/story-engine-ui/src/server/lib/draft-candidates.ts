@@ -11,6 +11,8 @@
  *   和它一连串存上的版本（从哪一版起头、依次存成了哪几版）。序号不比它大的存稿是迟到的旧笔，不写；
  *   盘上还是这个窗口最后存成的那版、新一笔又是照这一串里的某一版改的（关窗时补发的那笔和在路上那笔，
  *   或补发之后页面没关、接着存的那笔），就是这个窗口自己接着写，顺着接上（第 7 轮复核 U2）。
+ * - 操作里换不上的（写作版本 P2a 设计第三节）：号 = `<章>-` + sha256(`opId:stepId:第几版`) 前 16 位，同号已在不重写；
+ *   作者处理过（换上 / 不要了）改成墓碑（`handled`、正文清空），同号再来不复活；来源操作被清理时墓碑一起清（clearCandidateTombstones）。
  * 写都在书锁里（和存稿、找回、换上同一把锁）：查过的那份到换上为止不会被别人改。
  * 都在 `agents/` 下，不进存档点（撤销不会把它们翻没）；作者没处理的不自动清。
  */
@@ -42,8 +44,11 @@ const DraftCandidateFile = z.object({
   baseVersion: z.string().nullable(),
   basisDigest: z.string(),
   source: DraftCandidateSource,
-  status: z.enum(["writing", "ready"]),
+  /** handled = 作者处理过（墓碑：正文清空，同号不复活）。 */
+  status: z.enum(["writing", "ready", "handled"]),
   reason: DraftKeptReason.optional(),
+  /** 哪次操作的哪一步留下的（操作里换不上的才有）。 */
+  op: z.object({ opId: z.string(), stepId: z.string() }).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -157,9 +162,74 @@ export async function readDraftCandidate(projectDir: string, id: string): Promis
   }
 }
 
-export async function removeDraftCandidate(projectDir: string, id: string): Promise<void> {
+/** 作者处理过了（换上 / 不要了）、或这一份换上了：操作留下的改成墓碑（同号不复活），别的删掉。 */
+export async function settleDraftCandidate(projectDir: string, id: string): Promise<void> {
   writingNow.delete(id);
-  await withBookLock(projectDir, () => removeEntry(candidatesDir(projectDir), id));
+  await withBookLock(projectDir, async () => {
+    const candidate = await readDraftCandidate(projectDir, id);
+    if (!candidate?.op) return removeEntry(candidatesDir(projectDir), id);
+    if (candidate.status === "handled") return;
+    const { title: _title, reason: _reason, ...rest } = candidate;
+    await writeEntry(projectDir, candidatesDir(projectDir), id, { ...rest, body: "", status: "handled", updatedAt: new Date().toISOString() });
+  });
+}
+
+/** 操作里这一版的候选号：同一次操作同一步同一版永远是同一个号。 */
+export function operationCandidateId(chapter: number, op: { readonly opId: string; readonly stepId: string }, n = 1): string {
+  return `${chapter}-${sha256(`${op.opId}:${op.stepId}:${n}`).slice(0, 16)}`;
+}
+
+export type OperationCandidateOutcome =
+  | { readonly kind: "kept"; readonly candidate: DraftCandidate }
+  /** 作者已经处理过这一版（换上 / 不要了）：不复活。 */
+  | { readonly kind: "handled"; readonly id: string };
+
+/**
+ * 操作里换不上的那版留成候选（和换上那一下同一次持锁：书锁可重入）。同号已在 → 不重写；是墓碑 → 不复活。
+ */
+export async function keepOperationCandidateLocked(projectDir: string, input: {
+  readonly chapter: number;
+  readonly title?: string;
+  readonly body: string;
+  readonly baseVersion: string | null;
+  readonly basisDigest: string;
+  readonly source: DraftCandidateSource;
+  readonly reason: Exclude<DraftKeptReason, "interrupted">;
+  readonly op: { readonly opId: string; readonly stepId: string };
+  readonly n?: number;
+}): Promise<OperationCandidateOutcome> {
+  return withBookLock(projectDir, () => keepOperationCandidate(projectDir, input));
+}
+
+async function keepOperationCandidate(projectDir: string, input: Parameters<typeof keepOperationCandidateLocked>[1]): Promise<OperationCandidateOutcome> {
+  const id = operationCandidateId(input.chapter, input.op, input.n);
+  const existing = await readDraftCandidate(projectDir, id);
+  if (existing?.status === "handled") return { kind: "handled", id };
+  if (existing) return { kind: "kept", candidate: existing };
+  const now = new Date().toISOString();
+  const candidate: DraftCandidate = {
+    schema: "draft-candidate/1",
+    id,
+    chapter: input.chapter,
+    ...splitTitle(input),
+    baseVersion: input.baseVersion,
+    basisDigest: input.basisDigest,
+    source: input.source,
+    status: "ready",
+    reason: input.reason,
+    op: { opId: input.op.opId, stepId: input.op.stepId },
+    createdAt: now,
+    updatedAt: now,
+  };
+  await writeEntry(projectDir, candidatesDir(projectDir), id, candidate);
+  return { kind: "kept", candidate };
+}
+
+/** 来源操作被清理了（调用方拿着书锁）：它留下的墓碑一起清。没处理的候选不动（作者还能采用）。 */
+export async function clearCandidateTombstones(projectDir: string, opId: string): Promise<void> {
+  for (const candidate of await readEntries(candidatesDir(projectDir), DraftCandidateFile)) {
+    if (candidate.status === "handled" && candidate.op?.opId === opId) await removeEntry(candidatesDir(projectDir), candidate.id);
+  }
 }
 
 /**

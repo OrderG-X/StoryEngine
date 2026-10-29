@@ -203,7 +203,7 @@ export {
 export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
-export { fail, runCommand } from "./commands/runner.js";
+export { fail, opCommandKey, readCommandReceipt, runCommand } from "./commands/runner.js";
 export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";

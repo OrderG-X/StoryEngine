@@ -8,6 +8,9 @@
  * 「今天写了多少」= 今天结束时全书字数 − 今天第一次记之前的全书字数（净增，删字会抵掉）。
  * 第一次记的时候（老书、导入的书）先把全书数一遍当底，不算进今天。
  * 记账出错不挡写稿：只 warn，界面上的统计照旧读得出来。
+ *
+ * 操作里换上 AI 稿时按键记（写作版本 P2a 设计第三节）：`published` 键 `opId:stepId` 和这次的字数同一次原子写，
+ * 键在就不再记（恢复、重做不重复记）；键只在来源操作被清理时清（clearWordStatsKeys）。
  */
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -37,6 +40,8 @@ interface WordStatsFile {
   readonly chapters: Readonly<Record<string, number>>;
   /** 本地日期 YYYY-MM-DD → 当天记录。 */
   readonly days: Readonly<Record<string, DayRecord>>;
+  /** 操作里记过的键 `opId:stepId` → 记的时间。 */
+  readonly published?: Readonly<Record<string, string>>;
 }
 
 export interface WordStatsView {
@@ -108,7 +113,11 @@ async function readStatsFile(projectDir: string): Promise<WordStatsFile | null> 
     if (!/^\d{4}-\d{2}-\d{2}$/u.test(key) || !isRecord(value)) continue;
     days[key] = { start: nonNegativeInt(value.start), end: nonNegativeInt(value.end), author: int(value.author), ai: int(value.ai), other: int(value.other) };
   }
-  return { version: 1, chapters, days };
+  const published: Record<string, string> = {};
+  if (isRecord(raw.published)) {
+    for (const [key, value] of Object.entries(raw.published)) if (typeof value === "string") published[key] = value;
+  }
+  return { version: 1, chapters, days, published };
 }
 
 const sum = (chapters: Readonly<Record<string, number>>) => Object.values(chapters).reduce((a, b) => a + b, 0);
@@ -118,7 +127,7 @@ async function writeStatsFile(projectDir: string, stats: WordStatsFile): Promise
   const days = Object.fromEntries(keys.slice(-KEEP_DAYS).map((key) => [key, stats.days[key]!]));
   const path = join(projectDir, WORD_STATS_PATH);
   await mkdir(dirname(path), { recursive: true });
-  await writeFileAtomic(path, `${JSON.stringify({ version: 1, chapters: stats.chapters, days })}\n`);
+  await writeFileAtomic(path, `${JSON.stringify({ version: 1, chapters: stats.chapters, days, ...(stats.published && Object.keys(stats.published).length > 0 ? { published: stats.published } : {}) })}\n`);
 }
 
 function applyChange(stats: WordStatsFile, chapters: Record<string, number>, source: WordSource, delta: number, now: Date): WordStatsFile {
@@ -126,7 +135,7 @@ function applyChange(stats: WordStatsFile, chapters: Record<string, number>, sou
   const before = sum(stats.chapters);
   const day = stats.days[date] ?? { start: before, end: before, author: 0, ai: 0, other: 0 };
   const next: DayRecord = { ...day, end: sum(chapters), [source]: day[source] + delta };
-  return { version: 1, chapters, days: { ...stats.days, [date]: next } };
+  return { version: 1, chapters, days: { ...stats.days, [date]: next }, ...(stats.published ? { published: stats.published } : {}) };
 }
 
 /**
@@ -135,24 +144,55 @@ function applyChange(stats: WordStatsFile, chapters: Record<string, number>, sou
  */
 export async function recordChapterWords(projectDir: string, chapter: number, source: WordSource, before?: number, now: Date = new Date()): Promise<void> {
   try {
-    await withBookLock(projectDir, async () => {
-      const after = await chapterWordsNow(projectDir, chapter);
-      const key = String(chapter);
-      let stats = await readStatsFile(projectDir);
-      if (!stats) {
-        // 第一次记：全书数一遍当底（这章按写之前的数），不算进今天。
-        const base = await scanAllChapters(projectDir);
-        if (before !== undefined) base[key] = before;
-        stats = { version: 1, chapters: base, days: {} };
-      }
-      const old = before ?? stats.chapters[key] ?? 0;
-      const chapters = { ...stats.chapters, [key]: after };
-      if (after === 0) delete chapters[key];
-      await writeStatsFile(projectDir, applyChange({ ...stats, chapters: { ...stats.chapters, [key]: old } }, chapters, source, after - old, now));
-    });
+    await withBookLock(projectDir, () => recordLocked(projectDir, chapter, source, before, now));
   } catch (error) {
     console.warn(`[word-stats] 第 ${chapter} 章字数没记上：${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+async function recordLocked(projectDir: string, chapter: number, source: WordSource, before: number | undefined, now: Date, publishKey?: string): Promise<void> {
+  const after = await chapterWordsNow(projectDir, chapter);
+  const key = String(chapter);
+  let stats = await readStatsFile(projectDir);
+  if (!stats) {
+    // 第一次记：全书数一遍当底（这章按写之前的数），不算进今天。
+    const base = await scanAllChapters(projectDir);
+    if (before !== undefined) base[key] = before;
+    stats = { version: 1, chapters: base, days: {} };
+  }
+  const old = before ?? stats.chapters[key] ?? 0;
+  const chapters = { ...stats.chapters, [key]: after };
+  if (after === 0) delete chapters[key];
+  const changed = applyChange({ ...stats, chapters: { ...stats.chapters, [key]: old } }, chapters, source, after - old, now);
+  await writeStatsFile(projectDir, publishKey ? { ...changed, published: { ...stats.published, [publishKey]: now.toISOString() } } : changed);
+}
+
+/**
+ * 操作里换上 AI 稿之后记一次（调用方拿着书锁、刚换上：同一次持锁里写完）。键在 → 不记，返回 false。
+ * `before` 不给 = 换上那一下没量（回放回执补记：崩在核心提交和记字数之间）：整章重数、差值记成「其他」。永不抛（记不上返回 false）。
+ */
+export async function publishChapterWordsLocked(projectDir: string, chapter: number, key: string, before: number | undefined, now: Date = new Date()): Promise<boolean> {
+  try {
+    if ((await readStatsFile(projectDir))?.published?.[key]) return false;
+    await recordLocked(projectDir, chapter, before === undefined ? "other" : "ai", before, now, key);
+    return true;
+  } catch (error) {
+    console.warn(`[word-stats] 第 ${chapter} 章字数没记上：${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
+/** 这个键记过没有（读路径）。 */
+export async function wordStatsPublished(projectDir: string, key: string): Promise<boolean> {
+  return Boolean((await readStatsFile(projectDir))?.published?.[key]);
+}
+
+/** 来源操作被清理了（调用方拿着书锁）：清掉它的键。 */
+export async function clearWordStatsKeys(projectDir: string, opId: string): Promise<void> {
+  const stats = await readStatsFile(projectDir);
+  const keys = Object.keys(stats?.published ?? {});
+  if (!stats || !keys.some((key) => key.startsWith(`${opId}:`))) return;
+  await writeStatsFile(projectDir, { ...stats, published: Object.fromEntries(keys.filter((key) => !key.startsWith(`${opId}:`)).map((key) => [key, stats.published![key]!])) });
 }
 
 /** 恢复存档、撤销之后：全书重数一遍，差值记成「其他」。永不抛。 */

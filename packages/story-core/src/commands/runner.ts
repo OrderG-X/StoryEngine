@@ -53,6 +53,14 @@ async function undoableEffects(bookDir: string, writes: readonly TxWrite[]): Pro
   return effects;
 }
 
+/** 一次操作一步的幂等键（没另给键时用它）。 */
+export const opCommandKey = (op: { readonly opId: string; readonly stepId: string }): string => `op:${op.opId}:${op.stepId}`;
+
+/** 这个键的回执（没有 / 不是这个键的 → undefined）。命令之后的事出了意外时，调用方据此判断真相已经写上没有（读路径，不拿锁）。 */
+export async function readCommandReceipt(bookDir: string, key: string): Promise<CommandReceipt | undefined> {
+  return readReceipt(bookDir, key);
+}
+
 async function readReceipt(bookDir: string, key: string): Promise<CommandReceipt | undefined> {
   let raw: string;
   try {
@@ -74,7 +82,7 @@ export async function runCommand<A, R>(
   if (spec.tier === "author" && options.caller !== "author") {
     return fail("author_only", "这一步只能由你在界面上点按钮来做，AI 不能替你做。");
   }
-  const key = options.idempotencyKey?.trim() || (options.op ? `op:${options.op.opId}:${options.op.stepId}` : undefined);
+  const key = options.idempotencyKey?.trim() || (options.op ? opCommandKey(options.op) : undefined);
   if (spec.idempotent && !key) return fail("missing_idempotency_key", "这一步缺少防重复的标记，没有执行。");
   const parsed = spec.args.safeParse(rawArgs);
   if (!parsed.success) {

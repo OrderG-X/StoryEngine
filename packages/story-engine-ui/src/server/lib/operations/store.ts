@@ -18,7 +18,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { bookKey, canonicalJson, withBookLock } from "@actalk/story-core";
+import { bookKey, canonicalJson, opCommandKey, readCommandReceipt, withBookLock, type CommandReceipt } from "@actalk/story-core";
 import { runExclusive, writeFileAtomic } from "../project-io.js";
 
 export const OPERATION_SCHEMA = "story-operation/1" as const;
@@ -111,10 +111,44 @@ export interface OperationRecord {
   readonly pendingActions: readonly PendingAction[];
   /** 作者已经处理过的结果不明的 attempt：开书、resume 不再拿来拦。 */
   readonly settledUnknowns: readonly string[];
+  /** 开始应用、还没记上结果的步骤（ctx.apply）：这次执行一结束（停、完、错），按回执补记进 appliedEffects。 */
+  readonly applying?: readonly string[];
+  /** 已经落盘的效果（契约：失败、取消都不抹）。以核心回执为准。 */
+  readonly appliedEffects?: readonly AppliedEffect[];
   readonly eventSeq: number;
   readonly result?: unknown;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/** 一步应用落了盘：哪一步、哪个核心命令、书的版本号、写了哪些文件。 */
+export interface AppliedEffect {
+  readonly stepId: string;
+  readonly command: string;
+  readonly version: number;
+  readonly at: string;
+  readonly paths: readonly string[];
+}
+
+export const appliedEffectOf = (stepId: string, receipt: CommandReceipt): AppliedEffect => ({
+  stepId,
+  command: receipt.command,
+  version: receipt.version,
+  at: receipt.at,
+  paths: (receipt.effects ?? []).map((effect) => effect.path),
+});
+
+/** 按回执补记还在 applying 里的步骤（调用方拿着书锁 + 记录锁：在路上的那一笔已经写完）。没有回执的 = 没落盘，丢掉（那一步会整步重做）。 */
+async function settleApplying(bookDir: string, record: OperationRecord): Promise<OperationRecord> {
+  if (!record.applying?.length) return record;
+  const applied = [...(record.appliedEffects ?? [])];
+  for (const stepId of record.applying) {
+    if (applied.some((effect) => effect.stepId === stepId)) continue;
+    const receipt = await readCommandReceipt(bookDir, opCommandKey({ opId: record.opId, stepId }));
+    if (receipt) applied.push(appliedEffectOf(stepId, receipt));
+  }
+  const { applying: _applying, ...rest } = record;
+  return { ...rest, appliedEffects: applied };
 }
 
 export interface OperationTombstone {
@@ -293,8 +327,10 @@ export async function updateOperationLocked(
   const stored = await readOperation(bookDir, opId);
   if (stored.kind !== "record") return undefined;
   const current = stored.record;
-  const next = mutate(current);
-  if (!next) return current;
+  const changed = mutate(current);
+  if (!changed) return current;
+  // 这次执行结束了（换了状态或执行号）：在路上的应用按回执记清（契约：操作记录落后于回执时以回执为准）。
+  const next = changed.applying?.length && (changed.state !== "running" || changed.runEpoch !== current.runEpoch) ? await settleApplying(bookDir, changed) : changed;
   if (next.state !== current.state && !TRANSITIONS[current.state].includes(next.state)) throw new OperationTransitionError(current.state, next.state);
   if (isTerminal(current.state)) throw new OperationTransitionError(current.state, next.state);
   const written: OperationRecord = { ...next, opId: current.opId, requestKey: current.requestKey, writeScope: current.writeScope, eventSeq: current.eventSeq + 1, updatedAt: now.toISOString() };
@@ -489,7 +525,13 @@ export function tombstoneExpired(stone: Pick<OperationTombstone, "issuedAt" | "a
  * 开书时（书锁里）清：结束超 30 天、或每本书超 200 次的操作目录，留墓碑；墓碑过了期限（tombstoneExpired）的删。
  * summaryOf 给墓碑写一句结果（操作结果的投影，executor 给）。
  */
-export async function pruneOperations(bookDir: string, summaryOf: (record: OperationRecord) => string, now: Date = new Date()): Promise<{ readonly cleared: readonly string[] }> {
+export async function pruneOperations(
+  bookDir: string,
+  summaryOf: (record: OperationRecord) => string,
+  now: Date = new Date(),
+  /** 清掉这次操作在书里留的发布键（改句记录、出稿统计、候选墓碑）：先墓碑、再删目录、再清键，同一次持锁。 */
+  clearPublished?: (opId: string) => Promise<void>,
+): Promise<{ readonly cleared: readonly string[] }> {
   let names: string[];
   try {
     names = await readdir(join(bookDir, OPERATIONS_DIR));
@@ -502,8 +544,10 @@ export async function pruneOperations(bookDir: string, summaryOf: (record: Opera
   for (const name of names) {
     const stored = await readOperation(bookDir, name);
     if (stored.kind === "tombstone") {
+      // 崩在「墓碑之后、清键之前」的，这里接着做完剩下的（清键按键幂等）。
       if (tombstoneExpired(stored.tombstone, now)) await rm(operationDir(bookDir, name), { recursive: true, force: true });
       else await removeAllButRecord(bookDir, name);
+      await clearPublished?.(stored.tombstone.opId);
     } else if (stored.kind === "record" && isTerminal(stored.record.state)) {
       finished.push(stored.record);
     }
@@ -526,6 +570,7 @@ export async function pruneOperations(bookDir: string, summaryOf: (record: Opera
     // 先把记录换成墓碑（原子写），再删别的：崩在中间只多留几个文件，下次清；同键重送读到的已经是墓碑。
     await writeRecordFile(bookDir, stone);
     await removeAllButRecord(bookDir, record.opId);
+    await clearPublished?.(record.opId);
     cleared.push(record.opId);
   }
   return { cleared };

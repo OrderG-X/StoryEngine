@@ -1,6 +1,9 @@
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { writeFileAtomic } from "../book/project-store.js";
+import { currentOperation, OperationStopped } from "../lib/operations/context.js";
+import { withFence } from "../lib/operations/fence.js";
+import { operationDir } from "../lib/operations/store.js";
 
 export interface DiagnosticsTokenUsage {
   readonly promptTokens: number;
@@ -90,19 +93,30 @@ export function estimateTextTokens(text: string): number {
   return Math.max(1, Math.ceil(count));
 }
 
+/**
+ * 写一份诊断。在操作里（写作版本 P2a 设计 6.3）写进这次操作自己的 `artifacts/`（栅栏里写：停了就写不进），不写书；
+ * 不在操作里（还没迁走的入口）照旧写书里的 `diagnostics/`。
+ */
 export async function writeDiagnostics(
   projectDir: string,
   diagnostics: Omit<DiagnosticsRecord, "diagnosticsPath">,
 ): Promise<DiagnosticsRecord> {
-  const diagnosticsDir = join(projectDir, "diagnostics");
-  const diagnosticsPath = join(diagnosticsDir, `${diagnostics.stage}-chapter-${padChapter(diagnostics.chapter)}.json`);
+  const operation = currentOperation();
+  if (operation && resolve(operation.bookDir) !== resolve(projectDir)) throw new OperationStopped("cross_book_write", "这次操作只写它自己那本书，别的书没有写。");
+  const name = `${diagnostics.stage}-chapter-${padChapter(diagnostics.chapter)}.json`;
+  const diagnosticsDir = operation ? join(operationDir(projectDir, operation.opId), "artifacts", "diagnostics") : join(projectDir, "diagnostics");
+  const diagnosticsPath = join(diagnosticsDir, name);
   const record: DiagnosticsRecord = {
     ...diagnostics,
     diagnosticsPath,
   };
-  await mkdir(diagnosticsDir, { recursive: true });
-  // 审计 Low：引擎内最后一处对项目目录的非原子 JSON 写——收口 writeFileAtomic。
-  await writeFileAtomic(diagnosticsPath, `${JSON.stringify(record, null, 2)}\n`);
+  const write = async () => {
+    await mkdir(diagnosticsDir, { recursive: true });
+    // 审计 Low：引擎内最后一处对项目目录的非原子 JSON 写——收口 writeFileAtomic。
+    await writeFileAtomic(diagnosticsPath, `${JSON.stringify(record, null, 2)}\n`);
+  };
+  if (operation) await withFence(operation, write);
+  else await write();
   return record;
 }
 

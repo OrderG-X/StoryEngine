@@ -126,7 +126,7 @@ describe("runDraftQualityPipeline", () => {
       quote: "菜场早没了，门口摆着几摊卖豆腐的。",
       revisited: { from: "菜场还在，门口摆着几摊卖豆腐的。" },
     })]);
-    const log = JSON.parse(await readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0008.fixes.json"), "utf-8")) as unknown;
+    const log = (JSON.parse(await readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0008.fixes.json"), "utf-8")) as { fixes: unknown }).fixes;
     expect(log).toEqual([{ from: "菜场还在，门口摆着几摊卖豆腐的。", to: "菜场早没了，门口摆着几摊卖豆腐的。" }]);
   });
 
