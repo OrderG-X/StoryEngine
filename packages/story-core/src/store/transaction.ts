@@ -39,7 +39,7 @@ import {
 import { withBookLock } from "./lock.js";
 import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "./control.js";
 import { assertInsideBook, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
-import { moveFileInBook, readFileInBook, writeFileInBook } from "./safe-fs.js";
+import { moveFileInBook, readFileInBook, removeFileInBook, writeFileInBook } from "./safe-fs.js";
 import { saveCopyBeforeRestore } from "./saved-copies.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
@@ -57,6 +57,11 @@ interface ManifestFile {
   readonly slot: string;
   /** 这次写的内容的 sha256（P1 第 19 轮）：回滚时盘上的还是它，就是这次写到一半的，换回不用另存。老清单没有。 */
   readonly wrote?: string;
+  /**
+   * 原来那份的 sha256（existed 的才有，P1 第 22 轮 AJ1）：回滚时盘上已经是它就是换回过了——拿内容证明，
+   * 不拿「备份不在了」证明（备份可能是被挪走的）。老清单没有：备份也不在时说不清，如实失败。
+   */
+  readonly had?: string;
 }
 
 interface Manifest {
@@ -152,38 +157,45 @@ interface RollbackResult {
 }
 
 /**
- * 回滚要盖掉 / 删掉 target 之前：盘上现在的内容既不是这次写的（wrote），也不是要换回的，就先另存（见文件头「不毁唯一副本」）。
- * 目标是软链、不是普通文件，拒绝。
+ * 暂存的样子（P1 第 22 轮）：不在 = 换上过；在、而且就是写进去的那份 = 没换上（rename 挪走的就是它）；
+ * 在但核不上（软链、硬链、内容不对）= 被动过，要看正式那份才定得下。
  */
-async function keepForeignCurrent(bookDir: string, input: { readonly from: string; readonly path: string; readonly wrote?: string; readonly restore?: string }): Promise<void> {
-  const target = join(bookDir, input.path);
-  let stat;
+async function stagedState(bookDir: string, staged: string, file: ManifestFile): Promise<"moved" | "intact" | "tampered"> {
+  let content: string | undefined;
   try {
-    stat = await lstat(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
+    content = await readFileInBook(bookDir, staged, "transaction staged");
+  } catch {
+    return "tampered";
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`回滚目标不是普通文件，拒绝动：${input.path}`);
-  const current = await readFile(target, "utf-8");
-  if (current === input.restore) return;
-  if (input.wrote !== undefined && digest(current) === input.wrote) return;
-  await saveCopyBeforeRestore(bookDir, { from: input.from, path: input.path, content: current });
+  if (content === undefined) return "moved";
+  return file.wrote !== undefined && digest(content) !== file.wrote ? "tampered" : "intact";
+}
+
+/** 原来那份的指纹：清单记着的；老清单从备份算，备份也不在是 undefined。 */
+async function originalDigest(bookDir: string, backup: string, file: ManifestFile): Promise<string | undefined> {
+  if (file.had !== undefined) return file.had;
+  const content = await readFileInBook(bookDir, backup, "rollback backup");
+  return content === undefined ? undefined : digest(content);
 }
 
 /**
  * 把一份 prepared 的事务退回去：已换上的文件换回备份，事务新建的文件删掉。写入代次不动；工作稿代次只有进程内失败
  * （`inProcess`）才换回，收拾半截事务时不动（见文件头）。不换代次：调用方看返回的，换代次（advanceEpochs）之后再清掉这份事务。
+ *
+ * 换没换回拿内容证明（P1 第 22 轮 AJ1）：盘上已经是原来那份（新建的已经不在）才算退过了；不是就得从备份换回，
+ * 备份不在、核不上如实失败。要盖掉 / 删掉的那份，既不是这次写的、也不是原来的，先另存（「不毁唯一副本」），
+ * 再只盖掉 / 删掉核过的这一份（safe-fs 的 expectTargetSha / removeFileInBook，AJ2）。
  */
 async function rollback(bookDir: string, txDir: string, manifest: Manifest, inProcess = false): Promise<RollbackResult> {
   let changed = false;
   let gensTouched = false;
   const draftChapters = new Set<number>();
   for (const file of manifest.files) {
-    // 新文件还在暂存区 = 这个文件还没换上，书里是旧样子，不用动。
-    if (await exists(join(txDir, "staged", file.slot))) continue;
-    // 换上过（包括上次回滚到一半已经换回去的）：书被这次写动过。
-    changed = true;
+    const staged = await stagedState(bookDir, join(txDir, "staged", file.slot), file);
+    if (staged === "intact") continue;
+    // 换上过（包括上次回滚到一半已经换回去的）：书被这次写动过。暂存被动过的，下面核正式那份：还是原来的样子就没动过。
+    // 代次说不清换没换上就当换上过（只往前走，多换一次新的不丢东西）。
+    if (staged === "moved" || isControlPath(file.path)) changed = true;
     if (file.path === REVISION_PATH) continue;
     if (file.path === DRAFT_GENS_PATH) {
       gensTouched = true;
@@ -195,12 +207,16 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
     await assertPlainDirs(bookDir, dirname(path));
     const target = join(bookDir, path);
     const backup = join(txDir, "backup", file.slot);
-    // 备份已经不在 = 上次回滚到一半时已经换回去了，不再动它。
-    if (file.existed && !(await exists(backup))) continue;
-    const restore = file.existed ? await readFile(backup, "utf-8") : undefined;
-    await keepForeignCurrent(bookDir, { from: coreInstance(manifest), path, ...(file.wrote !== undefined ? { wrote: file.wrote } : {}), ...(restore !== undefined ? { restore } : {}) });
-    if (!file.existed) await rm(target, { force: true });
-    else await moveFileInBook(bookDir, backup, target, { label: "rollback target", expectSha: digest(restore!) });
+    const had = file.existed ? await originalDigest(bookDir, backup, file) : undefined;
+    if (file.existed && had === undefined) throw new Error(`备份不在、清单也没记原来是什么，说不清换没换回：${path}`);
+    const current = await readFileInBook(bookDir, target, "rollback target");
+    const now = current === undefined ? undefined : digest(current);
+    // 已经是原来的样子：退过了（暂存被动过的 = 没换上过）。
+    if (now === had) continue;
+    if (staged === "tampered") throw new Error(`暂存被动过、正式那份也不是原来的样子，说不清换没换上：${path}`);
+    if (current !== undefined && now !== file.wrote) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: current });
+    if (!file.existed) await removeFileInBook(bookDir, target, { label: "rollback target", expectSha: now! });
+    else await moveFileInBook(bookDir, backup, target, { label: "rollback target", expectSha: had, expectTargetSha: now ?? null });
   }
   return { changed, draftChapters: [...draftChapters], gensTouched };
 }
@@ -243,9 +259,11 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const target = join(bookDir, path);
       const slot = String(index);
       const existed = await checkTarget(bookDir, path);
-      if (existed) await createDurable(join(txDir, "backup", slot), (await readFileInBook(bookDir, target, "transaction target"))!);
+      const original = existed ? await readFileInBook(bookDir, target, "transaction target") : undefined;
+      if (existed && original === undefined) throw new Error(`要覆盖的文件刚才还在、现在不在了：${path}`);
+      if (original !== undefined) await createDurable(join(txDir, "backup", slot), original);
       await createDurable(join(txDir, "staged", slot), write.content);
-      files.push({ path, existed, slot, wrote: digest(write.content) });
+      files.push({ path, existed, slot, wrote: digest(write.content), ...(original !== undefined ? { had: digest(original) } : {}) });
     }
   } catch (error) {
     // 清单还没写，书里什么都没动：直接丢掉暂存。
@@ -259,11 +277,18 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const target = join(bookDir, file.path);
       await assertPlainDirs(bookDir, dirname(file.path));
       await mkdir(dirname(target), { recursive: true });
-      await moveFileInBook(bookDir, join(txDir, "staged", file.slot), target, { label: "transaction target", ...(file.wrote !== undefined ? { expectSha: file.wrote } : {}) });
+      // 盖掉的得还是备份时那份（新建的得还不在）：写的途中被别处改过就不盖，整份退回。
+      await moveFileInBook(bookDir, join(txDir, "staged", file.slot), target, { label: "transaction target", expectSha: file.wrote, expectTargetSha: file.had ?? null });
     }
   } catch (error) {
-    // 进程内失败：一直拿着书锁，工作稿代次照原样换回（见文件头），写入代次换新。
-    const undone = await rollback(bookDir, txDir, manifest, true);
+    // 进程内失败：一直拿着书锁，工作稿代次照原样换回（见文件头），写入代次换新。退不下去的（核不上、备份被动过）
+    // 事务原样留着，下一个写命令开工前再收拾、收拾不了如实挡住；这里报这次写没成的原因。
+    let undone: RollbackResult;
+    try {
+      undone = await rollback(bookDir, txDir, manifest, true);
+    } catch {
+      throw error;
+    }
     if (undone.changed) await advanceEpochs(bookDir);
     await rm(txDir, { recursive: true, force: true });
     throw error;
@@ -304,7 +329,8 @@ async function inspect(txDir: string): Promise<TxState> {
       manifest.schema === "story-core-tx/1" &&
       (manifest.status === "prepared" || manifest.status === "applied") &&
       Array.isArray(manifest.files) &&
-      manifest.files.every((file) => typeof file?.path === "string" && typeof file.slot === "string" && typeof file.existed === "boolean" && (file.wrote === undefined || typeof file.wrote === "string"));
+      manifest.files.every((file) => typeof file?.path === "string" && typeof file.slot === "string" && typeof file.existed === "boolean"
+        && (file.wrote === undefined || typeof file.wrote === "string") && (file.had === undefined || typeof file.had === "string"));
     return valid ? { kind: "manifest", manifest } : { kind: "broken" };
   } catch {
     return { kind: "broken" };
@@ -385,12 +411,12 @@ async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
         restores.set(path, null);
         continue;
       }
-      // 备份已经不在 = 上次回滚到一半时已经换回去了，这份不再动它。
-      const backup = await readFile(join(txDir, "backup", file.slot), "utf-8").catch((error: NodeJS.ErrnoException) => {
+      // 原来是什么说不清（老清单、备份也不在）：先后不按它算，回滚时如实失败。
+      const had = file.had ?? await readFile(join(txDir, "backup", file.slot), "utf-8").then(digest, (error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return undefined;
         throw error;
       });
-      if (backup !== undefined) restores.set(path, digest(backup));
+      if (had !== undefined) restores.set(path, had);
     }
     prepared.push({ format: "core", name, createdAt: state.manifest.createdAt, restores, manifest: state.manifest });
   }

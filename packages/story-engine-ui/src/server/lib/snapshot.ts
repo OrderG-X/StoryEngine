@@ -198,10 +198,21 @@ async function createSnapshotUnlocked(projectDir: string, label: string): Promis
   return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
 }
 
+/**
+ * 存档类入口（建存档点、存档里写、恢复、裁剪）先收拾上次写到一半的事务；有收拾不了的就停下、不动稿、不报成功
+ * （P1 第 22 轮 AJ3：恢复接口不看收拾结果，作者刚选的那版之后又被那份没退完的事务退掉）。老格式收拾不了照样抛。
+ */
+async function settleOrStop(projectDir: string): Promise<void> {
+  const recovery = await recoverTransactions(projectDir);
+  if (recovery.problems.length > 0) {
+    throw Object.assign(new Error("上次写到一半的记录收拾不了，先不动这本书，免得丢数据。"), { code: "TX_RESIDUE" });
+  }
+}
+
 /** 写入前调用：把当前全部状态存为一个快照。 */
 export async function createSnapshot(projectDir: string, label: string): Promise<SnapshotEntry> {
   return withProjectLock(projectDir, async () => {
-    await recoverTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     return createSnapshotUnlocked(projectDir, label);
   });
@@ -225,7 +236,7 @@ export async function runWithSnapshot<T>(
   fn: (snapshotId: string) => Promise<T>,
 ): Promise<{ readonly snapshot: SnapshotEntry; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
-    await recoverTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     const snapshot = await createSnapshotUnlocked(projectDir, label);
     const result = await fn(snapshot.id);
@@ -254,7 +265,7 @@ export async function runWithLazySnapshot<T>(
   return withProjectLock(projectDir, async () => {
     // 老格式事务（升级前崩溃留下的）先收拾，再进核心命令：收拾会换写入代次，核心随后核依据就对得上真相；
     // 留到要打存档点才收拾，核心已经照没收拾的半截真相核过依据了（第 4 轮复核 R9）。
-    await recoverTransactions(projectDir);
+    await settleOrStop(projectDir);
     let taken: SnapshotEntry | undefined;
     const result = await fn(async (label, command) => {
       if (taken) return;
@@ -304,7 +315,7 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     // formal transaction becomes part of the pre-restore history and may be
     // resurrected by a later undo.
     // 老格式和新核心的写盘事务都先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
-    await recoverTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     // 先解析目标：失败即抛，不污染历史
     const target = parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`, id]));
@@ -910,7 +921,7 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
   const keep = clampPruneKeep(options.keep);
   const dryRun = options.dryRun !== false;
   return withProjectLock(projectDir, async () => {
-    await recoverTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     const branch = await assertRepoHealthyForPrune(projectDir);
 

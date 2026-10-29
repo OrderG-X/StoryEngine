@@ -7,14 +7,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readDraft, readDraftState, readTruthBasis, runCommand, setLegacyTxIoHookForTests, sha256, withBookLock } from "@actalk/story-core";
+import { bumpRevision, cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readDraft, readDraftState, readTruthBasis, runCommand, setLegacyTxIoHookForTests, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, hasFailedUnsavedDraft, isOwnSavedVersion, keepPaperMine, openPaper, refreshPaper, saveDraftKeepalive, scheduleDraftSave, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { createStoryProject } from "../book/project-store.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
-import { freshRevision } from "../lib/book-backup.js";
 import { writeCards } from "../lib/card-write.js";
 import { draftSha, pendingDraftFor, readDraftCandidate, readDraftRecovery, readSaveMark, saveDraftCandidate } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -584,7 +583,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
 
   it("书从备份 / 回收站搬回来：稿纸上照原来那版发的存稿对不上", async () => {
     const base = await save(1, "搬走前的稿。");
-    await freshRevision(book);
+    await bumpRevision(book);
     expect((await readDraft(book, 1))?.version).not.toBe(base);
     expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "旧窗口的字。", baseVersion: base })).status).toBe(409);
     expect((await readDraft(book, 1))?.body).toBe("搬走前的稿。");

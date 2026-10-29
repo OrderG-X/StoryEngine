@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { DRAFT_GENS_PATH, draftChapterOfPath, isControlPath } from "./paths.js";
-import { writeFileInBook, type SafeWriteHook, type SafeWriteHookPoint } from "./safe-fs.js";
+import { readFileInBook, removeFileInBook, writeFileInBook, type SafeWriteHook, type SafeWriteHookPoint } from "./safe-fs.js";
 
 /** 老定稿链的事务目录。 */
 export const LEGACY_TX_DIR = ".story-engine-tx";
@@ -557,20 +557,22 @@ async function restoreCommitTransactionBackups(
       if (backup.existed) {
         const backupPath = join(txDir, backup.backupPath!);
         await assertSafeProjectPath(projectDir, backupPath, false, "commit backup");
-        content = await readFile(backupPath, "utf-8");
-        if (sha256Text(content) !== backup.sha256) {
+        content = await readFileInBook(resolve(projectDir), resolve(backupPath), "commit backup");
+        if (content === undefined || sha256Text(content) !== backup.sha256) {
           throw taggedError("TX_BACKUP_CHECKSUM_MISMATCH", `backup checksum mismatch at ${relative(resolve(projectDir), backupPath)}`);
         }
       }
-      // 现在盘上的：老格式没记事务写了什么，和要换回的不一样就先另存（之后存下的稿可能就这一份，AG3）。
-      const current = await readCurrentNoFollow(projectDir, targetPath, "formal rollback target");
-      if (current !== undefined && current !== content) await keep(backup.relativePath, current);
+      // 现在盘上的（不跟软链、单链接普通文件）：已经是原来的样子就退过了；不是就先另存（老格式没记事务写了什么，
+      // 之后存下的稿可能就这一份，AG3），再只盖掉 / 删掉核过的这一份（P1 第 22 轮 AJ2）。
+      await assertSafeProjectPath(projectDir, targetPath, true, "formal rollback target");
+      const current = await readFileInBook(resolve(projectDir), resolve(targetPath), "formal rollback target");
+      if (current === content) continue;
+      if (current !== undefined) await keep(backup.relativePath, current);
       if (content !== undefined) {
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
-        await writeTextNoFollow(projectDir, targetPath, content, "formal rollback target");
-      } else if (current !== undefined) {
-        await assertSafeProjectPath(projectDir, targetPath, true, "formal rollback target");
-        await rm(targetPath, { force: true });
+        await writeTextNoFollow(projectDir, targetPath, content, "formal rollback target", current === undefined ? null : sha256Text(current));
+      } else {
+        await removeFileInBook(resolve(projectDir), resolve(targetPath), { label: "formal rollback target", expectSha: sha256Text(current!) });
       }
     } catch (error) {
       // 相对文件名 + errno code/自造错误码（error.message 原文带绝对路径，绝不直拼）。
@@ -580,20 +582,6 @@ async function restoreCommitTransactionBackups(
     }
   }
   return issues;
-}
-
-/** 目标现在的内容（不跟软链）；不在是 undefined；不是普通文件抛出。 */
-async function readCurrentNoFollow(projectDir: string, targetPath: string, label: string): Promise<string | undefined> {
-  await assertSafeProjectPath(projectDir, targetPath, true, label);
-  let stats;
-  try {
-    stats = await lstat(targetPath);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return undefined;
-    throw error;
-  }
-  if (stats.isSymbolicLink() || !stats.isFile()) throw taggedError("UNSAFE_ROLLBACK_TARGET", `Refusing to touch ${label} at ${relative(resolve(projectDir), targetPath)}; not a regular file.`);
-  return readFile(targetPath, "utf-8");
 }
 
 function parseRecoverableCommitManifest(value: unknown, expectedChapter: number): CommitTransactionManifest | undefined {
@@ -726,9 +714,11 @@ async function writeTextNoFollow(
   targetPath: string,
   content: string,
   label: string,
+  /** 被盖掉的那份应该是什么（指纹；null = 应该不在）：核不上不盖（safe-fs）。 */
+  expectTargetSha?: string | null,
 ): Promise<void> {
   await assertSafeProjectPath(projectDir, targetPath, true, label);
-  await writeFileInBook(resolve(projectDir), resolve(targetPath), content, { label, hook: commitIoTestHook });
+  await writeFileInBook(resolve(projectDir), resolve(targetPath), content, { label, hook: commitIoTestHook, expectTargetSha });
   await assertSafeProjectPath(projectDir, targetPath, false, label);
 }
 
