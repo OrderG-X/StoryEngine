@@ -18,6 +18,20 @@ function streamingResponse(chunks: string[], status = 200): { response: Response
 }
 
 describe("provider-gate", () => {
+  it("503 不在闸里重发：原样交回，只发一次", async () => {
+    let sends = 0;
+    const gate = createProviderGate({ sleep: noSleep, log: quiet });
+    const response = await gate.fetch(URL_A, { method: "POST" }, {
+      baseFetch: async () => {
+        sends += 1;
+        return new Response(sends === 1 ? "busy" : "ok", { status: sends === 1 ? 503 : 200 });
+      },
+    });
+    expect(response.status).toBe(503);
+    await response.text();
+    expect(sends).toBe(1);
+  });
+
   it("429 后退避重试，成功就把正文交回", async () => {
     const statuses = [429, 429, 200];
     const calls: number[] = [];

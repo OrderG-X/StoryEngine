@@ -11,7 +11,8 @@
  *   前台至少 min(2, 上限 − 1) 位，上限是 1 就轮流；只有一边排队可以借满；在飞的不强杀。
  * - 并发上限自适应：开局宽（initialLimit），撞 429 就减半（最少 1），连续成功够多再慢慢 +1。
  *   不同服务商、不同套餐的上限不用人配。
- * - 429 / 503 退避重试：有 Retry-After 就照它等，否则指数退避加抖动，封顶 maxDelayMs；
+ * - 只有 429 退避重试（写作版本 P2a：503 和别的 5xx 可能已经转给上游、在算，闸里重发就是悄悄多花一次，交回调用方按结果不明处理）：
+ *   有 Retry-After 就照它等，否则指数退避加抖动，封顶 maxDelayMs；
  *   重试 maxRetries 次后把最后那个响应原样交回调用方，由调用方照常如实报错。
  * - 排队和退避期间每隔几秒调一次 onWait：调用方拿它给自己的空闲计时器续命，
  *   免得「排队等许可」被误判成「连接静默」。
@@ -43,7 +44,7 @@ export interface GatedFetchOptions {
   readonly lane?: GateLane;
 }
 
-const RETRYABLE_STATUS = new Set([429, 503]);
+const RETRYABLE_STATUS = new Set([429]);
 const WAIT_PULSE_MS = 5000;
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
