@@ -39,7 +39,7 @@ import {
 import { withBookLock } from "./lock.js";
 import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "./control.js";
 import { assertInsideBook, DISPLACED_DIR, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
-import { discardAside, moveFileInBook, placeFileInBook, readFileInBook, removeFileInBook, settleInterruptedPlace, writeFileInBook } from "./safe-fs.js";
+import { discardAside, moveFileInBook, readFileInBook, removeFileInBook, restoreFileInBook, retireName, settleInterruptedPlace, writeFileInBook } from "./safe-fs.js";
 import { saveCopyBeforeRestore } from "./saved-copies.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
@@ -183,10 +183,10 @@ interface Originals {
 
 type ReadBackup = (path: string) => Promise<string | undefined>;
 
-/** 收拾时读备份：不跟软链、单链接（先 settleInterruptedPlace 摘过放上一半的名字）。 */
+/** 收拾时读备份：不跟软链、单链接。 */
 const strictBackup = (bookDir: string): ReadBackup => (path) => readFileInBook(bookDir, path, "rollback backup");
 
-/** 只读扫描时读备份（不动盘，放上一半的备份和正式那份是同一个文件，内容照样对）。 */
+/** 只读扫描时读备份（不动盘）。 */
 const plainBackup: ReadBackup = async (path) => {
   const stats = await lstat(path).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
@@ -269,8 +269,8 @@ async function recordOriginals(bookDir: string, txDir: string, manifest: Manifes
 }
 
 /**
- * 上次退到一半被杀留下的（P1 第 24 轮，见 safe-fs 文件头三步）：放上了、还没摘掉暂存 / 备份名字的摘掉；挪到 aside 还没放上的放回去；
- * 原处另有一份的，aside 里那份不是这次写的就先另存（「不毁唯一副本」），再删 aside。
+ * 上次退到一半被杀留下的（P1 第 24 轮，见 safe-fs 文件头四步）：挪到 aside 还没放上的放回去；原处另有一份的，aside 里那份
+ * 不是这次写的就先另存（「不毁唯一副本」），再把 aside 挪进留证区。
  */
 async function settleInterrupted(bookDir: string, txDir: string, manifest: Manifest): Promise<void> {
   for (const file of manifest.files) {
@@ -281,11 +281,7 @@ async function settleInterrupted(bookDir: string, txDir: string, manifest: Manif
       continue;
     }
     const aside = join(txDir, "aside", file.slot);
-    const left = await settleInterruptedPlace(bookDir, join(bookDir, path), {
-      label: "rollback target",
-      sources: [join(txDir, "staged", file.slot), join(txDir, "backup", file.slot)],
-      aside,
-    });
+    const left = await settleInterruptedPlace(bookDir, join(bookDir, path), { label: "rollback target", aside });
     if (left === undefined) continue;
     if (digest(left) !== file.wrote) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: left });
     await discardAside(bookDir, aside, { label: "rollback target", expectSha: digest(left) });
@@ -298,7 +294,7 @@ async function settleInterrupted(bookDir: string, txDir: string, manifest: Manif
  *
  * 换没换回拿内容证明（P1 第 22 轮 AJ1）：盘上已经是原来那份（新建的已经不在）才算退过了；不是就得从备份换回，
  * 备份不在、核不上如实失败。要盖掉 / 删掉的那份，既不是这次写的、也不是原来的，先另存（「不毁唯一副本」），
- * 再只盖掉 / 删掉核过的这一份：先挪到事务目录里的 aside 核过内容再动（safe-fs 的 placeFileInBook / removeFileInBook，AJ2、第 24 轮）。
+ * 再只盖掉 / 删掉核过的这一份：先挪到事务目录里的 aside 核过内容再动（safe-fs 的 restoreFileInBook / removeFileInBook，AJ2、第 24～26 轮）。
  */
 async function rollback(bookDir: string, txDir: string, manifest: Manifest, inProcess = false): Promise<RollbackResult> {
   await mkdir(join(txDir, "aside"), { recursive: true });
@@ -334,8 +330,14 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
     if (now === had) continue;
     if (staged === "tampered") throw new Error(`暂存被动过、正式那份也不是原来的样子，说不清换没换上：${path}`);
     if (current !== undefined && now !== file.wrote) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: current });
-    if (!file.existed) await removeFileInBook(bookDir, target, { label: "rollback target", expectSha: now!, aside });
-    else await placeFileInBook(bookDir, backup, target, { label: "rollback target", expectSha: had, ...(now === undefined ? { expectTarget: null } : { expectTarget: now, aside }) });
+    if (!file.existed) {
+      await removeFileInBook(bookDir, target, { label: "rollback target", expectSha: now!, aside });
+      continue;
+    }
+    // 换回的内容从备份读、核指纹（不把备份本身挪上去：书里的文件只有一个名字，safe-fs 文件头）。
+    const content = await readBackup(backup);
+    if (content === undefined || digest(content) !== had) throw new Error(`备份不在或和原来那份对不上，换不回：${path}`);
+    await restoreFileInBook(bookDir, target, content, { label: "rollback target", createMode: 0o666, ...(now === undefined ? { expectTarget: null } : { expectTarget: now, aside }) });
   }
   return { changed, draftChapters: [...draftChapters], gensTouched };
 }
@@ -385,7 +387,7 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       files.push({ path, existed, slot, wrote: digest(write.content), ...(original !== undefined ? { had: digest(original) } : {}) });
     }
   } catch (error) {
-    // 清单还没写，书里什么都没动：直接丢掉暂存。
+    // 清单还没写，书里什么都没动：直接丢掉暂存（里面都是刚另抄的，没在书里露过面）。
     await rm(txDir, { recursive: true, force: true });
     throw error;
   }
@@ -396,10 +398,9 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const target = join(bookDir, file.path);
       await assertPlainDirs(bookDir, dirname(file.path));
       await mkdir(dirname(target), { recursive: true });
-      // 盖掉的得还是备份时那份（rename 前核，safe-fs 文件头）；新建的独占放上（原处有了就不放）。写的途中被别处改过就不盖，整份退回。
+      // 盖掉的得还是备份时那份、新建的得还不在（rename 前核，safe-fs 文件头）。写的途中被别处改过、别处先建了就不盖，整份退回。
       const staged = join(txDir, "staged", file.slot);
-      if (file.had === undefined) await placeFileInBook(bookDir, staged, target, { label: "transaction target", expectSha: file.wrote, expectTarget: null });
-      else await moveFileInBook(bookDir, staged, target, { label: "transaction target", expectSha: file.wrote, precheckTargetSha: file.had });
+      await moveFileInBook(bookDir, staged, target, { label: "transaction target", expectSha: file.wrote, precheckTargetSha: file.had ?? null });
     }
   } catch (error) {
     // 进程内失败：一直拿着书锁，工作稿代次照原样换回（见文件头），写入代次换新。退不下去的（核不上、备份被动过）
@@ -411,10 +412,12 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       throw error;
     }
     if (undone.changed) await advanceEpochs(bookDir);
-    await rm(txDir, { recursive: true, force: true });
+    // 回滚过的事务目录整个挪进留证区（挪开的、换下来的在书里露过面，不删，safe-fs 文件头「摘名字」）。
+    await retireName(bookDir, txDir, "rolled back transaction");
     throw error;
   }
   await writeManifest(bookDir, txDir, { ...manifest, status: "applied" });
+  // 暂存都 rename 换上去了；剩下的清单、备份都是另抄的，没在书里露过面（safe-fs 文件头「摘名字」）。
   await rm(txDir, { recursive: true, force: true });
 }
 
@@ -493,15 +496,13 @@ function coreInstance(manifest: Manifest): string {
   return `${manifest.id}@${digest(JSON.stringify(manifest)).slice(0, 16)}`;
 }
 
-/** 暂存还在、不是放上一半（和正式那份是同一个文件）的：没换上。 */
-async function notPlaced(staged: string, target: string): Promise<boolean> {
+/** 暂存还在的：没换上（换上是一次 rename，暂存的名字就没了）。 */
+async function notPlaced(staged: string): Promise<boolean> {
   const stagedStats = await lstat(staged).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  if (!stagedStats) return false;
-  const targetStats = await lstat(target).catch(() => undefined);
-  return !(targetStats && stagedStats.isFile() && targetStats.dev === stagedStats.dev && targetStats.ino === stagedStats.ino);
+  return stagedStats !== undefined;
 }
 
 /** 核心事务逐个看清（只读）：要回滚的（prepared）带上它会换回哪些文件；坏的记进 problems；没清单 / applied 的只清目录。 */
@@ -540,7 +541,7 @@ async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
       } catch {
         continue;
       }
-      if (await notPlaced(join(txDir, "staged", file.slot), join(bookDir, path))) continue;
+      if (await notPlaced(join(txDir, "staged", file.slot))) continue;
       if (!file.existed) {
         restores.set(path, null);
         continue;
@@ -630,9 +631,10 @@ export async function recoverTransactions(givenBookDir: string): Promise<Recover
       return report(rolledBack, [], problems);
     }
     rolledBack.push(undo.name);
-    await rm(txDir, { recursive: true, force: true });
+    await retireName(bookDir, txDir, "rolled back transaction");
   }
   await tidyLegacyTransactions(bookDir);
+  // 没清单 / applied 的：里面只有另抄的（换上的都 rename 走了），没在书里露过面。
   for (const name of core.cleaned) await rm(join(bookDir, TX_DIR, name), { recursive: true, force: true });
   return report(rolledBack, [...core.cleaned], problems);
 }

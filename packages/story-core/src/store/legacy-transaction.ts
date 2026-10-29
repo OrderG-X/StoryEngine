@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { DRAFT_GENS_PATH, draftChapterOfPath, isControlPath } from "./paths.js";
-import { discardAside, placeFileInBook, readFileInBook, removeFileInBook, retireLeftover, settleInterruptedPlace, writeFileInBook, type SafeWriteHook, type SafeWriteHookPoint } from "./safe-fs.js";
+import { discardAside, readFileInBook, removeFileInBook, restoreFileInBook, settleInterruptedPlace, writeFileInBook, type SafeWriteHook, type SafeWriteHookPoint } from "./safe-fs.js";
 
 /** 老定稿链的事务目录。 */
 export const LEGACY_TX_DIR = ".story-engine-tx";
@@ -553,14 +553,12 @@ async function restoreCommitTransactionBackups(
     // 两份代次只往前走（P1 第 19 轮 AG2）：不从备份换回，调用方退完换新的。
     if (isControlPath(backup.relativePath)) continue;
     const targetPath = join(projectDir, backup.relativePath);
-    // 换回用的固定名字（P1 第 24 轮，safe-fs 文件头三步）：restore/ 是要放上的那份，aside/ 是挪开核内容的那份；被杀了下次照名字收拾。
-    const stage = resolve(join(txDir, "restore", String(index)));
+    // 换回用的固定名字（P1 第 24 轮，safe-fs 文件头四步）：aside/ 是挪开核内容的那份；被杀了下次照名字收拾。
     const aside = resolve(join(txDir, "aside", String(index)));
     try {
-      await ensureSafeDirectory(projectDir, join(txDir, "restore"), true, "commit restore stage");
       await ensureSafeDirectory(projectDir, join(txDir, "aside"), true, "commit restore aside");
       await assertSafeProjectPath(projectDir, targetPath, true, "formal rollback target");
-      const left = await settleInterruptedPlace(root, resolve(targetPath), { label: "formal rollback target", sources: [stage], aside });
+      const left = await settleInterruptedPlace(root, resolve(targetPath), { label: "formal rollback target", aside });
       if (left !== undefined) {
         await keep(backup.relativePath, left);
         await discardAside(root, aside, { label: "formal rollback target", expectSha: sha256Text(left) });
@@ -582,12 +580,13 @@ async function restoreCommitTransactionBackups(
       if (current !== undefined) await keep(backup.relativePath, current);
       if (content !== undefined) {
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
-        // 要放上的那份先整份写进 restore/（自己的地方），再从那里独占放上；要盖掉的那份先挪到 aside/ 核过内容（safe-fs）。
+        // 要盖掉的那份先挪到 aside/ 核过内容，再在原处独占新建、写进备份的内容（safe-fs 文件头四步；书里的文件只有一个名字）。
         const hook = commitIoTestHook;
-        // restore/ 下自己的名字上留下的（上次被杀留下的半份、被换成的软链 / 硬链）先腾开：软链只摘名字，普通文件挪进留证区不删（第 25 轮）。
-        await retireLeftover(resolve(projectDir), stage, "formal rollback stage");
-        await writeFileInBook(root, stage, content, { label: "commit restore stage", hook: hook && ((point) => hook(point, targetPath)) });
-        await placeFileInBook(root, stage, resolve(targetPath), { label: "formal rollback target", expectSha: sha256Text(content), ...(current === undefined ? { expectTarget: null } : { expectTarget: sha256Text(current), aside }) });
+        await restoreFileInBook(root, resolve(targetPath), content, {
+          label: "formal rollback target",
+          hook: hook && ((point) => hook(point, targetPath)),
+          ...(current === undefined ? { expectTarget: null } : { expectTarget: sha256Text(current), aside }),
+        });
         await assertSafeProjectPath(projectDir, targetPath, false, "formal rollback target");
       } else {
         await removeFileInBook(root, resolve(targetPath), { label: "formal rollback target", expectSha: sha256Text(current!), aside });
