@@ -12,6 +12,8 @@ import { moveFileInBook, readFileInBook, writeFileInBook } from "./safe-fs.js";
 const io = vi.hoisted(() => ({
   afterSync: undefined as undefined | ((path: string) => Promise<void>),
   beforeRename: undefined as undefined | ((from: string, to: string) => Promise<void>),
+  beforeLink: undefined as undefined | ((from: string, to: string) => Promise<void>),
+  beforeUnlink: undefined as undefined | ((path: string) => Promise<void>),
 }));
 vi.mock("node:fs/promises", async (original) => {
   const actual = await original<typeof import("node:fs/promises")>();
@@ -30,6 +32,14 @@ vi.mock("node:fs/promises", async (original) => {
       await io.beforeRename?.(String(from), String(to));
       return actual.rename(from, to);
     },
+    link: async (from: string, to: string) => {
+      await io.beforeLink?.(String(from), String(to));
+      return actual.link(from, to);
+    },
+    unlink: async (path: string) => {
+      await io.beforeUnlink?.(String(path));
+      return actual.unlink(path);
+    },
   };
 });
 
@@ -46,6 +56,8 @@ beforeEach(async () => {
 afterEach(async () => {
   io.afterSync = undefined;
   io.beforeRename = undefined;
+  io.beforeLink = undefined;
+  io.beforeUnlink = undefined;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -233,34 +245,102 @@ describe("另存区不是书里的真目录（P1 第 21 轮 AI1）", () => {
   });
 });
 
-describe("要盖掉 / 删掉的那份先核内容（P1 第 22 轮 AJ1、AJ2）", () => {
-  it("writeFileInBook：盖掉的不是核过的那份、或应该不在却在，不写", async () => {
-    await writeFile(target(), "原稿 A");
-    await expect(writeFileInBook(book, target(), "新稿 B", { label: "draft", expectTargetSha: sha("别的") })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
-    await expect(writeFileInBook(book, target(), "新稿 B", { label: "draft", expectTargetSha: null })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
-    expect(await readFile(target(), "utf-8")).toBe("原稿 A");
-    await writeFileInBook(book, target(), "新稿 B", { label: "draft", expectTargetSha: sha("原稿 A") });
-    expect(await readFile(target(), "utf-8")).toBe("新稿 B");
-    expect((await readdir(dirname(target()))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+describe("回滚 / 恢复盖掉、删掉别人可能动过的那份：先挪开核内容（P1 第 22 轮 AJ2、第 24 轮）", () => {
+  const aside = () => join(book, ".tx", "aside");
+  const source = () => join(book, ".tx", "backup");
+  beforeEach(async () => {
+    await mkdir(join(book, ".tx"), { recursive: true });
+    await writeFile(source(), "原稿 A");
   });
 
-  it("removeFileInBook：内容核不上不删；不在当删过了；核完到挪开之间被换了，放回原处不删", async () => {
+  it("placeFileInBook：目标不是核过的那份、该不在却在，都不动；核得上的换上、不留 aside", async () => {
+    const { placeFileInBook } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    await expect(placeFileInBook(book, source(), target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("别的"), aside: aside() })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    await expect(placeFileInBook(book, source(), target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: null })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    expect(await readFile(target(), "utf-8")).toBe("现稿 C");
+    await placeFileInBook(book, source(), target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("现稿 C"), aside: aside() });
+    expect(await readFile(target(), "utf-8")).toBe("原稿 A");
+    expect((await lstat(target())).nlink).toBe(1);
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(source())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("核完到挪开之间别处原子存了 X（C 的链接数先归零）：挪开的不是核过的那份，X 放回原处、不盖", async () => {
+    const { placeFileInBook } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    io.beforeRename = async (from) => {
+      if (from !== target()) return;
+      io.beforeRename = undefined;
+      const incoming = join(outside, "incoming.md");
+      await writeFile(incoming, "后来的 X");
+      await rename(incoming, target());
+    };
+    await expect(placeFileInBook(book, source(), target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("现稿 C"), aside: aside() })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    expect(await readFile(target(), "utf-8")).toBe("后来的 X");
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(source(), "utf-8")).toBe("原稿 A");
+  });
+
+  it("挪开之后原处又有了 Y：不放；挪开的 C 留在 aside，下次收拾交回来另存再删", async () => {
+    const { discardAside, placeFileInBook, settleInterruptedPlace } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    io.beforeLink = async (_from, to) => {
+      if (to !== target()) return;
+      io.beforeLink = undefined;
+      await writeFile(target(), "别处新建的 Y");
+    };
+    await expect(placeFileInBook(book, source(), target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("现稿 C"), aside: aside() })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    expect(await readFile(target(), "utf-8")).toBe("别处新建的 Y");
+    expect(await readFile(aside(), "utf-8")).toBe("现稿 C");
+    expect(await settleInterruptedPlace(book, target(), { label: "draft", sources: [source()], aside: aside() })).toBe("现稿 C");
+    await discardAside(book, aside(), { label: "draft", expectSha: sha("现稿 C") });
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(target(), "utf-8")).toBe("别处新建的 Y");
+  });
+
+  it("删 aside 之前有人往里原位写了 X：删后拿着它再读核出来，X 原样写回 aside、如实报错", async () => {
+    const { placeFileInBook } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    io.beforeUnlink = async (path) => {
+      if (path !== aside()) return;
+      io.beforeUnlink = undefined;
+      await writeFile(aside(), "后来的 X");
+    };
+    await expect(placeFileInBook(book, source(), target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("现稿 C"), aside: aside() })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    expect(await readFile(target(), "utf-8")).toBe("原稿 A");
+    expect(await readFile(aside(), "utf-8")).toBe("后来的 X");
+  });
+
+  it("removeFileInBook：内容核不上不删；挪开前原位写成 X（inode 没变）：X 放回原处不删；核得上的删掉；不在当删过了", async () => {
     const { removeFileInBook } = await import("./safe-fs.js");
     await writeFile(target(), "作者 C");
-    await expect(removeFileInBook(book, target(), { label: "draft", expectSha: sha("别的") })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    await expect(removeFileInBook(book, target(), { label: "draft", expectSha: sha("别的"), aside: aside() })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
     expect(await readFile(target(), "utf-8")).toBe("作者 C");
     io.beforeRename = async (from) => {
       if (from !== target()) return;
       io.beforeRename = undefined;
-      await rm(from);
       await writeFile(from, "后来的 X");
     };
-    await expect(removeFileInBook(book, target(), { label: "draft", expectSha: sha("作者 C") })).rejects.toMatchObject({ code: "UNSAFE_INODE_MISMATCH" });
+    await expect(removeFileInBook(book, target(), { label: "draft", expectSha: sha("作者 C"), aside: aside() })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
     expect(await readFile(target(), "utf-8")).toBe("后来的 X");
-    expect((await readdir(dirname(target()))).filter((name) => name.endsWith(".del"))).toEqual([]);
-    await removeFileInBook(book, target(), { label: "draft", expectSha: sha("后来的 X") });
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
+    await removeFileInBook(book, target(), { label: "draft", expectSha: sha("后来的 X"), aside: aside() });
     await expect(lstat(target())).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(removeFileInBook(book, target(), { label: "draft", expectSha: sha("后来的 X") })).resolves.toBeUndefined();
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(removeFileInBook(book, target(), { label: "draft", expectSha: sha("后来的 X"), aside: aside() })).resolves.toBeUndefined();
+  });
+
+  it("settleInterruptedPlace：放上了还没摘名字的摘掉；挪开了还没放上的放回原处", async () => {
+    const { settleInterruptedPlace } = await import("./safe-fs.js");
+    await link(source(), target());
+    expect(await settleInterruptedPlace(book, target(), { label: "draft", sources: [source()], aside: aside() })).toBeUndefined();
+    await expect(lstat(source())).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await lstat(target())).nlink).toBe(1);
+    await rename(target(), aside());
+    expect(await settleInterruptedPlace(book, target(), { label: "draft", sources: [source()], aside: aside() })).toBeUndefined();
+    expect(await readFile(target(), "utf-8")).toBe("原稿 A");
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
@@ -287,9 +367,9 @@ describe("收拾半截事务：换没换回拿内容证明、只删核过的那�
   it.each([false, true])("备份换回时被调换（清单记原来那份：%s）：重开不凭备份不在就当退过了", async (had) => {
     const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
     const dir = await residue(A, { had });
-    io.beforeRename = async (from) => {
+    io.beforeLink = async (from) => {
       if (from !== join(dir, "backup", "0")) return;
-      io.beforeRename = undefined;
+      io.beforeLink = undefined;
       await rename(from, `${from}.displaced`);
       await writeFile(from, X);
     };
@@ -313,13 +393,13 @@ describe("收拾半截事务：换没换回拿内容证明、只删核过的那�
     await mkdir(dirname(draft()), { recursive: true });
     await writeFile(draft(), C);
     await writeFile(join(book, OTHER), C);
-    io.beforeRename = async (from) => {
+    io.beforeLink = async (from) => {
       if (from === join(dir, "backup", "1")) throw Object.assign(new Error("injected"), { code: "EIO" });
     };
     expect((await recoverTransactions(book)).problems).toEqual(["round23-tx"]);
     expect(await readFile(draft(), "utf-8")).toBe(A);
     expect(await readFile(join(dir, "manifest.json"), "utf-8")).toBe(manifest);
-    io.beforeRename = undefined;
+    io.beforeLink = undefined;
     expect(await recoverTransactions(book)).toMatchObject({ rolledBack: ["round23-tx"], problems: [] });
     expect(await hasPendingTransactions(book)).toBe(false);
     expect(await readFile(join(book, OTHER), "utf-8")).toBe(A);
@@ -340,11 +420,11 @@ describe("收拾半截事务：换没换回拿内容证明、只删核过的那�
     await mkdir(dirname(draft()), { recursive: true });
     await writeFile(draft(), A);
     let swapped = false;
-    io.beforeRename = async (from, to) => {
+    io.beforeLink = async (from, to) => {
       if (from.endsWith(`${join("staged", "1")}`)) throw Object.assign(new Error("injected"), { code: "EIO" });
       if (from.includes(`${join("", "backup", "")}`) && to === draft()) {
         swapped = true;
-        io.beforeRename = undefined;
+        io.beforeLink = undefined;
         await rename(from, `${from}.displaced`);
         await writeFile(from, X);
       }
@@ -431,5 +511,100 @@ describe("收拾半截事务：换没换回拿内容证明、只删核过的那�
     expect(await recoverTransactions(book)).toMatchObject({ rolledBack: ["round22-tx"], problems: [] });
     expect(await hasPendingTransactions(book)).toBe(false);
     expect((await listSavedDrafts(book, 1)).map((item) => item.body).sort()).toEqual(["不该被接受的 X。", "唯一的新稿 C。"]);
+  });
+
+  it("新建的被杀在放上之后、摘暂存名字之前：重开摘掉暂存名字、照常退掉", async () => {
+    const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
+    const dir = join(book, ".story-core-tx", "round24-tx");
+    await mkdir(join(dir, "staged"), { recursive: true });
+    await mkdir(join(dir, "backup"), { recursive: true });
+    await writeFile(join(dir, "staged", "0"), C);
+    await writeFile(join(dir, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "round24-tx", createdAt: "2026-10-20T00:00:00.000Z", status: "prepared", files: [{ path: DRAFT, slot: "0", existed: false, wrote: sha(C) }] }));
+    await mkdir(dirname(draft()), { recursive: true });
+    await link(join(dir, "staged", "0"), draft());
+    expect(await recoverTransactions(book)).toMatchObject({ rolledBack: ["round24-tx"], problems: [] });
+    await expect(lstat(draft())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("回滚被杀在挪开之后、放上之前：原处空着，重开先放回去、另存了再照常换回", async () => {
+    const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
+    const { listSavedDrafts } = await import("./saved-copies.js");
+    const dir = await residue(A, { had: true });
+    await mkdir(join(dir, "aside"), { recursive: true });
+    await rename(draft(), join(dir, "aside", "0"));
+    expect(await recoverTransactions(book)).toMatchObject({ rolledBack: ["round22-tx"], problems: [] });
+    expect(await readFile(draft(), "utf-8")).toBe(A);
+    expect(await hasPendingTransactions(book)).toBe(false);
+    expect((await listSavedDrafts(book, 1)).map((item) => item.body)).toEqual(["唯一的新稿 C。"]);
+  });
+
+  it("回滚被杀在放上之后、删 aside 之前：重开摘掉备份名字，aside 里那份另存了再删", async () => {
+    const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
+    const { listSavedDrafts } = await import("./saved-copies.js");
+    const dir = await residue(A, { had: true });
+    await mkdir(join(dir, "aside"), { recursive: true });
+    await rename(draft(), join(dir, "aside", "0"));
+    await link(join(dir, "backup", "0"), draft());
+    expect(await recoverTransactions(book)).toMatchObject({ rolledBack: ["round22-tx"], problems: [] });
+    expect(await readFile(draft(), "utf-8")).toBe(A);
+    expect((await lstat(draft())).nlink).toBe(1);
+    expect(await hasPendingTransactions(book)).toBe(false);
+    expect((await listSavedDrafts(book, 1)).map((item) => item.body)).toEqual(["唯一的新稿 C。"]);
+  });
+
+  it("新建的放上之前别处先建了同名文件：不盖，这次写整份退回", async () => {
+    const { commitFiles, hasPendingTransactions } = await import("./transaction.js");
+    await mkdir(dirname(draft()), { recursive: true });
+    io.beforeLink = async (_from, to) => {
+      if (to !== draft()) return;
+      io.beforeLink = undefined;
+      await writeFile(draft(), X);
+    };
+    await expect(commitFiles(book, [{ path: DRAFT, content: C }])).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    expect(await readFile(draft(), "utf-8")).toBe(X);
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+});
+
+describe("老清单的旁记绑着这份事务（P1 第 24 轮）", () => {
+  const DRAFT = "drafts/fast/chapter-0001.md";
+  const A = "# 原稿 A\n\n应当换回的原稿 A。\n";
+  const C = "# 现稿 C\n\n盘上的现稿 C。\n";
+  const draft = () => join(book, DRAFT);
+  const manifest = { schema: "story-core-tx/1", id: "round24-old", createdAt: "2026-10-20T00:00:00.000Z", status: "prepared", files: [{ path: DRAFT, slot: "0", existed: true }] };
+  const instance = `${manifest.id}@${sha(JSON.stringify(manifest)).slice(0, 16)}`;
+
+  async function oldResidue(originals: unknown): Promise<string> {
+    const dir = join(book, ".story-core-tx", manifest.id);
+    await mkdir(join(dir, "backup"), { recursive: true });
+    await mkdir(join(dir, "staged"), { recursive: true });
+    await writeFile(join(dir, "backup", "0"), A);
+    await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest));
+    await writeFile(join(dir, "originals.json"), JSON.stringify(originals));
+    await mkdir(dirname(draft()), { recursive: true });
+    await writeFile(draft(), C);
+    return dir;
+  }
+
+  it.each([
+    ["别的事务的旁记", { schema: "story-core-tx-originals/2", tx: "donor@0000000000000000", files: { "0": { path: DRAFT, had: sha(C) } } }],
+    ["老样子（槽位 → 指纹）", { "0": sha(C) }],
+    ["路径对不上", { schema: "story-core-tx-originals/2", tx: instance, files: { "0": { path: "drafts/fast/chapter-0002.md", had: sha(C) } } }],
+  ])("%s：不认，照备份换回", async (_name, originals) => {
+    const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
+    await oldResidue(originals);
+    expect(await recoverTransactions(book)).toMatchObject({ rolledBack: [manifest.id], problems: [] });
+    expect(await readFile(draft(), "utf-8")).toBe(A);
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("这份事务的旁记和还在的备份对不上：谁都不信，如实留着、备份和现稿都不动", async () => {
+    const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
+    const dir = await oldResidue({ schema: "story-core-tx-originals/2", tx: instance, files: { "0": { path: DRAFT, had: sha(C) } } });
+    expect((await recoverTransactions(book)).problems).toEqual([manifest.id]);
+    expect(await readFile(draft(), "utf-8")).toBe(C);
+    expect(await readFile(join(dir, "backup", "0"), "utf-8")).toBe(A);
+    expect(await hasPendingTransactions(book)).toBe(true);
   });
 });

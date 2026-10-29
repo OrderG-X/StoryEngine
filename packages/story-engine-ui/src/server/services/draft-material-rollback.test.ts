@@ -30,6 +30,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       await hooks.afterRename?.(String(from), String(to));
       return result;
     },
+    // 新建的文件独占放上走 link（核心 safe-fs，P1 第 24 轮）：和 rename 一样算「换上」那一下。
+    link: async (from: string, to: string) => {
+      await hooks.beforeRename?.(String(from), String(to));
+      const result = await actual.link(from, to);
+      await hooks.afterRename?.(String(from), String(to));
+      return result;
+    },
   };
 });
 vi.mock("../writing/context-gateway.js", async (importOriginal) => {

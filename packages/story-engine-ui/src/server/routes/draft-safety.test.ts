@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // 作者的字不丢、旧依据写的不换上（写作版本 P1b 第 3、4 轮复核，Astra 的 B1～B10、R1～R4 探针收成回归）。
-// 真核心、真路由、真稿纸存盘调度、真撤销；只换模型输出和 fetch 传输。写盘故障、调度屏障都在 rename 上注入（标明了）。
+// 真核心、真路由、真稿纸存盘调度、真撤销；只换模型输出和 fetch 传输。写盘故障、调度屏障都在 rename / link（换上那一下）上注入（标明了）。
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
@@ -33,6 +33,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     rename: async (from: string, to: string) => {
       await hooks.beforeRename?.(String(from), String(to));
       await real.rename(from, to);
+      await hooks.afterRename?.(String(from), String(to));
+    },
+    // 新建的文件独占放上走 link（核心 safe-fs，P1 第 24 轮）：和 rename 一样算「换上」那一下。
+    link: async (from: string, to: string) => {
+      await hooks.beforeRename?.(String(from), String(to));
+      await real.link(from, to);
       await hooks.afterRename?.(String(from), String(to));
     },
   };

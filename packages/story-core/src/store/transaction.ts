@@ -39,7 +39,7 @@ import {
 import { withBookLock } from "./lock.js";
 import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "./control.js";
 import { assertInsideBook, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
-import { moveFileInBook, readFileInBook, removeFileInBook, writeFileInBook } from "./safe-fs.js";
+import { discardAside, moveFileInBook, placeFileInBook, readFileInBook, removeFileInBook, settleInterruptedPlace, writeFileInBook } from "./safe-fs.js";
 import { saveCopyBeforeRestore } from "./saved-copies.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
@@ -59,7 +59,7 @@ interface ManifestFile {
   readonly wrote?: string;
   /**
    * 原来那份的 sha256（existed 的才有，P1 第 22 轮 AJ1）：回滚时盘上已经是它就是换回过了——拿内容证明，
-   * 不拿「备份不在了」证明（备份可能是被挪走的）。老清单没有：退之前从备份算出来记进旁记（ORIGINALS_FILE），
+   * 不拿「备份不在了」证明（备份可能是被挪走的）。老清单没有：退之前从备份算出来记进旁记（ORIGINALS_FILE，绑着这份事务和文件），
    * 备份也不在时说不清，如实失败。
    */
   readonly had?: string;
@@ -84,16 +84,6 @@ export interface RecoveryReport {
   readonly kept: number;
   /** 留证区超过 KEPT_REPORT_THRESHOLD 份了。 */
   readonly keptOverLimit: boolean;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
 }
 
 /** 书目录的真实路径（书目录本身是软链时跟到底）。 */
@@ -172,11 +162,43 @@ async function stagedState(bookDir: string, staged: string, file: ManifestFile):
   return file.wrote !== undefined && digest(content) !== file.wrote ? "tampered" : "intact";
 }
 
-/** 老清单退之前补记的原来那份的指纹（P1 第 23 轮）：事务目录里的旁记，槽位 → sha256。清单本身不改。 */
+/**
+ * 老清单退之前补记的原来那份的指纹（P1 第 23 轮）：事务目录里的旁记，清单本身不改。绑着这份事务（实例号 = 事务号 + 清单指纹）
+ * 和每个槽位的文件路径（P1 第 24 轮）：别的事务的旁记、路径对不上的条目一律不认；备份还在的，旁记记的得和备份对得上。
+ */
 const ORIGINALS_FILE = "originals.json";
+const ORIGINALS_SCHEMA = "story-core-tx-originals/2";
 
-/** 读旁记：没有、读不出（软链、坏了）都当没记过（说不清的照旧如实失败）。 */
-async function readRecordedOriginals(bookDir: string, txDir: string): Promise<Readonly<Record<string, string>>> {
+interface OriginalsRecord {
+  readonly schema: typeof ORIGINALS_SCHEMA;
+  readonly tx: string;
+  readonly files: Readonly<Record<string, { readonly path: string; readonly had: string }>>;
+}
+
+/** 核过的旁记：认下的（槽位 → 原来那份的指纹），和备份对不上的槽位。 */
+interface Originals {
+  readonly known: ReadonlyMap<string, string>;
+  readonly disputed: ReadonlySet<string>;
+}
+
+type ReadBackup = (path: string) => Promise<string | undefined>;
+
+/** 收拾时读备份：不跟软链、单链接（先 settleInterruptedPlace 摘过放上一半的名字）。 */
+const strictBackup = (bookDir: string): ReadBackup => (path) => readFileInBook(bookDir, path, "rollback backup");
+
+/** 只读扫描时读备份（不动盘，放上一半的备份和正式那份是同一个文件，内容照样对）。 */
+const plainBackup: ReadBackup = async (path) => {
+  const stats = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!stats) return undefined;
+  if (stats.isSymbolicLink() || !stats.isFile()) throw new Error("备份不是普通文件");
+  return readFile(path, "utf-8");
+};
+
+/** 读这份事务的旁记：没有、读不出、不是这份事务的，都当没记过（说不清的照旧如实失败）。 */
+async function readOriginalsRecord(bookDir: string, txDir: string, manifest: Manifest): Promise<OriginalsRecord["files"]> {
   let raw: string | undefined;
   try {
     raw = await readFileInBook(bookDir, join(txDir, ORIGINALS_FILE), "transaction originals");
@@ -185,19 +207,38 @@ async function readRecordedOriginals(bookDir: string, txDir: string): Promise<Re
   }
   if (raw === undefined) return {};
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    const parsed = JSON.parse(raw) as Partial<OriginalsRecord> | null;
+    if (!parsed || parsed.schema !== ORIGINALS_SCHEMA || parsed.tx !== coreInstance(manifest) || !parsed.files || typeof parsed.files !== "object") return {};
+    return parsed.files;
   } catch {
     return {};
   }
 }
 
-/** 原来那份的指纹：清单记着的；老清单看旁记，再从备份算；都没有是 undefined。 */
-async function originalDigest(bookDir: string, txDir: string, file: ManifestFile, recorded: Readonly<Record<string, string>>): Promise<string | undefined> {
-  const known = file.had ?? recorded[file.slot];
+/** 核旁记：只认这份事务、路径对得上的条目；备份还在的，记的得是备份的指纹（不是就记进 disputed，谁都不信）。 */
+async function readOriginals(bookDir: string, txDir: string, manifest: Manifest, readBackup: ReadBackup): Promise<Originals> {
+  const known = new Map<string, string>();
+  const disputed = new Set<string>();
+  const unknown = manifest.files.filter((file) => file.existed && file.had === undefined);
+  if (unknown.length === 0) return { known, disputed };
+  const record = await readOriginalsRecord(bookDir, txDir, manifest);
+  for (const file of unknown) {
+    const entry = Object.hasOwn(record, file.slot) ? record[file.slot] : undefined;
+    if (!entry || entry.path !== file.path || typeof entry.had !== "string") continue;
+    const backup = await readBackup(join(txDir, "backup", file.slot));
+    if (backup !== undefined && digest(backup) !== entry.had) disputed.add(file.slot);
+    else known.set(file.slot, entry.had);
+  }
+  return { known, disputed };
+}
+
+/** 原来那份的指纹：清单记着的；老清单看核过的旁记，再从备份算；都没有是 undefined。旁记和备份对不上如实失败。 */
+async function originalDigest(txDir: string, file: ManifestFile, originals: Originals, readBackup: ReadBackup): Promise<string | undefined> {
+  if (file.had !== undefined) return file.had;
+  if (originals.disputed.has(file.slot)) throw new Error(`旁记和备份记的原来那份对不上，说不清：${file.path}`);
+  const known = originals.known.get(file.slot);
   if (known !== undefined) return known;
-  const content = await readFileInBook(bookDir, join(txDir, "backup", file.slot), "rollback backup");
+  const content = await readBackup(join(txDir, "backup", file.slot));
   return content === undefined ? undefined : digest(content);
 }
 
@@ -205,20 +246,50 @@ async function originalDigest(bookDir: string, txDir: string, file: ManifestFile
  * 老清单退之前，先把原来那份的指纹从备份算出来记进旁记、落盘，再动文件（P1 第 23 轮）：退到一半被杀、备份已经换回去了，
  * 下次拿旁记证明换没换回（退的先后也按它算），不靠「备份不在了」。清单不改：另存的实例号跟着清单走，被杀了重来号不变。
  */
-async function recordOriginals(bookDir: string, txDir: string, manifest: Manifest): Promise<Readonly<Record<string, string>>> {
+async function recordOriginals(bookDir: string, txDir: string, manifest: Manifest): Promise<Originals> {
+  const readBackup = strictBackup(bookDir);
+  const originals = await readOriginals(bookDir, txDir, manifest, readBackup);
   const unknown = manifest.files.filter((file) => file.existed && file.had === undefined);
-  if (unknown.length === 0) return {};
-  const recorded: Record<string, string> = { ...(await readRecordedOriginals(bookDir, txDir)) };
+  if (unknown.length === 0 || originals.disputed.size > 0) return originals;
+  const known = new Map(originals.known);
   let added = false;
   for (const file of unknown) {
-    if (recorded[file.slot] !== undefined) continue;
-    const had = await originalDigest(bookDir, txDir, file, recorded);
+    if (known.has(file.slot)) continue;
+    const had = await originalDigest(txDir, file, originals, readBackup);
     if (had === undefined) continue;
-    recorded[file.slot] = had;
+    known.set(file.slot, had);
     added = true;
   }
-  if (added) await writeFileInBook(bookDir, join(txDir, ORIGINALS_FILE), `${JSON.stringify(recorded)}\n`, { label: "transaction originals" });
-  return recorded;
+  if (added) {
+    const files = Object.fromEntries(unknown.filter((file) => known.has(file.slot)).map((file) => [file.slot, { path: file.path, had: known.get(file.slot)! }]));
+    const record: OriginalsRecord = { schema: ORIGINALS_SCHEMA, tx: coreInstance(manifest), files };
+    await writeFileInBook(bookDir, join(txDir, ORIGINALS_FILE), `${JSON.stringify(record)}\n`, { label: "transaction originals" });
+  }
+  return { known, disputed: originals.disputed };
+}
+
+/**
+ * 上次退到一半被杀留下的（P1 第 24 轮，见 safe-fs 文件头三步）：放上了、还没摘掉暂存 / 备份名字的摘掉；挪到 aside 还没放上的放回去；
+ * 原处另有一份的，aside 里那份不是这次写的就先另存（「不毁唯一副本」），再删 aside。
+ */
+async function settleInterrupted(bookDir: string, txDir: string, manifest: Manifest): Promise<void> {
+  for (const file of manifest.files) {
+    let path: string;
+    try {
+      path = assertInsideBook(file.path);
+    } catch {
+      continue;
+    }
+    const aside = join(txDir, "aside", file.slot);
+    const left = await settleInterruptedPlace(bookDir, join(bookDir, path), {
+      label: "rollback target",
+      sources: [join(txDir, "staged", file.slot), join(txDir, "backup", file.slot)],
+      aside,
+    });
+    if (left === undefined) continue;
+    if (digest(left) !== file.wrote) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: left });
+    await discardAside(bookDir, aside, { label: "rollback target", expectSha: digest(left) });
+  }
 }
 
 /**
@@ -227,10 +298,13 @@ async function recordOriginals(bookDir: string, txDir: string, manifest: Manifes
  *
  * 换没换回拿内容证明（P1 第 22 轮 AJ1）：盘上已经是原来那份（新建的已经不在）才算退过了；不是就得从备份换回，
  * 备份不在、核不上如实失败。要盖掉 / 删掉的那份，既不是这次写的、也不是原来的，先另存（「不毁唯一副本」），
- * 再只盖掉 / 删掉核过的这一份（safe-fs 的 expectTargetSha / removeFileInBook，AJ2）。
+ * 再只盖掉 / 删掉核过的这一份：先挪到事务目录里的 aside 核过内容再动（safe-fs 的 placeFileInBook / removeFileInBook，AJ2、第 24 轮）。
  */
 async function rollback(bookDir: string, txDir: string, manifest: Manifest, inProcess = false): Promise<RollbackResult> {
-  const recorded = await recordOriginals(bookDir, txDir, manifest);
+  await mkdir(join(txDir, "aside"), { recursive: true });
+  await settleInterrupted(bookDir, txDir, manifest);
+  const originals = await recordOriginals(bookDir, txDir, manifest);
+  const readBackup = strictBackup(bookDir);
   let changed = false;
   let gensTouched = false;
   const draftChapters = new Set<number>();
@@ -251,7 +325,8 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
     await assertPlainDirs(bookDir, dirname(path));
     const target = join(bookDir, path);
     const backup = join(txDir, "backup", file.slot);
-    const had = file.existed ? await originalDigest(bookDir, txDir, file, recorded) : undefined;
+    const aside = join(txDir, "aside", file.slot);
+    const had = file.existed ? await originalDigest(txDir, file, originals, readBackup) : undefined;
     if (file.existed && had === undefined) throw new Error(`备份不在、清单也没记原来是什么，说不清换没换回：${path}`);
     const current = await readFileInBook(bookDir, target, "rollback target");
     const now = current === undefined ? undefined : digest(current);
@@ -259,8 +334,8 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
     if (now === had) continue;
     if (staged === "tampered") throw new Error(`暂存被动过、正式那份也不是原来的样子，说不清换没换上：${path}`);
     if (current !== undefined && now !== file.wrote) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: current });
-    if (!file.existed) await removeFileInBook(bookDir, target, { label: "rollback target", expectSha: now! });
-    else await moveFileInBook(bookDir, backup, target, { label: "rollback target", expectSha: had, expectTargetSha: now ?? null });
+    if (!file.existed) await removeFileInBook(bookDir, target, { label: "rollback target", expectSha: now!, aside });
+    else await placeFileInBook(bookDir, backup, target, { label: "rollback target", expectSha: had, ...(now === undefined ? { expectTarget: null } : { expectTarget: now, aside }) });
   }
   return { changed, draftChapters: [...draftChapters], gensTouched };
 }
@@ -321,8 +396,10 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const target = join(bookDir, file.path);
       await assertPlainDirs(bookDir, dirname(file.path));
       await mkdir(dirname(target), { recursive: true });
-      // 盖掉的得还是备份时那份（新建的得还不在）：写的途中被别处改过就不盖，整份退回。
-      await moveFileInBook(bookDir, join(txDir, "staged", file.slot), target, { label: "transaction target", expectSha: file.wrote, expectTargetSha: file.had ?? null });
+      // 盖掉的得还是备份时那份（rename 前核，safe-fs 文件头）；新建的独占放上（原处有了就不放）。写的途中被别处改过就不盖，整份退回。
+      const staged = join(txDir, "staged", file.slot);
+      if (file.had === undefined) await placeFileInBook(bookDir, staged, target, { label: "transaction target", expectSha: file.wrote, expectTarget: null });
+      else await moveFileInBook(bookDir, staged, target, { label: "transaction target", expectSha: file.wrote, precheckTargetSha: file.had });
     }
   } catch (error) {
     // 进程内失败：一直拿着书锁，工作稿代次照原样换回（见文件头），写入代次换新。退不下去的（核不上、备份被动过）
@@ -416,6 +493,17 @@ function coreInstance(manifest: Manifest): string {
   return `${manifest.id}@${digest(JSON.stringify(manifest)).slice(0, 16)}`;
 }
 
+/** 暂存还在、不是放上一半（和正式那份是同一个文件）的：没换上。 */
+async function notPlaced(staged: string, target: string): Promise<boolean> {
+  const stagedStats = await lstat(staged).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!stagedStats) return false;
+  const targetStats = await lstat(target).catch(() => undefined);
+  return !(targetStats && stagedStats.isFile() && targetStats.dev === stagedStats.dev && targetStats.ino === stagedStats.ino);
+}
+
 /** 核心事务逐个看清（只读）：要回滚的（prepared）带上它会换回哪些文件；坏的记进 problems；没清单 / applied 的只清目录。 */
 async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
   const root = join(bookDir, TX_DIR);
@@ -442,25 +530,23 @@ async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
       continue;
     }
     const restores = new Map<string, string | null>();
-    const recorded = await readRecordedOriginals(bookDir, txDir);
+    const originals = await readOriginals(bookDir, txDir, state.manifest, plainBackup);
     for (const file of state.manifest.files) {
       // 没换上的、代次（退的时候换新的，不换回）不算；路径不对的回滚时如实失败。
-      if (isControlPath(file.path) || (await exists(join(txDir, "staged", file.slot)))) continue;
+      if (isControlPath(file.path)) continue;
       let path: string;
       try {
         path = assertInsideBook(file.path);
       } catch {
         continue;
       }
+      if (await notPlaced(join(txDir, "staged", file.slot), join(bookDir, path))) continue;
       if (!file.existed) {
         restores.set(path, null);
         continue;
       }
-      // 原来是什么说不清（老清单、没补记、备份也不在）：先后不按它算，回滚时如实失败。
-      const had = file.had ?? recorded[file.slot] ?? await readFile(join(txDir, "backup", file.slot), "utf-8").then(digest, (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
+      // 原来是什么说不清（老清单、没补记、备份也不在、旁记和备份对不上）：先后不按它算，回滚时如实失败。
+      const had = await originalDigest(txDir, file, originals, plainBackup).catch(() => undefined);
       if (had !== undefined) restores.set(path, had);
     }
     prepared.push({ format: "core", name, createdAt: state.manifest.createdAt, restores, manifest: state.manifest });
