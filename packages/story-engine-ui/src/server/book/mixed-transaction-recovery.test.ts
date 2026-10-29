@@ -5,9 +5,10 @@
  * - AF1 核心事务回滚只要真退回过文件，就换一个新的写入代次（不论这次写没写代次）。
  * - C181 读侧和恢复用同一份判断：恢复收拾不了的老残留，读侧不报稳定。
  * - C182 开书时核心有收拾不了的残留，不报接好了。
+ * - 第 19 轮 AG1～AG3：要盖掉的不是那份事务写的先另存；哪份退不下去就整轮挡住；两份代次只往前走。
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -16,6 +17,7 @@ import {
   draftSave,
   hasPendingTransactions,
   LegacyResidueError,
+  listSavedDrafts,
   readBookSnapshot,
   readDraft,
   readDraftState,
@@ -200,5 +202,97 @@ describe("C182 开书：核心有收拾不了的残留，不报接好了", () =>
     const opened = await ensureBookOnCore(book);
     expect(opened).toMatchObject({ ok: false, code: "legacy_tx_residue" });
     if (!opened.ok) expect(opened.reason).not.toMatch(/[a-z]{4,}|\//u);
+  });
+});
+
+/** 另存区里的（收拾半截事务时另存的）。 */
+async function savedCopies(): Promise<readonly { readonly path: string; readonly content: string }[]> {
+  const dir = join(book, ".story-core-saved");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  return Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => JSON.parse(await readFile(join(dir, name), "utf-8")) as { path: string; content: string }));
+}
+
+describe("AG 第 19 轮：恢复不毁唯一副本、失败就挡住、代次只往前走", () => {
+  it("AG3 老事务残留比现在的稿旧（之后作者存下了 C）：退回 A，C 原样另存、稿纸上当恢复稿提示", async () => {
+    const a = await read(DRAFT);
+    await legacyResidue(a, "2026-10-18T00:00:00.000Z");
+    // 老版本没收拾残留就让作者存了 C（回执成功）。
+    const c = composeDraftFile({ title: "作者后来的名 C", body: "作者后来存下的整份 C。" });
+    await writeFile(join(book, DRAFT), c);
+
+    await recoverBookTransactions(book);
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原名", body: "作者成功保存的 A。" });
+    expect(await savedCopies()).toEqual([expect.objectContaining({ path: DRAFT, content: c })]);
+    // 稿纸上当恢复稿提示（找回 / 不要了见 routes/draft-title-ownership.test.ts）。
+    expect(await listSavedDrafts(book, 1)).toEqual([expect.objectContaining({ chapter: 1, title: "作者后来的名 C", body: "作者后来存下的整份 C。", settled: false })]);
+  });
+
+  it.each([
+    ["备份坏了", async (tx: string) => { await writeFile(join(tx, "backups", DRAFT), "被改过的备份"); }],
+    ["备份不在了", async (tx: string) => { await rm(join(tx, "backups", DRAFT)); }],
+  ])("AG1 老格式退不下去（%s）：比它先开工的核心事务不退，现在的稿 C 一个字不动，写命令挡着、重开也挡着", async (_label, breakIt) => {
+    // 核心先开工：新建工作稿（之前没有）写 B，被杀。
+    await rm(join(book, DRAFT));
+    const tx = join(book, ".story-core-tx", "created-b");
+    await mkdir(join(tx, "backup"), { recursive: true });
+    await mkdir(join(tx, "staged"), { recursive: true });
+    const b = composeDraftFile({ title: "B", body: "核心写的 B。" });
+    await writeFile(join(book, DRAFT), b);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "created-b", createdAt: "2026-10-18T00:00:00.000Z", status: "prepared", files: [{ path: DRAFT, slot: "0", existed: false, wrote: sha(b) }] }));
+    // 老格式后开工：备份 B；现在盘上是 C。
+    const legacyTx = await legacyResidue(b, "2026-10-28T00:00:00.000Z");
+    const c = composeDraftFile({ title: "C", body: "现在的稿 C。" });
+    await writeFile(join(book, DRAFT), c);
+    await breakIt(legacyTx);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await recoverBookTransactions(book).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(LegacyResidueError);
+      expect(await read(DRAFT)).toBe(c);
+      expect(await hasPendingTransactions(book)).toBe(true);
+      expect(JSON.parse(await readFile(join(legacyTx, "manifest.json"), "utf-8"))).toMatchObject({ status: "staged" });
+      const saved = await runCommand(book, draftSave, { chapter: 1, title: "新", body: "新。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+      expect(saved).toMatchObject({ ok: false, code: "transaction_residue" });
+      expect(await read(DRAFT)).toBe(c);
+    }
+  });
+
+  it("AG2 核心先开工、老格式后开工：退完工作稿版本和恢复前都不一样，照恢复前版本发的旧存稿撞版本、不盖回去", async () => {
+    const aVersion = (await readDraftState(book, 1)).version;
+    await coreResidue("earlier-core", "2026-10-18T00:00:00.000Z", { gens: await read(GENS), draft: await read(DRAFT) });
+    await liveDraft("核心中断名 B", "核心中断正文 B。");
+    const bVersion = (await readDraftState(book, 1)).version;
+    await legacyResidue(await read(DRAFT), "2026-10-28T00:00:00.000Z");
+    await writeFile(join(book, DRAFT), composeDraftFile({ title: "老事务中断名 C", body: "老事务中断正文 C。" }));
+
+    await recoverBookTransactions(book);
+    const after = await readDraftState(book, 1);
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原名", body: "作者成功保存的 A。" });
+    expect(after.version).not.toBe(aVersion);
+    expect(after.version).not.toBe(bVersion);
+    for (const stale of [aVersion, bVersion]) {
+      const saved = await runCommand(book, draftSave, { chapter: 1, title: "迟到", body: "迟到的旧存稿。", baseVersion: stale }, { caller: "author" });
+      expect(saved).toMatchObject({ ok: false, code: "draft_conflict" });
+    }
+    expect(await readDraft(book, 1)).toMatchObject({ body: "作者成功保存的 A。" });
+  });
+
+  it("核心事务清单记着写了什么：盘上的正是这次写的，退回不另存", async () => {
+    const before = { gens: await read(GENS), draft: await read(DRAFT) };
+    await liveDraft("半截", "半截。");
+    const half = await read(DRAFT);
+    const tx = join(book, ".story-core-tx", "own-write");
+    await mkdir(join(tx, "backup"), { recursive: true });
+    await mkdir(join(tx, "staged"), { recursive: true });
+    await writeFile(join(tx, "backup", "0"), before.gens);
+    await writeFile(join(tx, "backup", "1"), before.draft);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({
+      schema: "story-core-tx/1", id: "own-write", createdAt: new Date().toISOString(), status: "prepared",
+      files: [{ path: GENS, slot: "0", existed: true, wrote: sha(await read(GENS)) }, { path: DRAFT, slot: "1", existed: true, wrote: sha(half) }],
+    }));
+
+    expect(await recoverBookTransactions(book)).toMatchObject({ rolledBack: ["own-write"] });
+    expect(await readDraft(book, 1)).toMatchObject({ body: "作者成功保存的 A。" });
+    expect(await savedCopies()).toEqual([]);
   });
 });

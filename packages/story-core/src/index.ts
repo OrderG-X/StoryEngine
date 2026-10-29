@@ -161,7 +161,8 @@ export {
   setLegacyTxIoHookForTests,
   type LegacyRecoveryNotice,
 } from "./store/legacy-transaction.js";
-export { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, TX_DIR } from "./store/paths.js";
+export { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR } from "./store/paths.js";
+export { isSavedCopyId, listSavedDrafts, readSavedDraft, settleSavedCopy, type SavedDraft } from "./store/saved-copies.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,

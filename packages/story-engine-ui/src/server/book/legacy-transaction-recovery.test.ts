@@ -22,7 +22,7 @@ const recoverProjectCommitTransactions = async (projectDir: string): Promise<voi
 // 残留按老定稿链写盘的格式手工造：manifest.json（version 2）+ backups/ 下的原文件。
 
 describe("老定稿链事务残留的恢复", () => {
-  it("staged 残留：能核对的备份还原，核不了的新建文件原地保留，标 recovered 放行", async () => {
+  it("staged 残留：备份还原、新建的删掉，盘上现在的（核不了是不是这份写的）先另存；标 recovered 放行（P1 第 19 轮 AG3）", async () => {
     const projectDir = await createFixtureProject();
     // 老定稿链写过的人物现状文件（新建书不再有，这里按老书的样子手工放一份）。
     const stateRelativePath = join("characters", "guo-xu", "state.json");
@@ -40,12 +40,18 @@ describe("老定稿链事务残留的恢复", () => {
     await recoverProjectCommitTransactions(projectDir);
 
     await expect(readFile(statePath, "utf-8")).resolves.toBe(originalState);
-    await expect(readFile(join(projectDir, "chapters", "0009.md"), "utf-8")).resolves.toBe("partial chapter write");
+    await expect(access(join(projectDir, "chapters", "0009.md"))).rejects.toThrow();
     await expect(readTransactionStatus(projectDir, 9)).resolves.toBe("recovered");
     const manifest = await readFile(join(projectDir, ".story-engine-tx", "commit-chapter-0009", "manifest.json"), "utf-8");
-    expect(manifest).toMatch(/"recoveryIssues"/u);
+    expect(manifest).not.toMatch(/"recoveryIssues"/u);
+    // 盖掉 / 删掉的两份都原样另存了。
+    expect((await readSavedCopies(projectDir)).map((copy) => [copy.path, copy.content]).sort()).toEqual([
+      [stateRelativePath, "{\"characterId\":\"guo-xu\",\"emotion\":\"partial-crash-corruption\"}\n"],
+      ["chapters/0009.md", "partial chapter write"],
+    ].sort());
     // 已 recovered 的残留不再重复处理，也不会再拦住读盘。
     await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
+    expect(await readSavedCopies(projectDir)).toHaveLength(2);
   });
 
   it("快照撤销留下的空目录壳直接清掉，不把书锁死", async () => {
@@ -103,10 +109,9 @@ describe("老定稿链事务残留的恢复", () => {
     await expect(access(txDir)).resolves.toBeUndefined();
   });
 
-  it("放行但没回滚干净的残留持续上浮：通知列出来、总览 warnings 里有，文案不带绝对路径", async () => {
+  it("老版本放行了、没回滚干净的残留（盘上已有的 recovered + recoveryIssues）持续上浮：通知列出来、总览 warnings 里有，文案不带绝对路径", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(join(projectDir, "chapters", "0003.md"), "half-applied chapter kept on disk", "utf-8");
-    await writeStagedResidue(projectDir, 3, [{ relativePath: "chapters/0003.md" }]);
+    await writeSettledTransaction(projectDir, 3, "recovered", ["Rollback failed for chapters/0003.md: TX_UNVERIFIED_DELETE"]);
 
     await recoverProjectCommitTransactions(projectDir);
 
@@ -246,6 +251,12 @@ function validSnapshotOnlyManifest(chapter: number): Record<string, unknown> {
   };
 }
 
+
+async function readSavedCopies(projectDir: string): Promise<readonly { readonly path: string; readonly content: string }[]> {
+  const dir = join(projectDir, ".story-core-saved");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  return Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => JSON.parse(await readFile(join(dir, name), "utf-8")) as { path: string; content: string }));
+}
 
 async function readTransactionStatus(projectDir: string, chapter: number): Promise<string> {
   const text = await readFile(

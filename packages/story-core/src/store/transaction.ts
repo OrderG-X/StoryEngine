@@ -8,29 +8,37 @@
  *  4. 清单改成 applied，删掉事务目录。
  * 中途断电或进程被杀：下次写之前 `recoverTransactions` 把 prepared 的事务回滚（已换上的文件换回备份、
  * 新建的删掉），applied 的只清目录。调用方把版本号文件放在最后一个写，读的一方据此判断有没有读到一半。
- * 写入代次（REVISION_PATH）例外：换上了就不退回。回滚只要真退回过文件，内容全换回原样之后就换一个新代次（写作版本 P1b
- * 第 3 轮复核；P1 第 18 轮 AF1 起不论这次写没写代次）：途中有人读到了一半新内容，回滚后内容、工作稿代次都回到原样，
- * 开工时记下的依据又全对上——换了代次，照途中读到的材料算的东西一律对不上。写代次的调用方把它放在第一个写。
+ * 恢复的三条规矩（P1 第 19 轮复核）：
+ *  - **代次只往前走**：写入代次换上了就不退回；收拾半截事务时两份代次（写入代次、工作稿代次）都不从任何备份换回。每退完一份、
+ *    标它收拾过之前换新的：写入代次换新；碰过哪几章工作稿，那几章的工作稿号换新（只碰了工作稿代次、不知道哪章的，整本换新纪元）。
+ *    途中有人读到了一半新内容，照它算的依据、版本号一律对不上；被杀在哪一步，重开再退一遍只会更新
+ *    （写作版本 P1b 第 3 轮、P1 第 18 轮 AF1、第 19 轮 AG2）。写代次的调用方把它放在第一个写。
+ *    进程内写到一半失败（一直拿着书锁、备份是刚拍的）照原样换回工作稿代次：开工前读到的版本号照样能存，途中读到的对不上。
+ *  - **不毁唯一副本**：要盖掉 / 删掉的文件，盘上现在的内容不是这份事务写的（清单记着写了什么，核不上；老格式核不了），
+ *    先原样另存（store/saved-copies.ts）再动——升级前后的版本混着用过，残留的事务可能比现在的稿还旧（AG3）。另存不下就停。
+ *  - **失败就挡住**：哪一份退不下去（老格式的也一样），比它先开工的一份都不退、它自己不标收拾过，写命令如实拒绝开工（AG1）。
  * 没收拾的事务有好几份（老格式残留 + 核心的）：按开工先后倒着退（后开工的先退），同一个文件谁先谁后分不清就不退、如实报。
  *
  * 安全边界：书目录本身是软链时按真实路径算；目标文件或它的任何一级上级目录是软链，一律拒绝（不跟着链写到书外）。
  * 清单坏了的事务不知道换到哪一步，原样留着、写命令拒绝开工；作者确认后由 setAsideBrokenTransactions
  * 挪进 `.story-core-kept/` 留证（不删），那里攒到 KEPT_REPORT_THRESHOLD 份以上就在恢复报告里如实提醒。
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
-import { dirname, join, normalize, sep } from "node:path";
+import { basename, dirname, join, normalize, sep } from "node:path";
 import {
   hasPendingLegacyTransactions,
   LegacyResidueError,
+  markLegacyTransactionRecovered,
   scanLegacyTransactions,
   tidyLegacyTransactions,
   undoLegacyTransaction,
   type PendingLegacyTransaction,
 } from "./legacy-transaction.js";
 import { withBookLock } from "./lock.js";
-import { revisionWrite } from "./control.js";
-import { assertInsideBook, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
+import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "./control.js";
+import { assertInsideBook, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
+import { saveCopyBeforeRestore } from "./saved-copies.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
 export const KEPT_REPORT_THRESHOLD = 20;
@@ -45,6 +53,8 @@ interface ManifestFile {
   readonly path: string;
   readonly existed: boolean;
   readonly slot: string;
+  /** 这次写的内容的 sha256（P1 第 19 轮）：回滚时盘上的还是它，就是这次写到一半的，换回不用另存。老清单没有。 */
+  readonly wrote?: string;
 }
 
 interface Manifest {
@@ -137,35 +147,87 @@ async function copyDurable(from: string, to: string): Promise<void> {
   await writeDurable(to, await readFile(from, "utf-8"));
 }
 
-/** 把一份 prepared 的事务退回去：已换上的文件换回备份，事务新建的文件删掉；真换上过文件的，最后再换一个新代次（见文件头）。 */
-async function rollback(bookDir: string, txDir: string, manifest: Manifest): Promise<void> {
+/** 退回一份做了什么：真换上过文件没有、碰了哪几章工作稿、碰没碰工作稿代次（调用方据此换代次）。 */
+interface RollbackResult {
+  readonly changed: boolean;
+  readonly draftChapters: readonly number[];
+  readonly gensTouched: boolean;
+}
+
+/**
+ * 回滚要盖掉 / 删掉 target 之前：盘上现在的内容既不是这次写的（wrote），也不是要换回的，就先另存（见文件头「不毁唯一副本」）。
+ * 目标是软链、不是普通文件，拒绝。
+ */
+async function keepForeignCurrent(bookDir: string, input: { readonly from: string; readonly path: string; readonly wrote?: string; readonly restore?: string }): Promise<void> {
+  const target = join(bookDir, input.path);
+  let stat;
+  try {
+    stat = await lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`回滚目标不是普通文件，拒绝动：${input.path}`);
+  const current = await readFile(target, "utf-8");
+  if (current === input.restore) return;
+  if (input.wrote !== undefined && digest(current) === input.wrote) return;
+  await saveCopyBeforeRestore(bookDir, { from: input.from, path: input.path, content: current });
+}
+
+/**
+ * 把一份 prepared 的事务退回去：已换上的文件换回备份，事务新建的文件删掉。写入代次不动；工作稿代次只有进程内失败
+ * （`inProcess`）才换回，收拾半截事务时不动（见文件头）。不换代次：调用方看返回的，换代次（advanceEpochs）之后再清掉这份事务。
+ */
+async function rollback(bookDir: string, txDir: string, manifest: Manifest, inProcess = false): Promise<RollbackResult> {
   let changed = false;
+  let gensTouched = false;
+  const draftChapters = new Set<number>();
   for (const file of manifest.files) {
     // 新文件还在暂存区 = 这个文件还没换上，书里是旧样子，不用动。
     if (await exists(join(txDir, "staged", file.slot))) continue;
     // 换上过（包括上次回滚到一半已经换回去的）：书被这次写动过。
     changed = true;
-    // 代次换上了不退回，等内容都换回去再换新的。
     if (file.path === REVISION_PATH) continue;
+    if (file.path === DRAFT_GENS_PATH) {
+      gensTouched = true;
+      if (!inProcess) continue;
+    }
     const path = assertInsideBook(file.path);
+    const chapter = draftChapterOfPath(path);
+    if (chapter !== undefined) draftChapters.add(chapter);
     await assertPlainDirs(bookDir, dirname(path));
     const target = join(bookDir, path);
-    if (!file.existed) {
-      await rm(target, { force: true });
-      continue;
-    }
-    // 备份已经不在 = 上次回滚到一半时已经换回去了。
     const backup = join(txDir, "backup", file.slot);
-    if (await exists(backup)) await rename(backup, target);
+    // 备份已经不在 = 上次回滚到一半时已经换回去了，不再动它。
+    if (file.existed && !(await exists(backup))) continue;
+    const restore = file.existed ? await readFile(backup, "utf-8") : undefined;
+    await keepForeignCurrent(bookDir, { from: manifest.id, path, ...(file.wrote !== undefined ? { wrote: file.wrote } : {}), ...(restore !== undefined ? { restore } : {}) });
+    if (!file.existed) await rm(target, { force: true });
+    else await rename(backup, target);
   }
-  if (changed) {
-    const fresh = revisionWrite(new Date());
-    await assertPlainDirs(bookDir, dirname(fresh.path));
-    await mkdir(dirname(join(bookDir, fresh.path)), { recursive: true });
-    const temporary = join(txDir, "revision.json.tmp");
-    await writeDurable(temporary, fresh.content);
-    await rename(temporary, join(bookDir, fresh.path));
-  }
+  return { changed, draftChapters: [...draftChapters], gensTouched };
+}
+
+async function writeControl(bookDir: string, write: TxWrite): Promise<void> {
+  const path = assertInsideBook(write.path);
+  await assertPlainDirs(bookDir, dirname(path));
+  await mkdir(dirname(join(bookDir, path)), { recursive: true });
+  await checkTarget(bookDir, path);
+  // 先写临时文件再一次 rename（同目录、原子）：被杀在中间要么是旧的、要么是新的，不会是半截。
+  const temporary = join(bookDir, dirname(path), `.${basename(path)}.${randomBytes(4).toString("hex")}.tmp`);
+  await writeDurable(temporary, write.content);
+  await rename(temporary, join(bookDir, path));
+}
+
+/**
+ * 退完一份之后换代次（见文件头「代次只往前走」）：写入代次换新的；碰过的那几章工作稿号换新的（drafts 给了才换）；
+ * 只碰了工作稿代次、说不清哪章的，整本换新纪元。
+ */
+async function advanceEpochs(bookDir: string, drafts?: { readonly chapters: readonly number[]; readonly gensTouched: boolean }): Promise<void> {
+  await writeControl(bookDir, revisionWrite(new Date()));
+  if (!drafts) return;
+  if (drafts.chapters.length > 0) await writeControl(bookDir, draftGensWrite(await readDraftGens(bookDir), drafts.chapters, randomUUID()));
+  else if (drafts.gensTouched) await writeControl(bookDir, freshDraftGensWrite());
 }
 
 export async function commitFiles(givenBookDir: string, writes: readonly TxWrite[]): Promise<void> {
@@ -188,7 +250,7 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const existed = await checkTarget(bookDir, path);
       if (existed) await copyDurable(target, join(txDir, "backup", slot));
       await writeDurable(join(txDir, "staged", slot), write.content);
-      files.push({ path, existed, slot });
+      files.push({ path, existed, slot, wrote: digest(write.content) });
     }
   } catch (error) {
     // 清单还没写，书里什么都没动：直接丢掉暂存。
@@ -205,7 +267,9 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       await rename(join(txDir, "staged", file.slot), target);
     }
   } catch (error) {
-    await rollback(bookDir, txDir, manifest);
+    // 进程内失败：一直拿着书锁，工作稿代次照原样换回（见文件头），写入代次换新。
+    const undone = await rollback(bookDir, txDir, manifest, true);
+    if (undone.changed) await advanceEpochs(bookDir);
     await rm(txDir, { recursive: true, force: true });
     throw error;
   }
@@ -245,7 +309,7 @@ async function inspect(txDir: string): Promise<TxState> {
       manifest.schema === "story-core-tx/1" &&
       (manifest.status === "prepared" || manifest.status === "applied") &&
       Array.isArray(manifest.files) &&
-      manifest.files.every((file) => typeof file?.path === "string" && typeof file.slot === "string" && typeof file.existed === "boolean");
+      manifest.files.every((file) => typeof file?.path === "string" && typeof file.slot === "string" && typeof file.existed === "boolean" && (file.wrote === undefined || typeof file.wrote === "string"));
     return valid ? { kind: "manifest", manifest } : { kind: "broken" };
   } catch {
     return { kind: "broken" };
@@ -310,7 +374,7 @@ async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
     const restores = new Map<string, string | null>();
     for (const file of state.manifest.files) {
       // 没换上的、代次（退的时候换新的，不换回）不算；路径不对的回滚时如实失败。
-      if (file.path === REVISION_PATH || (await exists(join(txDir, "staged", file.slot)))) continue;
+      if (isControlPath(file.path) || (await exists(join(txDir, "staged", file.slot)))) continue;
       let path: string;
       try {
         path = assertInsideBook(file.path);
@@ -389,14 +453,22 @@ export async function recoverTransactions(givenBookDir: string): Promise<Recover
   }
   for (const undo of order) {
     if (undo.format === "legacy") {
-      await undoLegacyTransaction(bookDir, undo.name);
+      // 退不下去、另存不下、换不了代次：整轮停、抛「残留」（不标收拾过，下次照样挡着；比它先开工的一份都不退）。
+      try {
+        const undone = await undoLegacyTransaction(bookDir, undo.name, (path, content) => saveCopyBeforeRestore(bookDir, { from: undo.name, path, content }));
+        if (undone.changed) await advanceEpochs(bookDir, { chapters: undone.draftChapters, gensTouched: false });
+        await markLegacyTransactionRecovered(bookDir, undo.name);
+      } catch (error) {
+        throw error instanceof LegacyResidueError ? error : new LegacyResidueError(error);
+      }
       continue;
     }
     const txDir = join(bookDir, TX_DIR, undo.name);
     try {
-      await rollback(bookDir, txDir, undo.manifest!);
+      const undone = await rollback(bookDir, txDir, undo.manifest!);
+      if (undone.changed) await advanceEpochs(bookDir, { chapters: undone.draftChapters, gensTouched: undone.gensTouched });
     } catch {
-      // 回滚不下去（清单指到书外、上级目录被换成软链……）：原样留着，交给作者；比它先开工的也先不退（不然退到一半的书叠在没退的上面）。
+      // 回滚不下去（清单指到书外、上级目录被换成软链、另存不下……）：原样留着，交给作者；比它先开工的也先不退（不然退到一半的书叠在没退的上面）。
       problems.push(undo.name);
       return report(rolledBack, [], problems);
     }

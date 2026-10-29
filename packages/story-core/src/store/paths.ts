@@ -23,6 +23,12 @@ export const DRAFT_GENS_PATH = "store-control/drafts.json";
 export const TX_DIR = ".story-core-tx";
 /** 收拾不了的坏事务挪到这里留证（作者确认后挪，不删）。 */
 export const KEPT_TX_DIR = ".story-core-kept";
+/** 恢复要盖掉 / 删掉的文件，现在的内容不是那份事务写的，先另存在这里（store/saved-copies.ts）。 */
+export const SAVED_COPIES_DIR = ".story-core-saved";
+/** 两份代次（store/control.ts）：恢复只换新的，不从备份换回（P1 第 19 轮 AG2）。 */
+export function isControlPath(path: string): boolean {
+  return path === REVISION_PATH || path === DRAFT_GENS_PATH;
+}
 
 const pad = (chapter: number): string => String(chapter).padStart(4, "0");
 

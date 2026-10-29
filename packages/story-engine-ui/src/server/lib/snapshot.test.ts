@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, symlink, unlink, writeFile, access, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, symlink, unlink, writeFile, access, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -804,7 +804,7 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
     return projectDir;
   }
 
-  it("staged 新建文件无法自证 → recover 放行（半章原地保留）、restoreSnapshot 不再抛错", async () => {
+  it("staged 新建文件核不了 → 先另存再删、标 recovered 放行，restoreSnapshot 不再抛错（P1 第 19 轮 AG3）", async () => {
     const projectDir = await makeBookProject();
     const target = await createSnapshot(projectDir, "撤销目标");
     const relativePath = join("chapters", "0007.md");
@@ -826,18 +826,18 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
       "utf-8",
     );
 
-    // 修复前：这一步直接 reject（撤销线第一道门就死）。修复后：标 recovered 放行，
-    // 无法自证的新建文件绝不被事务回滚误删——原地保留，等后续提交自然覆盖。
+    // 修复前：这一步直接 reject（撤销线第一道门就死）。现在：核不了是不是这份写的新建文件，先原样另存、再删（不毁唯一副本），标 recovered 放行。
     await expect(recoverBookTransactions(projectDir)).resolves.toMatchObject({ problems: [] });
-    await expect(readFile(chapterPath, "utf-8")).resolves.toBe("崩溃残留的半章正文");
+    await expect(access(chapterPath)).rejects.toThrow();
+    const saved = await readdir(join(projectDir, ".story-core-saved"));
+    expect(saved).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(projectDir, ".story-core-saved", saved[0]!), "utf-8"))).toMatchObject({ path: "chapters/0007.md", content: "崩溃残留的半章正文" });
     await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
       .resolves.toMatch(/"status":\s*"recovered"/u);
 
     // 撤销线恢复可用：restoreSnapshot 不再被残留事务砖住，正常落「恢复到：撤销目标」。
     const restored = await restoreSnapshot(projectDir, target.id);
     expect(restored.restored.label).toBe("恢复到：撤销目标");
-    // 恢复目标之后新增的文件由 restoreSnapshot 按 git diff 正常清理（这是它的设计语义，
-    // 与事务回滚的不可判定删除是两回事）。
     await expect(access(chapterPath)).rejects.toThrow();
   }, 60_000);
 });

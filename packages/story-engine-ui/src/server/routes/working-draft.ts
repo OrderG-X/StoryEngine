@@ -19,7 +19,7 @@
  *
  * 版本号是这章的工作稿代次 + 草稿文件全文的哈希（核心包 draft/draft.ts）。
  */
-import { chapterRetitle, draftAdoptCandidate, draftSave, parseDraftFile, readChapterPaper, readDraftState, runCommand, withSettledBook, type DraftConflictDetails } from "@actalk/story-core";
+import { chapterRetitle, draftAdoptCandidate, draftSave, isSavedCopyId, parseDraftFile, readChapterPaper, readDraftState, readSavedDraft, runCommand, settleSavedCopy, withSettledBook, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -129,10 +129,19 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         // 查那一份、换上、清掉它，整段在书锁里（写作版本 P1b 第 3 轮复核）：查过之后别的存稿改了它，就不会拿旧的换上、再把新的删了。
         // 先收拾写到一半的事务（P1 第 17 轮）：字数统计、换上都对着收拾过的书。
         const settledReply = await withSettledBook(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
-          const entry = kind === "candidate" ? await readDraftCandidate(projectDir, id) : await readDraftRecovery(projectDir, id);
+          // 收拾没写完的事务时另存的那份（P1 第 19 轮 AG3，号是 `kept-…`）：和恢复稿一样是作者自己的字，存在核心的另存区。
+          const savedCopy = kind === "recovery" && isSavedCopyId(id);
+          const entry = kind === "candidate" ? await readDraftCandidate(projectDir, id) : savedCopy ? await readSavedDraft(projectDir, id) : await readDraftRecovery(projectDir, id);
           // 还等着作者选的：候选是 AI 写了字的那份；恢复稿看有没有清过（只起了章名的也算，第 13 轮复核 AA5）。
           const waiting = entry && entry.chapter === chapter && ("settled" in entry ? !entry.settled : entry.body.trim().length > 0);
           const live = waiting ? entry : undefined;
+          if (decision === "dismiss" && savedCopy) {
+            // 不要了：已经清了、不在了也算成；指纹必带（作者看到的就是这一份才清）。
+            if (!live) return { status: 200, payload: { ok: true } };
+            if (sha === undefined || sha !== draftSha(live)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
+            await settleSavedCopy(projectDir, id);
+            return { status: 200, payload: { ok: true } };
+          }
           if (decision === "dismiss") {
             if (kind === "candidate") {
               // 不要了：已经不在也算成（重发、两个窗口各点一次）。
@@ -173,6 +182,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           }
           if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, kind === "candidate" ? "ai" : "author", wordsBefore);
           if (kind === "candidate") await removeDraftCandidate(projectDir, id);
+          else if (savedCopy) await settleSavedCopy(projectDir, id);
           else await consumeDraftRecovery(projectDir, live as DraftRecovery);
           return { status: 200, payload: { ok: true, version: outcome.result.version, ...(snapshotId ? { snapshotId } : {}) } };
         });

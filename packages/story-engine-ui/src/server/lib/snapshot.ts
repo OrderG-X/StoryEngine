@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { bumpRevision, recoverTransactions, REVISION_PATH, withBookLock } from "@actalk/story-core";
+import { bumpRevision, recoverTransactions, REVISION_PATH, SAVED_COPIES_DIR, withBookLock } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
@@ -97,6 +97,9 @@ const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（�
 /** 新核心留证的东西（坏事务、镜像前的老文件原样）：撤销不能把它们抹掉。 */
 const CORE_KEPT_DIR = ".story-core-kept";
 const CORE_KEPT_MARKER = "# story-engine-ui: 新核心留证目录不入快照（撤销不抹证据）";
+/** 收拾半截事务时另存的（P1 第 19 轮 AG3）：作者还没处理的稿，撤销不能把它们抹掉。 */
+const CORE_SAVED_DIR = SAVED_COPIES_DIR;
+const CORE_SAVED_MARKER = "# story-engine-ui: 恢复前另存的稿不入快照（撤销不抹作者的稿）";
 /** 书的写入代次（写作版本 P1a）：撤销 / 恢复不能把它翻回去，恢复完换一个新的（按恢复前算的预览一律作废）。 */
 const CORE_REVISION_DIR = dirname(REVISION_PATH);
 const CORE_REVISION_MARKER = "# story-engine-ui: 写入代次不入快照（撤销不回退代次）";
@@ -113,6 +116,7 @@ const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: strin
   { dir: CORE_PREVIEW_DIR, line: `/${CORE_PREVIEW_DIR}/`, marker: CORE_PREVIEW_MARKER },
   { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
   { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
+  { dir: CORE_SAVED_DIR, line: `/${CORE_SAVED_DIR}/`, marker: CORE_SAVED_MARKER },
   { dir: WORD_STATS_DIR, line: `/${WORD_STATS_DIR}/`, marker: WORD_STATS_MARKER },
   { dir: CORE_REVISION_DIR, line: `/${CORE_REVISION_DIR}/`, marker: CORE_REVISION_MARKER },
 ];

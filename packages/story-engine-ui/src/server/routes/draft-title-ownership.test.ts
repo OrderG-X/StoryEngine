@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bareChapterName, composeDraftFile, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand } from "@actalk/story-core";
+import { bareChapterName, composeDraftFile, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, recoverBookTransactions, runCommand } from "@actalk/story-core";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readMaterialWorld } from "../book/material-reads.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
@@ -109,6 +109,8 @@ describe("AD2 章名里的换行收成空格", () => {
 });
 
 describe("AD3 存稿先收拾完上次没写完的事务再读盘", () => {
+  // P1 第 19 轮 AG2：收拾半截事务时工作稿代次只往前走（这一章换了新号），收拾前打开的页面这笔撞版本、整份进恢复稿；
+  // 恢复稿里的章名是回滚后的那个（先收拾、再读盘），稿子是回滚后的那份。
   it.each([false, true])("旧页面不带章名 / 带章名（%j）：沿用的是回滚后的章名", async (explicit) => {
     await save("作者原章名");
     const baseVersion = (await readDraftState(book, 1)).version;
@@ -126,9 +128,12 @@ describe("AD3 存稿先收拾完上次没写完的事务再读盘", () => {
     await writeFile(join(book, paths[1]!), composeDraftFile({ title: "没写完的那次的章名", body: "没写完的那次的正文。" }));
 
     const body = "# 作者的正文首节\n\n作者最新正文。";
-    const out = await call("/api/working-draft", { projectPath: book, chapter: 1, body, baseVersion, ...(explicit ? { title: "作者原章名" } : {}) }, "PUT");
-    expect(out.status).toBe(200);
-    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原章名", body });
+    const out = await call("/api/working-draft", { projectPath: book, chapter: 1, body, baseVersion, client: "adthreeclient", seq: 1, ...(explicit ? { title: "作者原章名" } : {}) }, "PUT");
+    expect(out.status).toBe(409);
+    expect(out.payload.code).toBe("draft_conflict");
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原章名", body: "作者原正文。" });
+    const recovery = await readDraftRecovery(book, String(out.payload.recoveryId));
+    expect(recovery).toMatchObject({ title: "作者原章名", body });
   });
 });
 
@@ -255,5 +260,57 @@ describe("AE3 AI 换稿先收拾事务，再核写的时候用过的材料", () 
     expect(await readDraft(book, 1)).toMatchObject({ body: "口令是白鹤。" });
     expect(await readDraft(book, 2)).toBeUndefined();
     if (!outcome.applied) expect(await readDraftCandidate(book, outcome.candidateId)).toMatchObject({ body: "他报出口令：青鹭。" });
+  });
+});
+
+describe("AG3 收拾半截事务时另存的稿：稿纸上找得回、不要了就不再提示", () => {
+  async function residueOverC(): Promise<string> {
+    await save("作者原章名", "作者原正文 A。");
+    const a = await readFile(join(book, draftPath(1)), "utf-8");
+    const tx = join(book, ".story-engine-tx", "commit-chapter-0001");
+    await mkdir(join(tx, "backups", "drafts", "fast"), { recursive: true });
+    await writeFile(join(tx, "backups", draftPath(1)), a);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({
+      version: 2, chapter: 1, createdAt: "2026-10-18T00:00:00.000Z", files: [draftPath(1)],
+      backups: [{ relativePath: draftPath(1), existed: true, backupPath: join("backups", draftPath(1)), sha256: createHash("sha256").update(a, "utf-8").digest("hex") }],
+      status: "staged",
+    }));
+    // 老版本没收拾残留就让作者存下了 C。
+    await writeFile(join(book, draftPath(1)), composeDraftFile({ title: "后来的章名", body: "后来存下的 C。" }));
+    expect((await recoverBookTransactions(book)).problems).toEqual([]);
+    return a;
+  }
+
+  async function pendingOnPaper(): Promise<Record<string, unknown> | undefined> {
+    const handlers: Middleware[] = [];
+    registerWorkingDraftRoutes({ use: (handler) => handlers.push(handler) });
+    const chunks: Buffer[] = [];
+    const res = { statusCode: 200, setHeader() { return res; }, end(chunk?: string | Buffer) { if (chunk) chunks.push(Buffer.from(chunk)); return res; } } as unknown as ServerResponse;
+    const req = Object.assign(Readable.from([]), { method: "GET", url: `/api/working-draft?project=${encodeURIComponent(book)}&chapter=1` }) as IncomingMessage;
+    await handlers[0]!(req, res, () => { throw new Error("没进路由"); });
+    const payload = JSON.parse(Buffer.concat(chunks).toString("utf-8")) as { paper: { pending?: Record<string, unknown> } };
+    return payload.paper.pending;
+  }
+
+  it("找回：换上另存的那份（章名一起），之后不再提示", async () => {
+    await residueOverC();
+    const pending = await pendingOnPaper();
+    expect(pending).toMatchObject({ kind: "recovery", title: "后来的章名", body: "后来存下的 C。" });
+    expect(String(pending!.id)).toMatch(/^kept-/u);
+    const adopted = await call("/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id: pending!.id, sha: pending!.sha, decision: "adopt", baseVersion: (await readDraftState(book, 1)).version });
+    expect(adopted.status).toBe(200);
+    expect(await readDraft(book, 1)).toMatchObject({ title: "后来的章名", body: "后来存下的 C。" });
+    expect(await pendingOnPaper()).toBeUndefined();
+  });
+
+  it("不要了：指纹对得上才清；清了不再提示，稿子不动", async () => {
+    await residueOverC();
+    const pending = (await pendingOnPaper())!;
+    const wrong = await call("/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id: pending.id, sha: "不对", decision: "dismiss" });
+    expect(wrong.status).toBe(409);
+    const dismissed = await call("/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id: pending.id, sha: pending.sha, decision: "dismiss" });
+    expect(dismissed.status).toBe(200);
+    expect(await pendingOnPaper()).toBeUndefined();
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原章名", body: "作者原正文 A。" });
   });
 });

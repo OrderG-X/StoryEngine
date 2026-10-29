@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { composeDraftFile, readDraft, sameDraft, sha256, withBookLock } from "@actalk/story-core";
+import { composeDraftFile, listSavedDrafts, readDraft, sameDraft, sha256, withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-io.js";
 
 /** 本进程里正在写的候选：标着「在写」却不在这里的，就是写到一半停了（进程没了、流程抛错）。 */
@@ -368,7 +368,10 @@ export async function writeSaveMark(projectDir: string, input: { readonly chapte
 
 /* ------------------------------ 稿纸上的提示 ------------------------------ */
 
-/** 稿纸打开一章时要提示作者的一份：先恢复稿（作者自己的字），再 AI 候选。和工作稿一样的不提示。 */
+/**
+ * 稿纸打开一章时要提示作者的一份：先恢复稿（作者自己的字：存稿撞了版本留下的，再是收拾没写完的事务时另存的，
+ * P1 第 19 轮 AG3，号是 `kept-…`），再 AI 候选。和工作稿一样的不提示。
+ */
 export type PendingDraft =
   | { readonly kind: "recovery"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string }
   | { readonly kind: "candidate"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string; readonly reason: DraftKeptReason };
@@ -381,6 +384,8 @@ export async function pendingDraftFor(projectDir: string, chapter: number): Prom
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const recovery = recoveries[0];
   if (recovery) return { kind: "recovery", id: recovery.id, ...(recovery.title ? { title: recovery.title } : {}), body: recovery.body, sha: draftSha(recovery) };
+  const saved = (await listSavedDrafts(projectDir, chapter)).find((copy) => !sameDraftContent(copy, draft));
+  if (saved) return { kind: "recovery", id: saved.id, ...(saved.title ? { title: saved.title } : {}), body: saved.body, sha: draftSha(saved) };
   const candidate = await pendingDraftCandidate(projectDir, chapter, draft);
   if (!candidate) return undefined;
   return {

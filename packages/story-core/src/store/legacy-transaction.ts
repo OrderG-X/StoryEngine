@@ -4,15 +4,15 @@
  * 老定稿链本身已删（重构 P7，2026-10-18），这里只收老版本中途崩溃留下的残留。**收拾一本书的事务只有核心一处**：
  * `recoverTransactions`（transaction.ts）把这里没收拾的老格式事务和核心自己的一起，按开工先后倒着退（P1 第 18 轮 AF2），
  * 写命令、`withSettledBook`、存档都走它——存稿、AI 换稿这类先读盘再定参数的，读到的一定是两种事务都收拾过的书。
- * 这里只给三样：只读的逐个看清（`scanLegacyTransactions`，读侧 `hasPendingLegacyTransactions` 用同一份判断）、
- * 退回一份（`undoLegacyTransaction`）、收尾（`tidyLegacyTransactions`：删空目录壳、归档）。调用方必须已持书锁。
+ * 这里只给这几样：只读的逐个看清（`scanLegacyTransactions`，读侧 `hasPendingLegacyTransactions` 用同一份判断）、
+ * 退回一份（`undoLegacyTransaction`：要盖掉的先另存、退不下去整份抛）、标成收拾过（`markLegacyTransactionRecovered`）、
+ * 收尾（`tidyLegacyTransactions`：删空目录壳、归档）。调用方必须已持书锁。
  */
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { freshDraftGensWrite, revisionWrite } from "./control.js";
-import { draftChapterOfPath } from "./paths.js";
+import { draftChapterOfPath, isControlPath } from "./paths.js";
 
 /** 老定稿链的事务目录。 */
 export const LEGACY_TX_DIR = ".story-engine-tx";
@@ -24,7 +24,7 @@ export interface CommitTransactionManifest {
   readonly files: readonly string[];
   readonly backups: readonly CommitTransactionBackup[];
   readonly status: "staged" | "applied" | "failed" | "recovered";
-  /** P1-6：回滚不完备的残留原因（新建文件无法自证为事务写入内容，原地保留并放行） */
+  /** 老版本恢复留下的「回滚不完备」原因（P1-6）。现在退不下去就挡着、不标收拾过（P1 第 19 轮 AG1）；这里只读老书上已有的。 */
   readonly recoveryIssues?: readonly string[];
 }
 
@@ -33,11 +33,6 @@ export interface CommitTransactionBackup {
   readonly existed: boolean;
   readonly backupPath?: string;
   readonly sha256?: string;
-}
-
-interface TransactionFile {
-  readonly relativePath: string;
-  readonly content: string;
 }
 
 /**
@@ -114,13 +109,50 @@ export async function scanLegacyTransactions(bookDir: string): Promise<readonly 
   });
 }
 
-/** 退回一份没收拾的老格式事务（调用方已持书锁、按开工先后排好了序）。收拾不了抛 `LegacyResidueError`。 */
-export async function undoLegacyTransaction(bookDir: string, name: string): Promise<void> {
+/** 退回时要盖掉 / 删掉的文件，现在的内容不是这份事务写的（老格式核不了）：先交给它另存（P1 第 19 轮 AG3）。另存不下要抛。 */
+export type KeepCurrent = (relativePath: string, content: string) => Promise<void>;
+
+/** 退回一份做了什么：换没换过文件、碰了哪几章工作稿（调用方据此换代次）。 */
+export interface LegacyUndoResult {
+  readonly changed: boolean;
+  readonly draftChapters: readonly number[];
+}
+
+/**
+ * 退回一份没收拾的老格式事务（调用方已持书锁、按开工先后排好了序）：备份换回去，事务新建的删掉；盖掉 / 删掉之前，现在的内容
+ * 和要换回的不一样就先另存（keep）。有一个文件退不下去就整份抛 `LegacyResidueError`、清单不改（P1 第 19 轮 AG1：不标「收拾过」，
+ * 下次开书照样挡着、重试；比它先开工的一份都不退）。两份代次不从备份换回（AG2，调用方退完换新的）。
+ * 退完不标收拾过：调用方换完代次再调 `markLegacyTransactionRecovered`（被杀在中间，重开还是没收拾的，再退一遍）。
+ */
+export async function undoLegacyTransaction(bookDir: string, name: string, keep: KeepCurrent): Promise<LegacyUndoResult> {
   return asResidue(async () => {
-    const match = /^commit-chapter-(\d+)$/u.exec(name);
-    if (!match) throw taggedError("UNSAFE_TX_RESIDUE_ID", `Unsafe commit transaction residue id: ${name}`);
-    await recoverCommitTransactionResidue(bookDir, join(bookDir, LEGACY_TX_DIR, name), Number(match[1]));
+    const txDir = legacyTxDir(bookDir, name);
+    const manifest = await pendingLegacyManifest(bookDir, txDir, name);
+    if (!manifest) return { changed: false, draftChapters: [] };
+    const issues = await restoreCommitTransactionBackups(bookDir, txDir, manifest.backups, keep);
+    if (issues.length > 0) throw taggedError("TX_ROLLBACK_INCOMPLETE", `Legacy commit transaction ${name} could not be fully rolled back: ${issues.join("; ")}`);
+    return {
+      changed: manifest.backups.length > 0,
+      draftChapters: [...new Set(manifest.backups.flatMap((backup) => {
+        const chapter = draftChapterOfPath(backup.relativePath);
+        return chapter === undefined ? [] : [chapter];
+      }))],
+    };
   });
+}
+
+/** 一份老格式事务退完、代次也换过了：标成收拾过。 */
+export async function markLegacyTransactionRecovered(bookDir: string, name: string): Promise<void> {
+  return asResidue(async () => {
+    const txDir = legacyTxDir(bookDir, name);
+    const manifest = await pendingLegacyManifest(bookDir, txDir, name);
+    if (manifest) await writeManifest(bookDir, txDir, { ...manifest, status: "recovered" });
+  });
+}
+
+function legacyTxDir(bookDir: string, name: string): string {
+  if (!/^commit-chapter-\d+$/u.test(name)) throw taggedError("UNSAFE_TX_RESIDUE_ID", `Unsafe commit transaction residue id: ${name}`);
+  return join(bookDir, LEGACY_TX_DIR, name);
 }
 
 /** 收尾（都退完之后）：删掉空目录壳、旧的干净事务归档。空目录壳删不掉抛 `LegacyResidueError`。 */
@@ -472,100 +504,83 @@ async function validateSnapshotOnlyCommitResidue(
   if (!validRollback) throw taggedError("INVALID_SNAPSHOT_ROLLBACK", `Invalid snapshot-only commit rollback metadata at ${manifestRel}`);
 }
 
-async function recoverCommitTransactionResidue(
-  projectDir: string,
-  txDir: string,
-  expectedChapter: number,
-): Promise<void> {
+/**
+ * 一份还没收拾的老格式事务的清单（staged / failed）；已经收拾过（recovered）、成功了的（applied）、目录不在了是 undefined。
+ * 目录不是真目录、清单坏了抛出。
+ *
+ * #7（长跑 2026-10-04 真机 50 章实证）：applied 是成功终态，恢复对它无事可做、更不能改写——apply 的收尾顺序是
+ * 「逐文件 fsync 全部落盘 → 最后写 applied manifest」，落成 applied 即证明事务写入全部完成。「recovered」只留给真正被中断、
+ * 由恢复路径收尾的事务。
+ */
+async function pendingLegacyManifest(projectDir: string, txDir: string, name: string): Promise<CommitTransactionManifest | undefined> {
   let stats;
   try {
     stats = await lstat(txDir);
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return;
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
     throw error;
   }
   const txRel = relative(resolve(projectDir), txDir);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw taggedError("UNSAFE_TX_RESIDUE", `Unsafe commit transaction residue at ${txRel}; refusing to delete or overwrite it.`);
   }
-
-  const manifest = await readCommitManifest(projectDir, txDir, expectedChapter);
-  if (manifest.status === "recovered") return;
-  // #7（长跑 2026-10-04 真机 50 章实证）：applied 是成功终态，恢复扫描对它无事可做、更不能改写。
-  // apply 的收尾顺序是「逐文件 fsync 全部落盘 → 最后写 applied manifest」，manifest 落成 applied 即
-  // 证明事务写入全部完成；此前这里对 applied 无条件改写成 recovered——而恢复扫描无处不在（每次提交、
-  // 每次读概览 buildStateOverview、快照操作都先收拾一遍），于是每个成功
-  // 事务的 applied 终态在收尾后的第一次概览刷新就被降级成 recovered，成功/中断在盘上从此不可区分
-  // （测试书 50/50 manifest 全停 recovered、零 recoveryIssues）。「recovered」只留给真正被中断、
-  // 由恢复路径收尾的事务（staged/failed）。
-  if (manifest.status === "applied") return;
-  // recover 路径不传 writtenFiles：staged/failed 残留的新建文件可能含用户未保存的编辑，
-  // 磁盘内容不能自证为「事务写入的内容」。保持 fail-closed（拒绝删除并如实记录），
-  // 只有 apply 路径（内存里有确切 writtenContent）才安全删除。
-  const rollbackIssues = await restoreCommitTransactionBackups(projectDir, txDir, manifest.backups);
-  // 正文换回了原样：写入代次换一个新的，读到过中途那版的预览、缓存一律对不上（写作版本 P1a 第 2 轮复核）。
-  // 调用方持着书锁（核心 recoverTransactions 在锁里调），直接写代次文件。
-  // 换回来的里有工作稿：工作稿代次也换新纪元（P1b 第 3 轮复核），照中途那版发的存稿对不上。
-  if (manifest.backups.length > 0) {
-    const touchedDraft = manifest.backups.some((backup) => draftChapterOfPath(backup.relativePath) !== undefined);
-    for (const write of [revisionWrite(new Date()), ...(touchedDraft ? [freshDraftGensWrite()] : [])]) {
-      const path = join(projectDir, write.path);
-      await ensureSafeDirectory(projectDir, dirname(path), true, "store-control parent");
-      await writeTextNoFollow(projectDir, path, write.content, "store-control");
-    }
-  }
-  if (rollbackIssues.length > 0) {
-    // P1-6 治永久锁死：回滚不完整时不再永久抛错阻塞后续提交。无法判定的新建文件
-    // 原地保留（用户数据分毫不动），事务标记 recovered 放行——后续提交会自然覆盖它。
-    // 恢复手段从「报错让用户手工删 .story-engine-tx」升级为「如实记录 + 自动放行」。
-    await writeManifest(projectDir, txDir, {
-      ...manifest,
-      status: "recovered",
-      recoveryIssues: rollbackIssues,
-    });
-    return;
-  }
-  await writeManifest(projectDir, txDir, { ...manifest, status: "recovered" });
+  const manifest = await readCommitManifest(projectDir, txDir, Number(/^commit-chapter-(\d+)$/u.exec(name)![1]));
+  return manifest.status === "staged" || manifest.status === "failed" ? manifest : undefined;
 }
 
 async function restoreCommitTransactionBackups(
   projectDir: string,
   txDir: string,
   backups: readonly CommitTransactionBackup[],
-  /** 事务写入的新文件内容（P1-6：新建文件回滚的删除凭据） */
-  writtenFiles?: readonly TransactionFile[],
+  keep: KeepCurrent,
 ): Promise<string[]> {
   const issues: string[] = [];
-  const writtenByPath = new Map(
-    (writtenFiles ?? []).map((file) => [file.relativePath, file.content] as const),
-  );
   for (const backup of [...backups].reverse()) {
+    // 两份代次只往前走（P1 第 19 轮 AG2）：不从备份换回，调用方退完换新的。
+    if (isControlPath(backup.relativePath)) continue;
     const targetPath = join(projectDir, backup.relativePath);
     try {
+      let content: string | undefined;
       if (backup.existed) {
         const backupPath = join(txDir, backup.backupPath!);
         await assertSafeProjectPath(projectDir, backupPath, false, "commit backup");
-        const content = await readFile(backupPath, "utf-8");
+        content = await readFile(backupPath, "utf-8");
         if (sha256Text(content) !== backup.sha256) {
           throw taggedError("TX_BACKUP_CHECKSUM_MISMATCH", `backup checksum mismatch at ${relative(resolve(projectDir), backupPath)}`);
         }
+      }
+      // 现在盘上的：老格式没记事务写了什么，和要换回的不一样就先另存（之后存下的稿可能就这一份，AG3）。
+      const current = await readCurrentNoFollow(projectDir, targetPath, "formal rollback target");
+      if (current !== undefined && current !== content) await keep(backup.relativePath, current);
+      if (content !== undefined) {
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
         await writeTextNoFollow(projectDir, targetPath, content, "formal rollback target");
-      } else {
-        await removeFileNoFollow(
-          projectDir,
-          targetPath,
-          "formal rollback target",
-          writtenByPath.get(backup.relativePath),
-        );
+      } else if (current !== undefined) {
+        await assertSafeProjectPath(projectDir, targetPath, true, "formal rollback target");
+        await rm(targetPath, { force: true });
       }
     } catch (error) {
-      // 相对文件名 + errno code/自造错误码：这条 issues 会同时进 report.issues（用户可见）和
-      // manifest.recoveryIssues（盘上取证）——error.message 原文带绝对路径，绝不直拼。
+      // 相对文件名 + errno code/自造错误码（error.message 原文带绝对路径，绝不直拼）。
       issues.push(`Rollback failed for ${backup.relativePath}: ${briefError(error, projectDir)}`);
+      // 有一处退不下去就停：后面的不再动（调用方整份当没收拾、挡着）。
+      break;
     }
   }
   return issues;
+}
+
+/** 目标现在的内容（不跟软链）；不在是 undefined；不是普通文件抛出。 */
+async function readCurrentNoFollow(projectDir: string, targetPath: string, label: string): Promise<string | undefined> {
+  await assertSafeProjectPath(projectDir, targetPath, true, label);
+  let stats;
+  try {
+    stats = await lstat(targetPath);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (stats.isSymbolicLink() || !stats.isFile()) throw taggedError("UNSAFE_ROLLBACK_TARGET", `Refusing to touch ${label} at ${relative(resolve(projectDir), targetPath)}; not a regular file.`);
+  return readFile(targetPath, "utf-8");
 }
 
 function parseRecoverableCommitManifest(value: unknown, expectedChapter: number): CommitTransactionManifest | undefined {
@@ -754,36 +769,6 @@ async function verifyOpenedProjectFile(
  * 这证明文件是本次未完成的提交产生的、没被用户/别的进程改过，删了不会丢任何用户数据。
  * 内容不匹配则保留并如实记录，绝不误删。
  */
-async function removeFileNoFollow(
-  projectDir: string,
-  targetPath: string,
-  label: string,
-  writtenContent?: string,
-): Promise<void> {
-  await assertSafeProjectPath(projectDir, targetPath, true, label);
-  try {
-    await lstat(targetPath);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return;
-    throw error;
-  }
-  const targetRel = relative(resolve(projectDir), targetPath);
-  if (writtenContent === undefined) {
-    throw taggedError(
-      "TX_UNVERIFIED_DELETE",
-      `Refusing to path-delete ${label} at ${targetRel}; no transaction content recorded for verification.`,
-    );
-  }
-  const currentContent = await readFile(targetPath, "utf-8");
-  if (sha256Text(currentContent) !== sha256Text(writtenContent)) {
-    throw taggedError(
-      "TX_CONTENT_CHANGED",
-      `Refusing to path-delete ${label} at ${targetRel}; content no longer matches the transaction's write (file was modified after the failed commit).`,
-    );
-  }
-  await rm(targetPath, { force: true });
-}
-
 function padChapter(chapter: number): string {
   return String(Math.max(0, Math.trunc(chapter))).padStart(4, "0");
 }
