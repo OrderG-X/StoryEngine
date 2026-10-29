@@ -5,7 +5,6 @@
  * 核账员三遍（跟读窗口，带 A 自复核 + F 时间线只进自复核）、同一份核账记忆和「不是问题」批注。
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
-import { readTruthBasis, readWithStableBasis } from "@actalk/story-core";
 import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
 import { describeTimelineForChapter, readStoryTimeline, type StoryTimeline } from "../../book/story-timeline.js";
 import { type FactEntry } from "../../book/types.js";
@@ -34,10 +33,11 @@ import {
   type ContinuityIssueV2,
   type EarlierText,
 } from "./check-chapter.js";
-import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory, type FixRecord } from "./check-memory.js";
+import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory, type CheckMemory, type FixRecord } from "./check-memory.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";
+import { readTruthBasisToCompare, readWithStableBasisForWork } from "../../book/truth-basis.js";
 
 export interface ChapterCheckItem {
   readonly quote: string;
@@ -179,7 +179,7 @@ async function checkByReader(input: {
  * 作者改了哪天要重核）。有一样读不了，键就是 undefined：不复用上次的，这次的结果也不存（读不了时核出来的不算全）。
  * 材料夹在两次读依据之间读（readWithStableBasis）：中途书上有写（哪怕又改回原样），键也是 undefined。
  */
-async function readCheckInputs(projectDir: string, chapter: number): Promise<{
+export async function readCheckInputs(projectDir: string, chapter: number): Promise<{
   readonly earlier: EarlierText;
   readonly ledgerFacts?: readonly FactEntry[];
   readonly foundation?: FoundationDigest;
@@ -188,7 +188,7 @@ async function readCheckInputs(projectDir: string, chapter: number): Promise<{
   /** 读材料那会儿书的依据摘要（带写入代次）：核完存记忆前再核一遍，核的途中书变了就不存。 */
   readonly basisDigest?: string;
 }> {
-  const { value, basis } = await readWithStableBasis(projectDir, async () => {
+  const { value, basis } = await readWithStableBasisForWork(projectDir, async () => {
     const earlier = await readEarlierChapters(projectDir, chapter);
     const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
     let foundationRead = true;
@@ -237,12 +237,21 @@ function changesFromFixLog(previous: string, body: string, log: readonly FixReco
   return undefined;
 }
 
+/**
+ * 这章的核账记忆，前文、账本、设定、时间线都还是那时的才给（正文可以不同）；对不上、读不了都是 undefined。
+ * 拿核账记忆当材料用（重写时交给写手的「上一稿核出的错」）一律走这里（第 7 轮复核 U4：前文改过了，旧记忆还在让写手照旧前文写）。
+ */
+export async function readCurrentCheckMemory(projectDir: string, chapter: number): Promise<CheckMemory | undefined> {
+  const memory = await readCheckMemory(projectDir, chapter).catch(() => undefined);
+  if (!memory || memory.version !== CHECK_MEMORY_VERSION) return undefined;
+  const { earlierHash } = await readCheckInputs(projectDir, chapter);
+  return earlierHash !== undefined && memory.earlierHash === earlierHash ? memory : undefined;
+}
+
 /** 这章这份正文能不能直接用上次的核账结果（正文、前文、账本、设定、时间线都没改）：只读盘、不调模型（P11：AI 出稿后补核账卡用）。 */
 export async function canReuseCheck(projectDir: string, chapter: number, body: string): Promise<boolean> {
-  const memory = await readCheckMemory(projectDir, chapter);
-  if (!memory || memory.version !== CHECK_MEMORY_VERSION || memory.bodyHash !== hashBody(body)) return false;
-  const { earlierHash } = await readCheckInputs(projectDir, chapter);
-  return earlierHash !== undefined && memory.earlierHash === earlierHash;
+  const memory = await readCurrentCheckMemory(projectDir, chapter);
+  return memory !== undefined && memory.bodyHash === hashBody(body);
 }
 
 export async function checkChapterBody(
@@ -295,7 +304,7 @@ export async function checkChapterBody(
   // 核账记忆：冷窗口的结果不写盘（它对照的范围小，不该被当成全书核过缓存起来；下次点「核账」重核，
   // 那时笔记多半已读齐，就是全书的核账）。有一步没跑成的也不存：存了下次就当全核过端出来，那一步的失败没了。
   // 核的途中书上有写（专员笔记、前文都可能跟着变了）：这遍的结果照常给，但不当成这份前文的核账记忆存。
-  const bookUnchanged = async (): Promise<boolean> => basisDigest !== undefined && (await readTruthBasis(projectDir).catch(() => undefined))?.digest === basisDigest;
+  const bookUnchanged = async (): Promise<boolean> => basisDigest !== undefined && (await readTruthBasisToCompare(projectDir).catch(() => undefined))?.digest === basisDigest;
   if (!reused && !result.coverage && result.failures.length === 0 && earlierHash !== undefined && (await bookUnchanged())) {
     await writeCheckMemory(projectDir, { chapter, bodyHash, body, earlierHash, issues: result.issues }).catch((error) => {
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);

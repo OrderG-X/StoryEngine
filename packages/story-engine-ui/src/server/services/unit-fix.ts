@@ -8,10 +8,11 @@
  */
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, numberedText, prepareUnitReplacement, readDraftFile, readTruthBasis, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { applyUnitEdits, numberedText, prepareUnitReplacement, readDraftFile, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { appendFixLog } from "../editorial/continuity/check-memory.js";
 import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
 import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 export interface UnitFix {
   /** 核账引的原句。 */
@@ -225,7 +226,7 @@ export async function fixDraftByUnits(input: {
 }): Promise<DraftUnitFixResult> {
   const { projectDir, chapter } = input;
   return oneAiWriterPerChapter(projectDir, chapter, async () => {
-    const basis = await readTruthBasis(projectDir);
+    const basis = await readTruthBasisForWork(projectDir);
     const file = await readDraftFile(projectDir, chapter).catch(() => undefined);
     const text = file?.text;
     if (file === undefined || text === undefined || !text.trim()) {

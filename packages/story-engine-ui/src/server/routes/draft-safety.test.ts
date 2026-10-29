@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper, UnsavedPaperError } from "../../drafts/draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { useDraftStore } from "../../stores/draftStore.js";
 import * as overviewModule from "../book/state-overview.js";
 import { createStoryProject } from "../book/project-store.js";
@@ -162,7 +162,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const newer = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "作者旧字。又补的新字。", baseVersion: base, client: "windowjia01", seq: 2 });
     const late = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "作者旧字。", baseVersion: base, client: "windowjia01", seq: 1 });
     expect([newer.status, late.status]).toEqual([409, 409]);
-    expect(late.payload.recoveryId).toBe(newer.payload.recoveryId);
+    expect(late.payload).toMatchObject({ code: "stale_save" });
     expect((await readDraftRecovery(book, String(newer.payload.recoveryId)))?.body).toBe("作者旧字。又补的新字。");
   });
 
@@ -214,12 +214,14 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const state = await readDraftState(book, 1);
     expect(state.file).toBeUndefined();
     expect(state.version).not.toBeNull();
-    const replay = await call("PUT", "/api/working-draft", oldRequest);
+    // 同一笔重发：序号挡下；同一窗口照旧「没稿」再发一笔：版本号挡下（撤销换了纪元，盘上不是这个窗口存成的那版，不顺着接）。
+    expect((await call("PUT", "/api/working-draft", oldRequest)).payload).toMatchObject({ code: "stale_save" });
+    const replay = await call("PUT", "/api/working-draft", { ...oldRequest, seq: 2 });
     expect(replay.status).toBe(409);
     expect(replay.payload.currentVersion).toBe(state.version);
     expect(await readDraft(book, 1)).toBeUndefined();
     // 稿纸照新的「没稿」版本存就存得上。
-    expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "撤销后重新写的。", baseVersion: state.version, client: "samewindow01", seq: 2 })).status).toBe(200);
+    expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "撤销后重新写的。", baseVersion: state.version, client: "samewindow01", seq: 3 })).status).toBe(200);
   });
 
   it("本窗口迟到的旧「不要了」：后来存进恢复稿的新字不清（R2）", async () => {
@@ -237,15 +239,76 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect((await readDraftRecovery(book, String(next.payload.recoveryId)))?.body).toBe("");
   });
 
-  it("本窗口迟到的旧存稿恰好和盘上一样（算存上）：不顺手清掉后来那几笔的恢复稿（R2）", async () => {
+  it("本窗口迟到的旧存稿（哪怕和盘上一样）：不写，也不顺手清掉后来那几笔的恢复稿（R2）", async () => {
     const base = await save(1, "原稿。");
-    const request = { projectPath: book, chapter: 1, baseVersion: base, client: "samewindow03" };
-    const old = { ...request, body: "旧笔已存成工作稿。", seq: 1 };
-    expect((await call("PUT", "/api/working-draft", old)).status).toBe(200);
-    const newer = await call("PUT", "/api/working-draft", { ...request, body: "新笔新增的重要句子。", seq: 2 });
+    const request = { projectPath: book, chapter: 1, client: "samewindow03" };
+    const old = { ...request, body: "旧笔已存成工作稿。", baseVersion: base, seq: 1 };
+    const first = await call("PUT", "/api/working-draft", old);
+    expect(first.status).toBe(200);
+    await save(1, "AI 换上的稿。");
+    const newer = await call("PUT", "/api/working-draft", { ...request, body: "新笔新增的重要句子。", baseVersion: first.payload.version, seq: 2 });
     expect(newer.status).toBe(409);
-    expect((await call("PUT", "/api/working-draft", old)).status).toBe(200);
+    expect((await call("PUT", "/api/working-draft", old)).payload).toMatchObject({ code: "stale_save" });
+    expect((await readDraft(book, 1))?.body).toBe("AI 换上的稿。");
     expect((await readDraftRecovery(book, String(newer.payload.recoveryId)))?.body).toBe("新笔新增的重要句子。");
+  });
+
+  it.each([["在路上那笔先到", false], ["补发那笔先到", true]] as const)("同一窗口关窗补发（和在路上那笔同一底版）：%s，盘上都是最后的字（第 7 轮 U2）", async (_name, keepaliveFirst) => {
+    const base = await save(1, "原稿。");
+    const request = { projectPath: book, chapter: 1, baseVersion: base, client: "closewindow1" };
+    const cleared = { ...request, body: "", seq: 1 };
+    const restored = { ...request, body: "原稿。又补了一句。", seq: 2 };
+    if (keepaliveFirst) {
+      expect((await call("PUT", "/api/working-draft", restored)).status).toBe(200);
+      expect((await call("PUT", "/api/working-draft", cleared)).payload).toMatchObject({ code: "stale_save" });
+    } else {
+      expect((await call("PUT", "/api/working-draft", cleared)).status).toBe(200);
+      expect((await call("PUT", "/api/working-draft", restored)).status).toBe(200);
+    }
+    expect((await readDraft(book, 1))?.body).toBe("原稿。又补了一句。");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
+  it("顺着接只认同一窗口、盘上还是它存的那版：别的窗口、AI 换过之后照旧撞版本进恢复稿（第 7 轮 U2）", async () => {
+    const base = await save(1, "原稿。");
+    expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, baseVersion: base, client: "windowaaaa1", body: "甲窗口的字。", seq: 1 })).status).toBe(200);
+    const other = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, baseVersion: base, client: "windowbbbb1", body: "乙窗口的字。", seq: 1 });
+    expect(other.status).toBe(409);
+    await save(1, "AI 换上的稿。");
+    const late = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, baseVersion: base, client: "windowaaaa1", body: "甲窗口补发的字。", seq: 2 });
+    expect(late.status).toBe(409);
+    expect(late.payload.recoveryId).toBeDefined();
+    expect((await readDraft(book, 1))?.body).toBe("AI 换上的稿。");
+  });
+
+  it.each([["在路上那笔先到", false], ["补发那笔先到", true]] as const)("真稿纸：清空的那笔还在路上、改回原文后关窗补发：%s，盘上是原文（第 7 轮 U2）", async (_name, keepaliveFirst) => {
+    await save(1, "原稿。");
+    useDraftStore.getState().loadPaper(book, (await call("GET", `/api/working-draft?project=${encodeURIComponent(book)}&chapter=1`)).payload.paper as never);
+    const held = barrier();
+    const keepaliveDone = barrier();
+    let puts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const order = init?.method === "PUT" ? (puts += 1) : 0;
+      if (order === 1) await held.promise;
+      if (order === 2 && !keepaliveFirst) await held.promise;
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      if (order === 2) keepaliveDone.release();
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    editDraft("");
+    const saving = flushDraftSave();
+    await Promise.resolve();
+    editDraft("原稿。");
+    saveDraftKeepalive();
+    if (keepaliveFirst) await keepaliveDone.promise;
+    held.release();
+    await saving;
+    await keepaliveDone.promise;
+    // 页面要是没真关（补发之后还活着），在路上那笔回来后接着存的那笔也顺着接上，不和自己撞版本。
+    await flushDraftSave();
+    expect((await readDraft(book, 1))?.body).toBe("原稿。");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+    expect(useDraftStore.getState().incoming ?? null).toBeNull();
   });
 
   it("恢复稿已被别的窗口找回、清空了：本窗口后来的「不要了」照样推进序号，在路上的旧笔到了不再写回来（第 5 轮 S10）", async () => {

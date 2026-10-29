@@ -7,13 +7,13 @@
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { readTruthBasis } from "@actalk/story-core";
 
 import { MAX_DECISIONS_PER_CHANGE, planLedgerChange, proposal, type LedgerChangeRequest } from "../ledger-decisions.js";
 import { callConfiguredBrainModel, reviewOpenThreads, type BrainCallModel } from "../../editorial/index.js";
 import { readProjectDirFromContext } from "../request-context.js";
 import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "../../lib/lenient-args.js";
 import { rememberBasis } from "../../lib/truth-basis-store.js";
+import { readTruthBasisForWork } from "../../book/truth-basis.js";
 
 export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "review", "group", "importance", "day", "summary"] as const;
 export type LedgerOp = (typeof LEDGER_OPS)[number];
@@ -79,7 +79,7 @@ const shortQuote = (text: string): string => (text.length > 40 ? `${text.slice(0
  */
 async function runThreadReview(projectDir: string, callModel: BrainCallModel): Promise<z.infer<typeof outputSchema>> {
   // 开理之前记依据（写作版本 P1a）：理的中途、或作者点确认之前账变了，确认时不记、重新理。
-  const basis = await readTruthBasis(projectDir);
+  const basis = await readTruthBasisForWork(projectDir);
   const review = await reviewOpenThreads({ projectDir, callModel });
   if (!review.ok) return { ok: false, op: "review", blockedReason: "review_failed", summary: `线索没理成：${review.reason}。` };
   const shown = review.suggestions.slice(0, MAX_DECISIONS_PER_CHANGE);

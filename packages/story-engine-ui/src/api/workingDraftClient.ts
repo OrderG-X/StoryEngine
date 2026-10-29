@@ -39,7 +39,9 @@ export interface SaveWorkingDraftRequest {
 
 export type SaveWorkingDraftResult =
   | { readonly ok: true; readonly version: string; readonly unchanged: boolean }
-  | { readonly ok: false; readonly conflict: true; readonly message: string; readonly current: WorkingDraft | null; readonly currentVersion?: string | null; readonly recoveryId?: string };
+  | { readonly ok: false; readonly conflict: true; readonly message: string; readonly current: WorkingDraft | null; readonly currentVersion?: string | null; readonly recoveryId?: string }
+  /** 这个窗口序号更大的一笔已经先到了（关窗时补发的那笔），这笔旧的没写。 */
+  | { readonly ok: false; readonly superseded: true };
 
 const BASE = "/api/working-draft";
 
@@ -61,7 +63,7 @@ export async function fetchChapterPaper(projectPath: string, chapter: number, si
   return payload.paper;
 }
 
-/** 存稿。撞版本返回 conflict（不抛）；网络或服务端出错才抛。keepalive 用于关窗前最后一笔。 */
+/** 存稿。撞版本返回 conflict、被本窗口后发的一笔顶掉返回 superseded（都不抛）；网络或服务端出错才抛。keepalive 用于关窗前最后一笔。 */
 export async function saveWorkingDraft(input: SaveWorkingDraftRequest, options: { readonly keepalive?: boolean } = {}): Promise<SaveWorkingDraftResult> {
   const response = await fetch(BASE, {
     method: "PUT",
@@ -70,7 +72,8 @@ export async function saveWorkingDraft(input: SaveWorkingDraftRequest, options: 
     ...(options.keepalive ? { keepalive: true } : {}),
   });
   if (response.status === 409) {
-    const payload = await response.json() as { error?: string; current?: WorkingDraft | null; currentVersion?: string | null; recoveryId?: string };
+    const payload = await response.json() as { code?: string; error?: string; current?: WorkingDraft | null; currentVersion?: string | null; recoveryId?: string };
+    if (payload.code === "stale_save") return { ok: false, superseded: true };
     return {
       ok: false,
       conflict: true,

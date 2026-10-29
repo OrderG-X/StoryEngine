@@ -7,7 +7,7 @@
  *   - 不返回 overview：去 AI 味只改文风、不动故事状态/事实，无需刷新资料面板。
  *   - violations 由前端把卡片里那几条传来（含可定位 text），不在端点重复体检（用户改的就是卡里那几条）。
  */
-import { readDraftState, readTruthBasis } from "@actalk/story-core";
+import { readDraftState } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -24,6 +24,7 @@ import { applyAiDraft } from "../lib/ai-draft-write.js";
 import { readAntiRules, withAntiRulesNote } from "../writing/ai-flavor/anti-rules.js";
 import { runDeAiFlavorBatch } from "../services/de-ai-flavor-batch.js";
 import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 export function registerDeAiFlavorRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {
@@ -73,7 +74,7 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     await assertStoryEngineProject(projectDir);
 
     // 改写模型跑着时作者存了稿、前文变了就不换上（留成候选，如实报）。先读依据、再读稿。
-    const basis = await readTruthBasis(projectDir);
+    const basis = await readTruthBasisForWork(projectDir);
     // 稿只读这一次：底版和要改的全文是同一份（全文含可能的标题行：违规句是正文整句、必为全文子串，倒序落盘后写回全文，标题不动）。
     const draftState = await readDraftState(projectDir, chapter);
     const baseVersion = draftState.version;

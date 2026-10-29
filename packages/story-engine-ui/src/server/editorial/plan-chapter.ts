@@ -2,7 +2,7 @@
  * 拟章纲编排（resolveChapterPlanForDraft）：章纲员窗口拟纲（planner.ts）→ 核账员窗口审纲（checker.ts）
  * → 有问题交回章纲员改一轮（不循环）。材料和天数归一这些纯函数在 plan-materials.ts。
  */
-import { basisDigestBefore, canonicalJson, readWithStableBasis, sha256 } from "@actalk/story-core";
+import { basisDigestBefore, canonicalJson, sha256 } from "@actalk/story-core";
 import { readChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 import { readStoryTimeline } from "../book/story-timeline.js";
 import {
@@ -19,6 +19,7 @@ import {
 import { containsQuote, normalize } from "./continuity/check-chapter.js";
 import { collectPlanMaterials } from "./plan-materials.js";
 import { withStep } from "../lib/token-meter.js";
+import { readWithStableBasisForWork } from "../book/truth-basis.js";
 
 export interface ResolvedChapterPlan {
   readonly plan?: ChapterPlan;
@@ -157,7 +158,7 @@ export async function planBasisOf(projectDir: string, chapter: number, direction
  */
 async function readPlanBasis(projectDir: string, chapter: number, direction?: string): Promise<{ readonly key: string; readonly digest: string } | undefined> {
   try {
-    const read = await readWithStableBasis(projectDir, async () => ({
+    const read = await readWithStableBasisForWork(projectDir, async () => ({
       materials: await collectPlanMaterials(projectDir, chapter, direction || undefined),
       timeline: (await readStoryTimeline(projectDir)).timeline.entries.filter((entry) => entry.chapter < chapter),
     }));

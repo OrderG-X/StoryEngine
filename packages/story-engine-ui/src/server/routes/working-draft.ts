@@ -7,6 +7,8 @@
  *     baseVersion 和盘上对不上 → 先把这份存成恢复稿（client = 稿纸窗口号、seq = 这个窗口第几笔，比盘上旧的不写），
  *     再 409 { ok:false, code:"draft_conflict", error, current, recoveryId }；恢复稿也没写进去 → 503 recovery_failed（没存上）。
  *     工作稿不动。盘上已经就是这份（同一笔重发）算存上。整段在书锁里。
+ *     同一窗口：序号不比上一笔大的（迟到的旧笔）→ 409 stale_save，不写；盘上还是这个窗口最后存成的那版、这笔又是照这个窗口
+ *     这一串里的某一版改的（关窗时补发的那笔，在路上那笔先落了盘）→ 顺着接上（第 7 轮复核 U2）。
  *   POST /api/working-draft/pending { projectPath, chapter, kind, id, sha, decision, baseVersion, client?, seq? }
  *     decision=adopt：换上那一份（作者档 draft.adoptCandidate，带作者眼前那份的版本，对不上不换；换前存档、可撤销）；
  *     decision=dismiss：不要了（AI 候选删掉；恢复稿清掉——本窗口自己的直接清，别的窗口的要 sha 对得上）。
@@ -17,7 +19,7 @@
  *
  * 版本号是这章的工作稿代次 + 草稿文件全文的哈希（核心包 draft/draft.ts）。
  */
-import { chapterRetitle, draftAdoptCandidate, draftSave, readChapterPaper, runCommand, sha256, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
+import { chapterRetitle, draftAdoptCandidate, draftSave, readChapterPaper, readDraftState, runCommand, sha256, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -39,9 +41,12 @@ import {
   pendingDraftFor,
   readDraftCandidate,
   readDraftRecovery,
+  ownLineage,
+  readSaveMark,
   recoveryClientOf,
   removeDraftCandidate,
   saveDraftRecovery,
+  writeSaveMark,
   type DraftRecovery,
 } from "../lib/draft-candidates.js";
 
@@ -192,14 +197,24 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         await assertStoryEngineProject(projectDir);
         // 存稿和撞版本时留恢复稿在同一把书锁里（写作版本 P1b 第 3 轮复核）：两笔存稿不会交错着写恢复稿，找回也切不进中间。
         const reply = await withBookLock(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
+          const mark = from ? await readSaveMark(projectDir, chapter, from.client) : undefined;
+          if (from && mark && from.seq <= mark.seq) return { status: 409, payload: { ok: false, code: "stale_save", error: "这个窗口后来又存过，这笔旧的没写。" } };
+          // 这个窗口自己接着写（见 ownLineage）：在盘上那版上存。
+          const diskVersion = (await readDraftState(projectDir, chapter)).version;
+          const lineage = ownLineage(mark, baseVersion, diskVersion);
           // 写作统计：写之前量一下这章多少字，存完按差值记成作者写的。
           const wordsBefore = await chapterWordsNow(projectDir, chapter).catch(() => undefined);
           const outcome = await runCommand(projectDir, draftSave, {
             chapter,
             body: text,
             ...(title ? { title } : {}),
-            baseVersion,
+            baseVersion: lineage ? diskVersion : baseVersion,
           }, { caller: "author" });
+          // 记号没写上不影响这笔（存上的照样算存上）：只是这之后迟到的旧笔挡不住、补发的那笔接不上（撞版本，进恢复稿）。
+          if (from && (outcome.ok || outcome.code === "draft_conflict")) {
+            await writeSaveMark(projectDir, { chapter, from, ...(outcome.ok ? { saved: { base: baseVersion, version: outcome.result.version } } : {}) })
+              .catch((error: unknown) => console.warn(`[working-draft] 第 ${chapter} 章存稿记号没写上：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`));
+          }
           if (outcome.ok) {
             if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, "author", wordsBefore);
             // 存上了：这个窗口的恢复稿、和这份一样的恢复稿没用了。清不掉不影响存稿（下次开章和工作稿一样也不提示）。

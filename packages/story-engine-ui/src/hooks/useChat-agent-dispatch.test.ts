@@ -1731,3 +1731,54 @@ describe("handleChapterButton：写作区固定按钮直接发结构化动作（
     expect(mockedStreamAgentChat.mock.calls[0]![0].action).toBeUndefined();
   });
 });
+
+describe("迟到的旧读数不盖后来已经显示的新稿（第 7 轮 U1）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    resetStore();
+    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
+  });
+
+  it("前一轮的重读迟到：后一轮 AI 写成、已经显示的新稿不退回旧版", async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const late = deferred<ChapterPaper>();
+    const old = disk.get(3)!;
+    mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return late.promise; });
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "revise_draft", toolCallId: "u1-old" });
+      handlers.onToolResult({ toolName: "revise_draft", toolCallId: "u1-old", chapter: 3, ok: true });
+      handlers.onDone();
+    });
+    const { result, unmount } = renderHook(() => useChat(buildParams({})));
+    try {
+      await act(async () => {
+        const turn = result.current.handleSendMessage("第一轮改稿");
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(5001);
+        await turn;
+      });
+      expect(isWorkspaceBusy()).toBe(false);
+      const latest = "第二轮真正写成且已经显示的新稿。";
+      scriptAgentStream((handlers) => {
+        handlers.onToolCall({ toolName: "revise_draft", toolCallId: "u1-new" });
+        writeDisk(3, { draft: latest, title: "第三章" });
+        handlers.onToolResult({ toolName: "revise_draft", toolCallId: "u1-new", chapter: 3, ok: true });
+        handlers.onDone();
+      });
+      await act(async () => { await result.current.handleSendMessage("第二轮改稿"); });
+      expect(useDraftStore.getState().body).toBe(latest);
+      await act(async () => {
+        late.resolve(old);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+      });
+      expect(useDraftStore.getState().body).toBe(latest);
+      expect(useDraftStore.getState().baseVersion).toBe(disk.get(3)!.draft!.version);
+    } finally {
+      unmount();
+      __resetDraftSyncForTests();
+      vi.useRealTimers();
+    }
+  });
+});

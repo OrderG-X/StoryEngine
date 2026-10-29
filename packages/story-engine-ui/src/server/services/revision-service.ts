@@ -46,11 +46,12 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { readDraftFile, readTruthBasis, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { readDraftFile, withBookLock, type TruthBasis } from "@actalk/story-core";
 import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
 import { applyAiDraft, oneAiWriterPerChapter, type AiDraftOutcome } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 /* ---------------------------------------------------------------------------
  * D21 定位：精确子串优先 + 空白/引号归一兜底
@@ -466,7 +467,7 @@ export async function previewRevision(input: {
 }): Promise<RevisionPreviewSuccess | RevisionFailure> {
   const { projectDir, chapter } = input;
   // 先记依据、再读稿和材料（写作版本 P1b 第 3 轮复核）：应用时照这份核，读材料之后书上有写就不换上。
-  const basis = await readTruthBasis(projectDir);
+  const basis = await readTruthBasisForWork(projectDir);
   const bound = async (preview: DraftRevisionPreview): Promise<DraftRevisionPreview> => ({ ...preview, basis: await rememberBasis(projectDir, basis) });
   const draftContent = input.draftContent ?? await readFile(defaultDraftPath(projectDir, chapter), "utf-8");
   const located = resolveRevisionTarget(draftContent, input.task);
@@ -595,7 +596,7 @@ async function reviseDraftOneShotQueued(
   draftPath: string,
 ): Promise<RevisionOneShotSuccess | RevisionOneShotFailure> {
   // 先读依据、再读稿（正文和版本一起读）：读稿之后书上有写、稿子改过，换上时就对不上。
-  const basis = await readTruthBasis(input.projectDir);
+  const basis = await readTruthBasisForWork(input.projectDir);
   const file = await readDraftFile(input.projectDir, input.chapter);
   if (!file) throw new Error(`第 ${input.chapter} 章还没有工作稿，没法改。`);
   const draftContent = file.text;

@@ -13,7 +13,6 @@ import {
   DecisionInput,
   nameKey,
   projectBook,
-  readTruthBasis,
   runCommand,
   sha256,
   type BookProjection,
@@ -26,6 +25,7 @@ import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 import { describeBasisChanges, recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 /** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
@@ -109,7 +109,7 @@ export async function planLedgerChange(projectDir: string, request: LedgerChange
   const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
   if (!onCore.ok) return fail("not_on_core", `这本书的账还没接到新格式上：${onCore.reason}`);
   // 先记依据再读投影：读的中途账变了，确认时对不上，照样作废。
-  const basis = await readTruthBasis(projectDir);
+  const basis = await readTruthBasisForWork(projectDir);
   const view = await projectBook(projectDir);
   if (view.chapters.length === 0) return fail("no_chapters", "还没有定稿的章，账本是空的；先定稿一章再改账。");
   const planned = planOnView(view, request);

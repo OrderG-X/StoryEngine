@@ -23,7 +23,6 @@ import {
   readChapterLedger,
   readChapterText,
   readDraftFile,
-  readTruthBasis,
   sha256,
   splitNumberedReply,
   splitUnits,
@@ -33,6 +32,7 @@ import {
 } from "@actalk/story-core";
 import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
+import { readTruthBasisForWork } from "../../book/truth-basis.js";
 
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
 export type SettleSide =
@@ -575,7 +575,7 @@ export async function proposeSettle(input: {
   const { projectDir, request, callModel } = input;
   const failures: string[] = [];
   // 先记依据再读：读的中途书变了，确认时现读的和它对不上，照样作废，不会拿一半新一半旧的结果去改。
-  const basis = await readTruthBasis(projectDir);
+  const basis = await readTruthBasisForWork(projectDir);
   const cards = await readCardsOrLegacy(projectDir);
   const committedNumbers = await listChapterTexts(projectDir);
   const focusChapter = request.chapter;

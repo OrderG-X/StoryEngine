@@ -108,6 +108,7 @@ import { pendingDraftCandidate, pendingDraftFor } from "../lib/draft-candidates.
 import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
 import { resolveProjectDraftLengthTarget, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 import { writeCheckMemory } from "../editorial/continuity/check-memory.js";
+import { readCheckInputs } from "../editorial/continuity/check-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
 
@@ -355,8 +356,10 @@ describe("runGenerateDraft 先拟章纲（阶段 2「先想后写」）", () => 
   it("这一章上一稿核出「确定」对不上、错在本章的 → 交给写手（重写别照章纲再写错）；错在前面那章的、「可能」的不交", async () => {
     planMocks.resolveChapterPlanForDraft.mockResolvedValue({ plan: PLAN, note: "沿用本章已有章纲：林澈去档案室对出缺页", reused: true });
     const issue = { earlierChapter: 1, reason: "楼层对不上", kind: "place" as const };
+    // 记忆的前文键得是现在的（前文改过的旧记忆不交给写手，第 7 轮 U4）。
+    const { earlierHash } = await readCheckInputs(projectDir!, 2);
     await writeCheckMemory(projectDir!, {
-      chapter: 2, bodyHash: "x", body: "", earlierHash: "y",
+      chapter: 2, bodyHash: "x", body: "", earlierHash: earlierHash!,
       issues: [
         { ...issue, quote: "他上到三楼走廊。", earlierQuote: "档案室的单间在一楼。", confidence: "sure" },
         { ...issue, quote: "第一章那句", earlierQuote: "设定原文", confidence: "sure", fixChapter: 1, againstSetting: { label: "地点" } },

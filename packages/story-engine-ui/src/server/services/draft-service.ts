@@ -48,7 +48,7 @@
  * 铁律：AI 写工作稿唯一通道是 applyAiDraft（lib/ai-draft-write.ts）；passed=false 的候选永远不得中选；
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
-import { parseDraftFile, quoteInText, readDraftState, readTruthBasis, type TruthBasis } from "@actalk/story-core";
+import { parseDraftFile, quoteInText, readDraftState, type TruthBasis } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -79,7 +79,8 @@ import {
   type WriterClient,
 } from "../writing/fast-draft-writer.js";
 import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { materialLog, planDigest, readMaterialWorld, type MaterialLog } from "../book/material-reads.js";
+import { materialLog, planDigest, readMaterialWorld, readStartPlan, type MaterialLog } from "../book/material-reads.js";
+import { readCurrentCheckMemory } from "../editorial/continuity/check-service.js";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../writing/beat-miss-adjudication.js";
 import { applyAiDraft, type AiDraftOutcome } from "../lib/ai-draft-write.js";
@@ -94,13 +95,13 @@ import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft, resolveChapterPlanForReroll } from "../editorial/plan-chapter.js";
-import { readCheckMemory } from "../editorial/continuity/check-memory.js";
 import type { LastDraftConflict } from "../writing/context-gateway.js";
 import { withStep } from "../lib/token-meter.js";
 import type { ContinueCallModel } from "./draft-pipeline/continue-draft.js";
 import type { BrainCallModel } from "../editorial/index.js";
 import type { RevisionModelCaller } from "./revision-service.js";
 import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "./draft-pipeline/run-quality-pipeline.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 /* ---------------------------------------------------------------------------
  * 长度目标解析与执法（D1：原 routes/draft.ts 的 enforce 栈整体迁入，逻辑一字未动）
@@ -973,10 +974,10 @@ interface DraftRunContext {
 
 /**
  * 这一章上一稿核账核出的「确定」对不上、错在本章的（核账记忆里的）：重写、接着写时交给写手
- * （长篇连写：重写沿用章纲，章纲里的「三楼走廊」又写了一遍）。没核过 / 读不了就没有。
+ * （长篇连写：重写沿用章纲，章纲里的「三楼走廊」又写了一遍）。没核过 / 读不了 / 那之后前文、账、设定改过就没有。
  */
 async function readLastDraftConflicts(projectDir: string, chapter: number): Promise<readonly LastDraftConflict[]> {
-  const memory = await readCheckMemory(projectDir, chapter).catch(() => undefined);
+  const memory = await readCurrentCheckMemory(projectDir, chapter).catch(() => undefined);
   if (!memory) return [];
   return memory.issues
     .filter((issue) => issue.confidence === "sure" && (issue.fixChapter === undefined || issue.fixChapter === chapter))
@@ -1133,9 +1134,10 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   // 开写时书和这一章的稿是什么样（先读依据、再读稿和写稿要用的材料）：拟纲、写稿的几分钟里作者存了稿、撤销或恢复过，
   // 或前文、设定改过，换上时就对不上——不盖掉作者那份，这版留成候选、如实说（写作版本 P1b）。
   // 稿只读这一次：版本号和接着写要接的正文是同一份。
-  const startBasis = await readTruthBasis(input.projectDir);
+  const startBasis = await readTruthBasisForWork(input.projectDir);
   // 别的章的工作稿、各章章纲不在真相里：开写时整本拍一份，拟纲、在场检测、写手不管谁读了哪一样，换上前都按这份核。
-  const materials = materialLog();
+  // 本章照哪份章纲写，拟完纲记下；没记（接着写、没有章纲）就按开写时盘上那份核：途中新建、重拟都不换上（第 7 轮 U5）。
+  const materials = materialLog([await readStartPlan(input.projectDir, input.chapter)]);
   for (const read of await readMaterialWorld(input.projectDir, input.chapter)) materials.note(read);
   const startState = await readDraftState(input.projectDir, input.chapter);
   const startDraft = startState.file && parseDraftFile(startState.file.text);

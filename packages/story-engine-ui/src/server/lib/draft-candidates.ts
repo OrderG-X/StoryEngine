@@ -7,6 +7,10 @@
  * - 恢复稿 `agents/drafts/recovery/r<章>-<窗口号>.json`（draft-recovery/1）：作者存稿撞了版本时手上那份。
  *   一个稿纸窗口每章一份（窗口号前端开页面时随机给），存的是这个窗口最新的字；带请求序号，比盘上这份旧的请求不写（迟到的旧字盖不回新字）。
  *   存上了、作者说不要了、找回了，就把正文清空、留着序号（再迟到的旧请求照样不写）。
+ * - 存稿记号 `agents/drafts/saves/s<章>-<窗口号>.json`（draft-save-mark/1）：一个稿纸窗口在一章上最后处理的那笔存稿的序号，
+ *   和它一连串存上的版本（从哪一版起头、依次存成了哪几版）。序号不比它大的存稿是迟到的旧笔，不写；
+ *   盘上还是这个窗口最后存成的那版、新一笔又是照这一串里的某一版改的（关窗时补发的那笔和在路上那笔，
+ *   或补发之后页面没关、接着存的那笔），就是这个窗口自己接着写，顺着接上（第 7 轮复核 U2）。
  * 写都在书锁里（和存稿、找回、换上同一把锁）：查过的那份到换上为止不会被别人改。
  * 都在 `agents/` 下，不进存档点（撤销不会把它们翻没）；作者没处理的不自动清。
  */
@@ -275,6 +279,68 @@ export async function clearSavedRecoveries(projectDir: string, chapter: number, 
     if (from && recovery.client === from.client) {
       if (from.seq >= recovery.seq) await settleRecovery(projectDir, recovery, from.seq);
     } else if (recovery.body.trim() && recovery.body.trim() === savedBody.trim()) await settleRecovery(projectDir, recovery);
+  }
+}
+
+/* -------------------------------- 存稿记号 -------------------------------- */
+
+const SaveMarkFile = z.object({
+  schema: z.literal("draft-save-mark/1"),
+  chapter: z.number().int().min(1),
+  client: z.string().regex(CLIENT),
+  /** 最后处理的那笔（存上、存成恢复稿都算）。 */
+  seq: z.number().int().min(0),
+  /** 这个窗口一连串存上的：起头那一版、依次存成的版本（最后一个是最近存成的）。 */
+  saved: z.object({ base: z.string().nullable(), versions: z.array(z.string()).min(1) }).optional(),
+  updatedAt: z.string(),
+});
+export type DraftSaveMark = z.infer<typeof SaveMarkFile>;
+
+const savesDir = (projectDir: string): string => join(projectDir, "agents", "drafts", "saves");
+const saveMarkId = (chapter: number, client: string): string => `s${chapter}-${client}`;
+
+/** 一个窗口在一章上的存稿记号（调用方在书锁里）；没有、坏了都是 undefined。 */
+export async function readSaveMark(projectDir: string, chapter: number, client: string): Promise<DraftSaveMark | undefined> {
+  try {
+    const parsed = SaveMarkFile.safeParse(JSON.parse(await readFile(join(savesDir(projectDir), `${saveMarkId(chapter, client)}.json`), "utf-8")));
+    return parsed.success && parsed.data.chapter === chapter && parsed.data.client === client ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const CHAIN_KEPT = 20;
+
+/** 盘上还是这个窗口最后存成的那版、这笔又是照这个窗口这一串里的某一版改的：这个窗口自己接着写。 */
+export function ownLineage(mark: DraftSaveMark | undefined, baseVersion: string | null, diskVersion: string | null): boolean {
+  const chain = mark?.saved;
+  if (!chain || diskVersion !== chain.versions.at(-1)) return false;
+  return chain.base === baseVersion || (baseVersion !== null && chain.versions.includes(baseVersion));
+}
+
+/** 记下这一笔（调用方在书锁里）；saved 是存上了：照哪一版改的、存成了哪一版。顺手清掉一个星期没动过的记号。 */
+export async function writeSaveMark(projectDir: string, input: { readonly chapter: number; readonly from: { readonly client: string; readonly seq: number }; readonly saved?: { readonly base: string | null; readonly version: string } }): Promise<void> {
+  const previous = await readSaveMark(projectDir, input.chapter, input.from.client);
+  const chain = previous?.saved;
+  // 照这一串里的版本改的就接在后面；照别处的版本改的另起一串。
+  const continues = chain && input.saved && (chain.base === input.saved.base || (input.saved.base !== null && chain.versions.includes(input.saved.base)));
+  const saved = !input.saved
+    ? chain
+    : continues
+      ? { base: chain.base, versions: [...chain.versions, input.saved.version].slice(-CHAIN_KEPT) }
+      : { base: input.saved.base, versions: [input.saved.version] };
+  const mark: DraftSaveMark = {
+    schema: "draft-save-mark/1",
+    chapter: input.chapter,
+    client: input.from.client,
+    seq: Math.max(input.from.seq, previous?.seq ?? 0),
+    ...(saved ? { saved } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  await writeEntry(projectDir, savesDir(projectDir), saveMarkId(input.chapter, input.from.client), mark);
+  const now = Date.now();
+  for (const old of await readEntries(savesDir(projectDir), SaveMarkFile)) {
+    if (now - Date.parse(old.updatedAt) > SETTLED_KEEP_MS) await rm(join(savesDir(projectDir), `${saveMarkId(old.chapter, old.client)}.json`), { force: true });
   }
 }
 

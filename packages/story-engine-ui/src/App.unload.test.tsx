@@ -86,3 +86,26 @@ it("没存上之后的重试还在路上：再关一次照样拦（第 5 轮 S5�
   app.unmount();
   expect(third.defaultPrevented).toBe(false);
 });
+
+it("清空的那笔还在路上、作者又改回原文再关窗：keepalive 补发原文（第 7 轮 U2）", async () => {
+  let done!: () => void;
+  const pending = new Promise<Awaited<ReturnType<typeof saveWorkingDraft>>>((resolve) => { done = () => resolve({ ok: true, version: "v2", unchanged: false }); });
+  vi.mocked(saveWorkingDraft).mockImplementation(() => pending);
+  openPaper();
+  const app = render(createElement(App));
+  let saving!: Promise<unknown>;
+  await act(async () => {
+    editDraft("");
+    saving = flushDraftSave();
+    await Promise.resolve();
+    editDraft("原稿。");
+  });
+  await act(async () => { window.dispatchEvent(new Event("pagehide")); });
+  const last = vi.mocked(saveWorkingDraft).mock.calls.at(-1)!;
+  // 和在路上那笔同一个底版、序号更大：服务端认出是同一窗口接着写的（routes/draft-safety.test.ts 测服务端那一半）。
+  expect(last[0]).toMatchObject({ body: "原稿。", baseVersion: "v1" });
+  expect(last[0].seq).toBeGreaterThan(vi.mocked(saveWorkingDraft).mock.calls[0]![0].seq!);
+  expect(last[1]).toEqual({ keepalive: true });
+  await act(async () => { done(); await saving; });
+  app.unmount();
+});

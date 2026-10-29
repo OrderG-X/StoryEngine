@@ -5,8 +5,9 @@
  */
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { diffTruthBasis, readTruthBasis, TruthBasis, type BasisChange } from "@actalk/story-core";
+import { diffTruthBasis, TruthBasis, type BasisChange } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-io.js";
+import { readTruthBasisForWork, readTruthBasisToCompare } from "../book/truth-basis.js";
 
 const DIGEST = /^[0-9a-f]{64}$/u;
 /** 留最近这么多份依据（一份几 KB）；更老的提议按钮点了如实说过期。 */
@@ -29,7 +30,7 @@ export async function rememberBasis(projectDir: string, basis: TruthBasis): Prom
 
 /** 现在这本书的依据，存好后返回摘要。 */
 export async function rememberCurrentBasis(projectDir: string): Promise<string> {
-  return rememberBasis(projectDir, await readTruthBasis(projectDir));
+  return rememberBasis(projectDir, await readTruthBasisForWork(projectDir));
 }
 
 async function pruneBases(projectDir: string): Promise<void> {
@@ -61,7 +62,7 @@ export type BasisCheck =
 export async function checkBasis(projectDir: string, digest: string): Promise<BasisCheck> {
   const basis = await recallBasis(projectDir, digest);
   if (!basis) return { ok: false, code: "basis_missing" };
-  const changes = diffTruthBasis(basis, await readTruthBasis(projectDir));
+  const changes = diffTruthBasis(basis, await readTruthBasisToCompare(projectDir));
   return changes.length === 0 ? { ok: true } : { ok: false, code: "basis_changed", changes };
 }
 
