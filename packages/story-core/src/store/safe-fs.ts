@@ -25,7 +25,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { link, lstat, open, realpath, rename, rm, unlink, type FileHandle } from "node:fs/promises";
+import { link, lstat, open, realpath, rename, rm, stat, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 /** 测试钩子停的点（老格式事务的单测在这两处调换路径）。 */
@@ -344,6 +344,20 @@ async function discardHeld(root: string, aside: string, held: FileHandle, expect
 }
 
 /**
+ * 摘掉刚 link 上的目标名字：它和源路径上的（源换成软链的，macOS 的 link 跟着链放的是链指向的那个）还是同一个文件才摘——
+ * 东西还在源那个名字下，不丢。
+ */
+async function unplace(source: string, target: string): Promise<void> {
+  const [placed, named, followed] = await Promise.all([
+    lstatOrUndefined(target).catch(() => undefined),
+    lstatOrUndefined(source).catch(() => undefined),
+    stat(source).catch(() => undefined),
+  ]);
+  const same = (other: Stats | undefined): boolean => !!placed && !!other && placed.dev === other.dev && placed.ino === other.ino;
+  if (same(named) || same(followed)) await unlink(target).catch(() => undefined);
+}
+
+/**
  * 回滚 / 恢复放上一份（见文件头三步）：source 是书里已经写好的（给了 expectSha 的内容要对得上）；expectTarget 是目标现在该是什么
  * （null = 该不在：直接独占放上；指纹：先挪到 aside 核过，再放上、再删 aside）。放上用 link，被杀在 link 之后 source 和目标是
  * 同一个文件，下次 settleInterruptedPlace 摘掉 source。目标原来有的沿用它的权限。
@@ -382,14 +396,19 @@ export async function placeFileInBook(
         if ((error as NodeJS.ErrnoException).code === "EEXIST") throw targetChanged(root, target, label);
         throw error;
       }
+      // 放上的得是打开的那个文件、上级没换过。上级被换了（放到了别处）：摘掉刚放的名字，挪开的不往别处放；
+      // 源在 link 之前被换了（放上的是别的文件）：摘掉刚放的名字（它还在源那个名字下，不丢），挪开的放回去。
       try {
         await assertSameDir(root, dirname(target), targetDir, label);
       } catch (error) {
-        // 放的那一下上级被换了（放到了别处）：摘掉刚放的这个名字（还是自己那个文件才摘），source 留着。
-        const placed = await lstatOrUndefined(target).catch(() => undefined);
-        const own = await handle.stat();
-        if (placed && placed.dev === own.dev && placed.ino === own.ino) await unlink(target).catch(() => undefined);
+        await unplace(source, target);
         throw error;
+      }
+      const [placed, own] = await Promise.all([lstat(target), handle.stat()]);
+      if (placed.dev !== own.dev || placed.ino !== own.ino) {
+        await unplace(source, target);
+        if (displaced) await putBack(displaced.aside, target);
+        throw unsafe("UNSAFE_INODE_MISMATCH", `Unsafe ${label}: ${relative(root, source)} was swapped before it was placed.`);
       }
       await unlink(source);
       await assertHeldFile(handle, target, root, label);

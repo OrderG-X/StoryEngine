@@ -9,7 +9,7 @@
  * 收尾（`tidyLegacyTransactions`：删空目录壳、归档）。调用方必须已持书锁。
  */
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { DRAFT_GENS_PATH, draftChapterOfPath, isControlPath } from "./paths.js";
 import { discardAside, placeFileInBook, readFileInBook, removeFileInBook, settleInterruptedPlace, writeFileInBook, type SafeWriteHook, type SafeWriteHookPoint } from "./safe-fs.js";
@@ -541,6 +541,20 @@ async function pendingLegacyManifest(projectDir: string, txDir: string, name: st
   return manifest.status === "staged" || manifest.status === "failed" ? manifest : undefined;
 }
 
+/**
+ * restore/ 下的名字只是自己的（上次被杀留下的半份、或被换成了软链 / 硬链）：先摘掉这个名字再写——只摘名字，不碰它指向的东西；
+ * 是目录就如实失败。放上一半的（和正式那份是同一个文件）调用方已先收拾过。
+ */
+async function clearOwnName(path: string): Promise<void> {
+  const stats = await lstat(path).catch((error: unknown) => {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!stats) return;
+  if (stats.isDirectory()) throw taggedError("UNSAFE_DIRECTORY", "commit restore stage is a directory");
+  await unlink(path);
+}
+
 async function restoreCommitTransactionBackups(
   projectDir: string,
   txDir: string,
@@ -584,6 +598,7 @@ async function restoreCommitTransactionBackups(
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
         // 要放上的那份先整份写进 restore/（自己的地方），再从那里独占放上；要盖掉的那份先挪到 aside/ 核过内容（safe-fs）。
         const hook = commitIoTestHook;
+        await clearOwnName(stage);
         await writeFileInBook(root, stage, content, { label: "commit restore stage", hook: hook && ((point) => hook(point, targetPath)) });
         await placeFileInBook(root, stage, resolve(targetPath), { label: "formal rollback target", expectSha: sha256Text(content), ...(current === undefined ? { expectTarget: null } : { expectTarget: sha256Text(current), aside }) });
         await assertSafeProjectPath(projectDir, targetPath, false, "formal rollback target");

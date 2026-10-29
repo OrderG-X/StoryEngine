@@ -608,3 +608,47 @@ describe("老清单的旁记绑着这份事务（P1 第 24 轮）", () => {
     expect(await hasPendingTransactions(book)).toBe(true);
   });
 });
+
+describe("放上那一下源被换了（P1 第 24 轮）", () => {
+  it("link 之前源换成指向书外的软链（macOS 的 link 跟着链放）：摘掉刚放的、书里不留指向书外的硬链，挪开的放回原处", async () => {
+    const { placeFileInBook } = await import("./safe-fs.js");
+    const aside = join(book, ".tx", "aside");
+    const source = join(book, ".tx", "backup");
+    const foreign = join(outside, "foreign.md");
+    await mkdir(join(book, ".tx"), { recursive: true });
+    await writeFile(source, "原稿 A");
+    await writeFile(foreign, "书外的字");
+    await writeFile(target(), "现稿 C");
+    io.beforeLink = async (from) => {
+      if (from !== source) return;
+      io.beforeLink = undefined;
+      await rm(source);
+      await symlink(foreign, source);
+    };
+    await expect(placeFileInBook(book, source, target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("现稿 C"), aside })).rejects.toMatchObject({ code: "UNSAFE_INODE_MISMATCH" });
+    expect(await readFile(target(), "utf-8")).toBe("现稿 C");
+    expect((await lstat(target())).nlink).toBe(1);
+    expect((await lstat(foreign)).nlink).toBe(1);
+    expect(await readFile(foreign, "utf-8")).toBe("书外的字");
+  });
+
+  it("link 之前源换成别的文件：摘掉刚放的名字、挪开的放回原处，如实报错", async () => {
+    const { placeFileInBook } = await import("./safe-fs.js");
+    const aside = join(book, ".tx", "aside");
+    const source = join(book, ".tx", "backup");
+    await mkdir(join(book, ".tx"), { recursive: true });
+    await writeFile(source, "原稿 A");
+    await writeFile(target(), "现稿 C");
+    io.beforeLink = async (from) => {
+      if (from !== source) return;
+      io.beforeLink = undefined;
+      await rename(source, `${source}.displaced`);
+      await writeFile(source, "调换进来的 X");
+    };
+    await expect(placeFileInBook(book, source, target(), { label: "draft", expectSha: sha("原稿 A"), expectTarget: sha("现稿 C"), aside })).rejects.toMatchObject({ code: "UNSAFE_INODE_MISMATCH" });
+    expect(await readFile(target(), "utf-8")).toBe("现稿 C");
+    expect(await readFile(source, "utf-8")).toBe("调换进来的 X");
+    expect(await readFile(`${source}.displaced`, "utf-8")).toBe("原稿 A");
+    await expect(lstat(aside)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
