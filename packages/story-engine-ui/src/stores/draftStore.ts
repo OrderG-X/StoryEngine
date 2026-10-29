@@ -53,8 +53,11 @@ export interface DraftStoreState {
   /** 打开一章：整份换上，不管有没有没存的字（调用方先存掉旧章）。 */
   /** 换上盘上这一章。章名只认盘上的：导航上的占位名（「下一章」「第 N 章」）只用来显示，不当章名写进稿子。 */
   readonly loadPaper: (projectPath: string, paper: ChapterPaper) => void;
-  /** 盘上来了新版本：作者手上没有没存的字就换上，有就提示（谁改的都一样，撤销也不直接盖）。 */
-  readonly receivePaper: (projectPath: string, paper: ChapterPaper) => void;
+  /**
+   * 盘上来了新版本：作者手上没有没存的字就换上，有就提示（谁改的都一样，撤销也不直接盖）。
+   * 返回怎么处理的：unchanged 盘上没变；own 盘上就是作者手上的字；replaced 换上了；incoming 出了提示；skipped 不是这一章。
+   */
+  readonly receivePaper: (projectPath: string, paper: ChapterPaper) => "unchanged" | "own" | "replaced" | "incoming" | "skipped";
   /** 作者在稿纸上改字。 */
   readonly edit: (body: string, title?: string) => void;
   /** 改章名（不动正文）。 */
@@ -138,7 +141,7 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
 
   receivePaper: (projectPath, paper) => {
     const state = get();
-    if (state.projectPath !== projectPath || state.chapter !== paper.chapter) return;
+    if (state.projectPath !== projectPath || state.chapter !== paper.chapter) return "skipped";
     const disk = diskText(paper);
     const dirty = isDraftDirty(state);
     // 版本号是盘上全文的哈希：一样 = 盘上没变（只有定稿那份可能变了）。没有工作稿时按字比。
@@ -147,12 +150,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       : state.baseVersion === null && sameText(disk.body, state.savedBody);
     if (unchanged) {
       set({ committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
-      return;
+      return "unchanged";
     }
     // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突。
     if (dirty && sameText(disk.body, state.body)) {
       set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
-      return;
+      return "own";
     }
     if (!dirty) {
       // 盘上就是准的：盘上没章名就是没有（写稿命令都会保留原章名）。真机试写：撤销「改章名」后盘上没章名了，
@@ -168,9 +171,10 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
         incoming: pendingIncoming(paper.pending),
         streaming: null,
       });
-      return;
+      return "replaced";
     }
     set({ committed: paper.committed, incoming: { ...(disk.title ? { title: disk.title } : {}), body: disk.body, version: disk.version, cause: "update" } });
+    return "incoming";
   },
 
   edit: (body, title) => set({ body, ...(title !== undefined ? { title } : {}) }),

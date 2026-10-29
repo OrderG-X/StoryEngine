@@ -448,7 +448,7 @@ function incomingCopy(incoming: PaperIncoming): { readonly text: string; readonl
       const text = reason === "interrupted"
         ? `AI 写到一半停了，写好的 ${words} 字还留着。`
         : reason === "basis_moved"
-          ? `AI 写好一版（${words} 字），写的途中前文或设定改过，没换上。`
+          ? `AI 写好一版（${words} 字），写的途中书里别处改过，没换上。`
           : reason === "apply_failed"
             ? `AI 写好一版（${words} 字），换上的时候没写进去，还留着。`
             : `AI 写好一版（${words} 字），写的途中你改过稿，没换上。`;

@@ -5,7 +5,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useProjectNavigation } from "./useProjectNavigation.js";
-import { fetchStateOverview } from "../api/client.js";
+import { fetchStateOverview, importBookProject } from "../api/client.js";
 import { fetchChapterPaper, saveWorkingDraft, type ChapterPaper } from "../api/workingDraftClient.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
@@ -47,6 +47,7 @@ vi.mock("../api/client.js", () => ({
     uiHints: { warnings: [] },
   })),
   createStoryProjectFromDraft: vi.fn(),
+  importBookProject: vi.fn(),
 }));
 
 vi.mock("../api/chatSessionsClient.js", () => ({
@@ -140,4 +141,52 @@ it("换书时那会儿打的字存不上：留在旧书，字还在稿纸上", a
   unmount();
   expect(useDraftStore.getState()).toMatchObject({ projectPath: "/virtual-old-book", chapter: 3, body: "存不上的新句。" });
   expect(useNavigationStore.getState().projectPath).toBe("/virtual-old-book");
+});
+
+it("点了换章、那章读不出来：在写作台里说清楚，还在原来那章（第 6 轮 T8）", async () => {
+  useNavigationStore.setState({ toast: null, openProjectError: null });
+  vi.mocked(fetchChapterPaper).mockRejectedValueOnce(new Error("目标章读取失败"));
+  const { result, unmount } = renderHook(() => useProjectNavigation(navParams()));
+  await act(async () => { await result.current.openChapterWorkspace({ id: "ch-4", chapterNumber: 4, title: "第四章", status: "planned" }); });
+  unmount();
+  expect(useNavigationStore.getState().toast ?? "").toContain("目标章读取失败");
+  expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "旧书原稿。" });
+  expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(mockWorkspaceData.currentChapter.chapterNumber);
+});
+
+it("导入好了、头一章读不出来：如实说没打开（不拿空稿冒充），留在原处，书架上有它（第 6 轮 T11）", async () => {
+  useNavigationStore.setState({ toast: null, openProjectError: null });
+  const overview = await fetchStateOverview({ projectPath: "/virtual-imported-book" });
+  vi.mocked(importBookProject).mockResolvedValueOnce({ projectDir: "/virtual-imported-book", overview, chapters: 3 } as Awaited<ReturnType<typeof importBookProject>>);
+  vi.mocked(fetchChapterPaper).mockRejectedValueOnce(new Error("导入书的首章读取失败"));
+  const params = navParams();
+  const { result, unmount } = renderHook(() => useProjectNavigation(params));
+  let error = "";
+  await act(async () => {
+    try { await result.current.handleImportBook({ title: "导入书", files: [{ name: "导入书.txt", text: "# 第一章\n\n已有的正文。" }], include: [true] } as Parameters<typeof result.current.handleImportBook>[0]); }
+    catch (thrown) { error = String(thrown); }
+  });
+  unmount();
+  expect(error).toContain("首章读取失败");
+  expect(error).toContain("先没打开");
+  expect(useNavigationStore.getState().projectPath).toBe("/virtual-old-book");
+  expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "旧书原稿。" });
+  expect(params.bookManagement.upsertRecentBook).toHaveBeenCalled();
+});
+
+it("点开的就是手上这章、读的期间又存过：迟到的旧读数不盖刚存的字", async () => {
+  const entered = deferred<void>();
+  const late = deferred<ChapterPaper>();
+  vi.mocked(fetchChapterPaper).mockImplementationOnce(async () => { entered.resolve(); return late.promise; });
+  const { result, unmount } = renderHook(() => useProjectNavigation(navParams()));
+  await act(async () => {
+    const opening = result.current.openChapterWorkspace({ id: "ch-3", chapterNumber: 3, title: "第三章", status: "current" });
+    await entered.promise;
+    editDraft("读的期间存好的新字。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    late.resolve({ ...emptyPaper(3), draft: { chapter: 3, body: "旧书原稿。", version: "v1" }, draftVersion: "v1" });
+    await opening;
+  });
+  unmount();
+  expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "读的期间存好的新字。", savedBody: "读的期间存好的新字。", baseVersion: "v2" });
 });

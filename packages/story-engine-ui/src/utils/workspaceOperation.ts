@@ -17,6 +17,7 @@ export type WorkspaceOperationKind =
   | "session-transition"
   | "foundation-write"
   | "deai-fix-all"
+  | "snapshot-restore"
   | "other-write";
 
 export interface WorkspaceOperationToken extends WorkspaceOperationTarget {

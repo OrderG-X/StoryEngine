@@ -79,7 +79,7 @@ import {
   type WriterClient,
 } from "../writing/fast-draft-writer.js";
 import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { materialLog, planDigest, type MaterialLog } from "../book/material-reads.js";
+import { materialLog, planDigest, readMaterialWorld, type MaterialLog } from "../book/material-reads.js";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../writing/beat-miss-adjudication.js";
 import { applyAiDraft, type AiDraftOutcome } from "../lib/ai-draft-write.js";
@@ -1134,6 +1134,9 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   // 或前文、设定改过，换上时就对不上——不盖掉作者那份，这版留成候选、如实说（写作版本 P1b）。
   // 稿只读这一次：版本号和接着写要接的正文是同一份。
   const startBasis = await readTruthBasis(input.projectDir);
+  // 别的章的工作稿、各章章纲不在真相里：开写时整本拍一份，拟纲、在场检测、写手不管谁读了哪一样，换上前都按这份核。
+  const materials = materialLog();
+  for (const read of await readMaterialWorld(input.projectDir, input.chapter)) materials.note(read);
   const startState = await readDraftState(input.projectDir, input.chapter);
   const startDraft = startState.file && parseDraftFile(startState.file.text);
   const startVersion = startState.version;
@@ -1145,7 +1148,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     input.onContinueBase?.(text);
   }
   // 开写时存的那份「在写」候选：不管怎么收场（换上、没换上、抛错），流程结束就不再算在写——没换上的、半路抛错的，稿纸会提示。
-  const start: DraftStart = { basis: startBasis, version: startVersion, materials: materialLog(), ...(continueFrom ? { continueFrom } : {}), progress: {} };
+  const start: DraftStart = { basis: startBasis, version: startVersion, materials, ...(continueFrom ? { continueFrom } : {}), progress: {} };
   try {
     return await runGenerateDraftStarted(input, start);
   } finally {
@@ -1222,7 +1225,7 @@ export class NothingToContinueError extends Error {
 interface DraftStart {
   readonly basis: TruthBasis;
   readonly version: string | null;
-  /** 写这一稿用过、不在真相依据里的材料（本章章纲、前一章工作稿、已有各章章名）：换上时有一样变了算依据过期（第 5 轮复核 S8/S9）。 */
+  /** 不在真相依据里的材料（开写时别的章的工作稿、各章章纲，照着写的本章章纲）：换上时有一样变了算依据过期（见 book/material-reads）。 */
   readonly materials: MaterialLog;
   readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
   readonly progress: { candidateId?: string };
@@ -1255,7 +1258,6 @@ async function runGenerateDraftWithPlan(
   const sharedDraftInput = {
     ...sharedFastDraftInput(run, { ...input, ...(continueFrom ? { segmentByPlan: false } : {}) }),
     ...(continueFrom ? { continueFrom } : {}),
-    materials: start.materials,
   };
   // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。接着写只出一版。
   const candidateCount = !continueFrom && (input.candidates === 2 || input.candidates === 3) ? input.candidates : 1;

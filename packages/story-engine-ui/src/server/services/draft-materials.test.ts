@@ -1,12 +1,12 @@
 // @vitest-environment node
-// AI 写稿用过、不在真相依据里的材料（已有各章章名、本章章纲）：写的途中变了，照旧材料写的不换上、留候选（第 5 轮复核 S8/S9）；
-// 没变照常换上。真出稿服务 + 真章纲编排 + 真核心写盘，只替换写手模型和出稿后的质量复核。
+// AI 写稿用到、不在真相依据里的材料（别的章的工作稿、各章章纲）：开写时整本拍一份，写的途中变了，照旧材料写的不换上、留候选
+// （第 5 轮复核 S8/S9、第 6 轮 T5/T6/T9）；没变照常换上（第 6 轮 T7）。真出稿服务 + 真章纲编排 + 真核心写盘，只替换模型和出稿后的质量复核。
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { draftSave, readDraft, readDraftState, runCommand } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftSave, readDraft, readDraftState, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
-import { normalizeChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
+import { normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
 import { pendingDraftFor } from "../lib/draft-candidates.js";
 import { planBasisOf, resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
 import type { BrainCallModel } from "../editorial/index.js";
@@ -15,9 +15,34 @@ import { runGenerateDraft } from "./draft-service.js";
 vi.mock("./draft-pipeline/run-quality-pipeline.js", () => ({
   runDraftQualityPipeline: vi.fn(async (input: { draftBody: string }) => ({ draftBody: input.draftBody, changed: false, info: {}, notes: [] })),
 }));
+const hooks = vi.hoisted(() => ({ afterPresence: undefined as undefined | (() => Promise<void>), afterMaterial: undefined as undefined | (() => Promise<void>) }));
+vi.mock("../writing/presence/in-scene-detector.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../writing/presence/in-scene-detector.js")>();
+  return {
+    ...actual,
+    resolveInSceneCharacters: async (...args: Parameters<typeof actual.resolveInSceneCharacters>) => {
+      const result = await actual.resolveInSceneCharacters(...args);
+      await hooks.afterPresence?.();
+      return result;
+    },
+  };
+});
+vi.mock("../book/material-reads.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../book/material-reads.js")>();
+  return {
+    ...actual,
+    firstMovedMaterial: async (...args: Parameters<typeof actual.firstMovedMaterial>) => {
+      const result = await actual.firstMovedMaterial(...args);
+      await hooks.afterMaterial?.();
+      return result;
+    },
+  };
+});
 
 let root: string | undefined;
 afterEach(async () => {
+  hooks.afterPresence = undefined;
+  hooks.afterMaterial = undefined;
   vi.unstubAllEnvs();
   if (root) await rm(root, { recursive: true, force: true });
   root = undefined;
@@ -40,15 +65,16 @@ const prose = (line: string): string => Array(6).fill(`${line}林远沿着河岸
 const planJson = (summary: string): string => JSON.stringify({ summary, beats: [summary], characters: ["林远"], newInformation: [summary], scene: { location: "河岸", time: "上午" }, dayOffset: 0 });
 const planner = (summary: string): BrainCallModel => async (_messages, options) => (options?.json ? planJson(summary) : "笔记。");
 const noProblems: BrainCallModel = async (_messages, options) => (options?.json ? JSON.stringify({ problems: [] }) : "笔记。");
+const policies = { lengthPolicy: "annotate", aiFlavorRecheck: false } as const;
 
-it("写手看过的别章章名写的途中改了：不换上、留候选（第 5 轮 S8）", async () => {
+it("写手看过的别章章名写的途中改了：不换上、留候选，说清是哪章（第 5 轮 S8）", async () => {
   const book = await makeBook();
   await save(book, 1, "前章的林远已经出发。", "第一章");
   await save(book, 4, "其他章工作稿。", "雨夜");
   const result = await runGenerateDraft({
     projectDir: book,
     chapter: 2,
-    policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    policies,
     writerClient: {
       async generateDraft({ context }) {
         expect(JSON.stringify(context.sections.find((section) => section.name === "chapter_titles")?.content)).toContain("雨夜");
@@ -57,19 +83,19 @@ it("写手看过的别章章名写的途中改了：不换上、留候选（第 
       },
     },
   });
-  expect(result.ok).toBe(false);
+  expect(result).toMatchObject({ ok: false, summary: expect.stringContaining("第 4 章的稿子") });
   expect(await readDraft(book, 2)).toBeUndefined();
   expect(await pendingDraftFor(book, 2)).toMatchObject({ kind: "candidate", reason: "basis_moved" });
 });
 
-it("别章只改了正文、章名没变：照常换上", async () => {
+it("别的章只改了正文：也不换上（拍的是整本，不猜写手用没用到那一章）", async () => {
   const book = await makeBook();
   await save(book, 1, "前章的林远已经出发。", "第一章");
   await save(book, 4, "其他章工作稿。", "雨夜");
   const result = await runGenerateDraft({
     projectDir: book,
     chapter: 2,
-    policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    policies,
     writerClient: {
       async generateDraft() {
         await save(book, 4, "其他章工作稿，作者又写了一句。", "雨夜");
@@ -77,8 +103,8 @@ it("别章只改了正文、章名没变：照常换上", async () => {
       },
     },
   });
-  expect(result.ok).toBe(true);
-  expect((await readDraft(book, 2))?.title).toBe("河岸");
+  expect(result.ok).toBe(false);
+  expect(await pendingDraftFor(book, 2)).toMatchObject({ kind: "candidate", reason: "basis_moved" });
 });
 
 it("照本章章纲写的途中章纲被重拟：不换上、留候选（第 5 轮 S9）", async () => {
@@ -90,7 +116,7 @@ it("照本章章纲写的途中章纲被重拟：不换上、留候选（第 5 �
     projectDir: book,
     chapter: 2,
     plannerCallModel: async () => { throw new Error("已有章纲应直接沿用"); },
-    policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    policies,
     writerClient: {
       async generateDraft({ context }) {
         expect(JSON.stringify(context.sections.find((section) => section.name === "chapter_plan")?.content)).toContain("把钥匙交给老周");
@@ -100,9 +126,117 @@ it("照本章章纲写的途中章纲被重拟：不换上、留候选（第 5 �
       },
     },
   });
-  expect(result.ok).toBe(false);
+  expect(result).toMatchObject({ ok: false, summary: expect.stringContaining("本章章纲") });
   expect(await readDraft(book, 2)).toBeUndefined();
   expect(await pendingDraftFor(book, 2)).toMatchObject({ kind: "candidate", reason: "basis_moved" });
+});
+
+it("写手读过的前章章纲写的途中重拟了：不换上（第 6 轮 T5）", async () => {
+  const book = await makeBook();
+  await save(book, 1, "林远走到了河岸。");
+  await writeChapterPlan(book, normalizeChapterPlan(JSON.parse(planJson("钥匙交给老周")), { chapter: 1, source: "author" })!);
+  await writeChapterPlan(book, normalizeChapterPlan({ ...JSON.parse(planJson("林远接着走")), storyDay: 2 }, { chapter: 2, source: "author" })!);
+  const result = await runGenerateDraft({
+    projectDir: book,
+    chapter: 2,
+    plannerCallModel: async () => { throw new Error("作者章纲应沿用"); },
+    policies,
+    writerClient: {
+      async generateDraft({ context }) {
+        expect(JSON.stringify(context.sections.find((section) => section.name === "chapter_plan")?.content)).toContain("钥匙交给老周");
+        const replanned = await resolveChapterPlanForDraft({ projectDir: book, chapter: 1, direction: "钥匙当场熔毁", plannerCallModel: planner("钥匙当场熔毁"), planCheckReaderCallModel: noProblems });
+        expect(replanned.plan?.summary).toBe("钥匙当场熔毁");
+        return { title: "交接之后", content: prose("昨天把钥匙交给老周后，林远一直等着他的回信。") };
+      },
+    },
+  });
+  expect(result).toMatchObject({ ok: false, summary: expect.stringContaining("第 1 章的章纲") });
+  expect(await pendingDraftFor(book, 2)).toMatchObject({ reason: "basis_moved" });
+});
+
+it("在场检测读过前章之后作者改了前章：不换上（第 6 轮 T6）", async () => {
+  const book = await makeBook();
+  expect(await runCommand(book, cardWrite, { ops: [
+    { op: "card.create", kind: "character", name: "老周" },
+    { op: "card.create", kind: "character", name: "老李" },
+  ] }, { caller: "author", idempotencyKey: "round6-cast" })).toMatchObject({ ok: true });
+  await save(book, 1, "林远与老周在门外等着。");
+  hooks.afterPresence = async () => {
+    hooks.afterPresence = undefined;
+    await save(book, 1, "林远与老李在门外等着。");
+  };
+  const result = await runGenerateDraft({
+    projectDir: book,
+    chapter: 2,
+    policies,
+    writerClient: {
+      async generateDraft({ context }) {
+        expect(context.trace.selectedCharacters).toContain("老周");
+        return { title: "门外", content: prose("老周陪着林远继续等。") };
+      },
+    },
+  });
+  expect(result).toMatchObject({ ok: false, summary: expect.stringContaining("第 1 章的稿子") });
+  expect(await pendingDraftFor(book, 2)).toMatchObject({ reason: "basis_moved" });
+});
+
+it.each([240, 150])("审纲后改出 %i 字的要点：写手拿到的就是盘上那份，没人动材料照常换上（第 6 轮 T7）", async (length) => {
+  const book = await makeBook();
+  const previousText = "林远把蓝色账册锁进抽屉，决定明天去档案室。";
+  expect(await runCommand(book, chapterCommit, { chapter: 1, text: `# 第一章\n\n${previousText}`, entries: [] }, { caller: "author", idempotencyKey: "round6-commit" })).toMatchObject({ ok: true });
+  const fixedBeat = "第二天林远去档案室，逐页核对账册上的记录，确定缺页是一笔境外汇款。".repeat(10).slice(0, length);
+  const replies = [
+    JSON.stringify({ summary: "去档案室对账", beats: ["当天去档案室", "管理员拦人", "查出缺页"], newInformation: ["缺页是境外汇款"], scene: { location: "档案室", time: "上午" }, characters: ["林远"], entities: ["账册"], dayOffset: 0 }),
+    JSON.stringify({ revised: [{ point: 1, beat: fixedBeat }] }),
+  ];
+  let jsonCalls = 0;
+  let consumed: readonly string[] = [];
+  const result = await runGenerateDraft({
+    projectDir: book,
+    chapter: 2,
+    plannerCallModel: async (_messages, options) => (options?.json ? replies[Math.min(jsonCalls++, replies.length - 1)]! : "读到林远计划明天去档案室。"),
+    planCheckReaderCallModel: async (_messages, options) => (options?.json
+      ? JSON.stringify({ problems: [{ point: 1, conflict: true, authorWilled: false, earlierQuote: previousText, earlierChapter: 1, reason: "前章安排明天，章纲却安排当天。" }] })
+      : "笔记。"),
+    policies,
+    writerClient: {
+      async generateDraft({ context }) {
+        consumed = (context.sections.find((section) => section.name === "chapter_plan")?.content as { beats: string[] }).beats;
+        return { title: "档案室", content: prose("第二天林远去档案室，核对账册。") };
+      },
+    },
+  });
+  expect(jsonCalls).toBe(2);
+  expect(consumed[0]).toHaveLength(length);
+  expect((await readChapterPlan(book, 2))?.beats).toEqual(consumed);
+  expect(result.ok).toBe(true);
+});
+
+it("书锁里核完章纲、还没换上时另一轮拟纲：等换上之后才写章纲（第 6 轮 T9）", async () => {
+  const book = await makeBook();
+  await writeChapterPlan(book, normalizeChapterPlan(JSON.parse(planJson("把钥匙交给老周")), { chapter: 1, source: "author" })!);
+  let reached!: () => void;
+  const checked = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const allowed = new Promise<void>((resolve) => { release = resolve; });
+  hooks.afterMaterial = async () => { hooks.afterMaterial = undefined; reached(); await allowed; };
+  const running = runGenerateDraft({
+    projectDir: book,
+    chapter: 1,
+    plannerCallModel: async () => { throw new Error("沿用作者章纲"); },
+    policies,
+    writerClient: { async generateDraft() { return { title: "交钥匙", content: prose("林远把钥匙交给了老周。") }; } },
+  });
+  await checked;
+  let replaced = false;
+  const replanning = resolveChapterPlanForDraft({ projectDir: book, chapter: 1, direction: "把钥匙熔毁", plannerCallModel: planner("把钥匙熔毁"), planCheckReaderCallModel: noProblems })
+    .then(() => { replaced = true; });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(replaced).toBe(false);
+  release();
+  expect((await running).ok).toBe(true);
+  await replanning;
+  expect((await readChapterPlan(book, 1))?.summary).toBe("把钥匙熔毁");
 });
 
 it("沿用的章纲、新拟的章纲没被动过：照常换上", async () => {
@@ -113,7 +247,7 @@ it("沿用的章纲、新拟的章纲没被动过：照常换上", async () => {
     chapter: 2,
     plannerCallModel: planner("把钥匙交给老周"),
     planCheckReaderCallModel: noProblems,
-    policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    policies,
     writerClient: { async generateDraft() { return { title: "交接", content: prose("林远把钥匙交给了老周。") }; } },
   });
   expect(fresh.ok).toBe(true);
@@ -123,7 +257,7 @@ it("沿用的章纲、新拟的章纲没被动过：照常换上", async () => {
     chapter: 2,
     plannerCallModel: planner("不该重拟"),
     planCheckReaderCallModel: noProblems,
-    policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    policies,
     writerClient: { async generateDraft() { return { title: "交接", content: prose("林远又一次把钥匙交给了老周。") }; } },
   });
   expect(again).toMatchObject({ ok: true, chapterPlan: { reused: true, summary: "把钥匙交给老周" } });

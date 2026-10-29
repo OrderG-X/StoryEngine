@@ -6,7 +6,7 @@ import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
   emptyAssistantMessage,
   projectAgentEvent,
-  settleStoppedAgentTurn,
+  settleUnfinishedAgentTurn,
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
 import { deriveIntentTitle } from "./deriveIntentTitle.js";
@@ -37,7 +37,8 @@ import {
 import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
-import { editDraft, flushDraftSave, openPaper, refreshPaper, UnsavedPaperError } from "../drafts/draftSync.js";
+import { editDraft, flushDraftSave, isOwnSavedVersion, openPaper, refreshPaper, UnsavedPaperError } from "../drafts/draftSync.js";
+import { claimWorkspaceForRestore } from "../workspace/claimRestore.js";
 import { saveChatNow } from "../sync/chatSync.js";
 import { flushAllSaves } from "../sync/saveAll.js";
 import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/applyOverview.js";
@@ -255,8 +256,9 @@ export function useChat(params: UseChatParams): UseChatResult {
       let sawChapterWriteToolCall = false;
       // 定稿在飞：记下发起时盘上那份定稿，收尾时据它判断「其实已经定稿、只是回执丢了」。
       let commitAttempt: { readonly committedBefore: string | null } | null = null;
-      // 出稿在飞：记下发起时稿纸开着哪章、上面的字，停止收尾时据它判断「盘上其实已经写完了」（只和同一章比，第 5 轮 S4）。
-      let generateAttempt: { readonly chapter: number; readonly bodyBefore: string } | null = null;
+      // 出稿在飞：记下发起时稿纸开着哪章、盘上那版的版本号。停止 / 出错收尾时盘上换成了别的版本、又不是这个窗口自己存的，
+      // 才说「盘上其实已经写完了」（只和同一章比，第 5 轮 S4；作者自己存的字不算，第 6 轮 T4）。
+      let generateAttempt: { readonly chapter: number; readonly versionBefore: string | null } | null = null;
       // AI 真撤销了（undo / manage_snapshots op=undo）：回合收尾时剥掉旧回合挂着的过时建议条。
       let agentUndone = false;
 
@@ -306,7 +308,13 @@ export function useChat(params: UseChatParams): UseChatResult {
             return;
           }
           // 盘上已经是这一轮写的新稿（停晚了一步、服务端已写进去）：用盘上那版，如实说——不管流出来的字还在不在、长短。
-          if (generateAttempt && generateAttempt.chapter === paper.chapter && !paper.incoming && paper.body !== generateAttempt.bodyBefore) {
+          if (
+            generateAttempt
+            && generateAttempt.chapter === paper.chapter
+            && !paper.incoming
+            && paper.baseVersion !== generateAttempt.versionBefore
+            && !isOwnSavedVersion(paper.baseVersion)
+          ) {
             appendMessage({
               id: `assistant-reconcile-${Date.now()}`,
               role: "assistant",
@@ -369,7 +377,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                 reportedDraftChapterMismatch = false;
                 streamOpen = true;
                 draftFailed = false;
-                generateAttempt = { chapter: useDraftStore.getState().chapter, bodyBefore: useDraftStore.getState().body };
+                generateAttempt = { chapter: useDraftStore.getState().chapter, versionBefore: useDraftStore.getState().baseVersion };
                 // 出稿一开始就把流程态置「正在生成草稿」，否则续写时标题区会残留上一章的「已入库」误导用户。
                 useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
               } else if (toolName === "revise_draft") {
@@ -421,7 +429,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                       if (!switched) return;
                       adopt();
                       // 写前的字按换过去的那章算（停止收尾时只和同一章比）。
-                      if (generateAttempt) generateAttempt = { chapter, bodyBefore: useDraftStore.getState().body };
+                      if (generateAttempt) generateAttempt = { chapter, versionBefore: useDraftStore.getState().baseVersion };
                       showStreaming();
                     }, (error: unknown) => {
                       // 手上那章的字没存上、那一章读不出来：稿纸不换（字还在这一章上），也不认领那一章，如实说一声（第 5 轮 S1）。
@@ -609,13 +617,17 @@ export function useChat(params: UseChatParams): UseChatResult {
         unstickGeneratingFlow();
         requestResync();
       } finally {
-        // 停止收尾：用户点「■」abort 只是断了流（streamAgentChat 对主动 abort 不报错、不收尾），回合收尾在这里补齐——
-        //   ① 残留 running 的步骤/卡片结算成「已停止」，金光/字幕随之静止；
-        //   ② 流出来的半章：盘上没有更全的一版就留给作者（「已停止 · 已写出的内容保留」）；
+        // 回合收尾：
+        //   ① 不管怎么结束（停止、断了、出错、正常），残留 running 的步骤/卡片都落定，金光/字幕随之静止
+        //      （断了 / 出错的说一句没收到结果，第 6 轮复核 T3）；
+        //   ② 停止时流出来的半章：盘上没有更全的一版就留给作者（「已停止 · 已写出的内容保留」）；
         //   ③ 写类工具在飞 → 重读一次盘上真值（回执丢了但盘上可能已写完整稿/已入库）。
+        // 用户点「■」abort 只是断了流（streamAgentChat 对主动 abort 不报错、不收尾），②③ 在这里补齐。
         const wasAborted = abortController.signal.aborted;
+        if (ownsCurrentWorkspace()) {
+          updateMessage(assistantMsgId, (current) => settleUnfinishedAgentTurn(current, Date.now(), wasAborted ? undefined : "这一轮中途断了，没收到这一步的结果。"));
+        }
         if (wasAborted && ownsCurrentWorkspace()) {
-          updateMessage(assistantMsgId, (current) => settleStoppedAgentTurn(current, Date.now()));
           const paperNow = useDraftStore.getState();
           const partial = paperNow.streaming !== null ? { text: paperNow.streaming, chapter: paperNow.chapter } : null;
           endStreaming();
@@ -708,48 +720,53 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveChat = useChatStore.getState();
       const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
+      // 从存稿到截完对话、重读完都占着工作区：这期间开不了新的一轮，截对话不会把新话截掉（第 6 轮复核 T10）。
+      const claimed = liveChat.chatLoading || liveUi.draftActionLoading ? null : claimWorkspaceForRestore(projectPath);
+      if (!claimed) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
-
-      const flushed = await flushAllSaves();
-      if (!flushed.ok) {
-        showToast(`${flushed.error}。先别撤销，等它存上再试。`, 5200);
-        return;
-      }
-
-      // restore 是唯一动盘的步骤；先单独 try，失败时如实回报「没动盘」、不截断对话。
       try {
-        await restoreSnapshotApi(projectPath, undoSnapshotId);
-      } catch (error) {
-        const messageText = error instanceof Error ? error.message : String(error);
-        appendMessage({
-          id: `assistant-undo-error-${Date.now()}`,
-          role: "assistant",
-          content: `撤销失败：${messageText}。没有改动磁盘或对话历史。`,
-        });
-        setChatError(messageText);
-        return;
-      }
+        const flushed = await flushAllSaves();
+        if (!flushed.ok) {
+          showToast(`${flushed.error}。先别撤销，等它存上再试。`, 5200);
+          return;
+        }
 
-      // 截断对话：连同触发该回合的用户提问一起去掉该回合及其后（回到「没问过」的干净态）。
-      // git restore 刻意不回退会话文件——必须显式写回，否则下次开书被撤销的回合又整段回来。
-      const liveMessages = useChatStore.getState().messages;
-      const truncated = truncateMessagesFrom(liveMessages, undoCutId(liveMessages, message.id));
-      useChatStore.getState().setMessages(truncated);
-      const saved = await saveChatNow(truncated.length === 0 ? { allowEmpty: true } : {});
-      if (!saved.ok) {
-        showToast(
-          `对话历史的撤销没写进会话文件（${saved.error}）。稿子和资料已经撤回去了，但重新打开本书后对话可能还是撤销前的样子。`,
-          5200,
-        );
-      }
+        // restore 是唯一动盘的步骤；先单独 try，失败时如实回报「没动盘」、不截断对话。
+        try {
+          await restoreSnapshotApi(projectPath, undoSnapshotId);
+        } catch (error) {
+          const messageText = error instanceof Error ? error.message : String(error);
+          appendMessage({
+            id: `assistant-undo-error-${Date.now()}`,
+            role: "assistant",
+            content: `撤销失败：${messageText}。没有改动磁盘或对话历史。`,
+          });
+          setChatError(messageText);
+          return;
+        }
 
-      try {
-        await syncWorkspaceAfterRestore(projectPath);
-      } catch (error) {
-        showToast(`撤销已完成，但重读盘上状态没成功（${error instanceof Error ? error.message : String(error)}）；换一章再回来即可看到撤销后的稿子。`, 5200);
+        // 截断对话：连同触发该回合的用户提问一起去掉该回合及其后（回到「没问过」的干净态）。
+        // git restore 刻意不回退会话文件——必须显式写回，否则下次开书被撤销的回合又整段回来。
+        const liveMessages = useChatStore.getState().messages;
+        const truncated = truncateMessagesFrom(liveMessages, undoCutId(liveMessages, message.id));
+        useChatStore.getState().setMessages(truncated);
+        const saved = await saveChatNow(truncated.length === 0 ? { allowEmpty: true } : {});
+        if (!saved.ok) {
+          showToast(
+            `对话历史的撤销没写进会话文件（${saved.error}）。稿子和资料已经撤回去了，但重新打开本书后对话可能还是撤销前的样子。`,
+            5200,
+          );
+        }
+
+        try {
+          await syncWorkspaceAfterRestore(projectPath);
+        } catch (error) {
+          showToast(`撤销已完成，但重读盘上状态没成功（${error instanceof Error ? error.message : String(error)}）；换一章再回来即可看到撤销后的稿子。`, 5200);
+        }
+      } finally {
+        finishWorkspaceOperation(claimed);
       }
     },
     [appendMessage, projectPath, setChatError, showToast],

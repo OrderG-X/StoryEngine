@@ -8,11 +8,11 @@ import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { streamAgentChat } from "../api/agentChatClient.js";
-import { fetchStateOverview } from "../api/client.js";
+import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
 import { fetchChapterPaper, saveWorkingDraft, type ChapterPaper } from "../api/workingDraftClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import { applyOverviewToWorkspace } from "../workspace/applyOverview.js";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave } from "../drafts/draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper } from "../drafts/draftSync.js";
 import { isPaperCommitted } from "../drafts/useDraftPreview.js";
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
@@ -582,6 +582,101 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     });
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "第三章原有的工作稿。", streaming: null });
     expect(messages().some((message) => message.content.includes("其实已经写完了"))).toBe(false);
+  });
+
+  it("回合收尾后迟到的重读：作者其间存好的新字不被旧读数盖回去（第 6 轮 T1）", async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const late = deferred<ChapterPaper>();
+    const old = disk.get(3)!;
+    mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return late.promise; });
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "revise_draft", toolCallId: "t1" });
+      handlers.onToolResult({ toolName: "revise_draft", toolCallId: "t1", chapter: 3, ok: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    try {
+      await act(async () => {
+        const turn = result.current.handleSendMessage("改一个字");
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(5001);
+        await turn;
+      });
+      expect(isWorkspaceBusy()).toBe(false);
+      const unique = "作者回合结束后刚存好的一句。";
+      await act(async () => { editDraft(unique); expect(await flushDraftSave()).toEqual({ ok: true }); });
+      await act(async () => { late.resolve(old); for (let n = 0; n < 30; n++) await Promise.resolve(); });
+      expect(useDraftStore.getState()).toMatchObject({ body: unique, savedBody: unique, incoming: null });
+      expect(disk.get(3)?.draft?.body).toBe(unique);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("存稿在路上时作者把字改回原样再换章：等那笔回来、原样再存一笔才换（第 6 轮 T2）", async () => {
+    const original = useDraftStore.getState().body;
+    const entered = deferred<void>();
+    const pending = deferred<void>();
+    const ordinarySave = mockedSaveWorkingDraft.getMockImplementation()!;
+    mockedSaveWorkingDraft.mockImplementationOnce(async (...args) => { entered.resolve(); await pending.promise; return ordinarySave(...args); });
+    editDraft("");
+    const saving = flushDraftSave();
+    await entered.promise;
+    editDraft(original);
+    const switching = openPaper(PROJECT, 4);
+    for (let n = 0; n < 30; n++) await Promise.resolve();
+    expect(useDraftStore.getState().chapter).toBe(3);
+    pending.resolve();
+    await Promise.all([saving, switching]);
+    expect(useDraftStore.getState().chapter).toBe(4);
+    expect(disk.get(3)?.draft?.body).toBe(original);
+  });
+
+  it("出稿调用后连接断了、没有工具结果：步骤不再一直转（第 6 轮 T3）", async () => {
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "t3" });
+      handlers.onError("连接中断，没有工具结果", true);
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => { await result.current.handleSendMessage("写这一章"); });
+    const step = messages().flatMap((message) => message.toolSteps ?? []).find((item) => item.id === "t3");
+    expect(step).toMatchObject({ status: "stopped", detail: expect.stringContaining("没收到") });
+    expect(useChatStore.getState().chatLoading).toBe(false);
+  });
+
+  it("出稿前作者自己存了字、出稿失败：不说「其实已经写完了」（第 6 轮 T4）", async () => {
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "t4" });
+      editDraft("模型还没写，作者自己补的字。");
+      await flushDraftSave();
+      handlers.onToolError({ toolName: "generate_draft", toolCallId: "t4", message: "模型失败，没生成正文", retryable: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => { await result.current.handleSendMessage("重写"); });
+    expect(useDraftStore.getState().body).toBe("模型还没写，作者自己补的字。");
+    expect(messages().some((message) => message.content.includes("其实已经写完"))).toBe(false);
+  });
+
+  it("「撤销到此」恢复途中开不了新的一轮：新话不会被撤销截掉（第 6 轮 T10）", async () => {
+    const target = { id: "old-assistant", role: "assistant" as const, content: "旧回合已写好", turnSnapshots: [{ toolName: "generate_draft", snapshotId: "old-snapshot" }] };
+    useChatStore.getState().setMessages([{ id: "old-user", role: "user", content: "旧需求" }, target]);
+    const restoreEntered = deferred<void>();
+    const restoreDone = deferred<void>();
+    vi.mocked(restoreSnapshotApi).mockImplementationOnce(async () => { restoreEntered.resolve(); await restoreDone.promise; });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      const undo = result.current.undoToTurn(target);
+      await restoreEntered.promise;
+      expect(isWorkspaceBusy()).toBe(true);
+      await result.current.handleSendMessage("撤销之后的新需求");
+      restoreDone.resolve();
+      await undo;
+    });
+    expect(mockedStreamAgentChat).not.toHaveBeenCalled();
+    expect(isWorkspaceBusy()).toBe(false);
+    expect(messages().some((message) => message.id === "old-assistant")).toBe(false);
   });
 
   it("a stale agent finally releases its token without clearing loading in the replacement workspace", async () => {

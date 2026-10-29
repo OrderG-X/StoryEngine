@@ -15,7 +15,6 @@ import {
 } from "../book/project-store.js";
 import { readDraftState, selectRelevant } from "@actalk/story-core";
 import { extractMarkdownTitle, readChapterTitles } from "../book/chapter-titles.js";
-import { titlesDigest, type MaterialLog } from "../book/material-reads.js";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
@@ -195,11 +194,6 @@ export interface BuildWriterContextInput {
    * （长篇连写：章纲带着「三楼走廊」，重写沿用章纲又写了一遍）。
    */
   readonly lastDraftConflicts?: readonly LastDraftConflict[];
-  /**
-   * 记下这份上下文用了哪些不在真相依据里的材料（前一章工作稿、已有各章章名）：要换上工作稿的出稿必须给，
-   * 换上前逐条再核（第 5 轮复核 S8）。只出候选、不换上的可以不给。
-   */
-  readonly materials?: MaterialLog;
 }
 
 /** 上一稿的一处错：写成了 wrote，和 where 的 against 对不上（why）。 */
@@ -249,15 +243,11 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       // 审计 Low：删掉「旧格式回退」第二跳——它与首读同一文件同一 JSON.parse，首读失败它必失败，
       // 永远不可能救回，只是把同一故障记两遍（且内层把权限错无痕吞成 []）。单跳：降级 + 留痕一次。
       .catch((error) => { trackReadFailure("时间线事件")(error); return [] as readonly TimelineEvent[]; }),
-    readPreviousUncommittedDraftContext(input.projectDir, input.chapter, input.materials),
+    readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
     readPreviousChapterContext(input.projectDir, input.chapter)
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
     // 已有各章标题（R7.7·报告 5：拟标题防重名，第 7、9 章都叫「铁丝」）。读不到按空（不出段），不炸出稿。
     readChapterTitles(input.projectDir, input.chapter)
-      .then((titles) => {
-        input.materials?.note({ kind: "titles", except: input.chapter, digest: titlesDigest(titles) });
-        return titles;
-      })
       .catch(() => [] as readonly { chapter: number; title: string }[]),
   ]);
   const plan = input.chapterPlan;
@@ -354,7 +344,6 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
 async function readPreviousUncommittedDraftContext(
   projectDir: string,
   chapter: number,
-  materials: MaterialLog | undefined,
 ): Promise<PreviousUncommittedDraftContext | undefined> {
   if (chapter <= 1) return undefined;
   const previousChapter = chapter - 1;
@@ -366,10 +355,9 @@ async function readPreviousUncommittedDraftContext(
   });
   if (committedContent !== undefined) return undefined;
 
-  // 前一章没定稿：它的工作稿当前情（不在真相依据里），记下用的是哪一版（没有稿也记：换上前有了稿也算前文变了）。
+  // 前一章没定稿：它的工作稿当前情（不在真相依据里；换上前出稿服务按开写时拍的那份核，见 book/material-reads）。
   const draft = await readDraftState(projectDir, previousChapter).catch(() => undefined);
   if (!draft) return undefined;
-  materials?.note({ kind: "draft", chapter: previousChapter, version: draft.version });
   const draftContent = draft.file?.text;
   const body = stripMarkdownHeading(draftContent ?? "");
   if (!body.trim()) return undefined;

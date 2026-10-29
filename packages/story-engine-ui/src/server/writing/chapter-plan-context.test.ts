@@ -86,11 +86,22 @@ describe("normalizeChapterPlan 宽进（模型无关）", () => {
 });
 
 describe("章纲落盘", () => {
+  it("落盘按读回的同一套归一：返回的、读回来的、写手拿到的是同一份（第 6 轮复核 T7）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-chapter-plan-"));
+    const longBeat = "第二天林远去档案室，逐页核对账册上的记录，确定缺页是一笔境外汇款。".repeat(20);
+    const raw = normalizeChapterPlan({ summary: "去城东", beats: ["出门"] }, { chapter: 9, source: "model", now: NOW })!;
+    const stored = await writeChapterPlan(dir, { ...raw, beats: [longBeat, "回来", "回来"], summary: "去城东（故事第 3 天）" });
+    expect(stored.beats[0]).toHaveLength(400);
+    expect(stored.beats).toHaveLength(2);
+    expect(stored.summary).toBe("去城东");
+    expect(await readChapterPlan(dir, 9)).toEqual(stored);
+    expect(await writeChapterPlan(dir, stored)).toEqual(stored);
+  });
+
   it("写了能读回；文件坏了读侧降级并留痕", async () => {
     const dir = await mkdtemp(join(tmpdir(), "story-engine-chapter-plan-"));
     const plan = normalizeChapterPlan({ summary: "去城东", beats: ["出门", "回来"] }, { chapter: 9, source: "author", now: NOW })!;
-    const path = await writeChapterPlan(dir, plan);
-    expect(path).toBe(chapterPlanPath(dir, 9));
+    expect(await writeChapterPlan(dir, plan)).toEqual(plan);
     expect(await readChapterPlan(dir, 9)).toEqual(plan);
     expect(await readChapterPlan(dir, 10)).toBeUndefined();
 

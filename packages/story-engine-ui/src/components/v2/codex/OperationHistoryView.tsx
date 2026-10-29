@@ -11,6 +11,8 @@ import type { SnapshotEntryDto } from "../../../api/types.js";
 import { flushAllSaves } from "../../../sync/saveAll.js";
 import { syncWorkspaceAfterRestore } from "../../../workspace/syncAfterRestore.js";
 import { noteRestoreInChat } from "../../../workspace/restoreNote.js";
+import { claimWorkspaceForRestore } from "../../../workspace/claimRestore.js";
+import { finishWorkspaceOperation } from "../../../utils/workspaceOperation.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { PageHead, Skeleton } from "./bibleVisual.js";
 
@@ -100,6 +102,12 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
   // 恢复后原地重读（重构 P5）：不整页刷新，列表里多出「恢复前」那条存档。
   const handleRestore = async (id: string): Promise<void> => {
     if (!projectPath) return;
+    // 恢复到记完一笔都占着工作区：这期间开不了新的一轮对话、换不了章（第 6 轮复核 T10）。
+    const claimed = claimWorkspaceForRestore(projectPath);
+    if (!claimed) {
+      setError("AI 或别的操作正在进行，等它结束再恢复。");
+      return;
+    }
     setRestoring(id);
     setError(null);
     try {
@@ -116,6 +124,7 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRestoring(null);
+      finishWorkspaceOperation(claimed);
     }
   };
 

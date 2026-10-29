@@ -15,7 +15,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { draftApplyGenerated, draftPath, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
-import { firstMovedMaterial, type MaterialRead } from "../book/material-reads.js";
+import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
 import { removeDraftCandidate, saveDraftCandidate, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
 import { scrubLocalAbsolutePaths } from "./local-path-scrubber.js";
 import { runWithLazySnapshot } from "./snapshot.js";
@@ -72,13 +72,19 @@ export type AiDraftOutcome =
   };
 
 function whyNotApplied(reason: DraftKeptReason, detail?: string): string {
-  if (reason === "basis_moved") return "写的途中前文或设定改过";
+  if (reason === "basis_moved") return `写的途中${detail ?? "前文或设定"}改过`;
   if (reason === "interrupted") return "写到一半停了";
   if (reason === "apply_failed") return `换上的时候写盘没成功${detail ? `（${detail}）` : ""}`;
   return "写的途中这一章的稿子改过（存稿、撤销或恢复）";
 }
 
-/** 没换上时给作者看的一句。detail = 写盘出错时的原因。 */
+function describeMovedMaterial(moved: MovedMaterial): string {
+  if (moved.kind === "plan") return "本章章纲";
+  const what = moved.kind === "drafts" ? "的稿子" : "的章纲";
+  return moved.chapter === undefined ? `别的章${what}` : `第 ${moved.chapter} 章${what}`;
+}
+
+/** 没换上时给作者看的一句。detail = 写盘出错时的原因 / 依据过期时改过的是什么。 */
 export function keptMessage(chapter: number, reason: DraftKeptReason, detail?: string): string {
   return `第 ${chapter} 章 AI 这版没换上：${whyNotApplied(reason, detail)}，你那份没动。AI 这版留着，稿纸上可以换成它。`;
 }
@@ -120,7 +126,8 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
     outcome = await withBookLock(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
       // 作者喊停之后后到的稿不落盘，也不留候选（锁里再问一次：等锁的工夫也可能停了）。
       if (turnAborted()) return "aborted";
-      if (await firstMovedMaterial(projectDir, input.materials)) return keep("basis_moved");
+      const movedMaterial = await firstMovedMaterial(projectDir, input.materials);
+      if (movedMaterial) return keep("basis_moved", describeMovedMaterial(movedMaterial));
       // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
       const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
       // 依据交给 runner 核：它先收拾写到一半的事务（回滚会换代次），再在同一把锁里比，途中读到的半截真相一律对不上。

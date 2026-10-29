@@ -195,11 +195,11 @@ export async function resolveChapterPlanForDraft(input: {
   if (!planned.plan) return planned;
   // 拟完再读一遍：拟纲那段时间里材料没变、书上也没写过，这份章纲才挂指纹（变了就不挂，下次重拟）。
   const end = start ? await readPlanBasis(input.projectDir, input.chapter, direction) : undefined;
-  if (basis && end?.key === basis && end.digest === start?.digest) {
-    await writeChapterPlan(input.projectDir, { ...planned.plan, basis });
-  }
+  const plan = basis && end?.key === basis && end.digest === start?.digest
+    ? await writeChapterPlan(input.projectDir, { ...planned.plan, basis })
+    : planned.plan;
   const staleNote = sameDirection && existing.basis !== undefined && basis !== undefined ? "前文改过，章纲按现在的重拟了。" : "";
-  return { ...planned, note: `${staleNote}${planned.note}${directionChangeNote(planned.plan)}` };
+  return { ...planned, plan, note: `${staleNote}${planned.note}${directionChangeNote(plan)}` };
 }
 
 /**

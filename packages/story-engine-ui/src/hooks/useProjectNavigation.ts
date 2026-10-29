@@ -18,7 +18,7 @@ import { useRecentBooksStore } from "../stores/recentBooksStore.js";
 import { bookCreationPromptText, bookImportPromptText } from "../utils/bookCreationPrompt.js";
 import { isFreshBook } from "../utils/isFreshBook.js";
 import { flushAllSaves } from "../sync/saveAll.js";
-import { clearPaperNow, drainPaper, replacePaperNow, UnsavedPaperError } from "../drafts/draftSync.js";
+import { clearPaperNow, drainPaper, paperReadMark, replacePaperNow, UnsavedPaperError } from "../drafts/draftSync.js";
 import { markChatLoaded } from "../sync/chatSync.js";
 import { flowStatusForPaper } from "../workspace/applyOverview.js";
 import {
@@ -403,6 +403,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       const baseChapterNumber = nextWorkspace.currentChapter.chapterNumber;
       // 打开哪一章从盘上算：最新有工作稿的那章 → 最新定稿章 → 引擎当前章（重构 P5，不再读按章存的 JSON 去猜）。
       const activeChapterNumber = resolveInitialChapterNumber(nextWorkspace.chapters, baseChapterNumber);
+      const paperRead = paperReadMark();
       const paper = await fetchChapterPaper(nextProjectPath, activeChapterNumber);
       if (!ownsNavigationOrigin(transition)) return false;
       const fileStates = new Map<number, ChapterFileState>([[activeChapterNumber, fileStateFromPaper(paper)]]);
@@ -463,7 +464,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       const entryMessages = entryChatMessages(backendSessionMessages);
       if (!(await drainBeforeReplace(transition, "仍停留在当前书籍"))) return false;
       // 所有异步读取完成、来源身份没变：同一个同步回合里换上新书的稿纸 / 项目 / 会话 / 工作区。
-      replacePaperNow(nextProjectPath, paper);
+      replacePaperNow(nextProjectPath, paper, paperRead);
       resetTransientUiState();
       setActiveBookId(null);
       setProjectPath(nextProjectPath);
@@ -620,11 +621,12 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         return;
       }
       const currentProjectPath = transition.projectPath || null;
+      const paperRead = paperReadMark();
       const paper: ChapterPaper | null = currentProjectPath ? await fetchChapterPaper(currentProjectPath, chapter.chapterNumber) : null;
       if (!ownsNavigationOrigin(transition)) return;
       // 读新章那会儿作者又在原来那章打了字：换上之前再存完，存不上就留在原地（第 4 轮复核 R3）。这之后到换上不再 await。
       if (!(await drainBeforeReplace(transition, "仍停留在当前章节"))) return;
-      if (currentProjectPath && paper) replacePaperNow(currentProjectPath, paper);
+      if (currentProjectPath && paper) replacePaperNow(currentProjectPath, paper, paperRead);
       const outgoingChapter = useBookStore.getState().workspace.currentChapter?.chapterNumber ?? null;
       // 章节表给没写的章垫的占位名「下一章」不当这章的名字（不管从哪个入口打开）。
       const draftTitle = paper?.draft?.title ?? paper?.committed?.title
@@ -659,8 +661,9 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionPreview(null);
       setCommitSelections(emptyCommitSelections());
     } catch (error) {
+      // 在写作台里点的：说在写作台里（书架那栏错误这里看不见，第 6 轮复核 T8）。稿纸、工作区都还在原来那章。
       if (ownsNavigationOrigin(transition)) {
-        setOpenProjectError(`打开章节失败：${error instanceof Error ? error.message : String(error)}`);
+        showToast(`第 ${chapter.chapterNumber} 章没打开（${error instanceof Error ? error.message : String(error)}），还在原来那章。`, 5200);
       }
     } finally {
       finishWorkspaceOperation(transition);
@@ -749,23 +752,28 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         }
       }
       const nextWorkspace = workspaceFromStateOverview(created.overview);
-      const firstPaper = await fetchChapterPaper(created.projectDir, nextWorkspace.currentChapter.chapterNumber).catch(() => null);
+      const book = bookSummaryFromOverview(created.overview, created.projectDir);
+      // 书已经建好 / 导入好了；头一章读不出来就先不打开（不拿空稿冒充，第 6 轮复核 T11），书架上能找到它。
+      let firstPaper: ChapterPaper;
+      try {
+        firstPaper = await fetchChapterPaper(created.projectDir, nextWorkspace.currentChapter.chapterNumber);
+      } catch (error) {
+        bookManagement.upsertRecentBook(book);
+        const message = `《${input.title}》已${input.verb}，但第 ${nextWorkspace.currentChapter.chapterNumber} 章没读出来（${error instanceof Error ? error.message : String(error)}），先没打开；在书架上能找到它。`;
+        if (input.rethrow) throw new Error(message);
+        if (ownsNavigationOrigin(transition)) showToast(message, 6400);
+        return;
+      }
       if (!ownsNavigationOrigin(transition)) {
         showToast(switched, 5000);
         return;
       }
-      const book = bookSummaryFromOverview(created.overview, created.projectDir);
       if (!(await drainBeforeReplace(transition, `《${input.title}》已${input.verb}、先没打开`, input.rethrow))) {
         if (!ownsNavigationOrigin(transition)) showToast(switched, 5000);
         return;
       }
       // 从这里起同步换上新书（中间不再 await，免得半新半旧的状态被存进新书）。
-      replacePaperNow(created.projectDir, firstPaper ?? {
-        chapter: nextWorkspace.currentChapter.chapterNumber,
-        draft: null,
-        committed: null,
-        editedSinceCommit: null,
-      });
+      replacePaperNow(created.projectDir, firstPaper);
       setActiveBookId(null);
       setProjectPath(created.projectDir);
       setCurrentOverview(created.overview);
