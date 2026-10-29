@@ -4,12 +4,14 @@
 // 真核心、真路由、真稿纸存盘调度、真撤销；只换模型输出和 fetch 传输。写盘故障、调度屏障都在 rename 上注入（标明了）。
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave, hasFailedUnsavedDraft, openPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
+import { setCommitIoTestHookForTests } from "../book/legacy-commit-recovery.js";
+import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { createStoryProject } from "../book/project-store.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
@@ -47,6 +49,7 @@ beforeEach(async () => {
   useDraftStore.getState().reset();
 });
 afterEach(async () => {
+  setCommitIoTestHookForTests(undefined);
   hooks.beforeRename = undefined;
   hooks.afterRename = undefined;
   __resetDraftSyncForTests();
@@ -341,6 +344,118 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect(isDraftDirty(useDraftStore.getState())).toBe(false);
     expect(useDraftStore.getState().incoming ?? null).toBeNull();
     expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
+  it("真稿纸：补发落盘、作者改回原文，重存那笔写盘失败：关窗照样拦，重试真的再发、盘上是原文（第 9 轮 W1）", async () => {
+    await save(1, "原稿 A。");
+    const firstArrived = barrier();
+    const releaseFirst = barrier();
+    const keepaliveDone = barrier();
+    let normalPuts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && !init.keepalive) {
+        normalPuts += 1;
+        if (normalPuts === 1) { firstArrived.release(); await releaseFirst.promise; }
+        // 第二笔普通存稿（作者改回的原文）换工作稿文件那一下写盘失败一次（注入在 rename 上）。
+        if (normalPuts === 2) {
+          hooks.beforeRename = async (_from, to) => {
+            if (to !== join(book, draftPath(1))) return;
+            hooks.beforeRename = undefined;
+            throw eio("换工作稿文件");
+          };
+        }
+      }
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      if (init?.keepalive) keepaliveDone.release();
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    editDraft("在途 B。");
+    const saving = flushDraftSave();
+    await firstArrived.promise;
+    editDraft("关窗补发 C。");
+    saveDraftKeepalive();
+    await keepaliveDone.promise;
+    editDraft("原稿 A。");
+    releaseFirst.release();
+    expect(await saving).toMatchObject({ ok: false });
+    expect(hasFailedUnsavedDraft()).toBe(true);
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(normalPuts).toBe(3);
+    expect((await readDraft(book, 1))?.body).toBe("原稿 A。");
+    expect(hasFailedUnsavedDraft()).toBe(false);
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
+  it("真稿纸：只有关窗补发那笔在路上、作者改回原文再换章：等那笔回来、把原文存上才换（第 9 轮 W2）", async () => {
+    await save(1, "原稿 A。");
+    await save(2, "第二章。");
+    const arrived = barrier();
+    const release = barrier();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.keepalive) { arrived.release(); await release.promise; }
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    editDraft("关窗补发 B。");
+    saveDraftKeepalive();
+    await arrived.promise;
+    editDraft("原稿 A。");
+    let switched = false;
+    const opening = openPaper(book, 2).then((opened) => { switched = true; return opened; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(switched).toBe(false);
+    release.release();
+    expect(await opening).toBe(true);
+    expect(useDraftStore.getState().chapter).toBe(2);
+    expect((await readDraft(book, 1))?.body).toBe("原稿 A。");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
+  it("真稿纸：页面没关、补发那笔正常回来：它定下存上了，不再多发（第 9 轮）", async () => {
+    await save(1, "原稿 A。");
+    const { puts } = wireRealRoutes();
+    await openPaper(book, 1);
+    editDraft("最新 B。");
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(useDraftStore.getState().saveStatus).toBe("saved"));
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(puts()).toBe(1);
+    expect((await readDraft(book, 1))?.body).toBe("最新 B。");
+  });
+
+  it("开书收拾升级前的老格式事务时作者存稿：等收拾完再存，撞了版本进恢复稿，回执之后的字不被回滚盖掉（第 9 轮 W3）", async () => {
+    await save(1, "崩溃前的稿 A。");
+    const relative = draftPath(1);
+    const original = await readFile(join(book, relative), "utf-8");
+    const tx = join(book, ".story-engine-tx/commit-chapter-0001");
+    await mkdir(join(tx, "backups", dirname(relative)), { recursive: true });
+    await writeFile(join(tx, "backups", relative), original);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({ version: 2, chapter: 1, createdAt: "2026-10-20T00:00:00.000Z", files: [relative], backups: [{ relativePath: relative, existed: true, backupPath: `backups/${relative}`, sha256: sha256(original) }], status: "staged" }));
+    await writeFile(join(book, relative), "中断事务留下的 B。");
+    const atRestore = barrier();
+    const releaseRestore = barrier();
+    setCommitIoTestHookForTests(async (phase, target) => {
+      if (phase !== "after-precheck-before-open" || target !== join(book, relative)) return;
+      setCommitIoTestHookForTests(undefined);
+      atRestore.release();
+      await releaseRestore.promise;
+    });
+    wireRealRoutes();
+    await openPaper(book, 1);
+    const opening = ensureBookOnCore(book);
+    await atRestore.promise;
+    editDraft("作者刚补写的 C。");
+    let acknowledged = false;
+    const saving = flushDraftSave().then((result) => { acknowledged = true; return result; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(acknowledged).toBe(false);
+    releaseRestore.release();
+    expect(await opening).toMatchObject({ ok: true });
+    expect(await saving).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.body).toBe("崩溃前的稿 A。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: "作者刚补写的 C。" });
   });
 
   it("撤销换了纪元、迟到的同文空写不把撤销后的版本认成这个窗口的：之后照撤销前发的旧笔撞版本进恢复稿（第 8 轮 V3）", async () => {

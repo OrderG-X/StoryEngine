@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { draftChapterOfPath, freshDraftGensWrite, revisionWrite } from "@actalk/story-core";
+import { draftChapterOfPath, freshDraftGensWrite, revisionWrite, withBookLock } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
 
 export interface CommitTransactionManifest {
@@ -105,9 +105,13 @@ export async function withProjectCommitLock<T>(projectDir: string, task: () => P
   }
 }
 
-/** Recover every engine commit residue before any caller reads formal state. */
+/**
+ * Recover every engine commit residue before any caller reads formal state.
+ * 锁序「书锁 → 老提交锁」（写作版本 P1 第 9 轮复核 W3）：恢复要回滚正文、工作稿，和作者存稿（拿书锁）必须互斥；
+ * 书锁可重入，已经拿着书锁的调用方（存档、通读）照常。
+ */
 export async function recoverProjectCommitTransactions(projectDir: string): Promise<void> {
-  return withProjectCommitLock(projectDir, () => recoverProjectCommitTransactionsUnlocked(projectDir));
+  return withBookLock(projectDir, () => withProjectCommitLock(projectDir, () => recoverProjectCommitTransactionsUnlocked(projectDir)));
 }
 
 /**

@@ -13,13 +13,12 @@
  *   存不上就不换（抛 UnsavedPaperError）；存完到换上之间不 await。
  * - 从盘上读的（换章、重读）都按「读的期间这一章没发过存稿」才用：发过就再读，免得迟到的旧读数盖掉刚存的字（第 6 轮复核 T1）；
  *   也按「开读比已换上的那份晚」才用：迟到的旧读数不盖后来读到、已经显示的新稿（第 7 轮复核 U1）。
- * - 一笔在路上时「要不要存」按在路上那份比（它落盘后盘上就是它）：改回原样也算要存，关窗时 keepalive 补发（第 7 轮复核 U2）。
- *   补发的那笔和在路上那笔是同一个底版，服务端按窗口号和序号认出是同一窗口接着写的，顺着接上；序号旧的那笔后到不写。
- * - **只有这个窗口最后发出的那笔的回执能定「存上了」**（第 8 轮复核 V1）：一笔回来时这个窗口后来又发过（关窗补发之后页面没关），
- *   这笔存上了、被顶掉了、撞了都说明不了盘上现在是什么——手上的字再存一笔（服务端顺着接，盘上就是手上这份时是空写），
- *   以那笔的回执为准。补发的那笔回来时还是最后一笔，也再存一笔（它的回执没照常处理）。
+ * - **待存只有一处记法**（第 9 轮复核）：每发一笔（普通的、关窗补发的）这一章就「没落定」，只有这一章最后发出那笔的回执能把它
+ *   落定（存上了 / 撞了另存成恢复稿）或记成没存上；别的回执什么都不改。要不要再发 = 没落定、没存上、或手上的字和盘上不一样。
+ *   换章、重读、flush 先等所有还没回来的笔（含关窗补发）都回来再看；关窗拦、重试、换章挡都看同一个状态。
+ *   关窗补发的那笔和在路上那笔是同一个底版，服务端按窗口号和序号认出是同一窗口接着写的，顺着接上；序号旧的那笔后到不写。
  */
-import { decidePendingDraft, fetchChapterPaper, saveWorkingDraft, type ChapterPaper } from "../api/workingDraftClient.js";
+import { decidePendingDraft, fetchChapterPaper, saveWorkingDraft, type ChapterPaper, type SaveWorkingDraftResult } from "../api/workingDraftClient.js";
 import { isDraftDirty, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
 
 export const DRAFT_SAVE_DELAY_MS = 600;
@@ -49,11 +48,22 @@ let seq = 0;
 const nextSender = (): { readonly client: string; readonly seq: number } => ({ client: clientId, seq: (seq += 1) });
 
 let timer: ReturnType<typeof setTimeout> | null = null;
-/** 上一笔明确没存上、之后还没有一笔存成：重试发出去了也算没存上（关窗照样拦，第 5 轮 S5）。 */
-let failedUnsaved = false;
-let inFlight: Promise<DraftFlushResult> | null = null;
-/** 在路上那笔发的是什么（回来之前盘上可能已经是它了）。 */
-let sending: { readonly projectPath: string; readonly chapter: number; readonly body: string; readonly title: string } | null = null;
+
+/**
+ * 这一章的存稿落定没有（第 9 轮复核：待存只有这一处记法，见文件头）。每发一笔（普通的、关窗补发的都算）就 pending；
+ * 只有这一章最后发出那笔的回执能改它：存上了、撞了另存成恢复稿 → 落定（failed 也清掉）；没存上 → 落定成 failed。
+ * failed 一直留到之后有一笔存成（重试在路上也还算没存上：关窗照样拦，第 5 轮 S5）。别的回执（被后来那笔顶掉的、迟到的）
+ * 什么都不改。换稿纸时清掉（换之前已经确认落定、没有 failed）。
+ */
+let sync: { readonly projectPath: string; readonly chapter: number; readonly lastSeq: number; readonly pending: boolean; readonly failed: boolean; readonly error?: string } | null = null;
+
+function syncOf(state: Pick<DraftStoreState, "projectPath" | "chapter">): { readonly pending: boolean; readonly failed: boolean } {
+  return sync !== null && sync.projectPath === state.projectPath && sync.chapter === state.chapter ? sync : { pending: false, failed: false };
+}
+
+/** 还没回来的存稿（普通的、关窗补发的都在）：换章、重读、flush 都等它们全回来再看。 */
+const requests = new Set<Promise<unknown>>();
+
 /** 发出过几笔存稿：读盘前后比一比，读的期间发过就说明读回来的可能比刚存的旧。 */
 let savesSent = 0;
 /** 这个窗口存成的版本号（最近几十个）：盘上是这些版本就是作者自己的字，不是别处写的（第 6 轮复核 T4）。 */
@@ -70,10 +80,6 @@ function rememberOwnVersion(version: string | null): void {
 export function isOwnSavedVersion(version: string | null): boolean {
   return version !== null && ownVersions.includes(version);
 }
-/** 这一章的回执说明不了盘上现在是什么（见文件头）：手上的字不管和底版一不一样，都要再存一笔。 */
-let reassert: { readonly projectPath: string; readonly chapter: number } | null = null;
-const reassertFor = (state: Pick<DraftStoreState, "projectPath" | "chapter">): boolean =>
-  reassert !== null && reassert.projectPath === state.projectPath && reassert.chapter === state.chapter;
 
 /** 上一笔撞了版本的那份（同一份字、同一底版不再重发，免得来回打转）。 */
 let rejected: { readonly projectPath: string; readonly chapter: number; readonly body: string; readonly title: string; readonly baseVersion: string | null } | null = null;
@@ -87,14 +93,14 @@ function rejectedAlready(state: Pick<DraftStoreState, "projectPath" | "chapter" 
     && rejected.baseVersion === state.baseVersion;
 }
 
-const paperOpen = (state: DraftStoreState): boolean => Boolean(state.projectPath) && state.chapter > 0 && state.loaded && !rejectedAlready(state);
+const paperOpen = (state: DraftStoreState): boolean => Boolean(state.projectPath) && state.chapter > 0 && state.loaded;
 
-/** 有要发的字：打开了一章、和盘上不一样（一笔在路上就和那笔比：它落盘后盘上就是它）、这份没被拒过。 */
+/** 要不要再发一笔：打开了一章，且这一章没落定（没回来、没存上）、或手上的字和盘上不一样（被拒过的那份除外）。 */
 function needsSave(state: DraftStoreState): boolean {
   if (!paperOpen(state)) return false;
-  if (reassertFor(state)) return true;
-  if (sending && sending.projectPath === state.projectPath && sending.chapter === state.chapter) return state.body !== sending.body || state.title !== sending.title;
-  return isDraftDirty(state);
+  const current = syncOf(state);
+  if (current.pending || current.failed) return true;
+  return !rejectedAlready(state) && isDraftDirty(state);
 }
 
 function clearTimer(): void {
@@ -118,85 +124,90 @@ export function scheduleDraftSave(delay = DRAFT_SAVE_DELAY_MS): void {
   }, delay);
 }
 
-async function sendOnce(): Promise<DraftFlushResult> {
-  const state = useDraftStore.getState();
-  if (!state.projectPath || !needsSave(state)) return { ok: true };
-  const sent = { projectPath: state.projectPath, chapter: state.chapter, body: state.body, title: state.title, baseVersion: state.baseVersion };
-  state.markSaving();
-  savesSent += 1;
-  sending = sent;
-  if (reassertFor(state)) reassert = null;
-  const sender = nextSender();
-  try {
-    const result = await saveWorkingDraft({
-      projectPath: sent.projectPath,
-      chapter: sent.chapter,
-      body: sent.body,
-      ...(sent.title.trim() ? { title: sent.title.trim() } : {}),
-      baseVersion: sent.baseVersion,
-      ...sender,
-    });
-    sending = null;
-    const live = useDraftStore.getState();
-    if (live.projectPath !== sent.projectPath || live.chapter !== sent.chapter) return { ok: true };
-    // 这笔之后这个窗口又发过（关窗补发）、或服务端说被自己后来那笔顶掉了：这笔的回执说明不了盘上现在是什么，
-    // 手上的字再存一笔，以那笔为准（见文件头）。
-    if (sender.seq !== seq || "superseded" in result) {
-      if (result.ok) rememberOwnVersion(result.version);
-      reassert = { projectPath: sent.projectPath, chapter: sent.chapter };
-      return { ok: true };
-    }
-    if (result.ok) {
-      rejected = null;
-      failedUnsaved = false;
-      rememberOwnVersion(result.version);
-      live.markSaved(result.version, sent.body, sent.title);
-      return { ok: true };
-    }
-    // 撞了版本：作者这份服务端存成了恢复稿才有号，稿纸出提示。这份不再重发；作者接着改了就再存（更新恢复稿）。
-    // 没有号 = 没另外存下来：当没存上，字还在稿纸上，过一会儿再试。
-    if (!result.recoveryId) {
-      const message = "别处刚改过这一章，你这段也没能另存下来。字还在稿纸上，稍后自动再试。";
-      live.markConflict(result);
-      live.markSaveError(message);
-      failedUnsaved = true;
-      return { ok: false, error: message };
-    }
-    rejected = sent;
-    failedUnsaved = false;
-    live.markConflict(result);
-    return { ok: true };
-  } catch (error) {
-    sending = null;
-    const message = error instanceof Error ? error.message : String(error);
-    const live = useDraftStore.getState();
-    if (live.projectPath === sent.projectPath && live.chapter === sent.chapter) {
-      live.markSaveError(message);
-      failedUnsaved = true;
-    }
-    return { ok: false, error: message };
-  }
+type SentPaper = { readonly projectPath: string; readonly chapter: number; readonly body: string; readonly title: string; readonly baseVersion: string | null };
+
+/** 这笔是不是这一章最后发出的那笔、稿纸还是这一章：只有它的回执能定下这一章（见 sync）。 */
+function decides(sent: SentPaper, seqSent: number): boolean {
+  const live = useDraftStore.getState();
+  return sync !== null && sync.projectPath === sent.projectPath && sync.chapter === sent.chapter && sync.lastSeq === seqSent
+    && live.projectPath === sent.projectPath && live.chapter === sent.chapter;
 }
 
-/** 现在就存（一笔在路上就等它回来；回来后还有没存的字再发一笔）。 */
+function markFailed(sent: SentPaper, seqSent: number, message: string): DraftFlushResult {
+  sync = { projectPath: sent.projectPath, chapter: sent.chapter, lastSeq: seqSent, pending: false, failed: true, error: message };
+  useDraftStore.getState().markSaveError(message);
+  return { ok: false, error: message };
+}
+
+/** 一笔回来了：按 decides 定下这一章，或者什么都不改。 */
+function receive(sent: SentPaper, seqSent: number, result: SaveWorkingDraftResult): DraftFlushResult {
+  if (result.ok) rememberOwnVersion(result.version);
+  if (!decides(sent, seqSent)) return { ok: true };
+  const live = useDraftStore.getState();
+  if ("superseded" in result) return markFailed(sent, seqSent, "这一笔存稿没定下来，稍后自动再试。");
+  if (result.ok) {
+    sync = { projectPath: sent.projectPath, chapter: sent.chapter, lastSeq: seqSent, pending: false, failed: false };
+    rejected = null;
+    live.markSaved(result.version, sent.body, sent.title);
+    return { ok: true };
+  }
+  // 撞了版本：作者这份服务端存成了恢复稿才有号，稿纸出提示。这份不再重发；作者接着改了就再存（更新恢复稿）。
+  // 没有号 = 没另外存下来：当没存上，字还在稿纸上，过一会儿再试。
+  live.markConflict(result);
+  if (!result.recoveryId) return markFailed(sent, seqSent, "别处刚改过这一章，你这段也没能另存下来。字还在稿纸上，稍后自动再试。");
+  sync = { projectPath: sent.projectPath, chapter: sent.chapter, lastSeq: seqSent, pending: false, failed: false };
+  rejected = sent;
+  return { ok: true };
+}
+
+/**
+ * 发一笔（要发才发）：这一章记成没落定，登记进 requests，回来后 receive。keepalive = 关窗途中那笔，不等前面那笔。
+ * 返回这一笔的结果（不是这一章最后那笔的，说明不了什么，算 ok）；不用发返回 undefined。
+ */
+function send(keepalive: boolean): Promise<DraftFlushResult> | undefined {
+  const state = useDraftStore.getState();
+  if (!state.projectPath || !needsSave(state)) return undefined;
+  const sent: SentPaper = { projectPath: state.projectPath, chapter: state.chapter, body: state.body, title: state.title, baseVersion: state.baseVersion };
+  const sender = nextSender();
+  sync = { projectPath: sent.projectPath, chapter: sent.chapter, lastSeq: sender.seq, pending: true, failed: syncOf(sent).failed };
+  savesSent += 1;
+  state.markSaving();
+  const request = saveWorkingDraft({
+    projectPath: sent.projectPath,
+    chapter: sent.chapter,
+    body: sent.body,
+    ...(sent.title.trim() ? { title: sent.title.trim() } : {}),
+    baseVersion: sent.baseVersion,
+    ...sender,
+  }, keepalive ? { keepalive: true } : undefined).then(
+    (result) => receive(sent, sender.seq, result),
+    (error: unknown) => (decides(sent, sender.seq) ? markFailed(sent, sender.seq, error instanceof Error ? error.message : String(error)) : { ok: true as const }),
+  );
+  requests.add(request);
+  void request.finally(() => requests.delete(request));
+  return request;
+}
+
+/**
+ * 现在就存：等还没回来的那几笔都回来，这一章没落定、或手上的字和盘上不一样就再发一笔，直到落定且没有要存的。
+ * 没存上如实返回，过一会儿自动再试。
+ */
 export async function saveDraftNow(): Promise<DraftFlushResult> {
   clearTimer();
-  while (inFlight) await inFlight;
-  inFlight = sendOnce();
-  let result: DraftFlushResult;
-  try {
-    result = await inFlight;
-  } finally {
-    inFlight = null;
+  for (;;) {
+    if (requests.size > 0) {
+      await Promise.allSettled([...requests]);
+      continue;
+    }
+    const request = send(false);
+    if (!request) return { ok: true };
+    const result = await request;
+    if (!result.ok) {
+      // 没存上：字还在稿纸上，过一会儿再试（这期间作者再打字也会重新排）。
+      if (timer === null) scheduleDraftSave(DRAFT_RETRY_MS);
+      return result;
+    }
   }
-  if (!result.ok) {
-    // 没存上：字还在稿纸上，过一会儿再试（这期间作者再打字也会重新排）。
-    if (timer === null) scheduleDraftSave(DRAFT_RETRY_MS);
-    return result;
-  }
-  // 发出去之后作者又打了字：接着存。
-  if (needsSave(useDraftStore.getState())) return saveDraftNow();
-  return result;
 }
 
 /** 换章、撤销、关窗前：把没存的字存掉，等它落盘（撞了版本的那份在恢复稿里，也算存下了；没存上如实返回）。 */
@@ -205,37 +216,18 @@ export async function flushDraftSave(): Promise<DraftFlushResult> {
 }
 
 /**
- * 关窗前要不要拦：上一笔明确没存上、字还没落盘。keepalive 不等回执，救不了已知存不上的那份（第 4 轮复核 R10）。
- * 撞了版本另存成恢复稿的不算（needsSave 已跳过那份）。
+ * 关窗前要不要拦：这一章最后那笔明确没存上、之后还没有一笔存成。keepalive 不等回执，救不了已知存不上的那份（第 4 轮复核 R10）。
+ * 撞了版本另存成恢复稿的不算（那是落定了）。不拿手上的字和底版比：没存上之后盘上是什么说不准（第 9 轮复核 W1）。
  */
 export function hasFailedUnsavedDraft(): boolean {
-  // 和盘上比，不和在路上那笔比：重试还没回来，字就还没落盘。
   const state = useDraftStore.getState();
-  return failedUnsaved && paperOpen(state) && isDraftDirty(state);
+  return paperOpen(state) && syncOf(state).failed;
 }
 
-/** 关窗途中的最后一笔（keepalive，不等回执）。一笔在路上也发：底版和它一样，服务端顺着接（见文件头）。 */
+/** 关窗途中的最后一笔（keepalive，不等前面那笔）：底版和在路上那笔一样，服务端按窗口号和序号顺着接（见文件头）。 */
 export function saveDraftKeepalive(): void {
-  const state = useDraftStore.getState();
-  if (!state.projectPath || !needsSave(state)) return;
   clearTimer();
-  const paper = { projectPath: state.projectPath, chapter: state.chapter };
-  savesSent += 1;
-  if (reassertFor(state)) reassert = null;
-  const sender = nextSender();
-  void saveWorkingDraft({
-    projectPath: state.projectPath,
-    chapter: state.chapter,
-    body: state.body,
-    ...(state.title.trim() ? { title: state.title.trim() } : {}),
-    baseVersion: state.baseVersion,
-    ...sender,
-  }, { keepalive: true }).then(() => undefined, () => undefined).then(() => {
-    // 页面没关（离页被取消、从页面缓存回来）、这笔还是最后一笔：它的回执没照常处理，再存一笔定下盘上是什么（第 8 轮复核 V1）。
-    if (sender.seq !== seq) return;
-    reassert = paper;
-    scheduleDraftSave(0);
-  });
+  void send(true);
 }
 
 /**
@@ -244,16 +236,8 @@ export function saveDraftKeepalive(): void {
  * （第 4 轮 R3、第 5 轮 S6/S7）。
  */
 export async function drainPaper(): Promise<void> {
-  for (;;) {
-    // 在路上的那笔先等它回来：手上的字可能刚改回和底版一样（看着不用存），盘上却正要落下那笔旧的（第 6 轮复核 T2）。
-    if (inFlight) {
-      await inFlight;
-      continue;
-    }
-    if (!needsSave(useDraftStore.getState())) return;
-    const flushed = await flushDraftSave();
-    if (!flushed.ok) throw new UnsavedPaperError(flushed.error);
-  }
+  const flushed = await saveDraftNow();
+  if (!flushed.ok) throw new UnsavedPaperError(flushed.error);
 }
 
 /** 每换一次稿纸加一；正在读盘的换法读回来时号不对 = 被后来的换法顶掉了，不换（第 5 轮 S3）。 */
@@ -262,7 +246,7 @@ let paperIntent = 0;
 /** 手上还有没存的字就不许换（漏了 drainPaper 的入口在这里如实失败，不丢字）。 */
 function assertNothingUnsaved(): void {
   const state = useDraftStore.getState();
-  if (inFlight || needsSave(state)) throw new UnsavedPaperError("刚打的字还在存");
+  if (requests.size > 0 || needsSave(state)) throw new UnsavedPaperError("刚打的字还在存");
 }
 
 /** 读盘前领的记号：那时发过几笔存稿、第几次开读。 */
@@ -295,10 +279,11 @@ function readStillFresh(read: PaperReadMark): boolean {
 export function replacePaperNow(projectPath: string, paper: ChapterPaper, read?: PaperReadMark): void {
   assertNothingUnsaved();
   paperIntent += 1;
-  failedUnsaved = false;
   const state = useDraftStore.getState();
   if (read !== undefined && !readStillFresh(read) && state.projectPath === projectPath && state.chapter === paper.chapter && state.loaded) return;
   state.loadPaper(projectPath, paper);
+  sync = null;
+  rejected = null;
   shownTicket = read?.ticket ?? (readTickets += 1);
 }
 
@@ -306,7 +291,8 @@ export function replacePaperNow(projectPath: string, paper: ChapterPaper, read?:
 export function clearPaperNow(): void {
   assertNothingUnsaved();
   paperIntent += 1;
-  failedUnsaved = false;
+  sync = null;
+  rejected = null;
   useDraftStore.getState().reset();
   shownTicket = (readTickets += 1);
 }
@@ -334,8 +320,8 @@ export async function openPaper(projectPath: string, chapter: number, options: {
  */
 export async function refreshPaper(options: { readonly chapter?: number } = {}): Promise<PaperRefresh> {
   for (let attempt = 0; attempt < REFRESH_ATTEMPTS; attempt += 1) {
-    // 在路上的那笔先等它落盘，读回来的才是它之后的样子。
-    while (inFlight) await inFlight;
+    // 还没回来的那几笔先等它们落盘，读回来的才是它们之后的样子。
+    while (requests.size > 0) await Promise.allSettled([...requests]);
     const state = useDraftStore.getState();
     if (!state.projectPath || state.chapter <= 0) return "skipped";
     if (options.chapter !== undefined && options.chapter !== state.chapter) return "skipped";
@@ -349,7 +335,7 @@ export async function refreshPaper(options: { readonly chapter?: number } = {}):
     // 后开读的一次已经换上了：这份是迟到的旧读数，不拿它盖（第 7 轮复核 U1）。
     if (read.ticket <= shownTicket) return "skipped";
     // 读的期间发过存稿：读回来的可能比刚存的旧，迟到了也不能拿它盖（第 6 轮复核 T1）。再读。
-    if (read.saves !== savesSent || inFlight) continue;
+    if (read.saves !== savesSent || requests.size > 0) continue;
     shownTicket = read.ticket;
     const outcome = useDraftStore.getState().receivePaper(projectPath, paper);
     if (outcome === "own") rememberOwnVersion(useDraftStore.getState().baseVersion);
@@ -433,13 +419,11 @@ export async function keepPaperMine(): Promise<PaperDecisionResult> {
 /** 只供单测：清掉模块里的计时器和在途。 */
 export function __resetDraftSyncForTests(): void {
   clearTimer();
-  inFlight = null;
-  sending = null;
-  reassert = null;
+  requests.clear();
+  sync = null;
   readTickets = 0;
   shownTicket = 0;
   rejected = null;
-  failedUnsaved = false;
   paperIntent = 0;
   savesSent = 0;
   ownVersions.length = 0;
