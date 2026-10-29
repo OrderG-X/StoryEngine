@@ -299,6 +299,32 @@ describe("收拾半截事务：换没换回拿内容证明、只删核过的那�
     expect(await readFile(join(dir, "backup", "0.displaced"), "utf-8")).toBe(A);
   });
 
+  it("老清单退到一半被打断：退之前补记了原来那份（清单不改），下次接着退完", async () => {
+    const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
+    const OTHER = "drafts/fast/chapter-0002.md";
+    const dir = join(book, ".story-core-tx", "round23-tx");
+    await mkdir(join(dir, "backup"), { recursive: true });
+    await mkdir(join(dir, "staged"), { recursive: true });
+    await writeFile(join(dir, "backup", "0"), A);
+    await writeFile(join(dir, "backup", "1"), A);
+    const files = [DRAFT, OTHER].map((path, slot) => ({ path, slot: String(slot), existed: true }));
+    const manifest = JSON.stringify({ schema: "story-core-tx/1", id: "round23-tx", createdAt: "2026-10-20T00:00:00.000Z", status: "prepared", files });
+    await writeFile(join(dir, "manifest.json"), manifest);
+    await mkdir(dirname(draft()), { recursive: true });
+    await writeFile(draft(), C);
+    await writeFile(join(book, OTHER), C);
+    io.beforeRename = async (from) => {
+      if (from === join(dir, "backup", "1")) throw Object.assign(new Error("injected"), { code: "EIO" });
+    };
+    expect((await recoverTransactions(book)).problems).toEqual(["round23-tx"]);
+    expect(await readFile(draft(), "utf-8")).toBe(A);
+    expect(await readFile(join(dir, "manifest.json"), "utf-8")).toBe(manifest);
+    io.beforeRename = undefined;
+    expect(await recoverTransactions(book)).toMatchObject({ rolledBack: ["round23-tx"], problems: [] });
+    expect(await hasPendingTransactions(book)).toBe(false);
+    expect(await readFile(join(book, OTHER), "utf-8")).toBe(A);
+  });
+
   it("备份不在了、正式那份已经是原来的样子：清单记着原来那份，就是退过了", async () => {
     const { hasPendingTransactions, recoverTransactions } = await import("./transaction.js");
     const dir = await residue(A, { had: true });
