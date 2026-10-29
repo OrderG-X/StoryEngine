@@ -339,6 +339,20 @@ function createWindow(url) {
     event.preventDefault();
     if (isExternal(target)) void shell.openExternal(target);
   });
+  // 页面拦下了离页（上一笔存稿明确没成功）：问作者，选「仍要关闭」才放行；Electron 默认不问、直接不关（第 4 轮复核 R10）。
+  win.webContents.on("will-prevent-unload", (event) => {
+    console.warn("[desktop] 页面拦下关窗：上一笔存稿没成功，问作者");
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["先不关", "仍要关闭"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "还有字没存上",
+      detail: "刚才存稿没成功。现在关掉，这些字会丢。",
+    });
+    if (choice === 1) event.preventDefault();
+    else quitKeptOpen = true;
+  });
   // 页面进程崩了：记下来，自动重载一次（草稿每次改动都已存盘）。
   let reloadedAfterCrash = false;
   win.webContents.on("render-process-gone", (_event, details) => {
@@ -393,6 +407,8 @@ const QUIT_CLOSE_GRACE_MS = 1_000;
 const QUIT_HARD_DEADLINE_MS = 4_000;
 
 let quitting = false;
+/** 这次退出时作者选了「先不关」：到点也别强关窗。 */
+let quitKeptOpen = false;
 app.on("before-quit", (event) => {
   // 审查 #4：退出前给前端 pagehide 的 keepalive 保存留一点时间抵达 server，并让 server 排空在途写盘请求，
   // 再真正退出——否则关窗即杀进程，最后一次未落盘的编辑会丢。首次拦截退出、短暂宽限后放行。
@@ -400,6 +416,19 @@ app.on("before-quit", (event) => {
   // 现在 close({ graceMs }) 会主动断开既有连接；外面再套一道硬时限兜底，任何情况下都退得出去。
   if (quitting) return;
   event.preventDefault();
+  // 先关窗、再停服务：页面有没存上的字会拦下（will-prevent-unload 问作者）；作者选先不关，就不退出、服务照常跑。
+  // 窗都关了 → window-all-closed → app.quit() 再进来，这时没有窗了才停服务。
+  const windows = BrowserWindow.getAllWindows();
+  if (windows.length > 0) {
+    quitKeptOpen = false;
+    for (const win of windows) win.close();
+    // 页面卡死、离页事件跑不起来：到点还没关掉、作者也没选先不关，就强关（Cmd+Q 不能被卡死的页面挂住）。
+    setTimeout(() => {
+      if (quitKeptOpen) return;
+      for (const win of BrowserWindow.getAllWindows()) win.destroy();
+    }, QUIT_HARD_DEADLINE_MS);
+    return;
+  }
   quitting = true;
   let done = false;
   const quitOnce = () => {

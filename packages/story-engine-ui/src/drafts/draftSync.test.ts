@@ -111,16 +111,16 @@ describe("稿纸状态", () => {
     expect(isDraftDirty(useDraftStore.getState())).toBe(true);
   });
 
-  it("force（作者点的撤销）直接换上", () => {
+  it("撤销后盘上变了、作者手上有没存的字：字不丢，出提示（第 4 轮复核 R7）", () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "新。", version: "b" }));
     useDraftStore.getState().edit("新。还没存。");
-    useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "旧。", version: "a" }), { force: true });
-    expect(useDraftStore.getState()).toMatchObject({ body: "旧。", baseVersion: "a", incoming: null });
+    useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "旧。", version: "a" }));
+    expect(useDraftStore.getState()).toMatchObject({ body: "新。还没存。", baseVersion: "b", incoming: { body: "旧。", version: "a", cause: "update" } });
   });
 
   it("撤销后盘上那版没章名 → 稿纸上的章名也清掉，不留着改过的（真机试写：撤销「改章名」后稿纸还显示新章名）", () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "正文。", version: "b", title: "回巷" }));
-    useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "a" }), { force: true });
+    useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "a" }));
     expect(useDraftStore.getState()).toMatchObject({ title: "", savedTitle: "", baseVersion: "a" });
   });
 
@@ -218,6 +218,37 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState()).toMatchObject({ chapter: 2, body: "二。" });
   });
 
+  it("换章读新章那会儿作者又打了字：换上之前再存一次，原章盘上有这句（第 4 轮复核 R3）", async () => {
+    const server = fakeServer({ 1: { version: "v0", body: "一。" }, 2: { version: "w0", body: "二。" } });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if ((!init || !init.method || init.method === "GET") && url.includes("chapter=2")) editDraft("一。改了。读盘时又打的一句。");
+      return server.fetchMock(url, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await openPaper(PROJECT, 1);
+    editDraft("一。改了。");
+    await openPaper(PROJECT, 2);
+    expect(server.disk[1]?.body).toBe("一。改了。读盘时又打的一句。");
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 2, body: "二。" });
+  });
+
+  it("换章读盘时又打的字存不上：不换章，字留在原章稿纸上", async () => {
+    const server = fakeServer({ 1: { version: "v0", body: "一。" }, 2: { version: "w0", body: "二。" } });
+    let failPuts = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if ((!init || !init.method || init.method === "GET") && url.includes("chapter=2")) {
+        editDraft("一。读盘时又打的一句。");
+        failPuts = true;
+      }
+      if (failPuts && init?.method === "PUT") throw new Error("写盘失败");
+      return server.fetchMock(url, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await openPaper(PROJECT, 1);
+    await expect(openPaper(PROJECT, 2)).rejects.toThrow();
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 1, body: "一。读盘时又打的一句。" });
+  });
+
   it("存稿路上作者又打了字：回来后接着存最新的", async () => {
     const server = fakeServer({ 1: { version: "v0", body: "一。" } });
     let release!: () => void;
@@ -307,14 +338,14 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", body: "撤销后的。" });
   });
 
-  it("撤销后重读：force 直接换上盘上的旧版", async () => {
+  it("撤销后重读：手上的字都存上了，直接换上盘上的旧版", async () => {
     const server = fakeServer({ 1: { version: "v0", body: "旧。" } });
     vi.stubGlobal("fetch", server.fetchMock);
     await openPaper(PROJECT, 1);
     editDraft("新。");
     await flushDraftSave();
     server.disk[1] = { version: "v0", body: "旧。" };
-    await refreshPaper({ force: true });
+    await refreshPaper();
     expect(useDraftStore.getState()).toMatchObject({ body: "旧。", baseVersion: "v0" });
   });
 

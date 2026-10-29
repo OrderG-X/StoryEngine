@@ -728,6 +728,34 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     }
   });
 
+  it("前一章没定稿、作者知情后提前写：写的途中前一章工作稿改了 → 照旧前情写的不换上、留候选（第 4 轮复核 R6）", async () => {
+    const projectDir = await makeProject("前章工作稿依据", "林远");
+    const old = "林远把唯一的钥匙交给老周，约定明天去海州。";
+    expect(await runCommand(projectDir, draftSave, { chapter: 1, body: old, baseVersion: null }, { caller: "author" })).toMatchObject({ ok: true });
+    const writerClientModule = await import("../../writing/writer-client.js");
+    let writerSaw = "";
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockImplementation(async () => ({
+      async generateDraft({ context }) {
+        writerSaw = JSON.stringify(context.sections.find((section) => section.name === "previous_uncommitted_draft")?.content ?? null);
+        const current = (await readDraft(projectDir, 1))!;
+        expect(await runCommand(projectDir, draftSave, { chapter: 1, body: "林远已经把唯一的钥匙熔了，不去海州了。", baseVersion: current.version }, { caller: "author" })).toMatchObject({ ok: true });
+        return { title: "第2章", content: longBody("林远") };
+      },
+    }));
+    try {
+      const result = await execute(
+        { chapter: 2, allowWriteAhead: true, autoDeAi: false },
+        { requestContext: buildProjectRequestContext(projectDir, 2, undefined, ["前章没定稿，继续写第二章"]) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; kept?: { reason: string } };
+      expect(writerSaw).toContain(old);
+      expect(result).toMatchObject({ ok: false, kept: { reason: "basis_moved" } });
+      expect(await readDraft(projectDir, 2)).toBeUndefined();
+      expect(await pendingDraftFor(projectDir, 2)).toMatchObject({ kind: "candidate", reason: "basis_moved" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("接着往下写：这章还没正文 → nothing_to_continue；已定稿 → chapter_committed；都不调模型", async () => {
     const projectDir = await makeProject("没得接", "林远");
     const writerClientModule = await import("../../writing/writer-client.js");

@@ -33,6 +33,16 @@ export function draftVersionOf(fileText: string, stamp: DraftStamp): string {
   return sha256(`${stamp.epoch}\u0000${stamp.gen ?? ""}\u0000${fileText}`).slice(0, 16);
 }
 
+/**
+ * 这一章没有工作稿时的版本号。老书（还没换过纪元、这章没号）是 null；换过纪元以后「没有稿」也带代次：
+ * 「没有稿 → 作者存 A → AI 换 B → 撤销回没有稿」之后，照最早那个「没有稿」发的旧存稿对不上，不会把撤销掉的 A 又写回来
+ * （写作版本 P1b 第 4 轮复核 R1）。和任何一份全文的版本号都不会撞（前缀不同）。
+ */
+export function absentDraftVersion(stamp: DraftStamp): string | null {
+  if (!stamp.epoch && stamp.gen === undefined) return null;
+  return `none-${sha256(`${stamp.epoch}\u0000${stamp.gen ?? ""}\u0000\u0001absent`).slice(0, 11)}`;
+}
+
 /** 一章工作稿此刻的代次。 */
 export async function readDraftStamp(bookDir: string, chapter: number): Promise<DraftStamp> {
   return draftStampOf(await readDraftGens(bookDir), chapter);
@@ -67,19 +77,26 @@ export function sameDraftBody(a: string, b: string): boolean {
 }
 
 /**
- * 一章工作稿的原样全文和版本号（一起读，版本号就是这份全文的）；没有文件就是 undefined。
+ * 一章工作稿此刻的样子：有文件就是原样全文和它的版本号，没有文件就只有「没有稿」的版本号（老书是 null）。
  * 代次先读、正文后读：正赶上写，算出的版本号谁都对不上（存稿撞版本，不会盖错）。
+ * 要拿「我是在哪一版上改的」去比的地方都用这里的 version，别拿 `readDraft(...)?.version ?? null`：那样「没有稿」永远是 null。
  */
-export async function readDraftFile(bookDir: string, chapter: number): Promise<{ readonly text: string; readonly version: string } | undefined> {
+export async function readDraftState(bookDir: string, chapter: number): Promise<{ readonly file?: { readonly text: string; readonly version: string }; readonly version: string | null }> {
   const stamp = await readDraftStamp(bookDir, chapter);
   let text: string;
   try {
     text = await readFile(join(bookDir, draftPath(chapter)), "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: absentDraftVersion(stamp) };
     throw error;
   }
-  return { text, version: draftVersionOf(text, stamp) };
+  const version = draftVersionOf(text, stamp);
+  return { file: { text, version }, version };
+}
+
+/** 一章工作稿的原样全文和版本号（一起读，版本号就是这份全文的）；没有文件就是 undefined。 */
+export async function readDraftFile(bookDir: string, chapter: number): Promise<{ readonly text: string; readonly version: string } | undefined> {
+  return (await readDraftState(bookDir, chapter)).file;
 }
 
 /** 读一章的工作稿；没有文件就是 undefined。 */
@@ -92,6 +109,8 @@ export interface ChapterPaper {
   readonly chapter: number;
   /** 工作稿；没有就是 null。 */
   readonly draft: Draft | null;
+  /** 工作稿此刻的版本号（没有稿也有，老书没有稿是 null）：稿纸存稿拿它当底版。 */
+  readonly draftVersion: string | null;
   /** 定稿正文；没定稿就是 null。 */
   readonly committed: { readonly title?: string; readonly body: string } | null;
   /** 定稿后工作稿又改过（两份都在且正文不一样）；没定稿或没工作稿就是 null。 */
@@ -100,11 +119,13 @@ export interface ChapterPaper {
 
 /** 稿纸打开一章要的全部：工作稿、定稿、定稿后改过没有。 */
 export async function readChapterPaper(bookDir: string, chapter: number): Promise<ChapterPaper> {
-  const [draft, committedText] = await Promise.all([readDraft(bookDir, chapter), readChapterText(bookDir, chapter)]);
+  const [state, committedText] = await Promise.all([readDraftState(bookDir, chapter), readChapterText(bookDir, chapter)]);
+  const draft = state.file && { chapter, ...parseDraftFile(state.file.text), version: state.file.version };
   const committed = committedText === undefined ? null : parseDraftFile(committedText);
   return {
     chapter,
     draft: draft ?? null,
+    draftVersion: state.version,
     committed,
     editedSinceCommit: draft && committed ? !sameDraftBody(draft.body, committed.body) : null,
   };

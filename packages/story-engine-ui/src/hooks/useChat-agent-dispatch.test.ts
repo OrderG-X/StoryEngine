@@ -455,6 +455,26 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(disk.get(3)?.draft?.body).toBe("作者在第三章刚打的字。");
   });
 
+  it("AI 写另一章、手上那章存不上：稿纸和当前章都留在原章，下一句话还是指原章（第 4 轮复核 R8）", async () => {
+    editDraft("第三章没存上的字。");
+    mockedSaveWorkingDraft.mockRejectedValue(new Error("存稿失败"));
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g4" });
+      handlers.onDraftDelta?.({ chapter: 4, text: "第四章 AI 在写。" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g4", chapter: 4, ok: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("继续写下一章"); });
+    scriptAgentStream((handlers) => handlers.onDone());
+    await act(async () => { await result.current.handleSendMessage("改一下我眼前这一章"); });
+
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "第三章没存上的字。" });
+    expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(3);
+    expect(mockedStreamAgentChat.mock.calls.at(-1)?.[0].currentChapter).toBe(3);
+  });
+
   it("a stale agent finally releases its token without clearing loading in the replacement workspace", async () => {
     let release!: () => void;
     mockedStreamAgentChat.mockImplementationOnce(async () => new Promise<void>((resolve) => { release = resolve; }));
@@ -1183,9 +1203,9 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     expect(useBookStore.getState().workspace.flowStatus).toBe("idle");
   });
 
-  it("撤销时作者手上还有没存的字 → 也换成盘上那版（撤销是作者自己要的）", async () => {
+  it("撤销请求发出后作者又打了字 → 字留着，盘上那版挂成提示（第 4 轮复核 R7）", async () => {
     scriptAgentStream((handlers) => {
-      useDraftStore.getState().edit("撤销前作者手上没存的字");
+      editDraft("撤销请求发出后作者刚打的字");
       writeDisk(3, { draft: "撤销后盘上那版" });
       handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销。" });
       handlers.onDone();
@@ -1194,8 +1214,22 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
 
     await act(async () => { await result.current.handleSendMessage("撤销"); });
 
-    expect(useDraftStore.getState().body).toBe("撤销后盘上那版");
-    expect(useDraftStore.getState().incoming).toBeNull();
+    expect(useDraftStore.getState()).toMatchObject({ body: "撤销请求发出后作者刚打的字", incoming: { cause: "update", body: "撤销后盘上那版" } });
+  });
+
+  it("存稿明确失败后撤销 → 没存上的字不被盘上旧稿盖掉（第 4 轮复核 R7）", async () => {
+    editDraft("还没存上、只在稿纸上的字");
+    mockedSaveWorkingDraft.mockRejectedValue(new Error("磁盘故障"));
+    scriptAgentStream((handlers) => {
+      writeDisk(3, { draft: "撤销后盘上那版" });
+      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销。" });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销"); });
+
+    expect(useDraftStore.getState().body).toBe("还没存上、只在稿纸上的字");
   });
 
   it("undone=false（没东西可撤）→ 稿纸不动", async () => {

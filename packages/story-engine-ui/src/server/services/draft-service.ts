@@ -48,7 +48,7 @@
  * 铁律：AI 写工作稿唯一通道是 applyAiDraft（lib/ai-draft-write.ts）；passed=false 的候选永远不得中选；
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
-import { quoteInText, readDraft, readTruthBasis, type TruthBasis } from "@actalk/story-core";
+import { parseDraftFile, quoteInText, readChapterText, readDraftState, readTruthBasis, type TruthBasis } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -1133,8 +1133,13 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   // 或前文、设定改过，换上时就对不上——不盖掉作者那份，这版留成候选、如实说（写作版本 P1b）。
   // 稿只读这一次：版本号和接着写要接的正文是同一份。
   const startBasis = await readTruthBasis(input.projectDir);
-  const startDraft = await readDraft(input.projectDir, input.chapter);
-  const startVersion = startDraft?.version ?? null;
+  // 前一章还没定稿（作者知情后提前写）：写手、章纲、在场检测拿它的工作稿当前情。工作稿不进依据，单独记下开工时的版本。
+  const alsoRead = input.chapter > 1 && (await readChapterText(input.projectDir, input.chapter - 1)) === undefined
+    ? [{ chapter: input.chapter - 1, version: (await readDraftState(input.projectDir, input.chapter - 1)).version }]
+    : [];
+  const startState = await readDraftState(input.projectDir, input.chapter);
+  const startDraft = startState.file && parseDraftFile(startState.file.text);
+  const startVersion = startState.version;
   let continueFrom: DraftStart["continueFrom"];
   if (input.continueFrom) {
     const text = startDraft?.body.trim() ?? "";
@@ -1143,7 +1148,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     input.onContinueBase?.(text);
   }
   // 开写时存的那份「在写」候选：不管怎么收场（换上、没换上、抛错），流程结束就不再算在写——没换上的、半路抛错的，稿纸会提示。
-  const start: DraftStart = { basis: startBasis, version: startVersion, ...(continueFrom ? { continueFrom } : {}), progress: {} };
+  const start: DraftStart = { basis: startBasis, version: startVersion, alsoRead, ...(continueFrom ? { continueFrom } : {}), progress: {} };
   try {
     return await runGenerateDraftStarted(input, start);
   } finally {
@@ -1220,6 +1225,8 @@ export class NothingToContinueError extends Error {
 interface DraftStart {
   readonly basis: TruthBasis;
   readonly version: string | null;
+  /** 前一章没定稿时它的工作稿版本（写手拿它当前情）：换上时变了算前文改过。 */
+  readonly alsoRead: readonly { readonly chapter: number; readonly version: string | null }[];
   readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
   readonly progress: { candidateId?: string };
 }
@@ -1466,6 +1473,7 @@ async function runGenerateDraftWithPlan(
       body: draftBody,
       baseVersion: start.version,
       basis: start.basis,
+      alsoRead: start.alsoRead,
       source,
       ...(input.snapshotLabel ? { snapshotLabel: input.snapshotLabel } : {}),
       ...(start.progress.candidateId ? { candidateId: start.progress.candidateId } : {}),

@@ -90,6 +90,18 @@ describe("作者存稿（draft.save）", () => {
     expectOk(await runCommand(book, draftSave, { chapter: 1, body: "接着写。", baseVersion: now }, author));
   });
 
+  it("撤销到还没写过：没稿也有新版本号，照撤销前「没稿」发的旧首稿撞版本（第 4 轮复核 R1）", async () => {
+    const vA = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "作者首稿。", baseVersion: null }, author)).result.version;
+    expectOk(await runCommand(book, draftApplyGenerated, { chapter: 1, body: "AI 的。", baseVersion: vA }, ai));
+    // 撤销到没稿：存档点删掉文件，再换代次。
+    await rm(draftFile(1));
+    await bumpRevision(book);
+    const now = (await readChapterPaper(book, 1)).draftVersion;
+    expect(now).toMatch(/^none-/u);
+    expectConflict(await runCommand(book, draftSave, { chapter: 1, body: "作者首稿。", baseVersion: null }, author));
+    expectOk(await runCommand(book, draftSave, { chapter: 1, body: "重新写。", baseVersion: now }, author));
+  });
+
   it("不经撤销，作者把稿改回原样：旧版本号也对不上（每写一次换一个代次号）", async () => {
     const vR = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "原稿。", baseVersion: null }, author)).result.version;
     const vA = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "改了。", baseVersion: vR }, author)).result.version;
@@ -194,7 +206,7 @@ describe("稿纸打开一章", () => {
   it("工作稿、定稿都给；只差空行时不算定稿后改过", async () => {
     await mkdir(join(book, "chapters"), { recursive: true });
     await writeFile(join(book, "chapters", "0001.md"), "# 第1章 · 钟停\n\n钟停了。\n\n她推门。\n", "utf-8");
-    expect(await readChapterPaper(book, 1)).toEqual({ chapter: 1, draft: null, committed: { title: "第1章 · 钟停", body: "钟停了。\n\n她推门。" }, editedSinceCommit: null });
+    expect(await readChapterPaper(book, 1)).toEqual({ chapter: 1, draft: null, draftVersion: null, committed: { title: "第1章 · 钟停", body: "钟停了。\n\n她推门。" }, editedSinceCommit: null });
     await mkdir(join(book, "drafts", "fast"), { recursive: true });
     await writeFile(draftFile(1), "# 第1章 · 钟停\n\n钟停了。  \n\n\n\n她推门。\n", "utf-8");
     expect((await readChapterPaper(book, 1)).editedSinceCommit).toBe(false);

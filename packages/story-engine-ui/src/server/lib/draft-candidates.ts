@@ -158,10 +158,13 @@ export async function removeDraftCandidate(projectDir: string, id: string): Prom
   await withBookLock(projectDir, () => removeEntry(candidatesDir(projectDir), id));
 }
 
-/** 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的不算。 */
-export async function pendingDraftCandidate(projectDir: string, chapter: number): Promise<DraftCandidate | undefined> {
+/**
+ * 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的、和眼下工作稿一样的不算。
+ * 先挑掉一样的再取最新：最新那份碰巧和工作稿一样时，更早那份作者还没处理的照样提示（第 4 轮复核 R4）。
+ */
+export async function pendingDraftCandidate(projectDir: string, chapter: number, draftBody?: string): Promise<DraftCandidate | undefined> {
   const candidates = (await readEntries(candidatesDir(projectDir), DraftCandidateFile))
-    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && !writingNow.has(candidate.id))
+    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && candidate.body.trim() !== draftBody && !writingNow.has(candidate.id))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return candidates[0];
 }
@@ -240,6 +243,8 @@ async function settleRecovery(projectDir: string, recovery: DraftRecovery, seq =
 export async function dismissDraftRecovery(projectDir: string, recovery: DraftRecovery, check: { readonly sha?: string; readonly from?: { readonly client: string; readonly seq: number } }): Promise<boolean> {
   const own = check.from?.client === recovery.client;
   if (!own && check.sha !== sha256(recovery.body)) return false;
+  // 本窗口迟到的旧「不要了」：它说不要的那几笔已经被后来的字顶掉了，后来的字不清（第 4 轮复核 R2）。
+  if (own && check.from!.seq < recovery.seq) return true;
   await settleRecovery(projectDir, recovery, own ? check.from!.seq : recovery.seq);
   return true;
 }
@@ -261,8 +266,10 @@ export async function clearSavedRecoveries(projectDir: string, chapter: number, 
       continue;
     }
     if (recovery.chapter !== chapter) continue;
-    if (from && recovery.client === from.client) await settleRecovery(projectDir, recovery, from.seq);
-    else if (recovery.body.trim() && recovery.body.trim() === savedBody.trim()) await settleRecovery(projectDir, recovery);
+    // 本窗口的：只清这笔之前的（迟到的旧笔恰好和盘上一样也算存上，但它之后那几笔还在恢复稿里，不能顺手清掉，第 4 轮复核 R2）。
+    if (from && recovery.client === from.client) {
+      if (from.seq >= recovery.seq) await settleRecovery(projectDir, recovery, from.seq);
+    } else if (recovery.body.trim() && recovery.body.trim() === savedBody.trim()) await settleRecovery(projectDir, recovery);
   }
 }
 
@@ -280,8 +287,8 @@ export async function pendingDraftFor(projectDir: string, chapter: number): Prom
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const recovery = recoveries[0];
   if (recovery) return { kind: "recovery", id: recovery.id, ...(recovery.title ? { title: recovery.title } : {}), body: recovery.body, sha: sha256(recovery.body) };
-  const candidate = await pendingDraftCandidate(projectDir, chapter);
-  if (!candidate || candidate.body.trim() === draftBody) return undefined;
+  const candidate = await pendingDraftCandidate(projectDir, chapter, draftBody);
+  if (!candidate) return undefined;
   return {
     kind: "candidate",
     id: candidate.id,

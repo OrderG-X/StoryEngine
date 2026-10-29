@@ -19,6 +19,7 @@ import { useRecentBooksStore } from "../stores/recentBooksStore.js";
 import { bookCreationPromptText, bookImportPromptText } from "../utils/bookCreationPrompt.js";
 import { isFreshBook } from "../utils/isFreshBook.js";
 import { flushAllSaves } from "../sync/saveAll.js";
+import { flushBeforeSwitch, UnsavedPaperError } from "../drafts/draftSync.js";
 import { markChatLoaded } from "../sync/chatSync.js";
 import { flowStatusForPaper } from "../workspace/applyOverview.js";
 import {
@@ -602,6 +603,17 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       const currentProjectPath = transition.projectPath || null;
       const paper: ChapterPaper | null = currentProjectPath ? await fetchChapterPaper(currentProjectPath, chapter.chapterNumber) : null;
       if (!ownsNavigationOrigin(transition)) return;
+      // 读新章那会儿作者又在原来那章打了字：换上之前再存一次，存不上就留在原地（第 4 轮复核 R3）。这之后到换上不再 await。
+      if (currentProjectPath) {
+        try {
+          await flushBeforeSwitch(currentProjectPath, chapter.chapterNumber);
+        } catch (error) {
+          if (!(error instanceof UnsavedPaperError)) throw error;
+          showToast(`保存失败，仍停留在当前章节：${error.reason}`, 5200);
+          return;
+        }
+        if (!ownsNavigationOrigin(transition)) return;
+      }
       const outgoingChapter = useBookStore.getState().workspace.currentChapter?.chapterNumber ?? null;
       // 章节表给没写的章垫的占位名「下一章」不当这章的名字（不管从哪个入口打开）。
       const draftTitle = paper?.draft?.title ?? paper?.committed?.title

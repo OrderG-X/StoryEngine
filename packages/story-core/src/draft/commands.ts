@@ -14,7 +14,7 @@ import { draftPath } from "../store/paths.js";
 import { fail } from "../commands/runner.js";
 import type { PlanContext, WriteCommandSpec } from "../commands/types.js";
 import type { DraftStamp } from "../store/control.js";
-import { composeDraftFile, draftVersionOf, readDraft, readDraftStamp, type Draft } from "./draft.js";
+import { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readDraft, readDraftStamp, type Draft } from "./draft.js";
 
 /** 三条命令同一份参数：都要说清是拿哪一版改 / 换的（这一章原来没有工作稿就是 null）。 */
 export const DraftSaveArgs = z.object({
@@ -32,9 +32,10 @@ export interface DraftWriteResult {
   readonly unchanged: boolean;
 }
 
-/** 存稿撞版本时交回去的东西：盘上那份（没有就是 null）。 */
+/** 存稿撞版本时交回去的东西：盘上那份（没有就是 null）和它此刻的版本号（没有稿也有，老书是 null）。 */
 export interface DraftConflictDetails {
   readonly current: Draft | null;
+  readonly currentVersion: string | null;
 }
 
 async function readRaw(bookDir: string, chapter: number): Promise<string | undefined> {
@@ -48,10 +49,10 @@ async function readRaw(bookDir: string, chapter: number): Promise<string | undef
 
 /** 盘上的版本和调用方手里的对不上：不写，把盘上那份交回去。盘上已经就是要写的这份不算对不上（同一笔重发）。 */
 async function conflictIfMoved(bookDir: string, chapter: number, baseVersion: string | null, currentText: string | undefined, stamp: DraftStamp, nextText: string) {
-  const currentVersion = currentText === undefined ? null : draftVersionOf(currentText, stamp);
+  const currentVersion = currentText === undefined ? absentDraftVersion(stamp) : draftVersionOf(currentText, stamp);
   if (baseVersion === currentVersion || currentText === nextText) return undefined;
-  const current = currentText === undefined ? null : await readDraft(bookDir, chapter) ?? null;
-  const details: DraftConflictDetails = { current };
+  const current = currentText === undefined ? null : { chapter, ...parseDraftFile(currentText), version: currentVersion as string };
+  const details: DraftConflictDetails = { current, currentVersion };
   return fail("draft_conflict", `第 ${chapter} 章的工作稿在别处改过了（比如 AI 改稿或撤销），这次没有写。`, details);
 }
 

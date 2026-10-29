@@ -17,7 +17,7 @@ import { setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
 import { isRealDraftContent } from "./utils/draftContent.js";
-import { editDraft } from "./drafts/draftSync.js";
+import { editDraft, flushDraftSave, hasFailedUnsavedDraft } from "./drafts/draftSync.js";
 import { saveChatNow, scheduleChatSave } from "./sync/chatSync.js";
 import { flushAllSaves, saveAllKeepalive } from "./sync/saveAll.js";
 import type { ChapterNavItem, LastFormalCommitApply } from "./types.js";
@@ -118,16 +118,26 @@ export function App() {
   useEffect(() => {
     // 关窗 / 刷新：keepalive 发出最后一笔，不等回执。
     const onHide = () => saveAllKeepalive();
+    // 上一笔明确没存上：拦下离页（浏览器 / 桌面壳会问作者），马上再正常存一次；作者仍要关，pagehide 照样补发 keepalive。
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasFailedUnsavedDraft()) {
+        saveAllKeepalive();
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+      void flushDraftSave();
+    };
     // 只是切后台：页面还活着，走常规保存。
     const onVisibility = () => {
       if (document.visibilityState === "hidden") void flushAllSaves();
     };
     window.addEventListener("pagehide", onHide);
-    window.addEventListener("beforeunload", onHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("pagehide", onHide);
-      window.removeEventListener("beforeunload", onHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);

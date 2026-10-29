@@ -210,7 +210,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           // 留不下来就如实说没存上（503），稿纸当没存、过一会儿再试，换章、关书都拦着。
           try {
             const saved = await saveDraftRecovery(projectDir, { chapter, body: text, ...(title ? { title } : {}), baseVersion, ...(from ? { from } : {}) });
-            return { status: 409, payload: { ok: false, code: outcome.code, error: outcome.message, current: details?.current ?? null, recoveryId: saved.recovery.id } };
+            return { status: 409, payload: { ok: false, code: outcome.code, error: outcome.message, current: details?.current ?? null, currentVersion: details?.currentVersion ?? null, recoveryId: saved.recovery.id } };
           } catch (error) {
             console.warn(`[working-draft] 第 ${chapter} 章没存上的那份没留成恢复稿：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`);
             return { status: 503, payload: { ok: false, code: "recovery_failed", error: "别处刚改过这一章，你这段也没能另存下来（写盘没成功）。字还在稿纸上，稍后自动再试。" } };

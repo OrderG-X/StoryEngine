@@ -68,7 +68,7 @@ async function renameCommittedChapter(chapterNumber: number, title: string): Pro
     return;
   }
   showChapterTitle(chapterNumber, outcome.title);
-  await refreshPaper({ force: true, chapter: chapterNumber }).catch(() => undefined);
+  await refreshPaper({ chapter: chapterNumber }).catch(() => undefined);
   if (!outcome.unchanged) toast("章名改好了，操作历史里能撤销。");
 }
 

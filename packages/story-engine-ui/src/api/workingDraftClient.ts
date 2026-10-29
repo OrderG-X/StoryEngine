@@ -19,6 +19,8 @@ export type PendingDraft =
 export interface ChapterPaper {
   readonly chapter: number;
   readonly draft: WorkingDraft | null;
+  /** 工作稿此刻的版本号：没有稿也有（老书没有稿是 null）。存稿拿它当底版。 */
+  readonly draftVersion?: string | null;
   readonly committed: { readonly title?: string; readonly body: string } | null;
   readonly editedSinceCommit: boolean | null;
   readonly pending?: PendingDraft;
@@ -37,7 +39,7 @@ export interface SaveWorkingDraftRequest {
 
 export type SaveWorkingDraftResult =
   | { readonly ok: true; readonly version: string; readonly unchanged: boolean }
-  | { readonly ok: false; readonly conflict: true; readonly message: string; readonly current: WorkingDraft | null; readonly recoveryId?: string };
+  | { readonly ok: false; readonly conflict: true; readonly message: string; readonly current: WorkingDraft | null; readonly currentVersion?: string | null; readonly recoveryId?: string };
 
 const BASE = "/api/working-draft";
 
@@ -68,12 +70,13 @@ export async function saveWorkingDraft(input: SaveWorkingDraftRequest, options: 
     ...(options.keepalive ? { keepalive: true } : {}),
   });
   if (response.status === 409) {
-    const payload = await response.json() as { error?: string; current?: WorkingDraft | null; recoveryId?: string };
+    const payload = await response.json() as { error?: string; current?: WorkingDraft | null; currentVersion?: string | null; recoveryId?: string };
     return {
       ok: false,
       conflict: true,
       message: payload.error ?? "这一章的稿子在别处改过了。",
       current: payload.current ?? null,
+      ...(payload.currentVersion !== undefined ? { currentVersion: payload.currentVersion } : {}),
       ...(typeof payload.recoveryId === "string" ? { recoveryId: payload.recoveryId } : {}),
     };
   }

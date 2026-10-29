@@ -93,6 +93,11 @@ export function retargetWorkspaceOperation(
   return activeOperation;
 }
 
+/** 还能不能认领另一章（retargetWorkspaceOperation 会不会成）：先查、等稿纸换过去了再认领。 */
+export function canRetargetWorkspaceOperation(token: WorkspaceOperationTarget): boolean {
+  return !activeOperationRetargeted && isWorkspaceOperationCurrent(token);
+}
+
 export function finishWorkspaceOperation(token: WorkspaceOperationTarget): boolean {
   if (!isWorkspaceOperationCurrent(token)) return false;
   activeOperation = null;

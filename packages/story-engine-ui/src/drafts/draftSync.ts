@@ -105,12 +105,12 @@ async function sendOnce(): Promise<DraftFlushResult> {
     // 没有号 = 没另外存下来：当没存上，字还在稿纸上，过一会儿再试。
     if (!result.recoveryId) {
       const message = "别处刚改过这一章，你这段也没能另存下来。字还在稿纸上，稍后自动再试。";
-      live.markConflict(result.current);
+      live.markConflict(result);
       live.markSaveError(message);
       return { ok: false, error: message };
     }
     rejected = sent;
-    live.markConflict(result.current, result.recoveryId);
+    live.markConflict(result);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -146,6 +146,15 @@ export async function flushDraftSave(): Promise<DraftFlushResult> {
   return saveDraftNow();
 }
 
+/**
+ * 关窗前要不要拦：上一笔明确没存上、字还没落盘。keepalive 不等回执，救不了已知存不上的那份（第 4 轮复核 R10）。
+ * 撞了版本另存成恢复稿的不算（needsSave 已跳过那份）。
+ */
+export function hasFailedUnsavedDraft(): boolean {
+  const state = useDraftStore.getState();
+  return needsSave(state) && state.saveError !== null;
+}
+
 /** 关窗途中的最后一笔（keepalive，不等回执）。 */
 export function saveDraftKeepalive(): void {
   const state = useDraftStore.getState();
@@ -161,28 +170,41 @@ export function saveDraftKeepalive(): void {
   }, { keepalive: true }).catch(() => undefined);
 }
 
-/** 打开一章：先存掉手上那章（存不上就不换，抛 UnsavedPaperError），再从盘上读这一章整份换上。 */
-export async function openPaper(projectPath: string, chapter: number): Promise<void> {
-  const state = useDraftStore.getState();
-  if (state.loaded && (state.projectPath !== projectPath || state.chapter !== chapter)) {
+/**
+ * 稿纸要换到 projectPath 的第 chapter 章：手上那章还有没存的字就存掉，存不上抛 UnsavedPaperError（不换）。
+ * 换章读新章的那会儿稿纸还开着原来那章、作者可能又打了字，所以换上之前（读完新章、loadPaper 之前）要再调一次，
+ * 之后别再 await：最后一次查和换上之间插不进字（第 4 轮复核 R3）。
+ */
+export async function flushBeforeSwitch(projectPath: string, chapter: number): Promise<void> {
+  const leaving = (): boolean => {
+    const state = useDraftStore.getState();
+    return state.loaded && (state.projectPath !== projectPath || state.chapter !== chapter);
+  };
+  while (leaving() && needsSave(useDraftStore.getState())) {
     const flushed = await flushDraftSave();
     if (!flushed.ok) throw new UnsavedPaperError(flushed.error);
   }
+}
+
+/** 打开一章：先存掉手上那章（存不上就不换，抛 UnsavedPaperError），再从盘上读这一章整份换上。 */
+export async function openPaper(projectPath: string, chapter: number): Promise<void> {
+  await flushBeforeSwitch(projectPath, chapter);
   const paper = await fetchChapterPaper(projectPath, chapter);
+  await flushBeforeSwitch(projectPath, chapter);
   useDraftStore.getState().loadPaper(projectPath, paper);
 }
 
 /**
- * 盘上可能变了（AI 写完稿、撤销、恢复）：重读这一章。
- * force = 作者自己点的撤销 / 恢复，直接换上；否则有没存的字就出提示让作者选。
+ * 盘上可能变了（AI 写完稿、撤销、恢复）：重读这一章。作者手上没有没存的字就换上；有就出提示让作者选，
+ * 撤销也一样（第 4 轮复核 R7：存稿失败时、撤销发出后又打的字，都只在稿纸上，直接换会丢）。
  */
-export async function refreshPaper(options: { readonly force?: boolean; readonly chapter?: number } = {}): Promise<void> {
+export async function refreshPaper(options: { readonly chapter?: number } = {}): Promise<void> {
   const state = useDraftStore.getState();
   if (!state.projectPath || state.chapter <= 0) return;
   if (options.chapter !== undefined && options.chapter !== state.chapter) return;
   const projectPath = state.projectPath;
   const paper = await fetchChapterPaper(projectPath, state.chapter);
-  useDraftStore.getState().receivePaper(projectPath, paper, options.force ? { force: true } : {});
+  useDraftStore.getState().receivePaper(projectPath, paper);
   // 盘上变了、作者手上还有没存的字：马上存一笔（撞版本，服务端存成恢复稿），别只留在页面里。
   if (useDraftStore.getState().incoming?.cause === "update") scheduleDraftSave(0);
 }

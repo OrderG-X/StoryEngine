@@ -32,6 +32,7 @@ import {
   isWorkspaceOperationCurrent,
   isWorkspaceOperationTargetCurrent,
   retargetWorkspaceOperation,
+  canRetargetWorkspaceOperation,
 } from "../utils/workspaceOperation.js";
 import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
@@ -84,6 +85,12 @@ export interface UseChatResult {
   undoToTurn: (message: ChapterMessage) => Promise<void>;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出内容保留、不报错。无在跑流时调用是 no-op。 */
   stopAgent: () => void;
+}
+
+/** 稿纸上开着这本书的哪一章（作者眼前的）；还没开就是 undefined。 */
+function visibleChapter(projectPath: string): number | undefined {
+  const paper = useDraftStore.getState();
+  return paper.loaded && paper.projectPath === projectPath && paper.chapter > 0 ? paper.chapter : undefined;
 }
 
 /** 作者发这句时在看哪一章（右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
@@ -202,7 +209,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       let streamBase = "";
       let draftStreamChapter: number | null = null;
       let reportedDraftChapterMismatch = false;
-      // 流式要换到另一章时，先把手上那章存掉、再换稿纸；这期间流来的字先攒着。
+      // 流式要换到另一章时，先把手上那章存掉、再换稿纸（换完清空）；这期间流来的字先攒着，到的工具结果等它换完再处理。
       let paperSwitch: Promise<void> | null = null;
       // 本回合发起的稿纸重读：回合收尾、释放操作所有权之前等它们读完。
       const pendingPaperSyncs: Promise<unknown>[] = [];
@@ -316,7 +323,8 @@ export function useChat(params: UseChatParams): UseChatResult {
         const flushed = await flushDraftSave();
         if (!flushed.ok) showToast(`稿子还没存上（${flushed.error}），AI 看到的是上一次存下的那版。`, 5200);
         // H3：把用户当前所在章一并发给后端，让 agent 默认作用于该章、各工具缺省回退该值（回看旧章不写错章）。
-        const currentChapterNumber = useBookStore.getState().workspace.currentChapter?.chapterNumber;
+        // 「所在章」= 稿纸上开着的那章（作者眼前的）；稿纸还没开才用书的当前章（第 4 轮复核 R8）。
+        const currentChapterNumber = visibleChapter(projectPath) ?? useBookStore.getState().workspace.currentChapter?.chapterNumber;
         // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
         // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
         const lastTurnUndoHint = lastTurnUndoHintFromMessages(useChatStore.getState().messages);
@@ -367,12 +375,16 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               if (draftStreamChapter === null) {
                 const previousChapter = operation.chapter;
-                const adopted = retargetWorkspaceOperation(operation, { chapter });
-                if (!adopted) return;
-                operation = adopted;
+                if (!canRetargetWorkspaceOperation(operation)) return;
                 draftStreamChapter = chapter;
-                if (chapter !== previousChapter) {
-                  // 这一轮写的是另一章：这轮对话归那一章（稿纸跳过去后，下一句话说完它不收进「别的章的对话」）。
+                // 认领 AI 写的那章：这一轮的操作、书的「当前章」、这轮对话都归它。稿纸要换章时，等稿纸真换过去了才认领
+                // （第 4 轮复核 R8：手上那章存不上、稿纸没换成，就都留在原章，下一句话不能指向 AI 写的那章）。
+                const adopt = (): void => {
+                  const adopted = retargetWorkspaceOperation(operation, { chapter });
+                  if (!adopted) return;
+                  operation = adopted;
+                  if (chapter === previousChapter) return;
+                  // 这轮对话归那一章（稿纸跳过去后，下一句话说完它不收进「别的章的对话」）。
                   const turnMessages = useChatStore.getState().messages;
                   const assistantIndex = turnMessages.findIndex((message) => message.id === assistantMsgId);
                   const opener = turnMessages.slice(0, Math.max(assistantIndex, 0)).reverse().find((message) => message.role === "user");
@@ -389,21 +401,26 @@ export function useChat(params: UseChatParams): UseChatResult {
                       hasDraftFile: false,
                     },
                   });
-                }
+                };
                 if (useDraftStore.getState().chapter !== chapter && projectPath) {
                   // AI 写的是另一章：稿纸换到那一章（先存掉手上那章）。
                   const switchProject = projectPath;
-                  paperSwitch = openPaper(switchProject, chapter)
-                    .catch((error: unknown) => {
-                      // 手上那章的字没存上：稿纸不换（字还在这一章上），如实说一声。
+                  const switching = openPaper(switchProject, chapter)
+                    .then(adopt, (error: unknown) => {
+                      // 手上那章的字没存上：稿纸不换（字还在这一章上），也不认领那一章，如实说一声。
                       if (error instanceof UnsavedPaperError) {
                         useNavigationStore.getState().showToast(`AI 在写第 ${chapter} 章；${error.message}`, 6000);
                         return;
                       }
-                      useDraftStore.getState().loadPaper(switchProject, { chapter, draft: null, committed: null, editedSinceCommit: null });
+                      useDraftStore.getState().loadPaper(switchProject, { chapter, draft: null, draftVersion: null, committed: null, editedSinceCommit: null });
+                      adopt();
                     })
                     .then(() => { if (ownsCurrentWorkspace()) showStreaming(); });
-                  track(paperSwitch);
+                  paperSwitch = switching;
+                  void switching.finally(() => { if (paperSwitch === switching) paperSwitch = null; });
+                  track(switching);
+                } else {
+                  adopt();
                 }
               } else if (chapter !== draftStreamChapter) {
                 if (!reportedDraftChapterMismatch) {
@@ -416,8 +433,13 @@ export function useChat(params: UseChatParams): UseChatResult {
               else streamedDraft = replace ? text : streamedDraft + text;
               showStreaming();
             },
-            onToolResult: (info) => {
+            onToolResult: function onToolResult(info) {
               if (!ownsCurrentWorkspace()) return;
+              // 稿纸正在换到 AI 写的那章：等换完（或没换成）再按那时的当前章处理这条结果（第 4 轮复核 R8）。
+              if (paperSwitch) {
+                track(paperSwitch.then(() => onToolResult(info)));
+                return;
+              }
               // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）也必须把对应步骤
               // 落定——否则该步永远 running。章号不匹配只跳过「工作区应用」，不跳过步骤收尾。
               const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
@@ -513,10 +535,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 refreshWorkspaceFromOverview?.(info.overview);
               }
               // 工具可能改了这一章的稿子（出稿、改稿、定稿、改名、撤销……）：按盘上重读稿纸。
-              // 盘上没变什么都不发生；变了而作者手上没有没存的字就换上，有就出提示让作者选。
-              // AI 撤销是作者自己要的：直接换上。
-              track((paperSwitch ?? Promise.resolve())
-                .then(() => refreshPaper(undone ? { force: true } : {}))
+              // 盘上没变什么都不发生；变了而作者手上没有没存的字就换上，有就出提示让作者选（撤销也一样）。
+              track(refreshPaper()
                 .then(() => {
                   // 撤销后这一章回到哪一步，按盘上那版算（可能退回到「还没写过」）。
                   if (undone && ownsCurrentWorkspace()) {

@@ -52,7 +52,7 @@ const draftPath = (project: string, chapter: number) => join(project, "drafts", 
 describe("/api/working-draft", () => {
   it("新章读到 null；带 null 存进去，再读拿到同一个版本号", async () => {
     const project = await realProject();
-    expect((await call("GET", getUrl(project, 1))).payload).toEqual({ ok: true, paper: { chapter: 1, draft: null, committed: null, editedSinceCommit: null } });
+    expect((await call("GET", getUrl(project, 1))).payload).toEqual({ ok: true, paper: { chapter: 1, draft: null, draftVersion: null, committed: null, editedSinceCommit: null } });
     const saved = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 1, title: "钟停", body: "钟停了。", baseVersion: null });
     expect(saved.status).toBe(200);
     expect(saved.payload).toMatchObject({ ok: true, unchanged: false });

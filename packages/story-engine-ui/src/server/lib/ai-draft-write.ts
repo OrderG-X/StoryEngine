@@ -14,7 +14,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { draftApplyGenerated, draftPath, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { draftApplyGenerated, draftPath, readDraftState, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
 import { removeDraftCandidate, saveDraftCandidate, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
 import { scrubLocalAbsolutePaths } from "./local-path-scrubber.js";
 import { runWithLazySnapshot } from "./snapshot.js";
@@ -38,6 +38,11 @@ export interface AiDraftInput {
   readonly baseVersion: string | null;
   /** 开工时读的真相依据（先读它，再读写稿要用的材料）。 */
   readonly basis: TruthBasis;
+  /**
+   * 写的时候还拿来当材料的别章工作稿（前一章没定稿时它的工作稿）：开工时、读材料之前的版本。工作稿不算真相、不进依据，
+   * 换上时这几章任何一章变了，也算前文改过（第 4 轮复核 R6）。
+   */
+  readonly alsoRead?: readonly { readonly chapter: number; readonly version: string | null }[];
   readonly source: DraftCandidateSource;
   /** 换上前打的存档点叫什么（操作历史里看的）；不给用核心的「AI 写稿：第 N 章」。 */
   readonly snapshotLabel?: string;
@@ -114,6 +119,9 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
     outcome = await withBookLock(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
       // 作者喊停之后后到的稿不落盘，也不留候选（锁里再问一次：等锁的工夫也可能停了）。
       if (turnAborted()) return "aborted";
+      for (const read of input.alsoRead ?? []) {
+        if ((await readDraftState(projectDir, read.chapter)).version !== read.version) return keep("basis_moved");
+      }
       // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
       const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
       // 依据交给 runner 核：它先收拾写到一半的事务（回滚会换代次），再在同一把锁里比，途中读到的半截真相一律对不上。

@@ -249,10 +249,12 @@ export async function runWithLazySnapshot<T>(
   fixedLabel?: string,
 ): Promise<{ readonly snapshotId?: string; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
+    // 老格式事务（升级前崩溃留下的）先收拾，再进核心命令：收拾会换写入代次，核心随后核依据就对得上真相；
+    // 留到要打存档点才收拾，核心已经照没收拾的半截真相核过依据了（第 4 轮复核 R9）。
+    await recoverProjectCommitTransactions(projectDir);
     let taken: SnapshotEntry | undefined;
     const result = await fn(async (label, command) => {
       if (taken) return;
-      await recoverProjectCommitTransactions(projectDir);
       await ensureRepoUnlocked(projectDir);
       taken = await createSnapshotUnlocked(projectDir, fixedLabel ?? coreSnapshotLabel(command, label));
     });

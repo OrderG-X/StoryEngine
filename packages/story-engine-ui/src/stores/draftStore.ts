@@ -53,8 +53,8 @@ export interface DraftStoreState {
   /** 打开一章：整份换上，不管有没有没存的字（调用方先存掉旧章）。 */
   /** 换上盘上这一章。章名只认盘上的：导航上的占位名（「下一章」「第 N 章」）只用来显示，不当章名写进稿子。 */
   readonly loadPaper: (projectPath: string, paper: ChapterPaper) => void;
-  /** 盘上来了新版本：force（作者自己点的撤销）直接换；否则按有没有没存的字决定换还是提示。 */
-  readonly receivePaper: (projectPath: string, paper: ChapterPaper, options?: { readonly force?: boolean }) => void;
+  /** 盘上来了新版本：作者手上没有没存的字就换上，有就提示（谁改的都一样，撤销也不直接盖）。 */
+  readonly receivePaper: (projectPath: string, paper: ChapterPaper) => void;
   /** 作者在稿纸上改字。 */
   readonly edit: (body: string, title?: string) => void;
   /** 改章名（不动正文）。 */
@@ -64,7 +64,8 @@ export interface DraftStoreState {
   readonly markSaved: (version: string, sentBody: string, sentTitle: string) => void;
   readonly markSaveError: (message: string) => void;
   /** 存稿撞版本（recoveryId：服务端把作者手上这份另存成的恢复稿）。 */
-  readonly markConflict: (current: WorkingDraft | null, recoveryId?: string) => void;
+  /** 存稿撞了版本：盘上那份和它此刻的版本号（没有稿也有版本号；旧服务没给就用那份稿的）。 */
+  readonly markConflict: (conflict: { readonly current: WorkingDraft | null; readonly currentVersion?: string | null; readonly recoveryId?: string }) => void;
   /** conflict / update：换成盘上那一版。（候选、恢复稿要服务端换，见 draftSync 的 acceptPaperIncoming。） */
   readonly acceptIncoming: () => void;
   /** conflict / update：保留手上这版，以盘上那一版为底再存。 */
@@ -103,11 +104,15 @@ function keepOrPending(current: PaperIncoming | null, paper: ChapterPaper): Pape
   return pendingIncoming(paper.pending);
 }
 
-/** 盘上这一章该显示的字：有工作稿用工作稿，没有就用定稿，都没有是空。 */
+/**
+ * 盘上这一章该显示的字：有工作稿用工作稿，没有就用定稿，都没有是空。版本号是工作稿此刻的（没有稿也有，
+ * 撤销回「没有稿」以后旧的「没有稿」对不上，第 4 轮复核 R1）；老书没有稿是 null。
+ */
 function diskText(paper: ChapterPaper): { readonly body: string; readonly title?: string; readonly version: string | null } {
   if (paper.draft) return { body: paper.draft.body, ...(paper.draft.title ? { title: paper.draft.title } : {}), version: paper.draft.version };
-  if (paper.committed) return { body: paper.committed.body, ...(paper.committed.title ? { title: paper.committed.title } : {}), version: null };
-  return { body: "", version: null };
+  const version = paper.draftVersion ?? null;
+  if (paper.committed) return { body: paper.committed.body, ...(paper.committed.title ? { title: paper.committed.title } : {}), version };
+  return { body: "", version };
 }
 
 export const useDraftStore = create<DraftStoreState>((set, get) => ({
@@ -131,7 +136,7 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
     });
   },
 
-  receivePaper: (projectPath, paper, options = {}) => {
+  receivePaper: (projectPath, paper) => {
     const state = get();
     if (state.projectPath !== projectPath || state.chapter !== paper.chapter) return;
     const disk = diskText(paper);
@@ -149,7 +154,7 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
       return;
     }
-    if (options.force || !dirty) {
+    if (!dirty) {
       // 盘上就是准的：盘上没章名就是没有（写稿命令都会保留原章名）。真机试写：撤销「改章名」后盘上没章名了，
       // 沿用眼前的会一直显示改过的那个。
       const title = disk.title ?? "";
@@ -184,12 +189,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
 
   markSaveError: (message) => set({ saveStatus: "error", saveError: message }),
 
-  markConflict: (current, recoveryId) => set({
+  markConflict: ({ current, currentVersion, recoveryId }) => set({
     saveStatus: "idle",
     incoming: {
       ...(current?.title ? { title: current.title } : {}),
       body: current?.body ?? "",
-      version: current?.version ?? null,
+      version: currentVersion !== undefined ? currentVersion : current?.version ?? null,
       cause: "conflict",
       ...(recoveryId ? { recoveryId } : {}),
     },
