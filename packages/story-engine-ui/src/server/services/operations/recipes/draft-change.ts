@@ -7,10 +7,12 @@
  *   有稿没点重写、前一章没定稿）如实挡下，不调模型。
  * - 步骤：materials（依据、材料、稿同一次读）→ notes（章纲员、核账员先读前文：当场最多 10 章 / 2 卷，缺得更多交后台补读、
  *   停在 paused:material）→ plan（只 write，在内存里拟、审、改）→ plan-save（新拟的走核心 plan.save）→ write:n（一版一步，
- *   只出一版时正文流进稿纸）→ 选优 → extend（只 write、不到下限）→ deai → check → fix → recheck（含终稿判漏复核）→ apply。
+ *   只出一版时正文流进稿纸）→ 选优 → extend（只 write、不到下限）→ deai → check → fix → recheck（含终稿判漏复核）
+ *   → versions（几版时落选的留成候选）→ apply。作者自己挑（pick: author，片 2D）写完几版就停在 versions：每版都留成候选、一版不换上。
  * - 结果：`body` 见 services/draft-change/result.ts；一版都没通过 → failed（draft_rejected），没换上 → succeeded + body.kept。
  * - 前台道（作者在等）；进程没了不自动续，停在 paused:interrupted 等作者点「接着做」。
  */
+import { readChapterPlan } from "../../../book/chapter-plan.js";
 import { planDigest } from "../../../book/material-reads.js";
 import { callConfiguredBrainModel, callConfiguredPlannerModel, type BrainCallModel } from "../../../editorial/index.js";
 import { READER_ROLE_LABELS } from "../../../editorial/reader-progress.js";
@@ -44,7 +46,7 @@ import {
   type DraftEditParams,
 } from "../../draft-change/params.js";
 import { editStepCallsModel, editTargetProblem, runDraftEdit } from "../../draft-change/edit.js";
-import { buildDraftChangeResult, rejectionMessage, type DraftApplied } from "../../draft-change/result.js";
+import { buildAuthorPickResult, buildDraftChangeResult, rejectionMessage, type DraftApplied } from "../../draft-change/result.js";
 import {
   checkDraft,
   coded,
@@ -53,6 +55,7 @@ import {
   extendDraft,
   finalBeatFidelity,
   fixSureIssues,
+  keepDraftVersions,
   planDraft,
   planMaterial,
   prepareDraftNotes,
@@ -61,6 +64,7 @@ import {
   recheckDraft,
   selectVersion,
   writeVersion,
+  type DraftOtherVersion,
   type DraftVersion,
 } from "../../draft-change/steps.js";
 import type { RevisionModelCaller } from "../../draft-change/revise-text.js";
@@ -157,8 +161,12 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
           budget: draftEditSends(edit) + await frozenCompatAllowance(input.models, DRAFT_EDIT_TASKS),
         };
       }
-      const params = readStoredDraftChange(input.mode, input.params);
-      if (!params) return { ok: false, code: "bad_params", message: "要写哪一章没说清：请给章号。" };
+      const read = readStoredDraftChange(input.mode, input.params);
+      if (!read) return { ok: false, code: "bad_params", message: "要写哪一章没说清：请给章号。" };
+      // 作者自己挑、没给新方向：照这章已有章纲里记着的作者原话另写——不拿空方向重拟，那会把作者给这章的方向冲掉
+      // （长篇实跑第 16 章：两版都没写作者点名的事）。受理时定下、存进记录，接着做照它。
+      const planDirection = read.pick === "author" && !read.direction ? (await readChapterPlan(bookDir, read.chapter).catch(() => undefined))?.direction?.trim() : undefined;
+      const params: StoredDraftChange = planDirection ? { ...read, direction: planDirection } : read;
       const { mode } = params;
       // 导入的书还在通读记账（P8）：账没记全，章纲员、核账员对照的前文是缺的，记完再出稿。
       const rereading = await rereadBlocker(bookDir, "出稿");
@@ -175,7 +183,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
         params,
         mode,
         writeScope: { chapters: [params.chapter] },
-        budget: sumBudget(draftChangeStepBudget(mode, versionCount(mode, params))) + await frozenCompatAllowance(input.models, draftChangeTasks(mode)),
+        budget: sumBudget(draftChangeStepBudget(mode, versionCount(mode, params), params.pick)) + await frozenCompatAllowance(input.models, draftChangeTasks(mode)),
       };
     },
 
@@ -265,8 +273,34 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
       }
 
       // 选优：确定性、不调模型，按检查点里的几版算。
-      const select = selectVersion(versions);
+      const select = selectVersion(versions, materials.title);
       if (select.chosen === undefined) throw coded("draft_rejected", rejectionMessage(chapter, versions, select));
+      // 留成候选的那一步（作者自己挑的几版、选优落选的几版）：号跟着这一步走，作者处理过的不复活。
+      const keepVersions = (reason: "author_pick" | "other_version", list: readonly DraftOtherVersion[]) =>
+        ctx.publish("versions", { chapter, reason, versions: list, baseVersion: materials.baseVersion, basis: materials.basis.digest }, () =>
+          keepDraftVersions(bookDir, {
+            chapter,
+            versions: list,
+            reason,
+            baseVersion: materials.baseVersion,
+            basisDigest: materials.basis.digest,
+            op: { opId: ctx.record.opId, stepId: "versions" },
+          }));
+      // 作者自己挑（「AI 另写几版」）：几版都留成候选、一版都不换上，作者挑了再换、再核。
+      if (params.pick === "author") {
+        ctx.progress("在把几版摆出来");
+        const kept = await keepVersions("author_pick", select.passed);
+        return buildAuthorPickResult({
+          params,
+          notes,
+          ...(planned ? { plan: planned } : {}),
+          ...(usedPlan ? { usedPlan } : {}),
+          versions,
+          select,
+          kept,
+          ...(planSaved?.snapshotId ? { planSnapshotId: planSaved.snapshotId } : {}),
+        });
+      }
       const chosen = versions[select.chosen]!;
       const chosenReport = chosen.report!;
       let body = chosenReport.draftBody!;
@@ -332,6 +366,9 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
         return { ...(recheck ? { recheck } : {}), beats };
       });
 
+      const others = select.passed.filter((version) => version.index !== select.chosen! + 1);
+      const otherVersions = others.length > 0 ? await keepVersions("other_version", others) : undefined;
+
       // 换上：照哪份章纲写的、开写时别的材料，换上前在书锁里核；对不上就留成候选，作者那份不动。
       const materialReads = [planMaterial(chapter, usedPlan, materials.startPlan), ...materials.world];
       const applied = await ctx.apply("apply", { body: finalBody, title, baseVersion: materials.baseVersion, basis: materials.basis.digest, fixes: fix.changes.length }, async (): Promise<DraftApplied> => {
@@ -377,6 +414,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
         finalBody,
         ...(materials.continueText ? { continueText: materials.continueText } : {}),
         ...(planSaved?.snapshotId ? { planSnapshotId: planSaved.snapshotId } : {}),
+        ...(otherVersions ? { otherVersions } : {}),
         applied,
       });
     },
@@ -384,7 +422,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
     stepBudget(stepId, params) {
       if (stepId === undefined) return 0;
       if (isStoredEdit(params)) return editStepCallsModel(stepId) ? draftEditSends(params) : 0;
-      return draftChangeStepBudget(params.mode, versionCount(params.mode, params))[stepId] ?? 0;
+      return draftChangeStepBudget(params.mode, versionCount(params.mode, params), params.pick)[stepId] ?? 0;
     },
 
     modelTasks(params) {

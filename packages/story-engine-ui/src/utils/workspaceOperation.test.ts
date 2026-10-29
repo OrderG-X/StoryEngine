@@ -13,13 +13,13 @@ describe("workspace operation ownership", () => {
   beforeEach(() => resetWorkspaceOperationForTests());
 
   it("atomically rejects a second foreground operation and only lets the owner release busy", () => {
-    const first = beginWorkspaceOperation("generate-draft", {
+    const first = beginWorkspaceOperation("agent-chat", {
       projectPath: "/books/a",
       chapter: 1,
       sessionId: "session-a",
     });
     expect(first).not.toBeNull();
-    const refused = beginWorkspaceOperation("quality-check", {
+    const refused = beginWorkspaceOperation("snapshot-restore", {
       projectPath: "/books/a",
       chapter: 1,
       sessionId: "session-a",
@@ -31,7 +31,7 @@ describe("workspace operation ownership", () => {
     expect(finishWorkspaceOperation(first!)).toBe(true);
     expect(isWorkspaceBusy()).toBe(false);
 
-    const second = beginWorkspaceOperation("quality-check", {
+    const second = beginWorkspaceOperation("snapshot-restore", {
       projectPath: "/books/a",
       chapter: 1,
       sessionId: "session-a",
@@ -42,7 +42,7 @@ describe("workspace operation ownership", () => {
   });
 
   it("checks project, chapter, session, and operation identity", () => {
-    const token = beginWorkspaceOperation("revision-preview", {
+    const token = beginWorkspaceOperation("agent-chat", {
       projectPath: "/books/a",
       chapter: 3,
       sessionId: "session-a",

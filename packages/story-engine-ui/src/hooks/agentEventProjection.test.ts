@@ -866,7 +866,7 @@ describe("操作投影（写作版本 P2a：检查交给执行器做）", () => 
   });
 
   it("写稿做完了：一次写几版的挂「另外几版」卡；同一次再来一遍不重挂", () => {
-    const versions = { chapter: 4, versions: [{ index: 1, body: "另一版正文。" }] };
+    const versions = { chapter: 4, versions: [{ index: 1, candidateId: "0004-op-1", sha: "c".repeat(64), body: "另一版正文。" }] };
     const draftView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.change", mode: "write", what: "写稿·第 4 章", ...overrides });
     let msg = project([{ type: "operation", operation: draftView() }]);
     msg = projectAgentEvent(msg, { type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, versions } }) });
@@ -891,6 +891,27 @@ describe("操作投影（写作版本 P2a：检查交给执行器做）", () => 
     const kept = project([{ type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: false } }) }]);
     expect(kept.turnSnapshots).toBeUndefined();
     expect(kept.affectedScopes).toBeUndefined();
+  });
+
+  it("换上作者挑的 AI 稿：记下存档点、标「影响了正文·草稿」；没换（稿纸上已经是这一版）不记", () => {
+    const adoptView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.adopt", what: "换上 AI 稿·第 4 章", ...overrides });
+    const msg = project([{ type: "operation", operation: adoptView() }, { type: "operation", operation: adoptView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, snapshots: ["s-adopt"] } }) }]);
+    expect(msg.turnSnapshots).toEqual([{ toolName: "change_draft", snapshotId: "s-adopt", chapterNumber: 4 }]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    const same = project([{ type: "operation", operation: adoptView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: false } }) }]);
+    expect(same.turnSnapshots).toBeUndefined();
+  });
+
+  it("想走法做完了：挂走法卡（稿纸上方给作者挑）；同一次再来一遍不重挂、作者挑过的不被冲掉；不记存档点", () => {
+    const plan = { chapter: 4, options: [{ title: "老周开口", steps: ["夜里上楼"], threads: [], problems: [] }], checked: true };
+    const planView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "plan.propose", mode: undefined, what: "想走法·第 4 章", ...overrides });
+    let msg = project([{ type: "operation", operation: planView() }, { type: "operation", operation: planView({ state: "succeeded", eventSeq: 5, plan }) }]);
+    expect(cardOf(msg, "directions")).toEqual({ type: "directions", brainstorm: plan });
+    msg = { ...msg, cards: msg.cards!.map((card) => (card.type === "directions" ? { ...card, picked: 0 } : card)) };
+    const again = projectAgentEvent(msg, { type: "operation", operation: planView({ state: "succeeded", eventSeq: 6, plan }) });
+    expect(again.cards!.filter((card) => card.type === "directions")).toEqual([{ type: "directions", brainstorm: plan, picked: 0 }]);
+    expect(again.turnSnapshots).toBeUndefined();
+    expect(again.affectedScopes).toBeUndefined();
   });
 
   it("没做成：只换操作卡，不挂结果卡", () => {

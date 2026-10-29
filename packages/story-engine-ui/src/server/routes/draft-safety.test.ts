@@ -1208,33 +1208,8 @@ describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () 
     expect(await readDraft(book, 1)).toMatchObject({ title: "原章名", body: "## 小节\n\n正文。" });
   });
 
-  it.each([
-    { label: "没章名", title: "", expected: undefined },
-    { label: "自己的章名", title: "AI 起的章名", expected: "AI 起的章名" },
-  ])("AB3：AI 候选（$label）换上时照它自己的章名，不夹带盘上后来的章名", async ({ title, expected }) => {
-    await saveTitled(1, "作者原稿。", "作者旧章名");
-    const start = await begin(1);
-    await saveTitled(1, "作者后来改的稿。", "作者后来改的章名");
-    const written = await applyAiDraft(book, { chapter: 1, title, body: "AI 稿。", ...start, source: "continue" });
-    expect(written).toMatchObject({ applied: false, reason: "draft_moved" });
-    if (written.applied) throw new Error("应留下候选");
-    wireRoutesWith();
-    await openPaper(book, 1);
-    expect(useDraftStore.getState().incoming?.pending?.id).toBe(written.candidateId);
-    expect(await acceptPaperIncoming()).toEqual({ ok: true });
-    expect((await readDraft(book, 1))?.title).toBe(expected);
-    expect(useDraftStore.getState().title).toBe(title);
-  });
-
-  it("AB4：「不要了」AI 候选不带指纹：不删（409），后来更新的那份留着", async () => {
-    const base = await save(1, "作者稿。");
-    const input = { chapter: 1, body: "候选正文。", baseVersion: base, basisDigest: (await readTruthBasis(book)).digest, source: "draft" as const, status: "ready" as const };
-    const candidate = await saveDraftCandidate(book, { ...input, title: "看到的旧名" });
-    await saveDraftCandidate(book, { ...input, id: candidate.id, title: "后来更新的新名" });
-    const response = await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "candidate", id: candidate.id, decision: "dismiss", baseVersion: null });
-    expect(response.status).toBe(409);
-    expect(await readDraftCandidate(book, candidate.id)).toMatchObject({ title: "后来更新的新名" });
-  });
+  // AB3（候选换上照它自己的章名）、AB4（不要了必带指纹）：P2a 片 2D 起 AI 候选换上 / 不要了走 draft.adopt / draft.discard，
+  // 见 services/operations/recipes/draft-candidate.test.ts。
 });
 
 // Astra 第 15 轮探针改写：一份稿只有两种样子（文件原文 / 拆开的稿），稿纸上就是拆开的稿——盘上读来的、提示里换上的、

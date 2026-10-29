@@ -29,7 +29,7 @@ import {
 import { continuitySummary, type ContinuityInfo, type ExtendOutcome, type FixOutcome } from "../draft-pipeline/quality-steps.js";
 import type { OperationResult } from "../operations/executor.js";
 import type { DraftChangeMode, DraftChangeParams } from "./params.js";
-import { lengthReportOf, type DeAiOutcome, type DraftOtherVersion, type DraftVersion, type NotesOutcome, type PlanOutcome, type SelectOutcome } from "./steps.js";
+import { lengthReportOf, type DeAiOutcome, type DraftVersion, type KeptVersion, type NotesOutcome, type PlanOutcome, type SelectOutcome } from "./steps.js";
 
 /** 换上那一步的结果（存进检查点的那几样：不带文件路径和整份文件）。 */
 export type DraftApplied =
@@ -72,8 +72,8 @@ export interface DraftChangeBody {
   /** 接着往下写：本来写好的字数、这次接着写的字数（稿纸顶栏同口径）、作者说这次写多少。 */
   readonly continued?: { readonly kept: number; readonly added: number; readonly asked?: number };
   readonly candidatesReport?: readonly DraftCandidateReportEntry[];
-  /** 落选的几版全文（只给界面的「另外几版」卡）。 */
-  readonly otherVersions?: readonly DraftOtherVersion[];
+  /** 落选的几版（留成了候选，带候选号和指纹：界面的「另外几版」卡点「用这版」换上）。 */
+  readonly otherVersions?: readonly KeptVersion[];
   readonly characterSelection: InSceneResult;
   readonly contextBudget?: unknown;
   readonly thenPreview?: true;
@@ -124,6 +124,7 @@ export function buildDraftChangeResult(input: {
   readonly finalBody: string;
   readonly continueText?: string;
   readonly planSnapshotId?: string;
+  readonly otherVersions?: readonly KeptVersion[];
   readonly applied: DraftApplied;
 }): OperationResult {
   const { params, mode } = input;
@@ -204,7 +205,7 @@ export function buildDraftChangeResult(input: {
     },
     ...(continued ? { continued } : {}),
     ...(versionCount > 1 ? { candidatesReport: input.select.entries } : {}),
-    ...(input.select.otherVersions ? { otherVersions: input.select.otherVersions } : {}),
+    ...(input.otherVersions ? { otherVersions: input.otherVersions } : {}),
     characterSelection: chosen.context.characterSelection,
     ...(chosen.context.contextBudget ? { contextBudget: chosen.context.contextBudget } : {}),
     ...(params.thenPreview ? { thenPreview: true as const } : {}),
@@ -217,6 +218,56 @@ export function buildDraftChangeResult(input: {
     summary,
     body,
     ...(applied.applied && applied.warnings && applied.warnings.length > 0 ? { warnings: applied.warnings } : {}),
+  };
+}
+
+/** 作者自己挑（pick: author，片 2D）的结果 `body`：几版都留成了候选，一版都没换上。 */
+export interface DraftPickBody {
+  readonly kind: "draft.change";
+  readonly mode: "write";
+  readonly pick: "author";
+  /** 没换上工作稿（作者挑了再换）。 */
+  readonly ok: false;
+  readonly chapter: number;
+  /** 留成候选的几版（带候选号和指纹：「写了 N 版」卡点开并排看、点「用这版」换上）。 */
+  readonly otherVersions: readonly KeptVersion[];
+  readonly candidatesReport: readonly DraftCandidateReportEntry[];
+  readonly chapterPlan?: DraftChangePlanInfo;
+  readonly planSnapshotId?: string;
+  readonly notes: readonly string[];
+}
+
+/** 作者自己挑：几版都摆出来了，一句结论（第几版没写成照说）。 */
+export function buildAuthorPickResult(input: {
+  readonly params: DraftChangeParams;
+  readonly notes: NotesOutcome;
+  readonly plan?: PlanOutcome;
+  readonly usedPlan?: ChapterPlan;
+  readonly versions: readonly DraftVersion[];
+  readonly select: SelectOutcome;
+  readonly kept: readonly KeptVersion[];
+  readonly planSnapshotId?: string;
+}): OperationResult {
+  const { chapter } = input.params;
+  const ready = input.kept.filter((version) => !("handled" in version));
+  const missed = input.versions.map((_, position) => position + 1).filter((index) => !input.kept.some((version) => version.index === index));
+  const body: DraftPickBody = {
+    kind: "draft.change",
+    mode: "write",
+    pick: "author",
+    ok: false,
+    chapter,
+    otherVersions: input.kept,
+    candidatesReport: input.select.entries,
+    ...(input.usedPlan ? { chapterPlan: planInfo(input.usedPlan, input.plan?.reused === true) } : {}),
+    ...(input.planSnapshotId ? { planSnapshotId: input.planSnapshotId } : {}),
+    notes: [input.plan?.note ?? "", ...input.notes.notes].filter((line) => line.trim().length > 0),
+  };
+  const missedLine = missed.length > 0 ? `（第 ${missed.join("、")} 版没写成）` : "";
+  return {
+    schema: "operation-result/1",
+    summary: `第 ${chapter} 章另写了 ${ready.length} 版${missedLine}：点开挑一版换上，你的稿子没动。`,
+    body,
   };
 }
 

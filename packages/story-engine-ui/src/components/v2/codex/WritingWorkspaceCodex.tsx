@@ -152,11 +152,7 @@ export function resolveRightPanelOpen(rightOpen: boolean, autoCollapsed: boolean
 }
 
 export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps) {
-  const workspaceBusy = Boolean(
-    props.chatLoading
-    || props.draftActionLoading
-    || isWorkspaceBusy(),
-  );
+  const workspaceBusy = Boolean(props.chatLoading || isWorkspaceBusy());
   const focusWriting = useDisplaySettingsStore((s) => s.focusWriting);
   const [rightOpen, setRightOpen] = useState(() => !focusWriting);
   // T3：用户是否点过右栏展开/收起。点过之后手动意愿覆盖窄视口自动收起（见 resolveRightPanelOpen）。

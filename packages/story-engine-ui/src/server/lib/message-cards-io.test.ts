@@ -40,7 +40,7 @@ describe("消息卡读回：定论卡（P12）", () => {
 
 describe("消息卡读回：另外几版", () => {
   it("几版全文跟着存、跟着读回；没章号整张不认", () => {
-    const versions = { chapter: 38, versions: [{ index: 1, body: "甲版正文。" }] };
+    const versions = { chapter: 38, pick: true, versions: [{ index: 1, candidateId: "0038-op-1", sha: "e".repeat(64), body: "甲版正文。" }] };
     expect(readMessageCards([{ type: "draft-versions", versions }])).toEqual([{ type: "draft-versions", versions }]);
     expect(readMessageCards([{ type: "draft-versions", versions: { versions: versions.versions } }])).toEqual([]);
   });

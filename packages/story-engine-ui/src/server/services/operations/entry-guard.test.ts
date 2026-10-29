@@ -1,7 +1,8 @@
 // @vitest-environment node
 /**
  * 源码扫描（写作版本 P2a 设计第十一节）：检查类（核账 / 硬伤检查 / 内容审阅 / 查 AI 味）只有执行器一个入口，
- * 路由表、客户端、对话工具、按钮分发都不绕过它；改稿类（按核账改 / 去 AI 味 / 改写）同样（片 2C）；老书上新核心只在登记的几处做（配方和专员里出现就报错）。
+ * 路由表、客户端、对话工具、按钮分发都不绕过它；改稿类（按核账改 / 去 AI 味 / 改写）同样（片 2C），想走法同样（片 2D）；
+ * 老书上新核心只在登记的几处做（配方和专员里出现就报错）。
  */
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -64,13 +65,23 @@ describe("改稿类只有执行器一个入口（片 2C）", () => {
   });
 });
 
-/** 路由以外登记过的几处；后三处在迁那一类操作的那片里删（设计第十一节）。 */
+describe("想走法只有执行器一个入口（片 2D）", () => {
+  it("章纲员出走法、核账员核走法只在 plan.propose 配方里调", async () => {
+    expect(await filesMatching(SERVER, /\b(?:proposeDirections|checkDirections)\s*\(/u)).toEqual(["editorial/brainstorm.ts", "services/operations/recipes/plan-propose.ts"]);
+  });
+
+  it("对话工具、按钮分发里没有 P2a 前的想走法工具名", async () => {
+    expect(await filesMatching(join(SERVER, "agent"), /["']brainstorm_chapter["']/u)).toEqual([]);
+    expect(await filesMatching(join(SERVER, "routes"), /["']brainstorm_chapter["']/u)).toEqual([]);
+  });
+});
+
+/** 路由以外登记过的几处；后两处在迁那一类操作的那片里删（设计第十一节）。 */
 const ON_CORE_CALLERS: Readonly<Record<string, string>> = {
   "book/mirror/ensure.ts": "定义处",
   "services/operations/executor.ts": "submitOperation 受理之前",
   "agent/ledger-decisions.ts": "理账",
   "agent/tools/commit-preview.ts": "定稿预览",
-  "editorial/brainstorm.ts": "想走法",
 };
 
 it("老书上新核心（ensureBookOnCore）只在登记的几处调：开书 / 读书的路由、导入、受理之前", async () => {

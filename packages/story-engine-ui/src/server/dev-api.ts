@@ -14,7 +14,6 @@ import { registerStateOverviewRoutes } from "./routes/state-overview.js";
 import { registerOperationsRoutes } from "./routes/operations.js";
 import { registerBuiltInRecipes } from "./services/operations/recipes/index.js";
 import { registerReaderProgressRoutes } from "./routes/reader-progress.js";
-import { registerDraftRoutes } from "./routes/draft.js";
 import { registerBooksRoutes } from "./routes/books.js";
 import { registerBookImportRoutes } from "./routes/book-import.js";
 import { registerBookFilesRoutes } from "./routes/book-files.js";
@@ -47,7 +46,6 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerBuiltInRecipes();
   registerStateOverviewRoutes(router);
   registerReaderProgressRoutes(router);
-  registerDraftRoutes(router);
   registerBooksRoutes(router);
   registerBookImportRoutes(router);
   registerBookFilesRoutes(router);

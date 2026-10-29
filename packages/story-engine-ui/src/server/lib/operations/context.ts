@@ -38,6 +38,14 @@ export class OperationStopped extends Error {
   }
 }
 
+/** 配方核不过（作者看的那版、依据变了）：抛它，这次记成 obsolete、说哪样变了。 */
+export class OperationObsolete extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "OperationObsolete";
+  }
+}
+
 export function rethrowIfStopped(error: unknown): void {
   if (error instanceof OperationStopped) throw error;
   if (error instanceof StopSignal && error.stop.type !== "policy") throw error;

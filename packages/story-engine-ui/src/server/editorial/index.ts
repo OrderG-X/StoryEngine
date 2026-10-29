@@ -61,11 +61,14 @@ export {
 export { LEDGER_ROLE };
 export { MAX_REVIEW_THREADS, reviewOpenThreads, type ThreadCloseSuggestion, type ThreadReviewOutcome } from "./thread-review.js";
 export {
-  brainstormChapter,
   BRAINSTORM_OPTIONS,
+  checkDirections,
+  PROPOSE_CALLS,
+  proposeDirections,
   type BrainstormOption,
   type BrainstormProblem,
-  type BrainstormResult,
+  type CheckedDirections,
+  type ProposeResult,
 } from "./brainstorm.js";
 export {
   PLANNER_ROLE,

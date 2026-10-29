@@ -164,7 +164,8 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "拟章纲", card: null },
-  brainstorm_chapter: { stepLabel: "想走法", card: null },
+  brainstorm_chapter: { stepLabel: "想走法", card: null }, // P2a 前的想走法工具（老会话回放仍显示原名）
+  plan_chapter: { stepLabel: "想走法", card: null },
   change_draft: { stepLabel: "写稿", card: null },
   generate_draft: { stepLabel: "生成正文", card: null }, // P2a 前的出稿工具（老会话回放仍显示原名）
   revise_draft: { stepLabel: "改稿", card: null },
@@ -210,6 +211,7 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "read_foundation",
   "generate_chapter_steering",
   "brainstorm_chapter",
+  "plan_chapter",
   "run_check",
   "read_operation",
   "commit_preview",
@@ -345,10 +347,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
-      // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
-      if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
-        return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
-      }
       // 定论卡（P12）：定论 + 前文要改的几句，作者划掉不改的、点「确认」一次改齐。
       if ((event.toolName === "settle_preview" || event.toolName === "settle_fact") && event.output?.settle && event.output?.ok !== false) {
         return withCard(withEffects, { type: "settle", settle: event.output.settle });
@@ -371,7 +369,7 @@ const LIVE_OPERATION_STATES: ReadonlySet<OperationCardData["state"]> = new Set([
 
 /**
  * 操作又变了（写作版本 P2a）：操作卡换成这一份（迟到的旧记录不盖新的；还在做的留着上一句进度）。检查头一回做完时按种类挂结果卡
- * （核账卡、硬伤检查卡……，checkedVersion＝查的是工作稿哪一版），写稿一次写了几版的挂「另外几版」卡；
+ * （核账卡、硬伤检查卡……，checkedVersion＝查的是工作稿哪一版），写稿一次写了几版的挂「另外几版」卡，想走法挂走法卡；
  * 同一次做完的记录再来一遍不重挂（作者在卡上点过的「不是问题」不被冲掉）。
  */
 function applyOperation(message: ChapterMessage, view: OperationViewData, announced: boolean): ChapterMessage {
@@ -399,17 +397,19 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
   const cards = [
     ...(view.inspect ? inspectCards(view.inspect) : []),
     ...(view.draft?.versions ? [{ type: "draft-versions" as const, versions: view.draft.versions }] : []),
+    // 想走法：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
+    ...(view.plan ? [{ type: "directions" as const, brainstorm: view.plan }] : []),
   ];
   return cards.length > 0 ? withCards(next, cards) : next;
 }
 
 /**
- * 写稿做完：这一轮记下它打的存档点（「撤销到此」、对话里「撤销上一步」从第一个整块退：新拟的章纲和换上的稿一起退），
+ * 写稿、换上作者挑的 AI 稿做完：这一轮记下它打的存档点（「撤销到此」、对话里「撤销上一步」从第一个整块退：新拟的章纲和换上的稿一起退），
  * 换上了的块头标「影响了正文·草稿」。同一个存档点只记一次（重连、补发的记录会再来）。
  */
 function withDraftEffects(message: ChapterMessage, view: OperationViewData): ChapterMessage {
   const draft = view.draft;
-  if (view.kind !== "draft.change" || view.state !== "succeeded" || !draft) return message;
+  if ((view.kind !== "draft.change" && view.kind !== "draft.adopt") || view.state !== "succeeded" || !draft) return message;
   const known = new Set((message.turnSnapshots ?? []).map((entry) => entry.snapshotId));
   const added = (draft.snapshots ?? []).filter((id) => !known.has(id)).map((snapshotId) => ({ toolName: "change_draft", snapshotId, chapterNumber: draft.chapter }));
   let next = added.length > 0 ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), ...added] } : message;

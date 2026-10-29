@@ -1,7 +1,8 @@
 // @vitest-environment node
 /**
  * 章名归作者（写作版本 P1 第 16 轮 AD1–AD3）：只换掉模型网络，真写手、候选、HTTP 路由、核心都不 mock。
- * - AD1 写手没起名就是没起名：「另写几版」不带章名，选用时沿用作者的，不补「第N章」盖掉它。
+ * - AD1 写手没起名就是没起名：写手的稿不带章名，换上时沿用作者的，不补「第N章」盖掉它（P2a 片 2D：换上走 draft.adopt，
+ *   「沿用作者的」在 `readAdoptable` 里，见 candidate-adopt.test.ts）。
  * - AD2 章名里的换行（含单独的 \r）收成空格，不串进正文。
  * - AD3 存稿先收拾完上次没写完的事务再读盘：旧页面沿用的章名是回滚后的。
  * - AE1 只写了章号（换个写法：「第1章：」「第 1 章」「第一〇一章」……）也算没起名（第 17 轮）。
@@ -16,6 +17,8 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bareChapterName, composeDraftFile, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, recoverBookTransactions, runCommand } from "@actalk/story-core";
+import { createConfiguredWriterClient } from "../writing/writer-client.js";
+import { runFastDraft } from "../writing/fast-draft-writer.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readMaterialWorld } from "../book/material-reads.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
@@ -23,7 +26,6 @@ import { readDraftCandidate, readDraftRecovery } from "../lib/draft-candidates.j
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
-import { registerDraftRoutes } from "./draft.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
 
 const model = vi.hoisted(() => ({ text: "" }));
@@ -35,10 +37,6 @@ vi.mock("../writing/writer-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../writing/writer-client.js")>();
   return { ...actual, createConfiguredWriterClient: vi.fn(async () => actual.createOpenAICompatibleWriterClient({ profile: { temperature: 0.8 } } as never)) };
 });
-vi.mock("../editorial/index.js", async (importOriginal) => ({
-  ...await importOriginal<Record<string, unknown>>(),
-  callConfiguredPlannerModel: vi.fn(async () => { throw new Error("这里不拟章纲"); }),
-}));
 
 let root: string;
 let book: string;
@@ -53,7 +51,7 @@ afterEach(async () => {
 
 async function call(url: string, body: Record<string, unknown>, method = "POST"): Promise<{ status: number; payload: Record<string, unknown> }> {
   const handlers: Middleware[] = [];
-  (url.includes("working-draft") ? registerWorkingDraftRoutes : registerDraftRoutes)({ use: (handler) => handlers.push(handler) });
+  registerWorkingDraftRoutes({ use: (handler) => handlers.push(handler) });
   const chunks: Buffer[] = [];
   const res = { statusCode: 200, setHeader() { return res; }, end(chunk?: string | Buffer) { if (chunk) chunks.push(Buffer.from(chunk)); return res; } } as unknown as ServerResponse;
   const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method, url }) as IncomingMessage;
@@ -61,41 +59,37 @@ async function call(url: string, body: Record<string, unknown>, method = "POST")
   return { status: res.statusCode, payload: JSON.parse(Buffer.concat(chunks).toString("utf-8")) as Record<string, unknown> };
 }
 
+/** 真写手写一稿（模型网络换成 model.text）：写手起的章名、去掉章名行的正文。 */
+async function write(): Promise<{ readonly title?: string; readonly body: string }> {
+  const report = await runFastDraft({ projectDir: book, chapter: 1, chapterGoal: "林远收到一封信。", writerClient: await createConfiguredWriterClient("fastDraft"), selectedCharacters: ["林远"], requestedDraftLength: 500 });
+  expect(report.passed).toBe(true);
+  return { ...(report.title ? { title: report.title } : {}), body: report.draftBody ?? "" };
+}
+
 async function save(title: string, body = "作者原正文。"): Promise<void> {
   const result = await runCommand(book, draftSave, { chapter: 1, title, body, baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
   expect(result.ok).toBe(true);
 }
 
-describe("AD1 写手没起名：另写几版不补「第N章」", () => {
-  it.each(["", "作者保留的章名"])("原来的章名 %j 选用后照旧", async (oldTitle) => {
-    await save(oldTitle);
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.status).toBe(200);
-    expect(generated.payload.draftTitle).toBeUndefined();
-    const before = (await readDraft(book, 1))!;
-    // 和稿纸选用候选一样：候选没起名就用作者眼前的。
-    const applied = await call("/api/draft/apply-candidate", { projectPath: book, chapter: 1, title: (generated.payload.draftTitle as string | undefined) ?? before.title ?? "", body: generated.payload.draftBody, baseVersion: before.version });
-    expect(applied.status).toBe(200);
-    expect((await readDraft(book, 1))?.title ?? "").toBe(oldTitle);
+describe("AD1 写手没起名：不补「第N章」", () => {
+  it("写手只回正文：没有章名", async () => {
+    const written = await write();
+    expect(written.title).toBeUndefined();
+    expect(written.body).toContain("林远推开门");
   });
 
-  it("写手在正文开头起了名：照候选的章名换上", async () => {
-    await save("作者旧名");
+  it("写手在正文开头起了名：统一成本章章号", async () => {
     model.text = `# 第1章 · 信到门口\n\n${model.text}`;
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.payload.draftTitle).toBe("第1章 · 信到门口");
-    const applied = await call("/api/draft/apply-candidate", { projectPath: book, chapter: 1, title: generated.payload.draftTitle, body: generated.payload.draftBody, baseVersion: (await readDraftState(book, 1)).version });
-    expect(applied.status).toBe(200);
-    expect((await readDraft(book, 1))?.title).toBe("第1章 · 信到门口");
+    const written = await write();
+    expect(written.title).toBe("第1章 · 信到门口");
+    expect(written.body).not.toContain("信到门口");
   });
 
-  it("写手只写了光秃秃的「第1章」：算没起名", async () => {
-    await save("作者的章名");
+  it("写手只写了光秃秃的「第一章」：算没起名", async () => {
     model.text = `# 第一章\n\n${model.text}`;
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.status).toBe(200);
-    expect(generated.payload.draftTitle).toBeUndefined();
-    expect(String(generated.payload.draftBody)).not.toContain("第一章");
+    const written = await write();
+    expect(written.title).toBeUndefined();
+    expect(written.body).not.toContain("第一章");
   });
 });
 
@@ -138,17 +132,11 @@ describe("AD3 存稿先收拾完上次没写完的事务再读盘", () => {
 });
 
 describe("AE1 只写了章号，换个写法也算没起名", () => {
-  it.each(["# 第1章：", "# 第1章 ·", "# 第一章—", "# 第1 章", "# 第零一章", "# 第一〇一章", "# 第 1 章", "第 1 章"])("%j：不起名、作者的章名留着", async (heading) => {
-    await save("作者的章名");
+  it.each(["# 第1章：", "# 第1章 ·", "# 第一章—", "# 第1 章", "# 第零一章", "# 第一〇一章", "# 第 1 章", "第 1 章"])("%j：不起名", async (heading) => {
     model.text = `${heading}\n\n${model.text}`;
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.status).toBe(200);
-    expect(generated.payload.draftTitle).toBeUndefined();
-    expect(String(generated.payload.draftBody)).not.toMatch(/^第|^#/u);
-    const before = (await readDraft(book, 1))!;
-    const applied = await call("/api/draft/apply-candidate", { projectPath: book, chapter: 1, title: (generated.payload.draftTitle as string | undefined) ?? before.title ?? "", body: generated.payload.draftBody, baseVersion: before.version });
-    expect(applied.status).toBe(200);
-    expect((await readDraft(book, 1))?.title).toBe("作者的章名");
+    const written = await write();
+    expect(written.title).toBeUndefined();
+    expect(written.body).not.toMatch(/^第|^#/u);
   });
 
   it.each([
@@ -159,21 +147,14 @@ describe("AE1 只写了章号，换个写法也算没起名", () => {
     ["# 第三章的秘密", "第1章 · 第三章的秘密"],
   ])("%j：起了名，统一成本章章号", async (heading, expected) => {
     model.text = `${heading}\n\n${model.text}`;
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.payload.draftTitle).toBe(expected);
+    expect((await write()).title).toBe(expected);
   });
 
-  it.each(["# 第一章 #", "## 第 1 章 ##", "# 第１２章： ###", "### 第1章 #"])("AF3 闭合井号 %j：不起名、作者的章名留着", async (heading) => {
-    await save("作者保留的章名");
+  it.each(["# 第一章 #", "## 第 1 章 ##", "# 第１２章： ###", "### 第1章 #"])("AF3 闭合井号 %j：不起名", async (heading) => {
     model.text = `${heading}\n\n${model.text}`;
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.status).toBe(200);
-    expect(generated.payload.draftTitle).toBeUndefined();
-    expect(String(generated.payload.draftBody)).not.toMatch(/^第|^#/u);
-    const before = (await readDraft(book, 1))!;
-    const applied = await call("/api/draft/apply-candidate", { projectPath: book, chapter: 1, title: (generated.payload.draftTitle as string | undefined) ?? before.title ?? "", body: generated.payload.draftBody, baseVersion: before.version });
-    expect(applied.status).toBe(200);
-    expect((await readDraft(book, 1))?.title).toBe("作者保留的章名");
+    const written = await write();
+    expect(written.title).toBeUndefined();
+    expect(written.body).not.toMatch(/^第|^#/u);
   });
 
   it.each([
@@ -184,9 +165,9 @@ describe("AE1 只写了章号，换个写法也算没起名", () => {
     ["# C# 入门", "第1章 · C# 入门"],
   ])("AF3 %j：闭合井号去掉，名字里的井号留着", async (heading, expected) => {
     model.text = `${heading}\n\n${model.text}`;
-    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
-    expect(generated.payload.draftTitle).toBe(expected);
-    expect(String(generated.payload.draftBody)).not.toMatch(/^#/u);
+    const written = await write();
+    expect(written.title).toBe(expected);
+    expect(written.body).not.toMatch(/^#/u);
   });
 
   it("核心同一条规则：剥章号、连着几次的也剥", () => {

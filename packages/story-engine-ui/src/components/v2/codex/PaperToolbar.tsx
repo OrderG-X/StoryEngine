@@ -19,7 +19,7 @@ export function PaperToolbar({
   /** 已定稿时「去第 N 章」：换到那一章。 */
   readonly onOpenChapter?: (chapter: number) => void;
   /** 「再来一版」（抽候选稿）：只在还没定稿、有入口时给。 */
-  readonly reroll?: { readonly label: string; readonly running: boolean; readonly onClick: () => void; readonly title: string };
+  readonly reroll?: { readonly label: string; readonly onClick: () => void; readonly title: string };
 }) {
   const { primary, check } = progress;
   const next = progress.commit.done && primary.kind === "open_next" ? progress.next : undefined;
@@ -44,8 +44,8 @@ export function PaperToolbar({
         <span className="cd-tools-status">{progress.statusLine}</span>
       )}
       {reroll ? (
-        <button type="button" className="cd-tools-btn is-quiet" disabled={busy || reroll.running} title={reroll.title} onClick={reroll.onClick}>
-          {reroll.running ? "生成候选中…" : reroll.label}
+        <button type="button" className="cd-tools-btn is-quiet" disabled={busy} title={reroll.title} onClick={reroll.onClick}>
+          {reroll.label}
         </button>
       ) : null}
       {next !== undefined && onOpenChapter ? (

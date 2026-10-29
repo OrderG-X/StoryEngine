@@ -405,18 +405,6 @@ export type ImportBookApiResponse =
   | { readonly ok: true; readonly projectDir: string; readonly overview: StateOverview; readonly imported: { readonly chapters: number } }
   | { readonly ok: false; readonly error: string };
 
-export interface GenerateDraftRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly chapterGoal?: string;
-  readonly requestedDraftLength?: number;
-  readonly maxOutputTokens?: number;
-  readonly selectedCharacterIds?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
-  readonly maxTimelineEvents?: number;
-  readonly contextTokenBudget?: number;
-}
-
 export interface WriterContextBudgetApiPayload {
   readonly droppedSections: readonly string[];
 }

@@ -222,7 +222,7 @@ export async function finishDraftOperation(record: OperationRecord, args: DraftF
       await finishWritten(args, body, body.thenPreview === true);
       return;
     }
-    // 写好了没换上：AI 这版在稿纸上等作者选，不再写一遍。
+    // 写好了没换上（AI 这版在稿纸上等作者选）、作者要自己挑的几版（在「另外几版」卡上）：照结论说，不再写一遍。
     emit(typeof summary === "string" && summary.trim() ? humanizeToolNames(summary.trim()) : `${what}做完了，结果在上面。`);
     return;
   }

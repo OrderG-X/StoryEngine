@@ -83,7 +83,10 @@ const inputSchema = z.object({
   contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
   allowWriteAhead: coerceBoolean(z.boolean().optional().describe("前一章没定稿被挡下时，只有作者明确说仍要先写才带 true。")),
   autoDeAi: coerceBoolean(z.boolean().optional().describe("false=检出机器腔只标注、不自动去味（默认自动去味一轮）。")),
-  candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe("1–3，默认 1；作者明确要多版挑选才填，耗时和 token 约 N 倍。continue 不用。")),
+  candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe("1–3，默认 1；作者明确要多版才填，耗时和 token 约 N 倍。continue 不用。")),
+  authorPicks: coerceBoolean(z.boolean().optional().describe(
+    "作者要自己挑（「多写几版给我挑」「另写两版我看看」）才带 true：几版都摆给作者挑，一版都不换进工作稿、不核账，这章有稿也照样写；没填 candidates 就写 2 版。continue 不用。",
+  )),
   thenPreview: coerceBoolean(z.boolean().optional().describe("作者明说写完就出定稿预览才带 true：稿写成了系统接着用这版出预览（不是定稿）。")),
 });
 
@@ -141,6 +144,7 @@ export const changeDraftTool = createTool({
       maxTimelineEvents: input.maxTimelineEvents,
       contextTokenBudget: input.contextTokenBudget,
       candidates: input.candidates,
+      ...(input.authorPicks === true ? { pick: "author" } : {}),
       autoDeAi: input.autoDeAi,
       thenPreview: input.thenPreview,
       allowWriteAhead: input.allowWriteAhead,

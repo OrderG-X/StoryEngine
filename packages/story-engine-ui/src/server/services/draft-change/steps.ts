@@ -25,6 +25,7 @@ import { prepareReaderNotes, type ReaderNotesOutcome } from "../../editorial/pre
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { READER_MAX_VOLUME_BUILDS } from "../../editorial/continuity/check-service.js";
 import type { BrainCallModel } from "../../editorial/index.js";
+import { draftSha, keepOperationCandidateLocked } from "../../lib/draft-candidates.js";
 import { isChapterCommitted } from "../../lib/working-draft-text.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { rethrowIfStopped } from "../../lib/operations/context.js";
@@ -95,7 +96,8 @@ export async function draftTargetProblem(
     if (!state.hasText) return { code: "nothing_to_continue", message: `第 ${chapter} 章还没有正文，没有可以接着写的。要从头写，就说「写第 ${chapter} 章」。` };
     return undefined;
   }
-  if (!params.rewrite && (committed || state.hasText)) {
+  // 作者自己挑的几版一版都不换上：有稿也不挡（已定稿的照样要说重写）。
+  if (!params.rewrite && (committed || (state.hasText && params.pick !== "author"))) {
     return {
       code: "chapter_has_text",
       message: committed
@@ -339,9 +341,12 @@ export async function writeVersion(input: {
 /*  select                                                              */
 /* ------------------------------------------------------------------ */
 
-/** 落选、但通过了的一版（全文，没落盘）：对话里出「另外几版」卡，作者点「用这版」才换进工作稿。 */
+/** 通过了的一版（全文）：作者自己挑的几版、选优落选的几版，在 `versions` 那步留成候选。 */
 export interface DraftOtherVersion {
+  /** 第几版（1 起）。 */
   readonly index: number;
+  /** 这一版的章名（AI 起的；没起就是开写时那份的，空串 = 没有）。 */
+  readonly title: string;
   readonly body: string;
 }
 
@@ -350,22 +355,64 @@ export interface SelectOutcome {
   readonly chosen?: number;
   readonly entries: readonly DraftCandidateReportEntry[];
   readonly scoreInputs: readonly DraftCandidateScoreInput[];
-  readonly otherVersions?: readonly DraftOtherVersion[];
+  /** 通过了的每一版（含选中的那版）。 */
+  readonly passed: readonly DraftOtherVersion[];
 }
 
-/** 确定性选优（不调模型）：只出一版也走这里（通过就选它）。 */
-export function selectVersion(versions: readonly DraftVersion[]): SelectOutcome {
+/** 确定性选优（不调模型）：只出一版也走这里（通过就选它）。fallbackTitle = AI 没起章名时用的（开写时那份的）。 */
+export function selectVersion(versions: readonly DraftVersion[], fallbackTitle: string): SelectOutcome {
   const scoreInputs = versions.map((version) =>
     scoreInputFromCandidateReport(version.index, version.report, version.exception, version.adjudication));
   const ranked = rankDraftCandidates(scoreInputs);
   const withExcerpts = attachCandidateExcerpts(ranked.entries, versions.map((version) => version.report?.draftBody));
   const entries = withExcerpts.map((entry, position) =>
     versions[position]?.temperature !== undefined ? { ...entry, temperature: versions[position]!.temperature! } : entry);
+  const passed = versions.flatMap((version, position) =>
+    scoreInputs[position]?.eligible && version.report?.draftBody
+      ? [{ index: position + 1, title: version.report.title?.trim() || fallbackTitle, body: version.report.draftBody }]
+      : []);
   const chosen = ranked.chosenIndex !== undefined && versions[ranked.chosenIndex]?.report?.draftBody ? ranked.chosenIndex : undefined;
-  if (chosen === undefined) return { entries, scoreInputs };
-  const otherVersions = versions.flatMap((version, position) =>
-    position !== chosen && scoreInputs[position]?.eligible && version.report?.draftBody ? [{ index: position + 1, body: version.report.draftBody }] : []);
-  return { chosen, entries, scoreInputs, ...(otherVersions.length > 0 ? { otherVersions } : {}) };
+  return { ...(chosen !== undefined ? { chosen } : {}), entries, scoreInputs, passed };
+}
+
+/** 留成候选的一版（结果里给「另外几版」卡）：候选号 + 指纹，作者点「用这版」带着它们换上。作者处理过的（墓碑）是 handled。 */
+export type KeptVersion =
+  | { readonly index: number; readonly candidateId: string; readonly sha: string; readonly title?: string; readonly body: string }
+  | { readonly index: number; readonly candidateId: string; readonly handled: true };
+
+/**
+ * `versions` 那步（发布，拿着书锁、过了栅栏）：这几版留成候选。号 = 这次操作这一步第几版，同号已在不重写、作者处理过的不复活。
+ * 作者自己挑的（author_pick）、选优落选的（other_version）都不上稿纸提示条，只在「另外几版」卡上挑。
+ */
+export async function keepDraftVersions(projectDir: string, input: {
+  readonly chapter: number;
+  readonly versions: readonly DraftOtherVersion[];
+  readonly reason: "author_pick" | "other_version";
+  readonly baseVersion: string | null;
+  readonly basisDigest: string;
+  readonly op: { readonly opId: string; readonly stepId: string };
+}): Promise<readonly KeptVersion[]> {
+  const kept: KeptVersion[] = [];
+  for (const version of input.versions) {
+    const outcome = await keepOperationCandidateLocked(projectDir, {
+      chapter: input.chapter,
+      title: version.title,
+      body: version.body,
+      baseVersion: input.baseVersion,
+      basisDigest: input.basisDigest,
+      source: "draft",
+      reason: input.reason,
+      op: input.op,
+      n: version.index,
+    });
+    if (outcome.kind === "handled") {
+      kept.push({ index: version.index, candidateId: outcome.id, handled: true });
+      continue;
+    }
+    const { candidate } = outcome;
+    kept.push({ index: version.index, candidateId: candidate.id, sha: draftSha(candidate), ...(candidate.title ? { title: candidate.title } : {}), body: candidate.body });
+  }
+  return kept;
 }
 
 /* ------------------------------------------------------------------ */

@@ -8,7 +8,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { useChatStore } from "../../../stores/chatStore.js";
-import { useUiStore } from "../../../stores/uiStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { flushAllSaves } from "../../../sync/saveAll.js";
 import { markChatLoaded } from "../../../sync/chatSync.js";
@@ -50,8 +49,7 @@ export function ChatSessionBar({ onClear }: {
   const projectPath = useNavigationStore((s) => s.projectPath);
   // 审查 #6：生成进行中禁用会话操作，避免把 A 会话的流式内容存进刚切过去的 B。
   const chatLoading = useChatStore((s) => s.chatLoading);
-  const draftActionLoading = useUiStore((s) => s.draftActionLoading);
-  const workspaceBusy = chatLoading || Boolean(draftActionLoading) || isWorkspaceBusy();
+  const workspaceBusy = chatLoading || isWorkspaceBusy();
 
   function notify(message: string) {
     useNavigationStore.getState().showToast(message, 3200);

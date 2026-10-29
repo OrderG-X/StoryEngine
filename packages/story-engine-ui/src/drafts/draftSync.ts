@@ -371,7 +371,8 @@ export type PaperDecisionResult = { readonly ok: true } | { readonly ok: false; 
  * 稿纸提示条上「换成那一版」：
  * - 撞版本 / 盘上变了：稿纸换成那版，马上存一笔核盘——盘上还是它就存上（空写）；别处又改了就撞版本、再提示（第 13 轮复核 AA1：
  *   不拿旧提示当盘上的确认）。撞版本时那份恢复稿作者不要了，一起删（在路上的这笔序号更大，删不到它）。
- * - AI 候选 / 恢复稿：先存掉手上的字，再让服务端换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），换完重读。
+ * - 恢复稿：先存掉手上的字，再让服务端换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），换完重读。
+ * AI 候选不在这里：交 draft.adopt 操作（`hooks/useDraftPicks`）。
  */
 export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
   const state = useDraftStore.getState();
@@ -384,11 +385,11 @@ export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
     scheduleDraftSave(0);
     if (!incoming.recoveryId) return { ok: true };
     // 本窗口自己的那份：带上窗口号和已发到第几笔，还在路上的旧笔到了也不再把它写回来。
-    const dropped = await decidePendingDraft({ projectPath, chapter, pending: { kind: "recovery", id: incoming.recoveryId, sha: "" }, decision: "dismiss", baseVersion: null, from: { client: clientId, seq } });
+    const dropped = await decidePendingDraft({ projectPath, chapter, pending: { id: incoming.recoveryId, sha: "" }, decision: "dismiss", baseVersion: null, from: { client: clientId, seq } });
     return dropped.ok ? { ok: true } : { ok: false, error: `换好了，但没存上的那份没删掉（下次开这一章还会提示）：${dropped.error}` };
   }
   const pending = incoming.pending;
-  if (!pending) return { ok: true };
+  if (pending?.kind !== "recovery") return { ok: true };
   const flushed = await flushDraftSave();
   if (!flushed.ok) return { ok: false, error: `你手上的字还没存上（${flushed.error}），没换。` };
   const live = useDraftStore.getState();
@@ -410,7 +411,7 @@ export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
 /**
  * 稿纸提示条上「保留我这版」/「不要了」：
  * - 撞版本 / 盘上变了：保留手上的字，以盘上那一版为底再存。
- * - AI 候选 / 恢复稿：不要了（服务端删掉那一份）。
+ * - 恢复稿：不要了（服务端清掉那一份）。AI 候选交 draft.discard 操作（`hooks/useDraftPicks`）。
  */
 export async function keepPaperMine(): Promise<PaperDecisionResult> {
   const state = useDraftStore.getState();
@@ -422,7 +423,7 @@ export async function keepPaperMine(): Promise<PaperDecisionResult> {
     return { ok: true };
   }
   const pending = incoming.pending;
-  if (!pending) return { ok: true };
+  if (pending?.kind !== "recovery") return { ok: true };
   const result = await decidePendingDraft({ projectPath: state.projectPath, chapter: state.chapter, pending, decision: "dismiss", baseVersion: null });
   if (result.ok && useDraftStore.getState().incoming?.pending?.id === pending.id) useDraftStore.getState().clearIncoming();
   return result;

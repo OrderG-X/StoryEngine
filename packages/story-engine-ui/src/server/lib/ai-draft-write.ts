@@ -23,7 +23,7 @@ import { draftApplyGenerated, draftPath, fail, opCommandKey, readCommandReceipt,
 import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
 import { MIRROR_FILES } from "../book/mirror/build.js";
 import { MIRROR_MARKER } from "../book/mirror/sync.js";
-import { keepOperationCandidateLocked, saveDraftCandidate, settleDraftCandidate, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
+import { keepOperationCandidateLocked, saveDraftCandidate, settleDraftCandidate, type ApplyKeptReason, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
 import { publishFixLogLocked, type FixRecord } from "./fix-log.js";
 import { currentOperation, OperationStopped, type OperationContext } from "./operations/context.js";
 import { checkFence } from "./operations/fence.js";
@@ -82,7 +82,7 @@ export type AiDraftOutcome =
   }
   | {
     readonly applied: false;
-    readonly reason: Exclude<DraftKeptReason, "interrupted">;
+    readonly reason: ApplyKeptReason;
     readonly candidateId: string;
     /** 给作者看的一句：为什么没换上、这版在哪。 */
     readonly message: string;
@@ -121,7 +121,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
   if (operation) return applyInOperation(projectDir, input, operation);
   const title = input.title.trim();
   const path = join(projectDir, draftPath(input.chapter));
-  const candidateOf = (status: "writing" | "ready", reason?: Exclude<DraftKeptReason, "interrupted">, id?: string) => saveDraftCandidate(projectDir, {
+  const candidateOf = (status: "writing" | "ready", reason?: ApplyKeptReason, id?: string) => saveDraftCandidate(projectDir, {
     chapter: input.chapter,
     title,
     body: input.body,
@@ -139,7 +139,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
   } catch (error) {
     console.warn(`[ai-draft] 第 ${input.chapter} 章 AI 这版换上前没存成候选：${errorText(error)}`);
   }
-  const keep = async (reason: Exclude<DraftKeptReason, "interrupted">, detail?: string): Promise<AiDraftOutcome> => {
+  const keep = async (reason: ApplyKeptReason, detail?: string): Promise<AiDraftOutcome> => {
     let kept;
     try {
       kept = await candidateOf("ready", reason, candidateId);
@@ -218,7 +218,7 @@ async function applyInOperation(projectDir: string, input: AiDraftInput, operati
   const key = `${op.opId}:${op.stepId}`;
   const title = input.title.trim();
   const path = join(projectDir, draftPath(input.chapter));
-  const keep = async (reason: Exclude<DraftKeptReason, "interrupted">, detail?: string): Promise<AiDraftOutcome> => {
+  const keep = async (reason: ApplyKeptReason, detail?: string): Promise<AiDraftOutcome> => {
     let kept;
     try {
       kept = await keepOperationCandidateLocked(projectDir, {

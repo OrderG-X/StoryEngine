@@ -21,7 +21,11 @@ import { readOperationTool, type ReadOperationOutput } from "./tools/read-operat
 import { checkChapterAction, type OperationAction } from "./user-actions.js";
 import { newDraftAction } from "./next-steps.js";
 import { createDraftChangeRecipe } from "../services/operations/recipes/draft-change.js";
+import { draftAdoptRecipe } from "../services/operations/recipes/draft-candidate.js";
 import { fakeDraftDeps, writerOf } from "../services/operations/recipes/draft-change-kit.js";
+import { createPlanProposeRecipe, PLAN_PROPOSE_KIND } from "../services/operations/recipes/plan-propose.js";
+import type { BrainCallModel } from "../editorial/index.js";
+import { planChapterTool } from "./tools/plan-chapter.js";
 
 let root: string;
 let book: string;
@@ -309,6 +313,29 @@ describe("写稿按钮（draft.change）", () => {
     expect(parseDraftFile(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).body.trim()).toBe("他推开门。");
   });
 
+  it("AI 另写几版给作者挑：一句结论（写了几版、稿子没动）；挑一版换上：说换上了，下一步推荐核账、再给预览定稿", async () => {
+    expect(await runCommand(book, draftSave, { chapter: 1, body: "作者的稿。", baseVersion: null, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
+    registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ writerClient: writerOf(prose) })));
+    registerRecipe(draftAdoptRecipe);
+    const signal = new AbortController().signal;
+    const out = collector();
+    await runOperationAction({ action: newDraftAction("write", { chapter: 1, candidates: 2, pick: "author" }), projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber(), signal });
+    expect(out.operationStates().at(-1)).toBe("succeeded");
+    expect(out.text()).toContain("另写了 2 版");
+    expect(out.text()).toContain("你的稿子没动");
+    const last = out.events.filter((item) => item.event === "operation" && (item.data as { operation?: unknown }).operation).at(-1)!.data as { operation: { result?: { body?: { otherVersions?: { candidateId: string; sha: string }[] } } } };
+    const version = last.operation.result?.body?.otherVersions?.[0];
+    expect(version).toBeDefined();
+
+    const adopt = collector();
+    const action: OperationAction = { kind: "new", type: "draft.adopt", params: { chapter: 1, candidateId: version!.candidateId, sha: version!.sha, baseVersion: (await readDraftState(book, 1)).version }, requestKey: "adopt-1", issuedAt: new Date().toISOString() };
+    await runOperationAction({ action, projectDir: book, sendEvent: adopt.sendEvent, scrubber: scrubber(), signal });
+    expect(adopt.operationStates().at(-1)).toBe("succeeded");
+    expect(adopt.text()).toContain("换上了 AI 这一版");
+    expect(adopt.choices().map((choice) => choice.label)).toEqual(["核账", "预览定稿"]);
+    expect(parseDraftFile(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).body.trim()).toBe(prose);
+  });
+
   it("没受理（前一章没定稿）：照原因说，下一步给「先定稿第 1 章」「仍要先写第 2 章」，不给「再写一次」", async () => {
     registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ writerClient: writerOf(prose) })));
     const out = collector();
@@ -400,5 +427,47 @@ describe("read_operation 和每轮开头的「最近的操作」：只读记录"
     expect(text).toContain("查 AI 味·第 2 章，停着：有一步可能已经发出去、结果没收到（可能已经计费）");
     expect(text).toContain("作者可以点「接着做」或「不要了」");
     expect(text).not.toContain("inspect.run");
+  });
+});
+
+describe("想走法（plan.propose，片 2D）", () => {
+  const OPTIONS = JSON.stringify({ options: [
+    { title: "林舟开门", steps: ["一早开门", "周婶来取伞"], recommended: true },
+    { title: "怀表不见了", steps: ["抽屉空了", "林舟去找周婶"] },
+  ] });
+  const planner = (reply: string): BrainCallModel => async (_messages, options) => (options.json ? reply : "笔记");
+  const usePlan = (reply: string) => registerRecipe(createPlanProposeRecipe({ plannerCallModel: planner(reply), readerCallModel: planner("{}"), modelProblem: () => undefined }));
+  const planChapter = (input: Record<string, unknown>, words: readonly string[], messageId: string) =>
+    (planChapterTool as unknown as { execute: (input: unknown, context: ToolExecutionContext) => Promise<SubmitReceipt> }).execute(input, {
+      requestContext: buildProjectRequestContext(book, 1, words, undefined, undefined, { messageId, issuedAt: new Date().toISOString() }),
+    } as unknown as ToolExecutionContext);
+
+  it("对话交：想法是作者原话才带，不是的不带、说清楚；收尾一句结论，记录里有几种走法（界面画走法卡）", async () => {
+    usePlan(OPTIONS);
+    const receipt = await planChapter({ idea: "让周婶来取伞" }, ["第一章往哪走？让周婶来取伞"], "msg-plan-1");
+    expect(receipt).toMatchObject({ ok: true, accepted: true, kind: PLAN_PROPOSE_KIND, chapter: 1, summary: "交出去了：想走法·第 1 章。" });
+    expect((await stored(receipt.opId!)).params).toEqual({ chapter: 1, idea: "让周婶来取伞" });
+    const out = collector();
+    const record = await followOperation({ bookDir: book, opId: receipt.opId!, sendEvent: out.sendEvent, signal: new AbortController().signal });
+    await finishOperationTurn({ record: record!, projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber() });
+    expect(out.text()).toBe("第 1 章想了 2 种走法，在稿纸上挑。");
+    expect(out.choices()).toEqual([]);
+    expect(((record!.result as { readonly body: unknown }).body as { options: { title: string }[] }).options.map((option) => option.title)).toEqual(["林舟开门", "怀表不见了"]);
+
+    const made = await planChapter({ idea: "主角想起了童年" }, ["第一章往哪走？"], "msg-plan-2");
+    expect(made.summary).toContain("填的想法不是作者原话，这次没带上，照故事现状想。");
+    expect((await stored(made.opId!)).params).toEqual({ chapter: 1 });
+  });
+
+  it("没想出来：说原因，给「再想一次」（照原来的想法、新的请求号）", async () => {
+    usePlan("不是 JSON");
+    const out = collector();
+    const action: OperationAction = { kind: "new", type: PLAN_PROPOSE_KIND, params: { chapter: 1, idea: "让周婶来取伞" }, requestKey: "plan-button-1", issuedAt: new Date().toISOString() };
+    await runOperationAction({ action, projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber(), signal: new AbortController().signal });
+    expect(out.text()).toMatch(/^想走法·第 1 章没做成：第 1 章的走法没想出来：/u);
+    const retry = out.choices();
+    expect(retry.map((choice) => choice.label)).toEqual(["再想一次"]);
+    expect(retry[0]!.action).toMatchObject({ kind: "new", type: PLAN_PROPOSE_KIND, params: { chapter: 1, idea: "让周婶来取伞" } });
+    expect((retry[0]!.action as { requestKey: string }).requestKey).not.toBe("plan-button-1");
   });
 });

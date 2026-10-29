@@ -8,7 +8,7 @@
  */
 import { fetchStateOverview } from "../api/client.js";
 import { followOperationEvents, listActiveOperations } from "../api/operationsClient.js";
-import { isDraftEditMode, type OperationLiveData, type OperationViewData } from "../api/agentChatClient.js";
+import { isCandidateDecisionType, isDraftEditMode, type OperationLiveData, type OperationViewData } from "../api/agentChatClient.js";
 import { editDraft, refreshPaper } from "../drafts/draftSync.js";
 import { flowAfterOperation } from "../hooks/agentFlowStatus.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -69,7 +69,7 @@ export function reconnectOperations(projectPath: string): void {
       onOperation: (next) => {
         if (!stillHere()) return;
         projectOperationEverywhere(next, owner);
-        if (next.kind === "draft.change" && isDraftEditMode(next.mode)) settleFollowedEdit(projectPath, next, stillHere);
+        if ((next.kind === "draft.change" && isDraftEditMode(next.mode)) || isCandidateDecisionType(next.kind)) settleFollowedEdit(projectPath, next, stillHere);
         else if (next.kind === "draft.change") draft.onOperation(next);
       },
       onProgress: (text) => { if (stillHere()) projectOperationProgressEverywhere(opId, text); },

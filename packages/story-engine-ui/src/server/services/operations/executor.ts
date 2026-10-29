@@ -24,6 +24,7 @@ import { listAttempts, settleAbandonedAttempt, unsettledUnknowns } from "../../l
 import { inputHashOf, readCheckpoint, writeCheckpoint } from "../../lib/operations/checkpoints.js";
 import {
   abortExecution,
+  OperationObsolete,
   OperationStopped,
   registerExecution,
   runInOperation,
@@ -118,13 +119,8 @@ export interface AuthorAction {
 /** 作者点了的决定存在这一步的检查点里。 */
 export const authorStepId = (actionId: string): string => `author:${actionId}`;
 
-/** 配方核不过（作者看的那版、依据变了）：抛它，这次记成 obsolete、说哪样变了。 */
-export class OperationObsolete extends Error {
-  constructor(readonly code: string, message: string) {
-    super(message);
-    this.name = "OperationObsolete";
-  }
-}
+/** 配方核不过（作者看的那版、依据变了）：抛它，这次记成 obsolete、说哪样变了（定义在 lib/operations/context.ts，下层也能抛）。 */
+export { OperationObsolete };
 
 export interface Recipe<P = unknown> {
   readonly kind: string;

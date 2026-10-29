@@ -23,12 +23,12 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
     const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
     invalidateStoryAgent();
     expect(tools).toEqual([
-      "brainstorm_chapter",
       "change_draft",
       "commit_preview",
       "foundation_write",
       "manage_ledger",
       "manage_snapshots",
+      "plan_chapter",
       "read_chapters_overview",
       "read_draft",
       "read_foundation",
@@ -42,7 +42,7 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
       "web_search",
     ]);
     const instructions = buildInstructions();
-    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft"]) {
+    for (const gone of ["brainstorm_chapter", "enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft"]) {
       expect(instructions).not.toContain(gone);
     }
     expect(instructions).toContain("run_check");
@@ -177,11 +177,11 @@ describe("buildInstructions 开书引导（仅空书时主动轻引导）", () =
     expect(instructions).toMatch(/故事资料基本为空|像一本新书/);
   });
 
-  it("开书引导复用现成工具（foundation_write/brainstorm_chapter）", () => {
+  it("开书引导复用现成工具（foundation_write/plan_chapter）", () => {
     const guidanceStart = instructions.indexOf("开书引导");
     const guidance = instructions.slice(guidanceStart);
     expect(guidance).toContain("foundation_write");
-    expect(guidance).toContain("brainstorm_chapter");
+    expect(guidance).toContain("plan_chapter");
   });
 
   // 重构 P9：新书不再自带占位主角，主角是作者说了才建的一张标了主角的人物卡。

@@ -2,7 +2,6 @@ import type {
   BookFileActionApiResponse,
   CreateProjectApiResponse,
   CreateProjectRequest,
-  GenerateDraftRequest,
   DeleteBookRequest,
   ImportBookApiResponse,
   ImportBookFile,
@@ -19,7 +18,7 @@ import type {
   StateOverviewApiResponse,
   StateOverviewRequest,
 } from "./types.js";
-import { FetchJsonError, fetchJson } from "./fetchJson.js";
+import { fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
 
 
@@ -217,58 +216,4 @@ export async function openBookProjectFolder(projectPath: string, signal?: AbortS
   }
 }
 
-/**
- * 抽卡候选（块③）：生成一版正文【不写盘、不快照、不改状态】，临时返回给前端并排展示，挑中才落盘。
- * 走 /api/draft/generate 的 persist:false 分支；不返回 overview（候选不改任何状态）。
- */
-export async function generateDraftCandidate(
-  input: GenerateDraftRequest,
-  signal?: AbortSignal,
-): Promise<{ readonly draftBody: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }> {
-  const payload = await fetchJson<
-    | { readonly ok: true; readonly draftBody: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }
-    | { readonly ok: false; readonly error: string }
-  >(
-    "/api/draft/generate",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...input, persist: false }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return { draftBody: payload.draftBody, ...(payload.draftTitle ? { draftTitle: payload.draftTitle } : {}), contextBudget: payload.contextBudget, ...(payload.planNote ? { planNote: payload.planNote } : {}) };
-}
-
-/** 抽卡「挑中落盘」（块③）：把选中的那份整稿（章名 + 正文，拆开的）写进工作稿，服务端写前留可撤销快照。 */
-export async function applyDraftCandidate(
-  input: { readonly projectPath: string; readonly chapter: number; readonly title: string; readonly body: string; readonly baseVersion: string | null },
-  signal?: AbortSignal,
-): Promise<{ readonly overview: StateOverview }> {
-  const payload = await fetchJson<
-    | { readonly ok: true; readonly overview: StateOverview }
-    | { readonly ok: false; readonly error: string }
-  >(
-    "/api/draft/apply-candidate",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  ).catch((error: unknown) => {
-    // 稿子在这期间改过（409）这类：给作者看服务端那句，不给状态码。
-    const said = error instanceof FetchJsonError && typeof (error.payload as { error?: unknown } | null)?.error === "string"
-      ? (error.payload as { error: string }).error
-      : undefined;
-    throw said ? new Error(said) : error;
-  });
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return { overview: payload.overview };
-}
 

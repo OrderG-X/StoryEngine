@@ -12,12 +12,10 @@ export interface WorkspaceOperationTarget {
 }
 
 /** 一份候选稿（拆开的：正文 + 章名；没章名 = 选用时沿用作者眼前的）。 */
-export interface WorkspaceDraftCandidate {
-  readonly body: string;
-  readonly title?: string;
-  readonly originTarget: WorkspaceOperationTarget;
-  /** AI 出稿时一起写的第几版（对话「另外几版」卡打开的）；没有＝「再来一版」现抽的候选。 */
-  readonly version?: number;
+/** 并排面板上的一版（「另外几版」卡点开的）：哪一章、哪本书的，点「用这版」带着候选号和指纹交 draft.adopt。 */
+export interface WorkspaceDraftCandidate extends DraftVersionData {
+  readonly chapter: number;
+  readonly projectPath: string;
 }
 
 export interface ChapterNavItem {
@@ -107,7 +105,7 @@ export type MessageCard =
   | { readonly type: "error"; readonly detail?: string; readonly reason?: AiErrorReason }
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
   | { readonly type: "status-notes"; readonly notes: readonly string[] }
-  /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
+  /** 想走法（plan.propose，写作版本 P2a；P6 起的头脑风暴）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
   | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number }
   /** AI 一次写几版（写稿 candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
   | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData }
@@ -173,9 +171,21 @@ export interface SettleCardData {
 }
 
 /** 「另外几版」卡：哪一章、落选的几版（index＝第几版，1 起）。 */
+/** 「另外几版」卡（写作版本 P2a 片 2D）：几版都留成了候选，带候选号和指纹，点「用这版」交 draft.adopt 换上。 */
 export interface DraftVersionsCardData {
   readonly chapter: number;
-  readonly versions: readonly { readonly index: number; readonly body: string }[];
+  /** 作者要自己挑的几版（一版都没换上）；没有 = 选优换上了一版，这是落选的几版。 */
+  readonly pick?: true;
+  readonly versions: readonly DraftVersionData[];
+}
+
+export interface DraftVersionData {
+  /** 第几版（1 起）。 */
+  readonly index: number;
+  readonly candidateId: string;
+  readonly sha: string;
+  readonly title?: string;
+  readonly body: string;
 }
 
 /** 头脑风暴卡：章纲员出的几种走法 + 核账员核前文的结果（线索只带名字，不带编号）。 */

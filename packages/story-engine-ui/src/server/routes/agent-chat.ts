@@ -36,7 +36,6 @@ import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
-import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -627,7 +626,7 @@ async function handleAgentChat(
       const actionChapter = "kind" in action ? (action.kind === "new" ? action.params.chapter : currentChapter) : "chapter" in action ? action.chapter : currentChapter;
       await appendTurnMetrics(projectDir, actionChapter, {
         kind: "action",
-        label: "kind" in action ? (action.kind === "new" ? `${action.type}:${action.mode}` : `operation:${action.kind}`) : action.toolName,
+        label: "kind" in action ? (action.kind === "new" ? ("mode" in action ? `${action.type}:${action.mode}` : action.type) : `operation:${action.kind}`) : action.toolName,
         ms: Date.now() - actionStarted,
         usage: actionUsage,
       });
@@ -762,13 +761,6 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
     }
     case "prune_snapshots": {
       const execute = pruneSnapshotsTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
-    case "brainstorm_chapter": {
-      const execute = brainstormChapterTool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

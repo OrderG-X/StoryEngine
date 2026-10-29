@@ -102,30 +102,19 @@ describe("/api/working-draft", () => {
     expect(((await call("GET", getUrl(project, 2))).payload.paper as Record<string, unknown>).pending).toBeUndefined();
   });
 
-  it("AI 候选：开章提示；正文变过、稿子变过都不换；不要了 → 删掉，再点一次也算成", async () => {
+  it("AI 候选：开章提示；换上 / 不要了不走这里（P2a 片 2D 起交 draft.adopt / draft.discard 操作），候选不动", async () => {
     const project = await realProject();
     const saved = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 3, body: "作者的稿。", baseVersion: null });
     const candidate = await saveDraftCandidate(project, { chapter: 3, title: "", body: "AI 写的一版。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
     const pending = ((await call("GET", getUrl(project, 3))).payload.paper as Record<string, unknown>).pending as Record<string, unknown>;
     expect(pending).toMatchObject({ kind: "candidate", id: candidate.id, reason: "draft_moved", body: "AI 写的一版。" });
 
-    const wrongSha = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: "别的", decision: "adopt", baseVersion: saved.payload.version });
-    expect(wrongSha.status).toBe(409);
-    const moved = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: pending.sha, decision: "adopt", baseVersion: null });
-    expect(moved.status).toBe(409);
-    expect(String(moved.payload.error)).toContain("没换");
+    for (const decision of ["adopt", "dismiss"]) {
+      const refused = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: pending.sha, decision, baseVersion: saved.payload.version });
+      expect(refused.status).toBe(400);
+    }
     expect((await readDraft(project, 3))?.body).toBe("作者的稿。");
-    expect(await readDraftCandidate(project, candidate.id)).toBeDefined();
-
-    // 不要了也要是作者看到的那一份（这期间变过就不删）。
-    const changed = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: "别的", decision: "dismiss", baseVersion: null });
-    expect(changed.status).toBe(409);
-    expect(await readDraftCandidate(project, candidate.id)).toBeDefined();
-    const dropped = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: pending.sha, decision: "dismiss", baseVersion: null });
-    expect(dropped.payload).toEqual({ ok: true });
-    expect(await readDraftCandidate(project, candidate.id)).toBeUndefined();
-    expect((await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: "", decision: "dismiss", baseVersion: null })).payload).toEqual({ ok: true });
-    expect((await readDraft(project, 3))?.body).toBe("作者的稿。");
+    expect(await readDraftCandidate(project, candidate.id)).toMatchObject({ body: "AI 写的一版。" });
   });
 
   it("存上的和恢复稿一样 → 恢复稿清掉；和工作稿一样的候选不提示", async () => {
@@ -172,8 +161,8 @@ describe("/api/working-draft", () => {
     expect(again.payload.snapshotId).toBeUndefined();
   }, 30_000);
 
-  it("别的路径交给下一个中间件（不吞 /api/draft/…）", async () => {
-    const other = await call("GET", "/api/draft/generate");
+  it("别的路径交给下一个中间件（不吞前缀相近的路径）", async () => {
+    const other = await call("GET", "/api/working-drafts");
     expect(other.nextCalled).toBe(true);
   });
 });

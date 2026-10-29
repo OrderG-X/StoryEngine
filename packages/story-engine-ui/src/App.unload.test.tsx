@@ -10,7 +10,6 @@ import { saveWorkingDraft } from "./api/workingDraftClient.js";
 
 vi.mock("./hooks/useBookManagement.js", () => ({ useBookManagement: () => ({}) }));
 vi.mock("./hooks/useProjectNavigation.js", () => ({ useProjectNavigation: () => ({ openHome() {}, openProject() {}, openRecentBook() {} }) }));
-vi.mock("./hooks/useWorkflowActions.js", () => ({ useWorkflowActions: () => ({}) }));
 vi.mock("./hooks/useChat.js", () => ({ useChat: () => ({}) }));
 vi.mock("./components/v2/ImmersiveAppShell.js", () => ({ default: () => null }));
 vi.mock("./components/v2/codex/SettingsModal.js", () => ({ SettingsModal: () => null }));

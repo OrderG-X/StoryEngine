@@ -21,7 +21,7 @@ import { readDraftTool } from "./tools/read-draft.js";
 import { foundationWriteTool } from "./tools/foundation-write.js";
 import { commitPreviewTool } from "./tools/commit-preview.js";
 import { manageLedgerTool } from "./tools/manage-ledger.js";
-import { brainstormChapterTool } from "./tools/brainstorm-chapter.js";
+import { planChapterTool } from "./tools/plan-chapter.js";
 import { changeDraftTool } from "./tools/change-draft.js";
 import { reviseDraftTool } from "./tools/revise-draft.js";
 import { runCheckTool } from "./tools/op-tools.js";
@@ -72,7 +72,7 @@ export function buildInstructions(): string {
       "这次写的是作者口述让你记的，工具会附「认下」按钮：提一句点「认下」就算作者自己写的；是你自己补的就不用提。",
     "",
     "写正文：",
-    "- 用户要正文（写第 N 章 / 写正文 / 出一版）就调 change_draft；只要方案、思路、问往哪走才用 brainstorm_chapter（作者的想法原样放进 idea，结果在稿纸上给作者挑，别把几种走法逐条复述）。缺章号时默认用户当前所在章。" +
+    "- 用户要正文（写第 N 章 / 写正文 / 出一版）就调 change_draft；只要方案、思路、问往哪走才用 plan_chapter（作者的想法原样放进 idea；交出去这一轮就停，走法卡由系统出、作者在稿纸上挑，你别替作者编走法）。缺章号时默认用户当前所在章。" +
       "用户给了本章必须写到的具体要点（具体名物、数字、编号、关键动作），逐条原样放进 mustHitBeats。",
     "- 接着写（作者说接着写 / 续写 / 补完这一章 / 再写几百字，或稿子短了要补）：调 change_draft 带 mode:\"continue\"，已写的字一个不动、从最后一句往后接，不用作者点按钮；" +
       "作者说了接下来写什么就原样放进 chapterGoal，说了字数就放 requestedDraftLength（这次接多少字）。别拿 revise_draft 硬接。" +
@@ -114,7 +114,7 @@ export function buildInstructions(): string {
     "开书引导（仅当设定本基本为空、像一本新书时）：",
     "- 温和地引导用户先说主角和大概的世界（年代、基调、规则），想到哪说到哪，只在关键缺口才追问（没有主角时问名字/想要什么/怕什么，世界太模糊时问年代/基本规矩）。",
     "- 边聊边用 foundation_write 写进设定本（主角 card.create 带 protagonist:true；世界的事写故事设定 story.set 或其他设定卡），自动存档、可撤销。",
-    "- 聊到第一章可用 brainstorm_chapter 出几种走法，给第一章方向前不必把已建的设定逐条复述一遍。已有真实设定的书不用走开书引导。",
+    "- 聊到第一章可用 plan_chapter 出几种走法，给第一章方向前不必把已建的设定逐条复述一遍。已有真实设定的书不用走开书引导。",
     "- 用平实的中文，不用 emoji，简洁直接。",
   ].join("\n");
 }
@@ -183,8 +183,8 @@ function storyAgentTools() {
     read_foundation: readFoundationTool,
     read_draft: readDraftTool,
     foundation_write: foundationWriteTool,
-    // 头脑风暴（重构 P6）：章纲员出几种走法、核账员核前文；取代原 generate_chapter_steering。
-    brainstorm_chapter: brainstormChapterTool,
+    // 写作版本 P2a：想走法是提交工具（plan.propose，收编原 brainstorm_chapter）：章纲员出几种走法、核账员核前文。
+    plan_chapter: planChapterTool,
     // 写作版本 P2a：写一章、接着往下写是提交工具（draft.change），服务端按固定配方跑（受理了这一轮就停）。
     change_draft: changeDraftTool,
     revise_draft: reviseDraftTool,

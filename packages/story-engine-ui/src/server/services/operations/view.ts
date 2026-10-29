@@ -92,6 +92,9 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",
   "inspect.run": "检查",
   "draft.change": "写稿",
+  "draft.adopt": "换上 AI 稿",
+  "draft.discard": "不要 AI 稿",
+  "plan.propose": "想走法",
 };
 
 /** 一次操作做的什么（中文）：认不出的种类如实说「别的操作」，不把英文种类名给模型念。 */

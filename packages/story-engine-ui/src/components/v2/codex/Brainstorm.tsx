@@ -1,13 +1,13 @@
 /**
  * 头脑风暴（重构 P6 第 5 步，草图 ⑤）：稿纸上方「第 N 章往哪走？」。
  *
- *  - 空章：一行想法输入 +【给我几种走法】→ brainstorm_chapter 结构化动作（章纲员出、核账员核，结果进对话）。
+ *  - 空章：一行想法输入 +【给我几种走法】→ 交一次想走法（plan.propose：章纲员出、核账员核，结果进对话）。
  *  - 有走法卡：几张走法并排（几步、推进哪些线索、核过前文对不对得上），【用这个】挑一种；【再来几种】换一批。
  *  - 挑中以后收成一条「这章打算」：照着自己写，或【让 AI 照这个起草】（交一次写稿，带这条方向）；【换一种】撤回。
  * 挑选只记在对话里的那张卡上（picked），不进账；没挑中的不留痕。「写这一章」按钮也照挑中的那种写。
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { newDraftAction, type AgentUserAction } from "../../../api/agentChatClient.js";
+import { newDraftAction, newPlanAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import type { BrainstormCardData, BrainstormOptionData } from "../../../type-defs/workspace.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { useChapterDirections } from "../../../workspace/chapterProgress.js";
@@ -119,7 +119,7 @@ export function BrainstormPanel({ chapter, draftEmpty, hidden, busy, onAction }:
 
   const brainstorm = (idea: string, avoid?: readonly string[]) => {
     setAsked(true);
-    onAction({ toolName: "brainstorm_chapter", chapter, ...(idea ? { idea } : {}), ...(avoid && avoid.length > 0 ? { avoid } : {}) });
+    onAction(newPlanAction({ chapter, ...(idea ? { idea } : {}), ...(avoid && avoid.length > 0 ? { avoid } : {}) }));
   };
   const thinking = asked && busy;
 

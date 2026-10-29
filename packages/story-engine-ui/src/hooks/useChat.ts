@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
-import { isDraftEditMode, isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
+import { isCandidateDecisionType, isDraftEditMode, isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
 import { cancelOperationRequest } from "../api/operationsClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
@@ -551,7 +551,8 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               projectOperationEverywhere(view, assistantMsgId, { announced: ENDED_OPERATION_STATES.has(view.state) });
               liveOperationRef.current = view.allowed.includes("cancel") && view.state !== "paused" ? { projectPath, opId: view.opId } : null;
-              if (view.kind === "draft.change" && isDraftEditMode(view.mode)) {
+              // 改稿、换上 / 不要 AI 稿：不流正文，停下来了按盘上重读稿纸（稿纸提示条跟着收起或换成别的）。
+              if ((view.kind === "draft.change" && isDraftEditMode(view.mode)) || isCandidateDecisionType(view.kind)) {
                 if (editOpId === null && !editSettled) beginEdit(view);
                 if (ENDED_OPERATION_STATES.has(view.state)) finishEdit(view);
               } else if (view.kind === "draft.change") {
@@ -843,9 +844,8 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       const liveChat = useChatStore.getState();
-      const liveUi = useUiStore.getState();
       // 从存稿到截完对话、重读完都占着工作区：这期间开不了新的一轮，截对话不会把新话截掉（第 6 轮复核 T10）。
-      const claimed = liveChat.chatLoading || liveUi.draftActionLoading ? null : claimWorkspaceForRestore(projectPath);
+      const claimed = liveChat.chatLoading ? null : claimWorkspaceForRestore(projectPath);
       if (!claimed) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
@@ -907,8 +907,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       const liveChat = useChatStore.getState();
-      const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading) {
         showToast("已有操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
@@ -971,8 +970,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveBook = useBookStore.getState();
       const liveChat = useChatStore.getState();
-      const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading) {
         showToast("已有操作正在进行，请等它结束后再定稿。", 4200);
         return;
       }
@@ -1022,8 +1020,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       const liveChat = useChatStore.getState();
-      const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading) {
         showToast("已有操作正在进行，请等它结束后再裁剪。", 4200);
         return;
       }
@@ -1049,8 +1046,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       const liveChat = useChatStore.getState();
-      const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading) {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }

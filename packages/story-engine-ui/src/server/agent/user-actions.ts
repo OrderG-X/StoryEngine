@@ -14,7 +14,20 @@ import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestio
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 import type { InspectMode } from "../services/inspect-service.js";
-import { isDraftEditMode, readDraftChangeParams, readDraftEditParams, type DraftChangeMode, type DraftChangeParams, type DraftEditMode, type DraftEditParams } from "../services/draft-change/params.js";
+import { PLAN_PROPOSE_KIND, readPlanProposeParams, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
+import {
+  isCandidateDecisionKind,
+  isDraftEditMode,
+  readCandidateDecisionParams,
+  readDraftChangeParams,
+  readDraftEditParams,
+  type CandidateDecisionKind,
+  type CandidateDecisionParams,
+  type DraftChangeMode,
+  type DraftChangeParams,
+  type DraftEditMode,
+  type DraftEditParams,
+} from "../services/draft-change/params.js";
 import {
   humanizeToolNames,
   resolveNextDraftTarget,
@@ -43,7 +56,6 @@ export const USER_ACTION_TOOL_NAMES = [
   "prune_snapshots",
   "commit_preview",
   "manage_snapshots",
-  "brainstorm_chapter",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 /** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」；P12：定论预览 / 改齐）。 */
@@ -52,7 +64,7 @@ const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo", "
 /**
  * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
  * 「接着做」「不要了」接着一次停着的操作。检查（inspect.run）、写稿和改稿（draft.change：写这一章 / 重写 / 接着往下写 /
- * 改这处 / 改掉这句 / 选中文字改写）是操作，别的按钮随各自那一片迁过来。
+ * 改这处 / 改掉这句 / 选中文字改写）、换上 / 不要 AI 稿（draft.adopt / draft.discard）、想走法（plan.propose）是操作，别的按钮随各自那一片迁过来。
  */
 export type OperationAction =
   | {
@@ -80,6 +92,22 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
+  /** 作者挑的 AI 稿（片 2D）：稿纸提示条「换成 AI 这版 / 不要了」、「另外几版」卡「用这版」。 */
+  | {
+    readonly kind: "new";
+    readonly type: CandidateDecisionKind;
+    readonly params: CandidateDecisionParams;
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  /** 想走法（片 2D）：稿纸上方「给我几种走法」「再来几种」。idea = 作者填的想法原话；avoid = 已经给过的走法名字。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof PLAN_PROPOSE_KIND;
+    readonly params: PlanProposeParams;
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
   /** 「接着做」；等作者点按钮的（「换上 / 再改一版」）带上是哪个按钮、点的哪个。 */
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string } }
   | { readonly kind: "cancel"; readonly opId: string };
@@ -104,11 +132,6 @@ export type UserAction =
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" }
   /**
-   * 「给我几种走法」「再来几种」（重构 P6 头脑风暴）：只读，章纲员出几种走法、核账员核前文，结果进对话、作者在稿纸上挑。
-   * idea = 作者在稿纸上方填的想法原话；avoid = 已经给过的走法名字（再来几种时别出一样的）。
-   */
-  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
-  /**
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
@@ -123,9 +146,6 @@ export type UserAction =
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
-/** 头脑风暴：作者想法多长、「再来几种」最多带几个已给过的走法名。 */
-const MAX_BRAINSTORM_IDEA = 500;
-const MAX_BRAINSTORM_AVOID = 12;
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -165,7 +185,9 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
-  if (record.type !== "inspect.run" && record.type !== "draft.change") return { kind: "invalid", reason: "不支持的操作。" };
+  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && !isCandidateDecisionKind(record.type)) {
+    return { kind: "invalid", reason: "不支持的操作。" };
+  }
   const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
   const chapter = params.chapter;
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
@@ -173,6 +195,16 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
   const issuedAt = typeof record.issuedAt === "string" && record.issuedAt.length <= 40 && Number.isFinite(Date.parse(record.issuedAt)) ? record.issuedAt : undefined;
   if (!requestKey || !issuedAt) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
   const stamp = { requestKey, issuedAt: new Date(Date.parse(issuedAt)).toISOString() };
+  if (isCandidateDecisionKind(record.type)) {
+    const decision = readCandidateDecisionParams(record.type, params);
+    if (!decision) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
+    return { kind: "action", action: { kind: "new", type: record.type, params: decision, ...stamp } };
+  }
+  if (record.type === PLAN_PROPOSE_KIND) {
+    const plan = readPlanProposeParams(params);
+    if (!plan) return { kind: "invalid", reason: "缺少有效章号。" };
+    return { kind: "action", action: { kind: "new", type: PLAN_PROPOSE_KIND, params: plan, ...stamp } };
+  }
   if (record.type === "draft.change" && isDraftEditMode(record.mode)) {
     const edit = readDraftEditParams(record.mode, params);
     if (!edit) return { kind: "invalid", reason: "要改的地方不对。" };
@@ -248,13 +280,6 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
   if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter, ...(record.allowShort === true ? { allowShort: true as const } : {}) } };
-  if (toolName === "brainstorm_chapter") {
-    const idea = typeof record.idea === "string" ? record.idea.trim().slice(0, MAX_BRAINSTORM_IDEA) : "";
-    const avoid = Array.isArray(record.avoid)
-      ? [...new Set(record.avoid.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 60)).filter(Boolean))].slice(0, MAX_BRAINSTORM_AVOID)
-      : [];
-    return { kind: "action", action: { toolName: "brainstorm_chapter", chapter, ...(idea ? { idea } : {}), ...(avoid.length > 0 ? { avoid } : {}) } };
-  }
   const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
     ? record.previewToken.trim()
     : undefined;
@@ -380,10 +405,6 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "settle_preview" || action.toolName === "settle_apply") {
     await runSettleAction({ ...args, action });
-    return;
-  }
-  if (action.toolName === "brainstorm_chapter") {
-    await runBrainstormAction({ ...args, action });
     return;
   }
   const stamp = Date.now();
@@ -622,40 +643,6 @@ async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserA
     },
   });
   emitText(outcome.summary);
-}
-
-/** 「给我几种走法」按钮：服务端直接跑只读的 brainstorm_chapter，走法卡进对话、稿纸上方给作者挑；回执一句话。 */
-async function runBrainstormAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "brainstorm_chapter" }>;
-}): Promise<void> {
-  const { action } = args;
-  const toolCallId = `user-action-brainstorm_chapter-${Date.now()}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  const input = {
-    chapter: action.chapter,
-    ...(action.idea ? { idea: action.idea } : {}),
-    ...(action.avoid ? { avoid: action.avoid } : {}),
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: "brainstorm_chapter", args: input });
-  let output: unknown;
-  try {
-    output = await args.executeTool("brainstorm_chapter", input, args.requestContext);
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "brainstorm_chapter", error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章的走法没想出来：${humanizeToolNames(message)}。可以再点一次。`);
-    return;
-  }
-  args.sendEvent("tool-result", { toolCallId, toolName: "brainstorm_chapter", output });
-  const result = output as { readonly ok?: unknown; readonly summary?: unknown } | undefined;
-  emitText(typeof result?.summary === "string" && result.summary.trim()
-    ? humanizeToolNames(result.summary.trim())
-    : `第 ${action.chapter} 章的走法没想出来。`);
 }
 
 /** 「撤销上一步」按钮：同对话里的撤销（manage_snapshots op=undo，优先整回合回退），回执照实说。 */

@@ -21,8 +21,13 @@ export interface DraftChangeParams {
   readonly selectedHookIds?: readonly string[];
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
-  /** write：作者要几版里挑（只认 2、3）；接着写只出一版。 */
+  /** write：一次写几版（只认 2、3）；接着写只出一版。 */
   readonly candidates?: 2 | 3;
+  /**
+   * write：几版作者自己挑（「AI 另写几版」）：每版都留成候选、一版都不换上，不去味、不核账（作者换上之后要核照常核）。
+   * 没说几版就写 2 版。不带它 = 选优换上一版，落选的也留成候选。
+   */
+  readonly pick?: "author";
   /** 检出机器腔只标注、不自动去味。 */
   readonly autoDeAi?: false;
   /** 作者要写完就出定稿预览。 */
@@ -58,7 +63,8 @@ export function readDraftChangeParams(mode: unknown, value: unknown): { readonly
   const selectedHookIds = texts(raw.selectedHookIds);
   const maxTimelineEvents = positiveInteger(raw.maxTimelineEvents);
   const contextTokenBudget = positiveInteger(raw.contextTokenBudget);
-  const candidates = writing && (raw.candidates === 2 || raw.candidates === 3) ? raw.candidates : undefined;
+  const pick = writing && raw.pick === "author" ? "author" as const : undefined;
+  const candidates = writing && (raw.candidates === 2 || raw.candidates === 3) ? raw.candidates : pick ? 2 as const : undefined;
   return {
     mode: mode as DraftChangeMode,
     params: {
@@ -71,8 +77,10 @@ export function readDraftChangeParams(mode: unknown, value: unknown): { readonly
       ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
       ...(contextTokenBudget !== undefined ? { contextTokenBudget } : {}),
       ...(candidates !== undefined ? { candidates } : {}),
+      ...(pick ? { pick } : {}),
       ...(raw.autoDeAi === false ? { autoDeAi: false as const } : {}),
-      ...(raw.thenPreview === true ? { thenPreview: true as const } : {}),
+      // 作者自己挑的一版都不换上：没有写完就出的定稿预览。
+      ...(raw.thenPreview === true && !pick ? { thenPreview: true as const } : {}),
       ...(writing && raw.rewrite === true ? { rewrite: true as const } : {}),
       ...(raw.allowWriteAhead === true ? { allowWriteAhead: true as const } : {}),
     },
@@ -201,4 +209,39 @@ export function readDraftEditParams(mode: unknown, value: unknown): DraftEditPar
   });
   if (violations.some((violation) => violation === undefined)) return undefined;
   return { mode, chapter, violations: violations as DraftDeaiParams["violations"] };
+}
+
+/* ------------------------------------------------------------------ */
+/*  作者挑 AI 稿：换上 / 不要了（写作版本 P2a 片 2D）                         */
+/* ------------------------------------------------------------------ */
+
+/** 换上 / 不要一份 AI 稿（稿纸提示条、「另外几版」卡上作者点的）：只认按钮交。 */
+export const DRAFT_ADOPT_KIND = "draft.adopt" as const;
+export const DRAFT_DISCARD_KIND = "draft.discard" as const;
+export type CandidateDecisionKind = typeof DRAFT_ADOPT_KIND | typeof DRAFT_DISCARD_KIND;
+
+export const isCandidateDecisionKind = (kind: unknown): kind is CandidateDecisionKind => kind === DRAFT_ADOPT_KIND || kind === DRAFT_DISCARD_KIND;
+
+export interface CandidateDecisionParams {
+  readonly chapter: number;
+  readonly candidateId: string;
+  /** 作者看到的那一份的指纹（章名 + 正文）。 */
+  readonly sha: string;
+  /** 换上：作者眼前那份工作稿的版本（这一章原来没有工作稿是 null）。不要了不带。 */
+  readonly baseVersion?: string | null;
+}
+
+const CANDIDATE_ID = /^[0-9a-z-]{8,80}$/u;
+const SHA = /^[0-9a-f]{64}$/u;
+
+/** 交来的（或记录里存的）参数读回来；号、指纹不对，换上没带底版号是 undefined。 */
+export function readCandidateDecisionParams(kind: CandidateDecisionKind, value: unknown): CandidateDecisionParams | undefined {
+  const raw = (value ?? {}) as Record<string, unknown>;
+  const chapter = positiveInteger(raw.chapter);
+  const candidateId = typeof raw.candidateId === "string" && CANDIDATE_ID.test(raw.candidateId) ? raw.candidateId : undefined;
+  const sha = typeof raw.sha === "string" && SHA.test(raw.sha) ? raw.sha : undefined;
+  if (chapter === undefined || !candidateId || !sha) return undefined;
+  if (kind === DRAFT_DISCARD_KIND) return { chapter, candidateId, sha };
+  const baseVersion = raw.baseVersion === null ? null : typeof raw.baseVersion === "string" && raw.baseVersion.trim() && raw.baseVersion.length <= 200 ? raw.baseVersion.trim() : undefined;
+  return baseVersion === undefined ? undefined : { chapter, candidateId, sha, baseVersion };
 }

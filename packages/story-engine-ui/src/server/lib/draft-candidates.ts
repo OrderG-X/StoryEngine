@@ -14,7 +14,8 @@
  *   盘上还是这个窗口最后存成的那版、新一笔又是照这一串里的某一版改的（关窗时补发的那笔和在路上那笔，
  *   或补发之后页面没关、接着存的那笔），就是这个窗口自己接着写，顺着接上（第 7 轮复核 U2）。
  * - 操作里换不上的（写作版本 P2a 设计第三节）：号 = `<章>-` + sha256(`opId:stepId:第几版`) 前 16 位，同号已在不重写；
- *   作者处理过（换上 / 不要了）改成墓碑（`handled`、正文清空），同号再来不复活；来源操作被清理时墓碑一起清（clearCandidateTombstones）。
+ *   作者处理过（换上 / 不要了：作者点的操作 draft.adopt / draft.discard，见 candidate-adopt.ts）改成墓碑（`handled`、正文清空），
+ *   同号再来不复活；来源操作被清理时墓碑一起清（clearCandidateTombstones）。
  * 写都在书锁里（和存稿、找回、换上同一把锁）：查过的那份到换上为止不会被别人改。
  * 都在 `agents/` 下，不进存档点（撤销不会把它们翻没）；作者没处理的不自动清。
  */
@@ -33,9 +34,15 @@ const ID = /^[0-9a-z-]{8,80}$/u;
 export const DraftCandidateSource = z.enum(["draft", "continue", "de-ai", "unit-fix", "revise", "revision"]);
 export type DraftCandidateSource = z.infer<typeof DraftCandidateSource>;
 
-/** 为什么没换上：写的途中工作稿变了 / 前文或设定变了 / 换的时候写盘出错 / 写到一半进程没了。 */
-export const DraftKeptReason = z.enum(["draft_moved", "basis_moved", "apply_failed", "interrupted"]);
+/**
+ * 为什么没换上：写的途中工作稿变了 / 前文或设定变了 / 换的时候写盘出错 / 写到一半进程没了；
+ * 一次写几版时落选的（other_version）、作者要自己挑的那几版（author_pick，写作版本 P2a 片 2D）——这两种不上稿纸提示条，
+ * 在对话的「另外几版」卡上点开挑。
+ */
+export const DraftKeptReason = z.enum(["draft_moved", "basis_moved", "apply_failed", "interrupted", "other_version", "author_pick"]);
 export type DraftKeptReason = z.infer<typeof DraftKeptReason>;
+/** 换上那一下没换成的几种（AI 稿留成候选、上稿纸提示条）。 */
+export type ApplyKeptReason = "draft_moved" | "basis_moved" | "apply_failed";
 
 const DraftCandidateFile = z.object({
   schema: z.literal("draft-candidate/1"),
@@ -252,13 +259,17 @@ export async function clearCandidateTombstones(projectDir: string, opId: string)
   }
 }
 
+/** 一次写几版留下的（落选的、作者要自己挑的）：在「另外几版」卡上挑，不上稿纸提示条。 */
+const VERSION_REASONS: ReadonlySet<DraftKeptReason> = new Set(["other_version", "author_pick"]);
+
 /**
- * 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的、和眼下工作稿一样的不算。
+ * 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的、和眼下工作稿一样的、一次写几版留下的不算。
  * 先挑掉一样的再取最新：最新那份碰巧和工作稿一样时，更早那份作者还没处理的照样提示（第 4 轮复核 R4）。
  */
 export async function pendingDraftCandidate(projectDir: string, chapter: number, draft?: DraftContent): Promise<DraftCandidate | undefined> {
   const candidates = (await readEntries(candidatesDir(projectDir), DraftCandidateFile))
-    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && !sameDraftContent(candidate, draft) && !writingNow.has(candidate.id))
+    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && !sameDraftContent(candidate, draft) && !writingNow.has(candidate.id)
+      && !(candidate.reason && VERSION_REASONS.has(candidate.reason)))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return candidates[0];
 }

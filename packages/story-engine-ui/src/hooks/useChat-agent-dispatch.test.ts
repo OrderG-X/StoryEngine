@@ -125,7 +125,6 @@ function resetStore(): void {
   });
   useUiStore.setState({
     aiFlavorPending: null,
-    draftActionLoading: null,
   });
   disk.clear();
   diskVersion = 0;

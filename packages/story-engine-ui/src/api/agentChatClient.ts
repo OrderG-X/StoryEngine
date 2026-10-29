@@ -67,6 +67,8 @@ export interface DraftParamsData {
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   readonly candidates?: 2 | 3;
+  /** 几版作者自己挑（「AI 另写几版」）：每版都留成候选、一版不换上。 */
+  readonly pick?: "author";
   readonly autoDeAi?: false;
   readonly thenPreview?: true;
   /** 作者点了「重写这一章」（这章有稿、已定稿也整章重写）。 */
@@ -133,8 +135,53 @@ export type OperationActionData =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
+  /** 换上 / 不要一份 AI 稿（片 2D：稿纸提示条、「另外几版」卡）。 */
+  | CandidateActionData<"draft.adopt">
+  | CandidateActionData<"draft.discard">
+  /** 想走法（片 2D：稿纸上方「给我几种走法」「再来几种」）。 */
+  | { readonly kind: "new"; readonly type: "plan.propose"; readonly params: PlanParamsData; readonly requestKey: string; readonly issuedAt: string }
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string } }
   | { readonly kind: "cancel"; readonly opId: string };
+
+/** 换上 / 不要 AI 稿（和服务端 services/draft-change/params.ts 的 CandidateDecisionParams 同形）。 */
+export type CandidateDecisionTypeData = "draft.adopt" | "draft.discard";
+
+interface CandidateActionData<T extends CandidateDecisionTypeData> {
+  readonly kind: "new";
+  readonly type: T;
+  readonly params: CandidateDecisionParamsData;
+  readonly requestKey: string;
+  readonly issuedAt: string;
+}
+
+export interface CandidateDecisionParamsData {
+  readonly chapter: number;
+  readonly candidateId: string;
+  /** 作者看到的那一份的指纹。 */
+  readonly sha: string;
+  /** 换上：作者眼前那份工作稿的版本（这一章原来没有工作稿是 null）。 */
+  readonly baseVersion?: string | null;
+}
+
+/** 一个换上 / 不要 AI 稿的按钮（请求号这时候给）。 */
+export function newCandidateAction(type: CandidateDecisionTypeData, params: CandidateDecisionParamsData): OperationActionData {
+  const stamp = { requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+  return type === "draft.adopt" ? { kind: "new", type, params, ...stamp } : { kind: "new", type, params, ...stamp };
+}
+
+/** 想走法的参数（和服务端 recipes/plan-propose.ts 的 PlanProposeParams 同形）：idea = 作者填的想法原话；avoid = 已经给过的走法名字。 */
+export interface PlanParamsData {
+  readonly chapter: number;
+  readonly idea?: string;
+  readonly avoid?: readonly string[];
+}
+
+/** 一个想走法按钮（请求号这时候给）。 */
+export function newPlanAction(params: PlanParamsData): OperationActionData {
+  return { kind: "new", type: "plan.propose", params, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+export const isCandidateDecisionType = (type: unknown): type is CandidateDecisionTypeData => type === "draft.adopt" || type === "draft.discard";
 
 /** 一个新检查按钮（请求号这时候给）。 */
 export function newInspectAction(mode: InspectModeData, chapter: number, options: { readonly fresh?: boolean } = {}): OperationActionData {
@@ -180,7 +227,6 @@ export type AgentUserAction =
   | { readonly toolName: "undo" }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly accept?: boolean }
-  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
   /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
   | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
   /** 设定本定论页「查前文」：拿这条定论查全书。 */
@@ -321,8 +367,6 @@ export interface AgentToolResult {
   readonly chapter?: number;
   /** commit_apply 专属：整份入库报告（CommitReport）。前端据此渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。 */
   readonly commitReport?: unknown;
-  /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
-  readonly brainstorm?: BrainstormCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
   /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
@@ -418,6 +462,8 @@ export interface OperationViewData {
   readonly inspect?: InspectCardsData;
   /** 写稿做完了的那几样（写的哪章、换上了没有、另外几版）。 */
   readonly draft?: DraftOperationData;
+  /** 想走法做完了的几种走法（走法卡、稿纸上方给作者挑）。 */
+  readonly plan?: BrainstormCardData;
   /** 等作者点的（改写的改前改后 +「换上 / 再改一版」）；点过的不算。 */
   readonly pending?: PendingActionData;
 }
@@ -445,7 +491,7 @@ export interface DraftOperationData {
   readonly title?: string;
   /** 这次写稿打的存档点，先后照写的先后（新拟的章纲存盘前、换上工作稿前）：这一轮的「撤销到此」、对话里说「撤销上一步」从第一个退。 */
   readonly snapshots?: readonly string[];
-  /** 一次写几版时落选的几版全文（「另外几版」卡）。 */
+  /** 一次写几版时落选的几版、作者要自己挑的几版（「另外几版」卡；都留成了候选）。 */
   readonly versions?: DraftVersionsCardData;
   /** 改稿改了的几处（稿纸上高亮改后那句）。 */
   readonly changes?: readonly EditChangeData[];
@@ -511,10 +557,15 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
 
 /** 写稿结果 → 界面要的那几样（不是写稿、没做完、形状不对是 undefined）。 */
 function readDraftOperation(body: unknown): DraftOperationData | undefined {
-  if (!isRecord(body) || body.kind !== "draft.change") return undefined;
+  if (!isRecord(body)) return undefined;
   const chapter = positiveInt(body.chapter);
   if (chapter === undefined) return undefined;
-  const versions = readDraftVersions({ chapter, otherVersions: body.otherVersions });
+  // 换上作者挑的 AI 稿（片 2D）：换没换上、打的存档点（这一轮的「撤销到此」从它退）。
+  if (body.kind === "draft.adopt") {
+    return { chapter, applied: body.applied === true, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshots: [body.snapshotId] } : {}) };
+  }
+  if (body.kind !== "draft.change") return undefined;
+  const versions = readDraftVersions({ chapter, otherVersions: body.otherVersions, ...(body.pick === "author" ? { pick: true } : {}) });
   const snapshots = [body.planSnapshotId, body.ok === true ? body.snapshotId : undefined]
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   const changes = editChanges(body.changes);
@@ -713,10 +764,6 @@ export async function streamAgentChat(
             // commit_apply 专属：入库成功且带 report（整份 CommitReport，不在轻量白名单里）→ 透传，前端渲染「入库」delta 卡。
             ...(parsed.toolName === "commit_apply" && output.committed === true && isRecord(output.report)
               ? { commitReport: output.report }
-              : {}),
-            // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
-            ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
-              ? { brainstorm: readBrainstormData(output)! }
               : {}),
             // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
             ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)
@@ -964,7 +1011,8 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const mode = typeof value.mode === "string" ? value.mode : undefined;
   const result = isRecord(value.result) ? value.result : undefined;
   const inspect = state === "succeeded" && value.kind === "inspect.run" && mode && result ? readInspectCards(mode, result.body) : undefined;
-  const draft = state === "succeeded" && value.kind === "draft.change" && result ? readDraftOperation(result.body) : undefined;
+  const draft = state === "succeeded" && (value.kind === "draft.change" || value.kind === "draft.adopt") && result ? readDraftOperation(result.body) : undefined;
+  const plan = state === "succeeded" && value.kind === "plan.propose" && result ? readBrainstormData(result.body) : undefined;
   const pending = state === "waiting_author" ? readPendingAction(value.pendingActions) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
@@ -989,6 +1037,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     },
     ...(inspect ? { inspect } : {}),
     ...(draft ? { draft } : {}),
+    ...(plan ? { plan } : {}),
     ...(pending ? { pending } : {}),
   };
 }
@@ -1082,6 +1131,10 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
   if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
   if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
   const stamp = { requestKey: value.requestKey, issuedAt: value.issuedAt };
+  if (value.type === "plan.propose") {
+    const params = readPlanParams(value.params);
+    return params ? { kind: "new", type: "plan.propose", params, ...stamp } : undefined;
+  }
   if (value.type === "draft.change" && isDraftEditMode(value.mode)) {
     const params = readEditParams(value.mode, value.params);
     return params ? { kind: "new", type: "draft.change", mode: params.mode, params, ...stamp } : undefined;
@@ -1113,6 +1166,18 @@ const textList = (value: unknown): readonly string[] | undefined => {
   return items.length > 0 ? items : undefined;
 };
 
+/** 想走法参数（和服务端 readPlanProposeParams 同一口径）：章号不对是 undefined。 */
+function readPlanParams(value: unknown): PlanParamsData | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = positiveInt(value.chapter);
+  if (chapter === undefined) return undefined;
+  const idea = nonEmptyText(value.idea, 500);
+  const avoid = Array.isArray(value.avoid)
+    ? [...new Set(value.avoid.flatMap((item) => { const text = nonEmptyText(item, 40); return text ? [text] : []; }))].slice(0, 9)
+    : [];
+  return { chapter, ...(idea ? { idea } : {}), ...(avoid.length > 0 ? { avoid } : {}) };
+}
+
 /** 写稿参数（和服务端 readDraftChangeParams 同一口径）：章号不对是 undefined，多的字段丢掉；接着写不带多版、重写。 */
 function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData | undefined {
   if (!isRecord(value)) return undefined;
@@ -1126,6 +1191,7 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
   const selectedHookIds = textList(value.selectedHookIds);
   const maxTimelineEvents = positiveInt(value.maxTimelineEvents);
   const contextTokenBudget = positiveInt(value.contextTokenBudget);
+  const pick = writing && value.pick === "author" ? "author" as const : undefined;
   const candidates = writing && (value.candidates === 2 || value.candidates === 3) ? value.candidates : undefined;
   return {
     chapter,
@@ -1137,6 +1203,7 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
     ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
     ...(contextTokenBudget !== undefined ? { contextTokenBudget } : {}),
     ...(candidates !== undefined ? { candidates } : {}),
+    ...(pick ? { pick } : {}),
     ...(value.autoDeAi === false ? { autoDeAi: false as const } : {}),
     ...(value.thenPreview === true ? { thenPreview: true as const } : {}),
     ...(writing && value.rewrite === true ? { rewrite: true as const } : {}),

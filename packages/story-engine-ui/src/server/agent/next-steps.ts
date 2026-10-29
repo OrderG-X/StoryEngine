@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { hasWorkingDraftText } from "../lib/working-draft-text.js";
 import type { DraftChangeMode, DraftChangeParams } from "../services/draft-change/params.js";
 import type { InspectMode } from "../services/inspect-service.js";
+import { PLAN_PROPOSE_KIND, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import type { OperationAction, UserAction } from "./user-actions.js";
 
 export interface NextStepChoice {
@@ -38,6 +39,11 @@ export function newOperationAction(type: "inspect.run", mode: InspectMode, param
 /** 一次写稿的按钮动作（写这一章 / 重写 / 接着往下写 / 再写一次）：和 newOperationAction 一样出的时候就给号。 */
 export function newDraftAction(mode: DraftChangeMode, params: DraftChangeParams): OperationAction {
   return { kind: "new", type: "draft.change", mode, params, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 想走法（「再想一次」）：和 newOperationAction 一样出的时候就给号。 */
+export function newPlanAction(params: PlanProposeParams): OperationAction {
+  return { kind: "new", type: PLAN_PROPOSE_KIND, params, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
 }
 
 /** 「核账」「再核一遍」：交一次核账。fresh＝正文没改也重新核。 */

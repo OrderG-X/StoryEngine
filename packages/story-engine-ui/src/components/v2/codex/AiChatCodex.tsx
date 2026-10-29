@@ -34,7 +34,7 @@ import { resumeBookReread } from "../../../api/client.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { ChatCapabilityBar, type CapabilityAction } from "./ChatCapabilityBar.js";
 import { turnTailSummary } from "./turnTail.js";
-import { operationCaption, runningAgentCard } from "./operationCaption.js";
+import { runningAgentCard } from "./operationCaption.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DirectionsCard } from "./Brainstorm.js";
 import { DraftVersionsCard } from "./DraftVersionsCard.js";
@@ -281,11 +281,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const { info: activeModel, setupStep } = useActiveModel(props.modelRefreshKey ?? 0);
   // 有动作在跑（聊天回包 / 出稿 / 预览 / 工作台写操作）＝「动作进行中」：先于下面的钩子算好，
   // 传给 useReaderCatchUp——动作等回包期间即使补读没在读也按 5 秒轮询（R6.2），「（核账在等它读完）」一出来就能看到。
-  const workspaceBusy = Boolean(
-    props.chatLoading
-    || props.draftActionLoading
-    || isWorkspaceBusy(),
-  );
+  const workspaceBusy = Boolean(props.chatLoading || isWorkspaceBusy());
   // 编辑部「在读前文」进度（R4.3）：开书概况带初值；任一角色在读时每 5 秒轮询，全读完自动停。
   // R6.2：概况刷新带来的新初值盖过旧轮询结果（同一次打开里后来的补读也显示）；动作进行中（busy）也轮询，回包到了再按 reading 停。
   // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
@@ -416,8 +412,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const waitingFirstEvent = Boolean(props.chatLoading) && (!lastAssistant || !assistantHasAnything(lastAssistant));
   // 「建议下一步」是收尾的内部一步，不上字幕。
   const busyCaption = busy
-    ? operationCaption(props.draftActionLoading)
-      ?? runningOperationCaption(lastAssistant ? cardOf(lastAssistant, "operation")?.op : undefined)
+    ? runningOperationCaption(lastAssistant ? cardOf(lastAssistant, "operation")?.op : undefined)
       ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running" && step.toolName !== "suggest_next_steps"))
       ?? "AI 在忙…"
     : null;
@@ -579,7 +574,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             {...(props.onOpenModelSettings ? { onOpenSettings: props.onOpenModelSettings } : {})}
             onUndoToHere={props.onUndoToTurn ? () => props.onUndoToTurn?.(message) : undefined}
             onPrefillComposer={prefillComposer}
-            liveOperation={index === all.length - 1 ? operationCaption(props.draftActionLoading) : null}
             isLatestMessage={index === all.length - 1}
             onFixAiFlavorViolation={props.onFixAiFlavorViolation}
             onFixAllAiFlavorViolations={props.onFixAllAiFlavorViolations}
@@ -832,7 +826,6 @@ function MessageBubbles({
   continuitySuperseded = false,
   continuitySettled,
   onPrefillComposer,
-  liveOperation = null,
   isLatestMessage = true,
   projectPath = null,
   onOpenSettings,
@@ -862,8 +855,6 @@ function MessageBubbles({
   readonly continuitySettled?: readonly string[] | undefined;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
-  /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
-  readonly liveOperation?: string | null;
   /** 是不是对话里最后一条（旧的出错卡不再给「重试」——后面已经重试过/往下走了，再点会重复跑）。 */
   readonly isLatestMessage?: boolean;
   /** 当前书目录（核账卡「不是问题」存盘用）。 */
@@ -878,15 +869,10 @@ function MessageBubbles({
   if (message.role === "system") {
     // 操作历史里点的恢复：记一行，之前那轮的「下一步」到这儿为止（见 utils/restoreNote.ts）。
     if (message.kind === "restore") return <div className="msg msg-ai se-op-row">{message.content}</div>;
-    // 不走对话的操作挂的进行中卡：在跑就显示「正在…」，不在跑了（上次关页/刷新打断）就如实说没做完。
+    // 老版本不走对话的操作挂的进行中卡（P2a 片 2D 起都进对话、没有新的了）：会话里还留着的，如实说没做完。
     const running = runningAgentCard(message.agentCards);
     if (!running) return null;
-    return liveOperation ? (
-      <div className="msg msg-ai se-op-row is-running" role="status">
-        <span className="se-op-dot" aria-hidden="true" />
-        <span>{liveOperation}…</span>
-      </div>
-    ) : (
+    return (
       <div className="msg msg-ai se-op-row">
         <span>{stripRunningSuffix(running.title)}没做完（中途关掉或刷新了），可以再来一次。</span>
       </div>

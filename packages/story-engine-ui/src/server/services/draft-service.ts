@@ -3,7 +3,7 @@
  * 多版确定性选优、字数 / AI 腔 / 要点核对的回执件、自动去味一轮。
  *
  * 出稿本身是 draft.change 操作（写作版本 P2a 3.1，services/draft-change/ + recipes/draft-change.ts）：一步一步跑、
- * 最后一次换上工作稿。HTTP 只剩抽卡候选（generateDraftCandidate，写作版本 P2a 2D 收编进 draft.change pick:author）。
+ * 最后一次换上工作稿；「AI 另写几版」是它的作者自己挑（pick: author）。
  *
  * 依赖说明：流程层（services）只往下引——写稿底层、编辑部（章纲）、基础设施；不引对话 AI 和 HTTP 出口。
  * 铁律：passed=false 的候选永远不得中选；回检 / 裁决 / 去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
@@ -43,7 +43,6 @@ import { resolveInSceneCharacters, type InSceneResult } from "../writing/presenc
 import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiCallModel, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
-import { resolveChapterPlanForReroll } from "../editorial/plan-chapter.js";
 import type { LastDraftConflict } from "../writing/context-gateway.js";
 import type { BrainCallModel } from "../editorial/index.js";
 
@@ -562,39 +561,10 @@ export function scoreInputFromCandidateReport(
 }
 
 /* ---------------------------------------------------------------------------
- * 共享 prelude、D5 抽卡
+ * 共享 prelude
  * ------------------------------------------------------------------------- */
 
-/** D5 抽卡（persist:false）输入：HTTP 专属能力；无策略参数——不写盘、不快照、不执法、不回检。 */
-export interface GenerateDraftCandidateInput {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly chapterGoal?: string;
-  readonly requestedDraftLength?: number;
-  /** 作者点名本章要写的人（名字）。 */
-  readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
-  readonly maxTimelineEvents?: number;
-  readonly contextTokenBudget?: number;
-  readonly maxOutputTokens?: number;
-  readonly writerClient: WriterClient;
-  /**
-   * 拟章纲（2026-10-10 引擎升级第 5 期「出稿一条路」）：写作台「写第一版 / 再来一版」也先拿章纲再写，
-   * 和对话里让 AI 写同一套（沿用已有章纲；没有就拟一份并审校）。缺省 = 不拟（旧行为，测试用）。
-   */
-  readonly plannerCallModel?: BrainCallModel;
-  readonly planCheckReaderCallModel?: BrainCallModel;
-}
-
-export interface GenerateDraftCandidateOutcome {
-  /** 章纲一句话（或拟不成的原因），给作者看。 */
-  readonly planNote?: string;
-  readonly candidate: FastDraftReport;
-  readonly characterSelection: InSceneResult;
-  readonly contextRanking: WriterRankContextPlan;
-}
-
-/** 共享 prelude：出稿操作和抽卡同一套「方向默认/数值归一/预算裁剪账本/在场角色解析/长度目标/回检规则」。 */
+/** 共享 prelude：出稿操作每一版同一套「方向默认/数值归一/预算裁剪账本/在场角色解析/长度目标/回检规则」。 */
 export interface DraftRunContext {
   readonly chapterGoal: string;
   readonly requestedDraftLength?: number;
@@ -716,43 +686,6 @@ export function sharedFastDraftInput(run: DraftRunContext, input: {
     ...(run.lastDraftConflicts ? { lastDraftConflicts: run.lastDraftConflicts } : {}),
     ...(run.chapterPlan && input.segmentByPlan ? { segmentByPlan: true } : {}),
   };
-}
-
-/**
- * D5 抽卡候选（HTTP 独有入参 persist:false 的 service 能力）：runFastDraft 只生成不落盘、
- * 不快照，候选正文交路由临时并排展示，挑中才落盘（/api/draft/apply-candidate）。不带 AI 腔回检（与
- * 按钮路一致）。失败如实：candidate.passed=false + issues，路由投影 422。
- */
-export async function generateDraftCandidate(input: GenerateDraftCandidateInput): Promise<GenerateDraftCandidateOutcome> {
-  const planning = input.plannerCallModel
-    ? await resolveChapterPlanForReroll({
-      projectDir: input.projectDir,
-      chapter: input.chapter,
-      ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
-      plannerCallModel: input.plannerCallModel,
-      ...(input.planCheckReaderCallModel ? { planCheckReaderCallModel: input.planCheckReaderCallModel } : {}),
-    })
-    : undefined;
-  // 作者没给新方向：写手拿的本章目标也沿用章纲里记着的作者原话，和第一版出稿时一样。
-  const chapterGoal = input.chapterGoal?.trim() || planning?.direction;
-  const run = await resolveDraftRunContext({
-    ...(planning?.plan ? { chapterPlan: planning.plan } : {}),
-    projectDir: input.projectDir,
-    chapter: input.chapter,
-    ...(chapterGoal ? { chapterGoal } : {}),
-    ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
-    ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
-    ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
-    ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
-    aiFlavorRecheck: false,
-  });
-  const candidate = await runFastDraft({
-    // 和对话里出稿一样有章纲就分前后两半写：一口气写的候选常短到目标的一半（换题材长篇实跑 2026-10-27：1,090 / 1,591 字，目标 2,000）。
-    ...sharedFastDraftInput(run, { ...input, segmentByPlan: true }),
-    writerClient: input.writerClient,
-    dryRun: false,
-  });
-  return { candidate, characterSelection: run.characterSelection, contextRanking: run.contextRanking, ...(planning?.note ? { planNote: planning.note } : {}) };
 }
 
 /**

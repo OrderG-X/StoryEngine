@@ -364,16 +364,42 @@ describe("streamAgentChat", () => {
   it("写稿做完了 → draft（章、换没换上、章名、存档点按先后、落选几版）；没做完、不是写稿的不带", async () => {
     const draftView = (body: unknown, overrides: Record<string, unknown> = {}) => opView("write", body, { kind: "draft.change", what: "写稿·第 38 章", chapter: 38, ...overrides });
     const { views } = await collectOperations([
-      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38, draftTitle: " 雨夜 ", planSnapshotId: "s-plan", snapshotId: "s-draft", otherVersions: [{ index: 1, body: "另一版。" }] }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38, draftTitle: " 雨夜 ", planSnapshotId: "s-plan", snapshotId: "s-draft", otherVersions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "另一版。" }] }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", pick: "author", ok: false, chapter: 38, planSnapshotId: "s-plan", otherVersions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "甲。" }, { index: 2, candidateId: "0038-op-2", handled: true }] }) }),
+      frame("operation", { type: "record", operation: opView("write", { kind: "draft.adopt", chapter: 38, applied: true, version: "v9", snapshotId: "s-adopt" }, { kind: "draft.adopt", what: "换上 AI 稿·第 38 章", chapter: 38, mode: undefined }) }),
       frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: false, chapter: 38, planSnapshotId: "s-plan", snapshotId: "s-stale", kept: { candidateId: "c1", reason: "draft_moved" } }) }),
       frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38 }, { state: "running" }) }),
       frame("operation", { type: "record", operation: opView("continuity", { kind: "draft.change", ok: true, chapter: 8 }) }),
     ]);
-    expect(views[0]?.draft).toEqual({ chapter: 38, applied: true, title: "雨夜", snapshots: ["s-plan", "s-draft"], versions: { chapter: 38, versions: [{ index: 1, body: "另一版。" }] } });
+    expect(views[0]?.draft).toEqual({ chapter: 38, applied: true, title: "雨夜", snapshots: ["s-plan", "s-draft"], versions: { chapter: 38, versions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "另一版。" }] } });
+    // 作者自己挑：一版都没换上，几版带 pick；处理过的那版不收。
+    expect(views[1]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"], versions: { chapter: 38, pick: true, versions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "甲。" }] } });
+    // 换上作者挑的那版：带存档点。
+    expect(views[2]?.draft).toEqual({ chapter: 38, applied: true, snapshots: ["s-adopt"] });
     // 没换上：稿的存档点不算（没写），章纲存过的照算。
-    expect(views[1]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"] });
-    expect(views[2]?.draft).toBeUndefined();
-    expect(views[3]?.draft).toBeUndefined();
+    expect(views[3]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"] });
+    expect(views[4]?.draft).toBeUndefined();
+    expect(views[5]?.draft).toBeUndefined();
+  });
+
+  it("想走法（片 2D）做完了 → plan（走法卡那一份）；没做完、没想出能用的不带", async () => {
+    const planView = (body: unknown, overrides: Record<string, unknown> = {}) => opView("", body, { kind: "plan.propose", mode: undefined, what: "想走法·第 8 章", ...overrides });
+    const options = [{ title: "老周开口", steps: ["夜里上楼", "说出钥匙在哪"], recommended: true, threads: [], problems: [] }];
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: planView({ kind: "plan.propose", ok: true, chapter: 8, idea: "让老周开口", options, checked: true, summary: "s" }) }),
+      frame("operation", { type: "record", operation: planView({ kind: "plan.propose", ok: true, chapter: 8, options, checked: true }, { state: "running" }) }),
+      frame("operation", { type: "record", operation: planView({ kind: "plan.propose", ok: true, chapter: 8, options: [], checked: false }) }),
+    ]);
+    expect(views[0]?.plan).toEqual({ chapter: 8, idea: "让老周开口", options, checked: true });
+    expect(views[1]?.plan).toBeUndefined();
+    expect(views[2]?.plan).toBeUndefined();
+  });
+
+  it("「再想一次」按钮存下来、读回来（和服务端同一口径）：章号不对的不认", () => {
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "plan.propose", params: { chapter: 8, idea: " 让老周开口 ", avoid: ["甲", "甲", " "] }, ...stamp }))
+      .toEqual({ kind: "new", type: "plan.propose", params: { chapter: 8, idea: "让老周开口", avoid: ["甲"] }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "plan.propose", params: { chapter: 0 }, ...stamp })).toBeUndefined();
   });
 
   it("改稿（片 2C）做完了 → draft 带改了的几处；停着等作者的带改法和能点的决定，点过的、认不出的不算", async () => {

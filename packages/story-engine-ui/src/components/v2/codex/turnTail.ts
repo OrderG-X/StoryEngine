@@ -25,6 +25,7 @@ const TAIL_SKIP_TOOLS = new Set([
   "check_ai_flavor",
   "check_continuity",
   "brainstorm_chapter",
+  "plan_chapter",
   "web_search",
 ]);
 

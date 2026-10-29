@@ -34,7 +34,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly steeringDirection: string;
   readonly chatLoading?: boolean;
   readonly chatError?: string | null;
-  readonly draftActionLoading?: string | null;
   readonly commitPreview?: CommitPreviewUiReport | null;
   readonly lastFormalCommitApply?: LastFormalCommitApply | null;
   readonly isCurrentChapterAlreadyFormallyCommitted?: boolean;
@@ -53,10 +52,13 @@ export interface WritingWorkspaceLayoutProps {
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;
   /** 「✎ 自己说」：选中正文 + 作者自己的要求 → 同上。 */
   readonly onSelectionRewriteCustom?: (selectionText: string, instruction: string) => Promise<void>;
-  /** 抽卡（阶段三块③）：再来一版生成 2–3 个临时候选并排选。 */
+  /** 「AI 另写几版」（片 2D）：另写两版摆给作者挑，作者的稿子不动（进对话一轮）。 */
   readonly onReroll?: () => void;
+  /** 并排面板上点「用这版」：交 draft.adopt 换进工作稿（进对话一轮，先存档、可撤销）。 */
   readonly onApplyCandidate?: (candidate: WorkspaceDraftCandidate) => void;
   readonly onCloseCandidates?: () => void;
+  /** 稿纸提示条上 AI 写好、没换上的那份：换上 / 不要了（进对话一轮）。 */
+  readonly onPendingCandidate?: (decision: "adopt" | "discard") => Promise<import("../drafts/draftSync.js").PaperDecisionResult>;
 }
 
 export interface BookSummary {

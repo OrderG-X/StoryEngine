@@ -5,8 +5,9 @@ import { describe, expect, it } from "vitest";
 import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
-  brainstormChapter,
   brainstormCheckTask,
+  checkDirections,
+  proposeDirections,
   brainstormTask,
   parseBrainstorm,
   splitBrainstormProblems,
@@ -128,6 +129,14 @@ function fakeReader(reply: string | Error) {
     return reply;
   };
   return { callModel, calls };
+}
+
+/** 两步接起来（同 plan.propose：先出、再核）。 */
+async function brainstormChapter(input: Parameters<typeof proposeDirections>[0] & { readonly callChecker: BrainCallModel }) {
+  const proposed = await proposeDirections(input);
+  if (!proposed.ok) return proposed;
+  const checked = await checkDirections({ ...input, options: proposed.options });
+  return { ok: true as const, chapter: input.chapter, ...(proposed.idea ? { idea: proposed.idea } : {}), ...checked };
 }
 
 describe("头脑风暴：整条（章纲员出 → 核账员核）", () => {

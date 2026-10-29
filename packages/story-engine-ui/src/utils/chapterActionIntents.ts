@@ -40,10 +40,6 @@ export function userActionChoiceText(
       return action.label ? `确认改设定：${action.label}` : "确认改设定";
     case "undo":
       return "撤销上一步";
-    case "brainstorm_chapter":
-      return action.avoid?.length
-        ? `第 ${action.chapter} 章再来几种走法${action.idea ? `：${action.idea}` : ""}`
-        : `想想第 ${action.chapter} 章往哪走${action.idea ? `：${action.idea}` : ""}`;
     case "settle_preview":
       if ("statement" in action) return `按定论查前文：「${action.statement}」`;
       return action.truth.where === "setting"
@@ -81,8 +77,15 @@ function operationActionText(action: import("../api/agentChatClient.js").Operati
   if (action.kind === "cancel") return "不要了";
   const chapter = action.params.chapter;
   if (isDraftEditAction(action)) return editActionText(action.params);
+  if (action.type === "draft.adopt") return `第 ${chapter} 章换成 AI 写好的那版`;
+  if (action.type === "draft.discard") return `第 ${chapter} 章 AI 写好的那版不要了`;
+  if (action.type === "plan.propose") {
+    const idea = action.params.idea ? `：${action.params.idea}` : "";
+    return action.params.avoid?.length ? `第 ${chapter} 章再来几种走法${idea}` : `想想第 ${chapter} 章往哪走${idea}`;
+  }
   if (action.type === "draft.change") {
     if (action.mode === "continue") return `第 ${chapter} 章接着往下写`;
+    if (action.params.pick === "author") return `第 ${chapter} 章另写几版给我挑`;
     if (action.params.rewrite) return `重写第 ${chapter} 章`;
     return directionTitle ? `照「${directionTitle}」写第 ${chapter} 章的正文` : `写第 ${chapter} 章的正文`;
   }

@@ -11,12 +11,13 @@ import { isTerminal } from "../lib/operations/store.js";
 import { rereadBlocker } from "../editorial/reread-state.js";
 import { cancelOperation, resumeOperation, submitOperation, subscribeOperation, type OperationEvent, type OperationResult } from "../services/operations/executor.js";
 import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
+import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
-import { DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
+import { DRAFT_ADOPT_KIND, DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
 import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
-import { checkChapterAction, humanizeToolNames, newOperationAction, resolveNextDraftTarget, sendNextSteps, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { checkChapterAction, humanizeToolNames, newOperationAction, newPlanAction, resolveNextDraftTarget, sendNextSteps, writeNextChoice, type NextStepChoice } from "./next-steps.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
 
@@ -174,6 +175,13 @@ export async function finishOperationTurn(args: {
         return;
       }
       emitText(`${view.summary ? humanizeToolNames(view.summary) : `${what}做完了，结果在上面。`}${changed}`);
+      // 换上了作者挑的那版 AI 稿：这版没核过账，核了再定稿。
+      if (record.kind === DRAFT_ADOPT_KIND && chapter !== undefined && (result?.body as { readonly applied?: unknown } | undefined)?.applied === true) {
+        sendNextSteps(args.sendEvent, "接下来？", [
+          { label: "核账", intent: `核第 ${chapter} 章的账`, recommended: true, action: checkChapterAction(chapter) },
+          { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, action: { toolName: "commit_preview", chapter } },
+        ]);
+      }
       return;
     }
     case "failed":
@@ -186,6 +194,11 @@ export async function finishOperationTurn(args: {
           recommended: true,
           action: newOperationAction(INSPECT_KIND, record.mode as InspectMode, { chapter }),
         }]);
+      }
+      // 想走法没想出来：照原来的想法、避开的走法再想一次（新的一次，请求号另给）。
+      const plan = record.kind === PLAN_PROPOSE_KIND ? readPlanProposeParams(record.params) : undefined;
+      if (plan && view.failure?.retryable !== false) {
+        sendNextSteps(args.sendEvent, "接下来？", [{ label: "再想一次", intent: `重新想第 ${plan.chapter} 章的走法`, recommended: true, action: newPlanAction(plan) }]);
       }
       return;
     }
@@ -231,19 +244,20 @@ export async function runOperationAction(args: {
   let opId: string;
   if (action.kind === "new") {
     const chapter = chapterOfAction(action);
+    const mode = "mode" in action ? action.mode : undefined;
     const outcome = await submitOperation(projectDir, {
       kind: action.type,
-      mode: action.mode,
+      ...(mode !== undefined ? { mode } : {}),
       params: action.params,
       requestKey: action.requestKey,
       issuedAt: action.issuedAt,
       origin: { kind: "button", messageId: action.requestKey, chapter },
     });
-    const receipt = receiptOf(outcome, "button", { kind: action.type, mode: action.mode, chapter });
+    const receipt = receiptOf(outcome, "button", { kind: action.type, ...(mode !== undefined ? { mode } : {}), chapter });
     if (!receipt.accepted || !receipt.opId) {
       emitText(receipt.summary);
       // 写稿没受理（有稿、前一章没定稿、没得接……）：按原因给下一步；别的原因（在忙、按过了）不给「再写一次」。
-      const read = action.type === DRAFT_CHANGE_KIND && !receipt.ok ? readDraftChangeParams(action.mode, action.params) : undefined;
+      const read = action.type === DRAFT_CHANGE_KIND && !receipt.ok ? readDraftChangeParams(mode, action.params) : undefined;
       if (read) sendNextSteps(args.sendEvent, "接下来？", await draftRetryChoices(projectDir, receipt.code, read.mode, read.params, false));
       return;
     }

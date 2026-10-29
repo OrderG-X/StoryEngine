@@ -81,6 +81,26 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(long.kind === "action" && "params" in long.action ? (long.action.params as { direction?: string }).direction?.length : 0).toBe(2000);
     expect(parseUserAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 3 }, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
     expect(parseUserAction({ kind: "new", type: "draft.change", mode: "write", params: {}, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    // AI 另写几版给作者挑（片 2D）：没给几版就是两版；接着写不收。
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, pick: "author", thenPreview: true }, requestKey: "k-1", issuedAt })).toMatchObject({
+      action: { mode: "write", params: { chapter: 3, pick: "author", candidates: 2 } },
+    });
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "continue", params: { chapter: 3, pick: "author" }, requestKey: "k-1", issuedAt })).toMatchObject({
+      action: { mode: "continue", params: { chapter: 3 } },
+    });
+    // 换上 / 不要了 AI 稿（片 2D）：候选号、指纹必带；换上还要作者眼前那份的版本号（新章是 null）。
+    const pick = { chapter: 3, candidateId: "3-0123456789abcdef", sha: "a".repeat(64) };
+    expect(parseUserAction({ kind: "new", type: "draft.adopt", params: { ...pick, baseVersion: null }, requestKey: "k-1", issuedAt })).toEqual({
+      kind: "action",
+      action: { kind: "new", type: "draft.adopt", params: { ...pick, baseVersion: null }, requestKey: "k-1", issuedAt },
+    });
+    expect(parseUserAction({ kind: "new", type: "draft.discard", params: { ...pick, baseVersion: "v1" }, requestKey: "k-1", issuedAt })).toEqual({
+      kind: "action",
+      action: { kind: "new", type: "draft.discard", params: pick, requestKey: "k-1", issuedAt },
+    });
+    for (const params of [pick, { ...pick, sha: "不对", baseVersion: null }, { ...pick, candidateId: "../x", baseVersion: null }, { ...pick, chapter: 0, baseVersion: null }]) {
+      expect(parseUserAction({ kind: "new", type: "draft.adopt", params, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    }
     // 老的出稿按钮（按工具名）不再收。
     expect(parseUserAction({ toolName: "generate_draft", chapter: 3 }).kind).toBe("invalid");
     expect(parseUserAction({ kind: "resume", opId: "op-0123456789abcdef0123" })).toEqual({ kind: "action", action: { kind: "resume", opId: "op-0123456789abcdef0123" } });
@@ -487,43 +507,18 @@ describe("改稿按钮（draft.change fix / deai / revise，片 2C）", () => {
   });
 });
 
-describe("「给我几种走法」结构化动作（brainstorm_chapter，重构 P6 头脑风暴）", () => {
-  it("解析：想法去空白、截长；已给过的走法名去空、去重；缺章号不收", () => {
-    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12, idea: "  让老周开口 ", avoid: [" 老周开口 ", "老周开口", "", 3, "夜里上楼"] })).toEqual({
+describe("「给我几种走法」「再来几种」按钮（plan.propose，片 2D）", () => {
+  const issuedAt = "2026-10-30T08:00:00.000Z";
+  it("解析：想法去空白；已给过的走法名去空、去重；缺章号不收；老的按工具名的按钮不认", () => {
+    expect(parseUserAction({ kind: "new", type: "plan.propose", params: { chapter: 12, idea: "  让老周开口 ", avoid: [" 老周开口 ", "老周开口", "", 3, "夜里上楼"] }, requestKey: "k-1", issuedAt })).toEqual({
       kind: "action",
-      action: { toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口", avoid: ["老周开口", "夜里上楼"] },
+      action: { kind: "new", type: "plan.propose", params: { chapter: 12, idea: "让老周开口", avoid: ["老周开口", "夜里上楼"] }, requestKey: "k-1", issuedAt },
     });
-    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12, idea: "   " })).toEqual({
+    expect(parseUserAction({ kind: "new", type: "plan.propose", params: { chapter: 12, idea: "   " }, requestKey: "k-1", issuedAt })).toEqual({
       kind: "action",
-      action: { toolName: "brainstorm_chapter", chapter: 12 },
+      action: { kind: "new", type: "plan.propose", params: { chapter: 12 }, requestKey: "k-1", issuedAt },
     });
-    expect(parseUserAction({ toolName: "brainstorm_chapter" })).toEqual({ kind: "invalid", reason: "缺少有效章号。" });
-  });
-
-  const run = async (executeTool: UserActionToolExecutor) => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口" },
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
-    });
-    return events;
-  };
-
-  it("直接跑只读工具（带想法），回话一句工具 summary；不追加下一步选项", async () => {
-    const executeTool = vi.fn(async () => ({ ok: true, chapter: 12, options: [], summary: "第 12 章想了 3 种走法，在稿纸上挑。" }));
-    const events = await run(executeTool);
-    expect(executeTool).toHaveBeenCalledWith("brainstorm_chapter", { chapter: 12, idea: "让老周开口" }, expect.anything());
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
-    expect(events.at(-1)!.data.text).toBe("第 12 章想了 3 种走法，在稿纸上挑。");
-  });
-
-  it("工具抛错 → tool-error + 如实说没想出来", async () => {
-    const events = await run(async () => { throw new Error("服务商超时"); });
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
-    expect(String(events.at(-1)!.data.text)).toContain("第 12 章的走法没想出来：服务商超时");
+    expect(parseUserAction({ kind: "new", type: "plan.propose", params: {}, requestKey: "k-1", issuedAt })).toEqual({ kind: "invalid", reason: "缺少有效章号。" });
+    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12 }).kind).toBe("invalid");
   });
 });

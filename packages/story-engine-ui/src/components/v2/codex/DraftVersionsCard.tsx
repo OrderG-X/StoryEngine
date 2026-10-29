@@ -1,10 +1,10 @@
 /**
- * 「另外几版」卡：AI 一次写几版时，挑中的那版进了工作稿，落选的几版放在这张卡上。
- * 点「点开看」在稿纸上并排打开（和「再来一版」同一个面板），挑一版「用这版」换进工作稿（先存档、可撤销）。
+ * 「另外几版」卡（写作版本 P2a 片 2D）：AI 一次写几版时，落选的几版（选优换上了一版）、作者要自己挑的几版（「AI 另写几版」，
+ * 一版都没换上）都留成了候选，放在这张卡上。点「点开看」在稿纸上并排打开，挑一版「用这版」交 draft.adopt 换进工作稿
+ * （进对话一轮，先存档、可撤销）。
  */
 import type { DraftVersionsCardData } from "../../../type-defs/workspace.js";
 import { useBookStore } from "../../../stores/bookStore.js";
-import { useChatStore } from "../../../stores/chatStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { useUiStore } from "../../../stores/uiStore.js";
 import { isPaperCommitted } from "../../../drafts/useDraftPreview.js";
@@ -17,13 +17,7 @@ export function openDraftVersions(data: DraftVersionsCardData): string | null {
   if (!projectPath) return "请先打开本地项目。";
   if (chapter !== data.chapter) return `先打开第 ${data.chapter} 章。`;
   if (isPaperCommitted()) return `第 ${data.chapter} 章已定稿，换不了。`;
-  const originTarget = { projectPath, chapter, sessionId: useChatStore.getState().activeSessionId, operationId: `draft-versions-${chapter}` };
-  useUiStore.getState().setDraftCandidates(data.versions.map((version) => ({
-    // 只换正文：不带章名，选用时沿用作者眼前的（作者可能改过）。
-    body: version.body,
-    version: version.index,
-    originTarget,
-  })));
+  useUiStore.getState().setDraftCandidates(data.versions.map((version) => ({ ...version, chapter: data.chapter, projectPath })));
   return null;
 }
 
@@ -33,8 +27,8 @@ export function DraftVersionsCard({ data, busy }: { readonly data: DraftVersions
     if (blocked) useNavigationStore.getState().showToast(blocked);
   };
   return (
-    <div className="se-dir-card" role="group" aria-label={`第 ${data.chapter} 章的另外几版`}>
-      <div className="se-dir-h">第 {data.chapter} 章 · 另外 {data.versions.length} 版</div>
+    <div className="se-dir-card" role="group" aria-label={`第 ${data.chapter} 章的${data.pick ? "几版" : "另外几版"}`}>
+      <div className="se-dir-h">第 {data.chapter} 章 · {data.pick ? `写了 ${data.versions.length} 版，挑一版` : `另外 ${data.versions.length} 版`}</div>
       <ul>
         {data.versions.map((version) => (
           <li key={version.index}><span>第 {version.index} 版 · {countTextWords(version.body).toLocaleString()} 字</span></li>

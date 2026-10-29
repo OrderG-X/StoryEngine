@@ -9,8 +9,10 @@ import { BACKFILL_KIND, readBackfillParams, setReaderBackfillHandler, type Reade
 import { listOperations, type OperationRecord } from "../../../lib/operations/store.js";
 import { registerRecipe, submitOperation } from "../executor.js";
 import { backgroundBackfillRecipe } from "./background-backfill.js";
+import { draftAdoptRecipe, draftDiscardRecipe } from "./draft-candidate.js";
 import { draftChangeRecipe } from "./draft-change.js";
 import { inspectRunRecipe } from "./inspect-run.js";
+import { planProposeRecipe } from "./plan-propose.js";
 
 /** 同一本书交后台补读排成一条（两个请求同时到，不会各受理一次）。 */
 const backfillChains = new Map<string, Promise<unknown>>();
@@ -62,5 +64,8 @@ export function registerBuiltInRecipes(): void {
   registerRecipe(backgroundBackfillRecipe);
   registerRecipe(inspectRunRecipe);
   registerRecipe(draftChangeRecipe);
+  registerRecipe(draftAdoptRecipe);
+  registerRecipe(draftDiscardRecipe);
+  registerRecipe(planProposeRecipe);
   setReaderBackfillHandler(submitBackfill);
 }

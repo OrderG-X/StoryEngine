@@ -5,13 +5,12 @@
  *    每种 3 步 + 推进了哪些开着的线索（只许填线索编号，代码换成名字，不认识的丢掉）。
  *  - 核账员：一次核完几种走法的每一步（互相替代、不用彼此对得上），前文原句由代码逐字核对（同审章纲）。
  *  - 只读：不落章纲、不进账。作者挑中的那种之后作为「这章的方向」交给写这一章；没挑中的不留痕。
+ *  - 分两步（写作版本 P2a 片 2D）：`proposeDirections`（章纲员出）、`checkDirections`（核账员核），由操作 plan.propose 一步一步跑。
  */
 import { projectBook, type ThreadView } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
 import { canCallAgain } from "../lib/llm-client.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
-import { coreSnapshotFor } from "../lib/snapshot.js";
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readEarlierChapters, type EarlierText } from "./continuity/check-chapter.js";
 import { collectPlanMaterials, OPENING_PLAN_NOTE, planMaterialBlocks } from "./plan-materials.js";
 import { buildColdReaderWindow, coldPausedNote, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -29,6 +28,8 @@ const MAX_ADVANCED = 3;
 const MAX_THREADS_IN_PROMPT = 40;
 /** 拟走法失败（不是 JSON / 能用的走法不够）自动再试的次数。 */
 const RETRIES = 1;
+/** 章纲员想走法最多调几次（额度按它算）。 */
+export const PROPOSE_CALLS = RETRIES + 1;
 /** 当场最多补几章笔记；超过就按冷窗口（已有笔记 + 最近几章原文）想，同拟章纲。 */
 const MAX_CATCH_UP = 10;
 
@@ -61,27 +62,12 @@ export interface BrainstormOption {
   readonly problems: readonly BrainstormProblem[];
 }
 
-export type BrainstormResult =
-  | {
-    readonly ok: true;
-    readonly chapter: number;
-    readonly idea?: string;
-    readonly options: readonly BrainstormOption[];
-    /** 核账员核过前文没有；没核成时 checkNote 说原因。 */
-    readonly checked: boolean;
-    readonly checkNote?: string;
-    /** 前面还没有定稿的章（新书第一章）：没前文可对，核账员不核。 */
-    readonly nothingEarlier?: true;
-    /** 章纲员 / 核账员还没读完全书，这次按已有笔记 + 最近几章原文想的。 */
-    readonly coldNote?: string;
-  }
-  | { readonly ok: false; readonly reason: string };
-
-/** 开着的线索（新核心投影）：分量重的先、停得久的先。书还没接到新格式上就没有（不挡头脑风暴）。 */
+/**
+ * 开着的线索（新核心投影）：分量重的先、停得久的先。只读：书在受理想走法之前已经接到新核心上（执行器 submitOperation）；
+ * 读不出来就没有（不挡想走法）。
+ */
 export async function readOpenThreads(projectDir: string): Promise<readonly BrainstormThread[]> {
   try {
-    const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
-    if (!onCore.ok) return [];
     const projection = await projectBook(projectDir);
     return projection.threads
       .filter((thread) => thread.status !== "closed")
@@ -242,6 +228,7 @@ async function readerWindow(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  readonly maxVolumeBuilds?: number;
 }): Promise<{ readonly messages: BrainMessage[]; readonly cold?: ColdCoverage }> {
   const root = input.notesRoot ?? input.projectDir;
   const waiting = readerWaitingHandlers(root, input.role.id, input.upTo);
@@ -252,6 +239,7 @@ async function readerWindow(input: {
     callModel: input.callModel,
     ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
     maxCatchUp: input.maxCatchUp ?? MAX_CATCH_UP,
+    ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
     waitingAs: "想走法",
     onCatchUpBegin: waiting.onCatchUpBegin,
     onProgress: waiting.onProgress,
@@ -275,39 +263,42 @@ function coldText(who: string, cold: ColdCoverage, upTo: number): string {
   return `${who}还没读完全书（第 ${cold.notedThrough} / ${upTo} 章），这次按${basis}想的，更早的细节可能漏。${coldPausedNote(cold)}`;
 }
 
-/**
- * 想第 N 章的几种走法：章纲员出、核账员核。只读（不落章纲、不进账）。
- * 章纲员没拟成 → ok:false + 原因；核账员没核成 → 照样给走法，checked:false 如实说没核。
- */
-export async function brainstormChapter(input: {
+/** 两步共用的输入：哪本书、第几章、跟读窗口怎么建。 */
+interface DirectionsInput {
   readonly projectDir: string;
   readonly chapter: number;
+  readonly notesRoot?: string;
+  /** 当场最多补几章笔记、生成几个卷节点；操作里笔记在前一步补过，都传 0（缺的按冷窗口）。缺省 MAX_CATCH_UP、不限卷节点。 */
+  readonly maxCatchUp?: number;
+  readonly maxVolumeBuilds?: number;
+  /** 冷窗口时在后台接着补笔记。 */
+  readonly onCold?: (role: "planner" | "checker") => void;
+}
+
+export type ProposeResult =
+  | { readonly ok: true; readonly idea?: string; readonly options: readonly BrainstormOption[]; readonly coldNote?: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * 第一步：章纲员想第 N 章的几种走法（plan.propose 的 `propose`，写作版本 P2a 片 2D）。只读（不落章纲、不进账）。
+ * 没拟成 → ok:false + 原因（解析不了的自动再试一次；被拒、结果不明不再发）。
+ */
+export async function proposeDirections(input: DirectionsInput & {
   /** 作者的想法原话；没给 = 按故事现状想。 */
   readonly idea?: string;
   /** 「再来几种」：已经给过的走法名字，别再出一样的。 */
   readonly avoid?: readonly string[];
   readonly callPlanner: BrainCallModel;
-  readonly callChecker: BrainCallModel;
-  readonly notesRoot?: string;
-  readonly maxCatchUp?: number;
-  /** 冷窗口时在后台接着补笔记（生产传 catchUpReaders）。 */
-  readonly onCold?: (role: "planner" | "checker") => void;
   /** 读开着的线索（测试注入）；缺省读新核心投影。 */
   readonly readThreads?: (projectDir: string) => Promise<readonly BrainstormThread[]>;
-}): Promise<BrainstormResult> {
+}): Promise<ProposeResult> {
   const upTo = input.chapter - 1;
   const idea = input.idea?.trim() || undefined;
-  const windowInput = {
-    projectDir: input.projectDir,
-    upTo,
-    ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
-    ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
-  };
-
   let plannerWindow: Awaited<ReturnType<typeof readerWindow>>;
   try {
-    plannerWindow = await readerWindow({ ...windowInput, role: PLANNER_ROLE, callModel: input.callPlanner });
+    plannerWindow = await readerWindow({ ...windowInput(input), role: PLANNER_ROLE, callModel: input.callPlanner });
   } catch (error) {
+    rethrowIfStopped(error);
     return { ok: false, reason: `章纲员读前文没成：${error instanceof Error ? error.message : String(error)}` };
   }
   if (plannerWindow.cold) input.onCold?.("planner");
@@ -337,39 +328,59 @@ export async function brainstormChapter(input: {
     }
   }
   if (!options) return { ok: false, reason: `章纲员没想出能用的走法${tries > 1 ? "（已自动重试一次）" : ""}：${lastError || "模型没有返回可用内容"}` };
-
-  const coldNotes = plannerWindow.cold ? [coldText("章纲员", plannerWindow.cold, upTo)] : [];
-  let checked = false;
-  let checkNote: string | undefined;
-  // 核出来的每处都要引前文原句核实；前面一章都没定稿（新书第一章）就一处也立不住，白调一次模型还说「核过前文」（2026-10-23 从零走查）。
-  const earlier = await readEarlierChapters(input.projectDir, input.chapter);
-  const nothingEarlier = earlier.chapters.length === 0;
-  if (!nothingEarlier) {
-    try {
-      const checkerWindow = await readerWindow({ ...windowInput, role: CHECKER_ROLE, callModel: input.callChecker });
-      if (checkerWindow.cold) {
-        input.onCold?.("checker");
-        coldNotes.push(coldText("核账员", checkerWindow.cold, upTo));
-      }
-      const text = await withStep("核账员核走法", () => input.callChecker(
-        [...checkerWindow.messages, { role: "user", content: brainstormCheckTask(input.chapter, options!) }],
-        { json: true },
-      ));
-      options = splitBrainstormProblems(text, options, earlier);
-      checked = true;
-    } catch (error) {
-      checkNote = `核账员这次没核成：${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
   return {
     ok: true,
-    chapter: input.chapter,
     ...(idea ? { idea } : {}),
     options,
-    checked,
-    ...(checkNote ? { checkNote } : {}),
-    ...(nothingEarlier ? { nothingEarlier: true as const } : {}),
-    ...(coldNotes.length > 0 ? { coldNote: coldNotes.join("") } : {}),
+    ...(plannerWindow.cold ? { coldNote: coldText("章纲员", plannerWindow.cold, upTo) } : {}),
+  };
+}
+
+export interface CheckedDirections {
+  readonly options: readonly BrainstormOption[];
+  /** 核账员核过前文没有；没核成时 checkNote 说原因。 */
+  readonly checked: boolean;
+  readonly checkNote?: string;
+  /** 前面还没有定稿的章（新书第一章）：没前文可对，核账员不核。 */
+  readonly nothingEarlier?: true;
+  /** 核账员还没读完全书，这次按已有笔记 + 最近几章原文核的。 */
+  readonly coldNote?: string;
+}
+
+/**
+ * 第二步：核账员替几种走法对前文（plan.propose 的 `check`）。没核成照样给走法，checked:false 如实说没核。
+ * 核出来的每处都要引前文原句核实；前面一章都没定稿（新书第一章）就一处也立不住，不调模型（2026-10-23 从零走查）。
+ */
+export async function checkDirections(input: DirectionsInput & {
+  readonly options: readonly BrainstormOption[];
+  readonly callChecker: BrainCallModel;
+}): Promise<CheckedDirections> {
+  const earlier = await readEarlierChapters(input.projectDir, input.chapter);
+  if (earlier.chapters.length === 0) return { options: input.options, checked: false, nothingEarlier: true };
+  let coldNote: string | undefined;
+  try {
+    const checkerWindow = await readerWindow({ ...windowInput(input), role: CHECKER_ROLE, callModel: input.callChecker });
+    if (checkerWindow.cold) {
+      input.onCold?.("checker");
+      coldNote = coldText("核账员", checkerWindow.cold, input.chapter - 1);
+    }
+    const text = await withStep("核账员核走法", () => input.callChecker(
+      [...checkerWindow.messages, { role: "user", content: brainstormCheckTask(input.chapter, input.options) }],
+      { json: true },
+    ));
+    return { options: splitBrainstormProblems(text, input.options, earlier), checked: true, ...(coldNote ? { coldNote } : {}) };
+  } catch (error) {
+    rethrowIfStopped(error);
+    return { options: input.options, checked: false, checkNote: `核账员这次没核成：${error instanceof Error ? error.message : String(error)}`, ...(coldNote ? { coldNote } : {}) };
+  }
+}
+
+function windowInput(input: DirectionsInput): { readonly projectDir: string; readonly upTo: number; readonly notesRoot?: string; readonly maxCatchUp?: number; readonly maxVolumeBuilds?: number } {
+  return {
+    projectDir: input.projectDir,
+    upTo: input.chapter - 1,
+    ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+    ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+    ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
   };
 }

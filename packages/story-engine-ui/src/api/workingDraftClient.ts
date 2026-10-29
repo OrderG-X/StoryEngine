@@ -93,13 +93,13 @@ export async function saveWorkingDraft(input: SaveWorkingDraftRequest, options: 
 export type PendingDecisionResult = { readonly ok: true; readonly warning?: string } | { readonly ok: false; readonly error: string };
 
 /**
- * 对等着选的那一份做决定：adopt = 换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），dismiss = 不要了。
- * 没成如实给原因，不抛。
+ * 对等着选的那一份作者自己的字（恢复稿、另存的那份）做决定：adopt = 换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），
+ * dismiss = 不要了。AI 候选不走这里：换上 / 不要了交 draft.adopt / draft.discard 操作（`hooks/useDraftPicks`）。没成如实给原因，不抛。
  */
 export async function decidePendingDraft(input: {
   readonly projectPath: string;
   readonly chapter: number;
-  readonly pending: Pick<PendingDraft, "kind" | "id" | "sha">;
+  readonly pending: { readonly id: string; readonly sha: string };
   readonly decision: "adopt" | "dismiss";
   readonly baseVersion: string | null;
   /** 不要本窗口自己的恢复稿时带上（不用 sha，序号挡住还在路上的旧笔）。 */
@@ -112,7 +112,7 @@ export async function decidePendingDraft(input: {
       body: JSON.stringify({
         projectPath: input.projectPath,
         chapter: input.chapter,
-        kind: input.pending.kind,
+        kind: "recovery",
         id: input.pending.id,
         sha: input.pending.sha,
         decision: input.decision,
