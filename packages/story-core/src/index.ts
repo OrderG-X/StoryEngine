@@ -218,7 +218,7 @@ export {
   type SerialPart,
   type SerialSplit,
 } from "./text/serial-split.js";
-export { absentDraftVersion, composeDraftFile, draftVersionOf, leadingHeading, normalizeDraft, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, readDraftVersions, retitleText, sameDraft, sameDraftBody, type ChapterPaper, type Draft, type DraftText } from "./draft/draft.js";
+export { absentDraftVersion, composeDraftFile, draftVersionOf, leadingHeading, paperDraft, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, readDraftVersions, retitleText, sameDraft, sameDraftBody, type ChapterPaper, type Draft, type DraftText } from "./draft/draft.js";
 export { draftAdoptCandidate, draftApplyGenerated, DraftSaveArgs, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
 export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";

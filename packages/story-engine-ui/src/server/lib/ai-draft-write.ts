@@ -33,10 +33,13 @@ export class AiDraftWriteError extends Error {
 
 export interface AiDraftInput {
   readonly chapter: number;
-  /** 正文。开头已经是「# 标题」行时整份照写，标题不另加。 */
+  /**
+   * AI 这一版的整份稿（写作版本 P1 第 14 轮复核）：拆开的正文（一行都不再拆）+ 章名（空串 = 没章名）。
+   * 调用方开工时就把章名定下来：AI 给了用它，没给就是开工时那份稿的章名——留成候选、作者后来再换上，也还是这一版的章名，
+   * 不借换上那一刻盘上的（AB3）。改文件原文的（改句、改稿、去 AI 味）先过核心 parseDraftFile。
+   */
+  readonly title: string;
   readonly body: string;
-  /** 不给就沿用盘上原来的标题。 */
-  readonly title?: string;
   /** 开工时读的工作稿版本（这一章原来没有工作稿就是 null）；和读到的正文一起读的那一版。 */
   readonly baseVersion: string | null;
   /** 开工时读的真相依据（先读它，再读写稿要用的材料）。 */
@@ -100,11 +103,11 @@ export function keptMessage(chapter: number, reason: DraftKeptReason, detail?: s
 const errorText = (error: unknown): string => scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
 
 export async function applyAiDraft(projectDir: string, input: AiDraftInput): Promise<AiDraftOutcome> {
-  const title = input.title?.trim();
+  const title = input.title.trim();
   const path = join(projectDir, draftPath(input.chapter));
   const candidateOf = (status: "writing" | "ready", reason?: Exclude<DraftKeptReason, "interrupted">, id?: string) => saveDraftCandidate(projectDir, {
     chapter: input.chapter,
-    ...(title ? { title } : {}),
+    title,
     body: input.body,
     baseVersion: input.baseVersion,
     basisDigest: input.basis.digest,
@@ -143,7 +146,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
         runCommand(projectDir, draftApplyGenerated, {
           chapter: input.chapter,
           body: input.body,
-          ...(title ? { title } : {}),
+          title,
           baseVersion: input.baseVersion,
         }, { caller: "ai", snapshot, basis: input.basis }), input.snapshotLabel);
       if (!result.ok && result.code === "basis_changed") return keep("basis_moved");

@@ -679,38 +679,6 @@ export function extractJsonObject(raw: string): string | null {
 // Draft / chapter path helpers
 // ---------------------------------------------------------------------------
 
-export function stripLeadingMarkdownChapterHeading(content: string): string {
-  const normalized = content.replace(/\r\n?/gu, "\n").trimStart();
-  const lines = normalized.split("\n");
-  const firstContentLineIndex = lines.findIndex((line) => line.trim().length > 0);
-  if (firstContentLineIndex < 0) return normalized.trim();
-
-  const firstContentLine = lines[firstContentLineIndex].trim();
-  if (!isMarkdownChapterHeading(firstContentLine)) return normalized.trim();
-
-  const nextLines = lines.slice(firstContentLineIndex + 1);
-  while (nextLines[0]?.trim() === "") nextLines.shift();
-  return nextLines.join("\n").trim();
-}
-
-/** 编辑器只要正文：首行是「# 章名」就去掉（保留原文末换行），否则原样不动。 */
-export function stripTitleLineForEditor(content: string): string {
-  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim() ?? "";
-  if (!isMarkdownChapterHeading(firstLine)) return content;
-  const body = stripLeadingMarkdownChapterHeading(content);
-  return /\n$/u.test(content) ? `${body}\n` : body;
-}
-
-function isMarkdownChapterHeading(line: string): boolean {
-  if (!/^#{1,6}\s+\S/u.test(line)) return false;
-  const title = line.replace(/^#{1,6}\s+/u, "").trim();
-  if (!title) return false;
-  // 不猜白名单开始：章节标题
-  if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;
-  return title.length <= 40 && !/[。！？!?；;]/u.test(title);
-  // 不猜白名单结束
-}
-
 export function defaultDraftPath(projectDir: string, chapter: number): string {
   return join(projectDir, "drafts", "fast", `chapter-${padChapter(chapter)}.md`);
 }
@@ -728,12 +696,13 @@ export function chapterWorkspacePath(projectDir: string, chapter: number): strin
   return join(projectDir, ".story-engine-ui", "chapter-workspaces", `chapter-${padChapter(chapter)}.json`);
 }
 
+/** 稿件 / 定稿文件的章名（核心 parseDraftFile 认章名行），去掉开头的「第 N 章 ·」只留名字；没有是 null。 */
 export function extractDraftTitle(content: string | undefined): string | null {
   if (!content) return null;
-  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!firstLine?.startsWith("#")) return null;
+  const heading = parseDraftFile(content).title;
+  if (!heading) return null;
   // 不猜白名单：章节标题
-  const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
+  const title = heading.replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
   return title || null;
 }
 
@@ -808,7 +777,7 @@ function normalizedContent(content: string | undefined): string {
  * 用户打开却是空的（真机实测 bug）。真稿绝不会以这些标记开头，故按开头判定足够安全、题材中立。
  */
 function isStateBackedDraftPlaceholder(content: string | undefined): boolean {
-  const body = stripLeadingMarkdownChapterHeading(normalizedContent(content)).trim();
+  const body = parseDraftFile(normalizedContent(content)).body;
   if (!body) return false;
   return body.startsWith("还没有工作稿正文") || body.startsWith("还没有载入本章工作稿正文")
     || body.startsWith("还没有草稿正文") || body.startsWith("还没有载入本章草稿正文");

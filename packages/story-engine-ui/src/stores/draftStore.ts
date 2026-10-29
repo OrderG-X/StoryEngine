@@ -2,8 +2,9 @@
  * 稿纸（重构 P5）：工作稿只有这一个主人。
  *
  * - `body` 是作者眼前的字；`savedBody` 是盘上 `baseVersion` 那一版的字。
- * - **稿 = 章名 + 正文**（第 13 轮复核）：比对、存稿都按整份（核心的 `normalizeDraft`，前后端同一份）。正文开头自带「# 章名」行时，
- *   章名就是那一行（作者打字时跟着认）；从章名入口改章名，那一行也跟着换——两个来处说的始终是同一个，存稿时单给的章名为准。
+ * - **稿 = 章名 + 正文**（第 13、14 轮复核）：比对、存稿都按整份（核心 `draft-format`，前后端同一份）。`body` 是稿纸上的字：
+ *   开头可能有作者打的「# 章名」行（只认一级，「#」一个字也没有 = 章名清空），章名就跟着那一行；从章名入口改章名，那一行也跟着换——
+ *   两个来处说的始终是同一个。和盘上比、存稿都先过 `paperDraft`（那一行归章名），盘上读来的已经是拆开的，不再拆。
  * - **有没有没存的字只看改动号**（第 12 轮复核 Z3）：作者在稿纸上的每个动作（打字、改章名、在提示上选）都让 `rev` 加一；
  *   `cleanRev` 是盘上确认过的那一下（读盘时盘上就是这份、或存稿回执说存的就是这一下）。两者不一样就是没存，
  *   哪怕字改回了和底版一样——撞版本之后改回原稿也是作者的选择，要存（进工作稿或恢复稿），不能被重读换掉。
@@ -16,7 +17,7 @@
  * 存盘的调度在 `drafts/draftSync.ts`，这里只管状态。
  */
 import { create } from "zustand";
-import { leadingHeading, retitleText, sameDraft as sameDraftText } from "@actalk/story-core/draft-format";
+import { leadingHeading, paperDraft, retitleText, sameDraft as sameDraftText } from "@actalk/story-core/draft-format";
 import type { ChapterPaper, PendingDraft, WorkingDraft } from "../api/workingDraftClient.js";
 
 export interface PaperIncoming {
@@ -290,9 +291,9 @@ export function hasUnsavedEdits(state: Pick<DraftStoreState, "rev" | "cleanRev">
   return state.rev !== state.cleanRev;
 }
 
-/** 盘上那份和稿纸上的是不是同一份稿：按整份比（稿纸单给的章名为准，见文件头）。 */
+/** 盘上那份（拆开的）和稿纸上的是不是同一份稿：稿纸那边先过 paperDraft（开头的章名行归章名），按整份比。 */
 function sameDraft(disk: { readonly body: string; readonly title?: string }, paper: Pick<DraftStoreState, "body" | "title">): boolean {
-  return sameDraftText(disk, { title: paper.title, body: paper.body });
+  return sameDraftText(disk, paperDraft(paper.body, paper.title));
 }
 
 /** 稿纸上的字和底版那一版不一样（核账、定稿按版本认结果时用：字一样就是同一版）。存不存看 hasUnsavedEdits。 */

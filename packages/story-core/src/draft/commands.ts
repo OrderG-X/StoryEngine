@@ -70,20 +70,19 @@ function planWrite(context: PlanContext, chapter: number, nextText: string, curr
 }
 
 /**
- * 章名：给了（空串也算给了，= 不要章名）就以它为准，正文开头自带的章名行去掉（写作版本 P1 第 13 轮复核：作者存的是整份稿，
- * 回执确认的必须是真写下的那份）；没给（AI 写稿只管正文）就认正文开头的章名行，再没有就沿用盘上的。
+ * 章名：给了（空串也算给了，= 不要章名）就以它为准；没给（AI 写稿只管正文）就沿用盘上的。
+ * body 是拆开的正文，一行都不再拆（写作版本 P1 第 14 轮：再拆一次会把开头的小节标题当章名吃掉）；
+ * 稿纸上的字由存稿路由先过 paperDraft。
  */
-async function nextDraftText(bookDir: string, args: { readonly chapter: number; readonly body: string; readonly title?: string }, currentText: string | undefined): Promise<string> {
-  if (args.title !== undefined) return composeDraftFile({ title: args.title, body: args.body });
-  const own = parseDraftFile(args.body);
-  const title = own.title ?? (currentText === undefined ? undefined : parseDraftFile(currentText).title);
-  return composeDraftFile({ title: title ?? "", body: own.body });
+function nextDraftText(args: { readonly body: string; readonly title?: string }, currentText: string | undefined): string {
+  const title = args.title !== undefined ? args.title : currentText === undefined ? "" : parseDraftFile(currentText).title ?? "";
+  return composeDraftFile({ title, body: args.body });
 }
 
 async function planReplace(context: PlanContext, args: DraftSaveArgs, label: string) {
   const stamp = await readDraftStamp(context.bookDir, args.chapter);
   const currentText = await readRaw(context.bookDir, args.chapter);
-  const nextText = await nextDraftText(context.bookDir, args, currentText);
+  const nextText = nextDraftText(args, currentText);
   const conflict = await conflictIfMoved(context.bookDir, args.chapter, args.baseVersion, currentText, stamp, nextText);
   if (conflict) return conflict;
   return planWrite(context, args.chapter, nextText, currentText, stamp, label);

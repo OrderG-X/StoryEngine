@@ -46,7 +46,7 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { readDraftFile, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { parseDraftFile, readDraftFile, withBookLock, type TruthBasis } from "@actalk/story-core";
 import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
 import { applyAiDraft, oneAiWriterPerChapter, type AiDraftOutcome } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
@@ -433,9 +433,12 @@ async function persistRevisionUpdate(input: {
   readonly basis: TruthBasis;
   readonly snapshotLabel: string;
 }): Promise<AiDraftOutcome> {
+  // 改的是文件原文（带章名行）：拆一次，章名照原文的。
+  const draft = parseDraftFile(input.updatedContent);
   return applyAiDraft(input.projectDir, {
     chapter: input.chapter,
-    body: input.updatedContent,
+    title: draft.title ?? "",
+    body: draft.body,
     baseVersion: input.baseVersion,
     basis: input.basis,
     materials: [],

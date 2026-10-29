@@ -7,6 +7,7 @@
  *
  * 纯确定性、题材中立、不调模型：按词面在已定稿章节里找段落，近章优先，每个词最多取几段、总量封顶。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -52,7 +53,7 @@ async function readCommittedChapters(projectDir: string, beforeChapter: number):
   const out: { chapter: number; body: string }[] = [];
   for (const chapter of chapters) {
     const content = await readFile(join(projectDir, "chapters", `${String(chapter).padStart(4, "0")}.md`), "utf-8");
-    out.push({ chapter, body: content.replace(/^#[^\n]*\n/u, "") });
+    out.push({ chapter, body: parseDraftFile(content).body });
   }
   return out;
 }

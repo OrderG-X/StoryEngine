@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, hasFailedUnsavedDraft, isOwnSavedVersion, keepPaperMine, openPaper, refreshPaper, saveDraftKeepalive, scheduleDraftSave, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { setCommitIoTestHookForTests } from "../book/legacy-commit-recovery.js";
@@ -17,7 +17,7 @@ import { createStoryProject } from "../book/project-store.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
 import { freshRevision } from "../lib/book-backup.js";
 import { writeCards } from "../lib/card-write.js";
-import { draftSha, pendingDraftFor, readDraftRecovery, readSaveMark } from "../lib/draft-candidates.js";
+import { draftSha, pendingDraftFor, readDraftCandidate, readDraftRecovery, readSaveMark, saveDraftCandidate } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
@@ -108,7 +108,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     wireRealRoutes();
     await openPaper(book, 1);
     editDraft("作者在 AI 回合里打的第一段。");
-    expect(await applyAiDraft(book, { chapter: 1, body: "AI 先落盘了。", ...(await begin(1)), source: "draft" })).toMatchObject({ applied: true });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "AI 先落盘了。", ...(await begin(1)), source: "draft" })).toMatchObject({ applied: true });
     expect(await flushDraftSave()).toEqual({ ok: true });
     const id = useDraftStore.getState().incoming?.recoveryId;
     expect(typeof id).toBe("string");
@@ -197,7 +197,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const before = await createSnapshot(book, "原底稿");
     const oldRequest = { projectPath: book, chapter: 1, body: "之前存过、后来撤销的 A。", baseVersion: base };
     expect((await call("PUT", "/api/working-draft", oldRequest)).status).toBe(200);
-    expect(await applyAiDraft(book, { chapter: 1, body: "AI 后来改的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "AI 后来改的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
     await restoreSnapshot(book, before.id);
     const restored = (await readDraft(book, 1))!;
     expect(restored.body).toBe("作者选定要恢复的底稿。");
@@ -211,7 +211,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const before = await createSnapshot(book, "还没写首稿");
     const oldRequest = { projectPath: book, chapter: 1, body: "已经撤销的首稿 A。", baseVersion: null, client: "samewindow01", seq: 1 };
     expect((await call("PUT", "/api/working-draft", oldRequest)).status).toBe(200);
-    expect(await applyAiDraft(book, { chapter: 1, body: "后来 AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "后来 AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
     await restoreSnapshot(book, before.id);
     const state = await readDraftState(book, 1);
     expect(state.file).toBeUndefined();
@@ -559,7 +559,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect(first.status).toBe(200);
     const queuedNoop = { projectPath: book, chapter: 1, client, seq: 2, baseVersion: original, body: "碰巧一样的 B。" };
     const queuedEdit = { projectPath: book, chapter: 1, client, seq: 3, baseVersion: first.payload.version, body: "AI 写之前发出的 C。" };
-    expect(await applyAiDraft(book, { chapter: 1, body: "碰巧一样的 B。", basis: await readTruthBasis(book), baseVersion: (await readDraftState(book, 1)).version, materials: [], source: "revise" })).toMatchObject({ applied: true });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "碰巧一样的 B。", basis: await readTruthBasis(book), baseVersion: (await readDraftState(book, 1)).version, materials: [], source: "revise" })).toMatchObject({ applied: true });
     expect((await call("PUT", "/api/working-draft", queuedNoop)).payload).toMatchObject({ ok: true, unchanged: true });
     const late = await call("PUT", "/api/working-draft", queuedEdit);
     expect(late.status).toBe(409);
@@ -622,7 +622,7 @@ describe("稿纸不自己认底版、旧回执不复活提示（第 11 轮复核
       }
     });
     await openPaper(book, 1);
-    expect(await applyAiDraft(book, { chapter: 1, body: "共同得到的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "共同得到的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
     const foreign = (await readDraft(book, 1))!;
     editDraft("共同得到的 B。");
     saveDraftKeepalive();
@@ -830,7 +830,7 @@ describe("要不要存看改动号、提示只说稿纸不知道的盘上版本�
     await save(1, "作者原稿 A。");
     const sent = wireRoutesWith();
     await openPaper(book, 1);
-    expect(await applyAiDraft(book, { chapter: 1, body: "AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
     editDraft("作者临时 C。");
     expect(await flushDraftSave()).toEqual({ ok: true });
     expect(await pendingDraftFor(book, 1)).toMatchObject({ body: "作者临时 C。" });
@@ -1120,6 +1120,115 @@ describe("稿 = 章名 + 正文、选了那一版要存一笔核盘（第 13 轮
   });
 });
 
+// Astra 第 14 轮探针改写：一份稿三种样子（文件原文 / 拆开的稿 / 稿纸上的字），拆过的不再拆；章名行只认一级。
+describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () => {
+  async function saveTitled(chapter: number, body: string, title?: string): Promise<string> {
+    const baseVersion = (await readDraftState(book, chapter)).version;
+    const outcome = await runCommand(book, draftSave, { chapter, body, ...(title !== undefined ? { title } : {}), baseVersion }, { caller: "author" });
+    if (!outcome.ok) throw new Error(outcome.message);
+    return outcome.result.version;
+  }
+  const put = (base: string | null, client: string, seq: number, title: string, body: string) =>
+    call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, client, seq, baseVersion: base, title, body });
+
+  it("AB1b：作者存下章名 + 二级小节，AI 照盘上那份改正文：小节标题还在，章名不动", async () => {
+    wireRoutesWith();
+    await openPaper(book, 1);
+    editDraft("# 正章名\n\n## 正文第一节\n\n原句。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "正章名", body: "## 正文第一节\n\n原句。" });
+    const draft = parseDraftFile(await readFile(join(book, draftPath(1)), "utf-8"));
+    const result = await applyAiDraft(book, { chapter: 1, title: draft.title ?? "", body: draft.body.replace("原句。", "改好的句子。"), ...(await begin(1)), source: "revise" });
+    expect(result).toMatchObject({ applied: true });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "正章名", body: "## 正文第一节\n\n改好的句子。" });
+    // 再读一遍文件、再拼一遍：一行都不少（第 14 轮 AB1a：拆开的不再拆）
+    expect(parseDraftFile(await readFile(join(book, draftPath(1)), "utf-8"))).toEqual({ title: "正章名", body: "## 正文第一节\n\n改好的句子。" });
+  });
+
+  it("没章名、正文开头就是一级标题行：存上再读回来，那一行还是正文（拼文件时垫一行空章名）", async () => {
+    await saveTitled(1, "# 正文里的一级标题\n\n正文。", "");
+    const disk = await readDraft(book, 1);
+    expect(disk?.title).toBeUndefined();
+    expect(disk?.body).toBe("# 正文里的一级标题\n\n正文。");
+  });
+
+  it.each(["adopt", "dismiss"] as const)("AB1c：恢复稿只改了小节标题，旧指纹「%s」对不上（409）", async (decision) => {
+    const base = await save(1, "A。");
+    const current = await save(1, "B。");
+    expect((await put(base, "round14section", 1, "章名", "# 章名\n\n## 旧小节\n\n正文。")).status).toBe(409);
+    const seen = (await pendingDraftFor(book, 1))!;
+    expect(seen).toMatchObject({ title: "章名", body: "## 旧小节\n\n正文。" });
+    expect((await put(base, "round14section", 2, "章名", "# 章名\n\n## 新小节\n\n正文。")).status).toBe(409);
+    const changed = (await pendingDraftFor(book, 1))!;
+    expect(changed.sha).not.toBe(seen.sha);
+    const response = await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: seen.kind, id: seen.id, sha: seen.sha, decision, baseVersion: current });
+    expect(response.status).toBe(409);
+    expect(await readDraftRecovery(book, seen.id)).toMatchObject({ settled: false, body: "## 新小节\n\n正文。" });
+    expect((await readDraft(book, 1))?.body).toBe("B。");
+  });
+
+  it("AB1d：恢复稿还有小节标题，别处存上的只是后半截一样：不当已存清掉", async () => {
+    const base = await save(1, "原稿。");
+    const current = await save(1, "外部稿。");
+    const response = await put(base, "round14clear", 1, "章名", "# 章名\n\n## 作者第一节\n\n正文。");
+    expect(response.status).toBe(409);
+    const id = String(response.payload.recoveryId);
+    expect((await put(current, "round14another", 1, "章名", "正文。")).status).toBe(200);
+    expect(await readDraftRecovery(book, id)).toMatchObject({ settled: false, body: "## 作者第一节\n\n正文。" });
+  });
+
+  it.each(["#", "# "])("AB2：稿纸上章名行只剩 %j：章名清空，盘上没章名", async (marker) => {
+    wireRoutesWith();
+    await openPaper(book, 1);
+    editDraft("# 原章名\n\n正文。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    editDraft(`${marker}\n\n正文。`);
+    expect(useDraftStore.getState().title).toBe("");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(await readDraft(book, 1)).toMatchObject({ body: "正文。" });
+    expect((await readDraft(book, 1))?.title).toBeUndefined();
+  });
+
+  it("AB2 对照：「## 小节」不是章名行，章名照旧", async () => {
+    wireRoutesWith();
+    await openPaper(book, 1);
+    editDraft("# 原章名\n\n正文。");
+    await flushDraftSave();
+    editDraft("## 小节\n\n正文。");
+    expect(useDraftStore.getState().title).toBe("原章名");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "原章名", body: "## 小节\n\n正文。" });
+  });
+
+  it.each([
+    { label: "没章名", title: "", expected: undefined },
+    { label: "自己的章名", title: "AI 起的章名", expected: "AI 起的章名" },
+  ])("AB3：AI 候选（$label）换上时照它自己的章名，不夹带盘上后来的章名", async ({ title, expected }) => {
+    await saveTitled(1, "作者原稿。", "作者旧章名");
+    const start = await begin(1);
+    await saveTitled(1, "作者后来改的稿。", "作者后来改的章名");
+    const written = await applyAiDraft(book, { chapter: 1, title, body: "AI 稿。", ...start, source: "continue" });
+    expect(written).toMatchObject({ applied: false, reason: "draft_moved" });
+    if (written.applied) throw new Error("应留下候选");
+    wireRoutesWith();
+    await openPaper(book, 1);
+    expect(useDraftStore.getState().incoming?.pending?.id).toBe(written.candidateId);
+    expect(await acceptPaperIncoming()).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.title).toBe(expected);
+    expect(useDraftStore.getState().title).toBe(title);
+  });
+
+  it("AB4：「不要了」AI 候选不带指纹：不删（409），后来更新的那份留着", async () => {
+    const base = await save(1, "作者稿。");
+    const input = { chapter: 1, body: "候选正文。", baseVersion: base, basisDigest: (await readTruthBasis(book)).digest, source: "draft" as const, status: "ready" as const };
+    const candidate = await saveDraftCandidate(book, { ...input, title: "看到的旧名" });
+    await saveDraftCandidate(book, { ...input, id: candidate.id, title: "后来更新的新名" });
+    const response = await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "candidate", id: candidate.id, decision: "dismiss", baseVersion: null });
+    expect(response.status).toBe(409);
+    expect(await readDraftCandidate(book, candidate.id)).toMatchObject({ title: "后来更新的新名" });
+  });
+});
+
 describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
   it("两步改稿：预览后作者改了设定，应用时不换上、留成候选（B2）", async () => {
     await save(1, "他推开门。");
@@ -1158,7 +1267,7 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     await writeFile(join(tx, "manifest.json"), JSON.stringify({ version: 2, chapter: 1, createdAt: "2026-10-20T00:00:00.000Z", files: [relative], backups: [{ relativePath: relative, existed: true, backupPath: `backups/${relative}`, sha256: sha256(original) }], status: "staged" }));
     await writeFile(join(book, relative), "前文：他叫李四。");
     const basis = await readTruthBasis(book);
-    const result = await applyAiDraft(book, { chapter: 2, body: "李四带着钥匙来了。", baseVersion: null, basis, materials: [], source: "revise" });
+    const result = await applyAiDraft(book, { chapter: 2, title: "", body: "李四带着钥匙来了。", baseVersion: null, basis, materials: [], source: "revise" });
     expect(await readFile(join(book, relative), "utf-8")).toBe(original);
     expect(JSON.parse(await readFile(join(tx, "manifest.json"), "utf-8")).status).toBe("recovered");
     expect(result).toMatchObject({ applied: false, reason: "basis_moved" });
@@ -1169,9 +1278,9 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     await save(1, "底稿。");
     const old = await begin(1);
     await save(1, "作者已改。");
-    expect(await applyAiDraft(book, { chapter: 1, body: "作者还没处理的 AI 方案 A。", ...old, source: "revise" })).toMatchObject({ applied: false });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "作者还没处理的 AI 方案 A。", ...old, source: "revise" })).toMatchObject({ applied: false });
     await new Promise((resolve) => setTimeout(resolve, 3));
-    expect(await applyAiDraft(book, { chapter: 1, body: "AI 方案 B。", ...old, source: "revise" })).toMatchObject({ applied: false });
+    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "AI 方案 B。", ...old, source: "revise" })).toMatchObject({ applied: false });
     await save(1, "AI 方案 B。");
     expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "candidate", body: "作者还没处理的 AI 方案 A。" });
   });
@@ -1186,7 +1295,7 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
         throw eio("工作稿写盘失败");
       }
     };
-    const outcome = await applyAiDraft(book, { chapter: 1, body: "已经生成完的 AI 改稿。", ...begun, source: "revise" });
+    const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "已经生成完的 AI 改稿。", ...begun, source: "revise" });
     expect(injected).toBe(true);
     expect(outcome).toMatchObject({ applied: false, reason: "apply_failed" });
     expect((await readDraft(book, 1))?.body).toBe("作者原稿。");
@@ -1217,7 +1326,7 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
       failRest.release();
       expect(await failedWrite).toMatchObject({ ok: false });
       expect(await readFile(join(book, "chapters/0001.md"), "utf-8")).toBe("他叫张三。");
-      const applied = await applyAiDraft(book, { chapter: 2, body: "李四把钥匙交了出去。", baseVersion: null, basis, materials: [], source: "draft" });
+      const applied = await applyAiDraft(book, { chapter: 2, title: "", body: "李四把钥匙交了出去。", baseVersion: null, basis, materials: [], source: "draft" });
       expect(applied).toMatchObject({ applied: false, reason: "basis_moved" });
       expect(await readDraft(book, 2)).toBeUndefined();
     } finally {

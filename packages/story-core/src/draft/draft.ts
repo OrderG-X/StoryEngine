@@ -16,7 +16,7 @@ import { draftStampOf, readDraftGens, type DraftStamp } from "../store/control.j
 import { draftPath } from "../store/paths.js";
 import { parseDraftFile, sameDraftBody } from "./format.js";
 
-export { composeDraftFile, leadingHeading, normalizeDraft, parseDraftFile, retitleText, sameDraft, sameDraftBody, type DraftText } from "./format.js";
+export { composeDraftFile, leadingHeading, paperDraft, parseDraftFile, retitleText, sameDraft, sameDraftBody, type DraftText } from "./format.js";
 
 export interface Draft {
   readonly chapter: number;

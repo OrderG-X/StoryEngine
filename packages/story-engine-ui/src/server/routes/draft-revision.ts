@@ -11,6 +11,7 @@
  * 落盘前 400 诚实拒；解析不到（草稿在预览后已大变）同样 400 诚实拒。resolvedTarget 由服务端解析，
  * 不回传、不信客户端字符串（裸 resolvedTarget 回传可伪造：传「的」→ 恒拒一切修订）。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
 import { countDraftWords, normalizeDraftRevisionPreview, type DraftRevisionPreview, type DraftRevisionTask } from "../writing/draft-revision.js";
 import {
@@ -23,7 +24,6 @@ import {
   readStringList,
   requireBodyString,
   requirePositiveBodyInteger,
-  stripTitleLineForEditor,
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
@@ -139,7 +139,7 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
         updatedWordCount: countDraftWords(outcome.updatedContent),
       },
       // 编辑器只要正文：草稿文件首行的「# 章名」不回给编辑器（否则应用修改后稿纸顶上冒出一行标题）。
-      draftContent: stripTitleLineForEditor(`${outcome.updatedContent.trimEnd()}\n`),
+      draftContent: `${parseDraftFile(outcome.updatedContent).body}\n`,
       overview,
     });
   } catch (error) {

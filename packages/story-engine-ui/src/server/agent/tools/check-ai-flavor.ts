@@ -1,13 +1,14 @@
 /**
  * check_ai_flavor — 只读工具：对某章草稿做『去 AI 味』体检，挑出有 AI 腔的句子 + 原因 + 改写方向，不改稿。
  *
- * 编排：读草稿（defaultDraftPath + stripLeadingMarkdownChapterHeading）+ 从 story/writing-rules.json
+ * 编排：读草稿（defaultDraftPath + 核心 parseDraftFile）+ 从 story/writing-rules.json
  * 抽反 AI 判据（readAntiRules，合并去重；读不到→空判据、用通用判据兜底，结论里如实说没按作者的规则查）
  *   → runAiFlavorCheck（注入 callModel = resolveConfiguredChatModel("draftReview") + callOpenAICompatibleChatModel）。
  *
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope。
  * 绝不静默失败：模型/网络挂了如实回报 ok:false，不编造违规。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
 import { buildWritingContextPack } from "../../writing/writing-context-pack.js";
 import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
@@ -15,7 +16,7 @@ import { z } from "zod";
 import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
-import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
+import { defaultDraftPath } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { runAiFlavorCheck, type AiFlavorReport } from "../../writing/ai-flavor/ai-flavor-check.js";
 import { readAntiRules, withAntiRulesNote } from "../../writing/ai-flavor/anti-rules.js";
@@ -56,7 +57,7 @@ export async function runCheckAiFlavorToolLogic(input: {
   readonly callModel: (prompt: string) => Promise<string>;
 }): Promise<AiFlavorReport> {
   const raw = await readFile(defaultDraftPath(input.projectDir, input.chapter), "utf-8").catch(() => "");
-  const draftText = stripLeadingMarkdownChapterHeading(raw).trim();
+  const draftText = parseDraftFile(raw).body;
   const antiRules = await readAntiRules(input.projectDir);
   const establishedElements = await gatherEstablishedElements(input.projectDir, input.chapter);
   const report = await runAiFlavorCheck({ draftText, antiRules: antiRules.items, establishedElements, callModel: input.callModel });

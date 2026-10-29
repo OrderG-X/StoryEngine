@@ -9,7 +9,7 @@
  */
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { KEPT_TX_DIR, project, readBookSnapshot, readChapterText, readHead, withBookLock, type BookSnapshot } from "@actalk/story-core";
+import { KEPT_TX_DIR, parseDraftFile, project, readBookSnapshot, readChapterText, readHead, withBookLock, type BookSnapshot } from "@actalk/story-core";
 import { buildLegacyMirror, MIRROR_FILES, serializeLegacyMirror } from "./build.js";
 
 export const MIRROR_MARKER = ".story-core-mirror.json";
@@ -118,9 +118,7 @@ async function readChapterTitles(bookDir: string, chapters: readonly number[]): 
   return titles;
 }
 
-/** 正文第一行非空行是 markdown 标题就取它（和老定稿取章名的办法一样）。 */
+/** 章节文件的章名（核心 parseDraftFile：第一行非空行是一级章名行）。 */
 export function markdownTitle(text: string | undefined): string | undefined {
-  const first = text?.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!first?.startsWith("#")) return undefined;
-  return first.replace(/^#+\s*/u, "").trim() || undefined;
+  return text === undefined ? undefined : parseDraftFile(text).title;
 }

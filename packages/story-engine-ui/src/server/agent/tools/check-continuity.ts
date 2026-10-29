@@ -12,7 +12,7 @@ import { z } from "zod";
 import { coerceBoolean, coerceNumber } from "../../lib/lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { draftVersionOf, readDraftStamp } from "@actalk/story-core";
+import { draftVersionOf, parseDraftFile, readDraftStamp } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
 import { rereadBlocker } from "../../editorial/reread-state.js";
 
@@ -64,7 +64,7 @@ export type CheckContinuityToolOutput = z.infer<typeof outputSchema>;
 export async function cachedCheckContinuity(projectDir: string, chapter: number): Promise<CheckContinuityToolOutput | null> {
   const draft = await readDraftContent({ projectDir, chapter });
   if (!draft.found || !draft.content.trim()) return null;
-  if (!(await canReuseCheck(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim()))) return null;
+  if (!(await canReuseCheck(projectDir, chapter, parseDraftFile(draft.content).body))) return null;
   return runCheckContinuity(projectDir, chapter);
 }
 
@@ -95,7 +95,7 @@ export async function runCheckContinuity(
   if (rereading) {
     return { ok: false, chapter, source: draft.source, sure: [], maybe: [], earlierOpen: [], failures: [rereading], dismissed: 0, reused: false, summary: rereading };
   }
-  const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), options);
+  const result = await checkChapterBody(projectDir, chapter, parseDraftFile(draft.content).body, options);
   // 版本号按读到的那份文件算（和核心 draft 的版本同一口径）：界面拿它判断「核过后改过稿」，不拿结果到达那一刻稿纸上的版本
   // （白沙渡试写：AI 出完稿紧接着核账，稿纸还没换上新稿，记成了旧版本，刷新后一直显示「核过后改过稿」）。
   return {

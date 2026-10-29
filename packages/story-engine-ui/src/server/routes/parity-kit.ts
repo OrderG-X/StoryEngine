@@ -35,12 +35,11 @@ import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
   defaultCommittedChapterPath,
   defaultDraftPath,
-  stripLeadingMarkdownChapterHeading,
 } from "../lib/project-io.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../agent/request-context.js";
 
 export { callRoute } from "./test-helpers.js";
-export { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading };
+export { defaultCommittedChapterPath, defaultDraftPath };
 
 export const PARITY_MAIN_CHARACTER = "林远";
 

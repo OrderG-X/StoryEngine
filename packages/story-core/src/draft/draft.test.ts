@@ -8,7 +8,7 @@ import { readHead } from "../store/book.js";
 import { DRAFT_GENS_PATH } from "../store/paths.js";
 import { bumpRevision } from "../store/revision.js";
 import { draftAdoptCandidate, draftApplyGenerated, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./commands.js";
-import { composeDraftFile, draftVersionOf, normalizeDraft, parseDraftFile, readChapterPaper, readDraft, retitleText, sameDraft, sameDraftBody } from "./draft.js";
+import { composeDraftFile, draftVersionOf, paperDraft, parseDraftFile, readChapterPaper, readDraft, retitleText, sameDraft, sameDraftBody } from "./draft.js";
 
 let book: string;
 beforeEach(async () => {
@@ -35,46 +35,67 @@ function expectConflict(outcome: CommandOutcome<DraftWriteResult>): DraftConflic
 }
 
 describe("草稿文件拆拼", () => {
-  it("第一行「# 章名」拆成章名，其余是正文；没有章名行就全是正文", () => {
+  it("文件原文：第一行非空行是一级章名行就拆成章名，其余是正文；只有「#」是空章名；「## 小节」是正文", () => {
     expect(parseDraftFile("# 第1章 · 钟停\n\n钟停了。\n\n她推门。\n")).toEqual({ title: "第1章 · 钟停", body: "钟停了。\n\n她推门。" });
     expect(parseDraftFile("\n\n钟停了。\n")).toEqual({ body: "钟停了。" });
     expect(parseDraftFile("")).toEqual({ body: "" });
+    expect(parseDraftFile("## 第一节\n\n原句。\n")).toEqual({ body: "## 第一节\n\n原句。" });
+    expect(parseDraftFile("# 章名\n\n## 第一节\n\n原句。\n")).toEqual({ title: "章名", body: "## 第一节\n\n原句。" });
+    expect(parseDraftFile("#\n\n# 小节\n正文\n")).toEqual({ body: "# 小节\n正文" });
+    expect(parseDraftFile("\r\n# 章名\r\n正文\r\n")).toEqual({ title: "章名", body: "正文" });
   });
 
-  it("拼回去：有章名补第一行；单给的章名为准（空串 = 没章名），没给才认正文开头的章名行（第 13 轮复核 AA4）", () => {
+  it("拆开的稿拼回文件：正文一行都不拆（第 14 轮复核 AB1）；没章名、正文开头是章名行的垫一行「#」，读回来还是原样", () => {
     expect(composeDraftFile({ title: "钟停", body: "钟停了。" })).toBe("# 钟停\n\n钟停了。\n");
-    expect(composeDraftFile({ title: "别的", body: "# 钟停\n\n钟停了。" })).toBe("# 别的\n\n钟停了。\n");
-    expect(composeDraftFile({ title: "", body: "# 钟停\n\n钟停了。" })).toBe("钟停了。\n");
-    expect(composeDraftFile({ body: "# 钟停\n钟停了。" })).toBe("# 钟停\n\n钟停了。\n");
+    expect(composeDraftFile({ title: "章名", body: "## 第一节\n\n原句。" })).toBe("# 章名\n\n## 第一节\n\n原句。\n");
+    expect(composeDraftFile({ body: "## 第一节\n原句。" })).toBe("## 第一节\n原句。\n");
+    expect(composeDraftFile({ title: "", body: "# 小节\n正文" })).toBe("#\n\n# 小节\n正文\n");
     expect(composeDraftFile({ body: "钟停了。" })).toBe("钟停了。\n");
     expect(composeDraftFile({ title: "钟停", body: "" })).toBe("# 钟停\n");
+    for (const draft of [{ title: "章名", body: "## 第一节\n\n原句。" }, { body: "# 小节\n正文" }, { title: "章名", body: "# 小节\n正文" }]) {
+      expect(parseDraftFile(composeDraftFile(draft))).toEqual(draft);
+      expect(composeDraftFile(parseDraftFile(composeDraftFile(draft)))).toBe(composeDraftFile(draft));
+    }
   });
 
-  it("同一份稿按整份比：章名不一样就不是同一份；正文只差空行不算", () => {
-    expect(sameDraft({ title: "钟停", body: "钟停了。" }, { body: "# 钟停\n\n\n钟停了。  " })).toBe(true);
+  it("稿纸上的字：开头的章名行属于章名、不留在正文；给了章名以它为准，没给认那一行，都没有是 undefined", () => {
+    expect(paperDraft("# 钟停\n\n钟停了。", "钟停")).toEqual({ title: "钟停", body: "钟停了。" });
+    expect(paperDraft("# 钟停\n\n钟停了。")).toEqual({ title: "钟停", body: "钟停了。" });
+    expect(paperDraft("#\n钟停了。")).toEqual({ title: "", body: "钟停了。" });
+    expect(paperDraft("## 第一节\n钟停了。", "章名")).toEqual({ title: "章名", body: "## 第一节\n钟停了。" });
+    expect(paperDraft("钟停了。")).toEqual({ body: "钟停了。" });
+  });
+
+  it("同一份稿按整份比，两边都不拆：章名不一样就不是同一份；小节标题不一样也不是；正文只差空行不算", () => {
+    expect(sameDraft({ title: "钟停", body: "钟停了。" }, { title: "钟停", body: "\n\n钟停了。  " })).toBe(true);
     expect(sameDraft({ title: "钟停", body: "钟停了。" }, { title: "别的", body: "钟停了。" })).toBe(false);
-    expect(sameDraft({ title: "", body: "# 钟停\n钟停了。" }, { body: "钟停了。" })).toBe(true);
-    expect(normalizeDraft({ title: "  ", body: "\n# 旧\n正文\n" })).toEqual({ body: "正文" });
+    expect(sameDraft({ title: "", body: "钟停了。" }, { body: "钟停了。" })).toBe(true);
+    expect(sameDraft({ title: "章名", body: "## 旧小节\n原句。" }, { title: "章名", body: "## 新小节\n原句。" })).toBe(false);
+    expect(sameDraft({ title: "章名", body: "## 第一节\n原句。" }, { title: "章名", body: "原句。" })).toBe(false);
   });
 
-  it("改章名：正文开头的章名行跟着换，章名空就去掉那一行；没有章名行不动", () => {
+  it("改章名：稿纸开头的章名行跟着换，章名空就去掉那一行；没有章名行不动", () => {
     expect(retitleText("# 旧\n\n正文", "新")).toBe("# 新\n\n正文");
     expect(retitleText("# 旧\n\n正文", " ")).toBe("正文");
     expect(retitleText("正文", "新")).toBe("正文");
+    expect(retitleText("## 小节\n正文", "新")).toBe("## 小节\n正文");
   });
 });
 
 describe("作者存稿（draft.save）", () => {
-  it("章名给了就以它为准（空串 = 去掉章名），正文开头的章名行不再顶替；没给沿用盘上的（第 13 轮复核 AA4）", async () => {
-    let base = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "# 原章名\n钟停了。", title: "原章名", baseVersion: null }, author)).result.version;
+  it("章名给了就以它为准（空串 = 去掉章名）；没给沿用盘上的；正文是拆开的正文、一行都不拆（第 13 轮 AA4、第 14 轮 AB1）", async () => {
+    let base = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "钟停了。", title: "原章名", baseVersion: null }, author)).result.version;
     expect(await readFile(draftFile(1), "utf-8")).toBe("# 原章名\n\n钟停了。\n");
-    const renamed = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "# 原章名\n钟停了。", title: "新章名", baseVersion: base }, author));
+    const renamed = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "钟停了。", title: "新章名", baseVersion: base }, author));
     expect(renamed.result.unchanged).toBe(false);
     expect(await readFile(draftFile(1), "utf-8")).toBe("# 新章名\n\n钟停了。\n");
     base = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "钟停了。又响了。", baseVersion: renamed.result.version }, author)).result.version;
     expect((await readDraft(book, 1))?.title).toBe("新章名");
-    expectOk(await runCommand(book, draftSave, { chapter: 1, body: "钟停了。又响了。", title: "", baseVersion: base }, author));
+    base = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "钟停了。又响了。", title: "", baseVersion: base }, author)).result.version;
     expect(await readFile(draftFile(1), "utf-8")).toBe("钟停了。又响了。\n");
+    expectOk(await runCommand(book, draftSave, { chapter: 1, body: "## 第一节\n\n钟停了。", title: "章名", baseVersion: base }, author));
+    expect(await readFile(draftFile(1), "utf-8")).toBe("# 章名\n\n## 第一节\n\n钟停了。\n");
+    expect(await readDraft(book, 1)).toMatchObject({ title: "章名", body: "## 第一节\n\n钟停了。" });
   });
 
   it("新章：baseVersion 传 null 就能存；回执的版本号就是盘上文件的哈希；不动书的快照", async () => {

@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { composeDraftFile, normalizeDraft, readDraft, sameDraft, sha256, withBookLock } from "@actalk/story-core";
+import { composeDraftFile, readDraft, sameDraft, sha256, withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-io.js";
 
 /** 本进程里正在写的候选：标着「在写」却不在这里的，就是写到一半停了（进程没了、流程抛错）。 */
@@ -101,10 +101,16 @@ async function removeEntry(dir: string, id: string): Promise<void> {
   await rm(join(dir, `${id}.json`), { force: true });
 }
 
-/** 一份稿的内容：正文 + 章名（章名给了就以它为准，见核心 normalizeDraft）。 */
+/** 一份拆开的稿：章名（缺省 = 没有）+ 正文（一行都不再拆，见核心 draft/format.ts）。 */
 export interface DraftContent {
   readonly title?: string;
   readonly body: string;
+}
+
+/** 存进候选、恢复稿的样子：章名去空白、空就不写；正文去首尾空白。 */
+function storedDraft(title: string, body: string): DraftContent {
+  const name = title.trim();
+  return name ? { title: name, body: body.trim() } : { body: body.trim() };
 }
 
 /** 是不是同一份稿：按整份比（第 12 轮复核 Z2：只比正文会漏掉另起的章名）。没有稿算不一样。 */
@@ -121,7 +127,8 @@ export function draftSha(draft: DraftContent): string {
 
 export async function saveDraftCandidate(projectDir: string, input: {
   readonly chapter: number;
-  readonly title?: string;
+  /** 这一版的章名（空串 = 没有）：开工时就定下，换上时照它（第 14 轮复核 AB3）。 */
+  readonly title: string;
   readonly body: string;
   readonly baseVersion: string | null;
   readonly basisDigest: string;
@@ -134,7 +141,7 @@ export async function saveDraftCandidate(projectDir: string, input: {
   const now = new Date().toISOString();
   const previous = input.id ? await readDraftCandidate(projectDir, input.id) : undefined;
   const id = previous?.id ?? `${input.chapter}-${randomUUID()}`;
-  const text = normalizeDraft(input);
+  const text = storedDraft(input.title, input.body);
   const candidate: DraftCandidate = {
     schema: "draft-candidate/1",
     id,
@@ -210,7 +217,8 @@ export interface RecoverySave {
  */
 export async function saveDraftRecovery(projectDir: string, input: {
   readonly chapter: number;
-  readonly title?: string;
+  /** 作者手上那份的章名（空串 = 没有）。 */
+  readonly title: string;
   readonly body: string;
   readonly baseVersion: string | null;
   readonly from?: { readonly client: string; readonly seq: number };
@@ -225,7 +233,7 @@ export async function saveDraftRecovery(projectDir: string, input: {
       schema: "draft-recovery/1",
       id,
       chapter: input.chapter,
-      ...normalizeDraft(input),
+      ...storedDraft(input.title, input.body),
       settled: false,
       baseVersion: input.baseVersion,
       client: from.client,
