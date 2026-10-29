@@ -2,9 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
-import { bigramSimilarity, DEFAULT_STALE_AFTER, readBible, selectRelevant, type BibleView } from "@actalk/story-core";
+import { bigramSimilarity, DEFAULT_STALE_AFTER, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
-import { formatCommitRecoveryNotice, listCommitRecoveryNotices } from "./legacy-commit-recovery.js";
 import type {
   ArcGoal,
   ArcGoalPool,
@@ -190,7 +189,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     // A3（P1-6 上浮）：开书时 recover 已跑完；仍挂着「recovered + recoveryIssues」的残留
     // =盘上「章文件在、资料已回滚」的分歧态。上浮进 uiHints.warnings 既有通道，绝不只写 manifest 静默。
     // 扫描失败不堵概览——概述是读侧，残留信号由下一次 recover/commit 继续兜。
-    listCommitRecoveryNotices(input.projectDir).catch(() => [] as const),
+    listLegacyRecoveryNotices(input.projectDir).catch(() => [] as const),
   ]);
 
   const latestChapter = inferCurrentChapter(timelineEvents);
@@ -286,7 +285,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     uiHints: {
       warnings: [
         ...buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
-        ...commitRecoveryNotices.map(formatCommitRecoveryNotice),
+        ...commitRecoveryNotices.map(formatLegacyRecoveryNotice),
         // 审计 Low：损坏台账如实可见（绝不把「坏文件」显示成「没有资料」）。
         ...unique(corruptLedgerFiles.map((relativePath) =>
           `资料文件损坏，面板按空显示：${relativePath}。定稿等写入操作会如实报错，请先修复该文件。`)),
@@ -294,6 +293,14 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       ],
     },
   };
+}
+
+/**
+ * 一条老格式事务残留通知渲成中性文本（code 前缀 `transaction_recovered_partial` + 章号 + 计数）。
+ * 绝不带绝对路径/error.message——细节证据在 `.story-engine-tx/<transactionId>/manifest.json`（相对路径）。
+ */
+export function formatLegacyRecoveryNotice(notice: LegacyRecoveryNotice): string {
+  return `transaction_recovered_partial: 第 ${notice.chapter} 章的入库事务此前中断且未能完全回滚，已按原样放行（${notice.issueCount} 项残留记录在 ${notice.transactionId}/manifest.json）；该章文件可能与伏笔/时间线等资料不一致，建议重新提交第 ${notice.chapter} 章或人工核对。`;
 }
 
 function storyField(bible: BibleView | undefined, label: string): string {

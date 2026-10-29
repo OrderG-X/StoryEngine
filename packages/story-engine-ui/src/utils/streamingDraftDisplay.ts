@@ -16,7 +16,7 @@ export function streamingDraftDisplay(raw: string, base?: string): string {
 function withoutHeadingLine(raw: string): string {
   const leading = raw.match(/^\s*/u)?.[0] ?? "";
   const rest = raw.slice(leading.length);
-  if (!rest.startsWith("#")) return raw;
+  if (!rest.startsWith("#")) return raw; // 章名行白名单：模型输出
   const newline = rest.indexOf("\n");
   if (newline < 0) return "";
   return rest.slice(newline + 1).replace(/^\s*\n/u, "").replace(/^\n+/u, "");

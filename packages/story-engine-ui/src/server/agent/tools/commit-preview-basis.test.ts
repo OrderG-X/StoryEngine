@@ -31,7 +31,7 @@ const model = async (_messages: unknown, options: { readonly json: boolean }) =>
 beforeEach(async () => {
   root = await makeHomeTempDir("commit-preview-basis-");
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "定稿依据", genre: "悬疑", protagonistName: "林远" }));
-  expect(await runCommand(book, draftSave, { chapter: 1, body, baseVersion: null }, { caller: "author" })).toMatchObject({ ok: true });
+  expect(await runCommand(book, draftSave, { chapter: 1, title: "", body, baseVersion: null }, { caller: "author" })).toMatchObject({ ok: true });
 });
 afterEach(async () => {
   hook.beforePrepare = undefined;

@@ -129,7 +129,7 @@ export function validateStreamedDraftBody(value: string): string | null {
   const body = value
     .replace(/```[\s\S]*?```/gu, "")
     // 不猜白名单：章节标题
-    .replace(/^#+\s*第[一二三四五六七八九十百\d]+章[^\n]*$/gmu, "")
+    .replace(/^#+\s*第[一二三四五六七八九十百\d]+章[^\n]*$/gmu, "") // 章名行白名单：模型输出
     .trim();
   const cjkCount = countCjkChars(body);
   const paragraphs = body.split(/\n{2,}/u).map((item) => item.trim()).filter(Boolean);
@@ -1150,7 +1150,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     input.onContinueBase?.(text);
   }
   // 开写时存的那份「在写」候选：不管怎么收场（换上、没换上、抛错），流程结束就不再算在写——没换上的、半路抛错的，稿纸会提示。
-  const start: DraftStart = { basis: startBasis, version: startVersion, materials, ...(continueFrom ? { continueFrom } : {}), progress: {} };
+  const start: DraftStart = { basis: startBasis, version: startVersion, materials, ...(continueFrom ? { continueFrom } : {}), title: startDraft?.title ?? "", progress: {} };
   try {
     return await runGenerateDraftStarted(input, start);
   } finally {
@@ -1230,6 +1230,8 @@ interface DraftStart {
   /** 不在真相依据里的材料（开写时别的章的工作稿、各章章纲，照着写的本章章纲）：换上时有一样变了算依据过期（见 book/material-reads）。 */
   readonly materials: MaterialLog;
   readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
+  /** 开写时那份稿的章名（空串 = 没有）：接着写沿用它（写作版本 P1 第 14 轮复核 AB3：候选的章名开工时就定下）。 */
+  readonly title: string;
   readonly progress: { candidateId?: string };
 }
 
@@ -1330,7 +1332,9 @@ async function runGenerateDraftWithPlan(
   }
 
   // 首稿先存成候选（写作版本 P1b）：补写、去味、核账改都在内存里做，最后一次换上工作稿；进程半路没了，这版也找得回。
-  const draftTitle = continueFrom ? undefined : finalReport?.title ?? `第${chapter}章`;
+  // 整份稿的章名开工时就定下：新写的用 AI 起的，AI 没起名、接着写的都沿用开写时那份的（候选晚换上也不借那时盘上的；
+  // 写作版本 P1 第 16 轮 AD1：不补「第N章」盖掉作者的章名，原本没章名的照旧没有）。
+  const draftTitle = continueFrom ? start.title : finalReport?.title ?? start.title;
   const source = continueFrom ? "continue" as const : "draft" as const;
   let finalDraftContent = "";
   const keepProgress = async (): Promise<void> => {
@@ -1338,7 +1342,7 @@ async function runGenerateDraftWithPlan(
       const candidateId = start.progress.candidateId;
       start.progress.candidateId = (await saveDraftCandidate(projectDir, {
         chapter,
-        ...(draftTitle ? { title: draftTitle } : {}),
+        title: draftTitle,
         body: draftBody,
         baseVersion: start.version,
         basisDigest: start.basis.digest,
@@ -1473,7 +1477,7 @@ async function runGenerateDraftWithPlan(
   try {
     applied = await applyAiDraft(projectDir, {
       chapter,
-      ...(draftTitle ? { title: draftTitle } : {}),
+      title: draftTitle,
       body: draftBody,
       baseVersion: start.version,
       basis: start.basis,

@@ -128,12 +128,12 @@ describe("fixDraftByUnits：改完走 AI 写稿唯一通道（写作版本 P1b�
   async function book(body: string) {
     const rootDir = await makeHomeTempDir("unit-fix-");
     const { projectDir } = await createStoryProject({ rootDir, title: "白沙渡", genre: "武侠", protagonistName: "许微" });
-    const saved = await runCommand(projectDir, draftSave, { chapter: 5, body, baseVersion: null }, { caller: "author" });
+    const saved = await runCommand(projectDir, draftSave, { chapter: 5, title: "", body, baseVersion: null }, { caller: "author" });
     if (!saved.ok) throw new Error(saved.message);
     return { rootDir, projectDir };
   }
   const authorSaves = async (projectDir: string, body: string) => {
-    const outcome = await runCommand(projectDir, draftSave, { chapter: 5, body, baseVersion: (await readDraft(projectDir, 5))?.version ?? null }, { caller: "author" });
+    const outcome = await runCommand(projectDir, draftSave, { chapter: 5, title: "", body, baseVersion: (await readDraft(projectDir, 5))?.version ?? null }, { caller: "author" });
     if (!outcome.ok) throw new Error(outcome.message);
   };
 

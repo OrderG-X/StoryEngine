@@ -86,6 +86,7 @@ export {
 export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
 
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteFromText, quoteInText } from "./text/quote.js";
+export { bareChapterName, CHAPTER_NUMERAL, hasChapterNumberPrefix } from "./text/chapter-title.js";
 export {
   applyUnitEdits,
   dropNeighborEcho,
@@ -151,16 +152,25 @@ export { bumpRevision, revisionWrite } from "./store/revision.js";
 export { bookEpochWrite, draftStampOf, freshDraftGensWrite, readBookEpoch, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
-export { BOOK_EPOCH_PATH, CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, isUndoablePath, KEPT_TX_DIR, LEDGER_DIR, planPath, REVISION_PATH, TX_DIR } from "./store/paths.js";
+export {
+  LEGACY_TX_ACTIVE_RETENTION,
+  LEGACY_TX_ARCHIVE_RETENTION,
+  LEGACY_TX_DIR,
+  LegacyResidueError,
+  listLegacyRecoveryNotices,
+  setLegacyTxIoHookForTests,
+  type LegacyRecoveryNotice,
+} from "./store/legacy-transaction.js";
+export { BOOK_EPOCH_PATH, CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, isUndoablePath, KEPT_TX_DIR, LEDGER_DIR, planPath, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR } from "./store/paths.js";
+export { isSavedCopyId, listSavedDrafts, readSavedDraft, settleSavedCopy, type SavedDraft } from "./store/saved-copies.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,
+  recoverBookTransactions,
   recoverTransactions,
   setAsideBrokenTransactions,
   sha256Bytes,
   type RecoveryReport,
-  type TxChange,
-  type TxDelete,
   type TxEffect,
 } from "./store/transaction.js";
 
@@ -203,7 +213,7 @@ export {
 export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
-export { fail, opCommandKey, readCommandReceipt, runCommand } from "./commands/runner.js";
+export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
 export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
@@ -223,7 +233,7 @@ export {
   type SerialPart,
   type SerialSplit,
 } from "./text/serial-split.js";
-export { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, readDraftVersions, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
+export { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, readDraftVersions, sameDraft, sameDraftBody, type ChapterPaper, type Draft, type DraftText } from "./draft/draft.js";
 export { draftAdoptCandidate, draftApplyGenerated, DraftSaveArgs, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
 export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";

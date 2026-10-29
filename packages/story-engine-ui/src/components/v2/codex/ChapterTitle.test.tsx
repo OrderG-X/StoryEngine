@@ -17,7 +17,7 @@ describe("写作台章名：点一下改（重构 P6 第 7 步）", () => {
     expect(screen.queryByRole("textbox", { name: "章名" })).toBeNull();
   });
 
-  it("带「第N章 ·」前缀的旧章名只露名字来改；Esc、没改、清空都不存", () => {
+  it("带「第N章 ·」前缀的旧章名只露名字来改；Esc、没改都不存；清空是改成没章名（写作版本 P1 第 14 轮复核 AB2）", () => {
     const onRename = vi.fn();
     render(<ChapterTitle chapterNumber={13} title="第13章 · 七天" editable onRename={onRename} />);
     fireEvent.click(screen.getByRole("button", { name: "第13章 · 七天" }));
@@ -28,9 +28,10 @@ describe("写作台章名：点一下改（重构 P6 第 7 步）", () => {
     fireEvent.click(screen.getByRole("button", { name: "第13章 · 七天" }));
     fireEvent.blur(screen.getByRole("textbox", { name: "章名" }));
     fireEvent.click(screen.getByRole("button", { name: "第13章 · 七天" }));
+    expect(onRename).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole("textbox", { name: "章名" }), { target: { value: " " } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "章名" }), { key: "Enter" });
-    expect(onRename).not.toHaveBeenCalled();
+    expect(onRename).toHaveBeenCalledWith("");
   });
 
   it("不能改（出稿中 / 看定稿）就是普通标题", () => {

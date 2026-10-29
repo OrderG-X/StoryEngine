@@ -14,8 +14,9 @@ export type WorkspaceRevisionPreview = DraftRevisionPreview & {
   readonly originTarget: WorkspaceOperationTarget;
 };
 
+/** 一份候选稿（拆开的：正文 + 章名；没章名 = 选用时沿用作者眼前的）。 */
 export interface WorkspaceDraftCandidate {
-  readonly content: string;
+  readonly body: string;
   readonly title?: string;
   readonly originTarget: WorkspaceOperationTarget;
   /** AI 出稿时一起写的第几版（对话「另外几版」卡打开的）；没有＝「再来一版」现抽的候选。 */

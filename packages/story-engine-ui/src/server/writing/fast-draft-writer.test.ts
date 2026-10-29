@@ -3,7 +3,7 @@ import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
-import { CHAPTER_LEDGER_SCHEMA, cardWrite, runCommand, type CardOp, type ChapterLedger } from "@actalk/story-core";
+import { CHAPTER_LEDGER_SCHEMA, cardWrite, composeDraftFile, runCommand, type CardOp, type ChapterLedger } from "@actalk/story-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "./context-gateway.js";
 import { runFastDraft, resolveDraftMaxOutputTokens, type WriterClient } from "./fast-draft-writer.js";
@@ -12,7 +12,7 @@ import { createStoryProject } from "../book/project-store.js";
 
 /** 引擎不写盘了（重构 P7）：拼出调用方会落进工作稿的文件文本，沿用原来按文件比对的断言。 */
 function draftFileOf(report: { readonly title?: string; readonly draftBody?: string }): string {
-  return `# ${report.title}\n\n${report.draftBody ?? ""}\n`;
+  return composeDraftFile({ ...(report.title ? { title: report.title } : {}), body: report.draftBody ?? "" });
 }
 
 describe("StoryEngine-NG FastDraftWriter", () => {
@@ -222,14 +222,15 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(report).toMatchObject({
       chapter: 1,
       passed: true,
-      title: "开局",
+      // 写手另给的章名也统一成「第N章 · 名字」（第 17 轮 AE1：和正文开头的章名行同一种写法）。
+      title: "第1章 · 开局",
       tokenUsage: { promptTokens: 100, completionTokens: 60, totalTokens: 160 },
       issues: [],
     });
     // 引擎不写盘：工作稿文件由调用方走 draft.applyGenerated 落。
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0001.md"))).rejects.toThrow();
     await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
-      "# 开局\n\nGuo Xu 站在大门前，第一次意识到自己的副本已经开始。\n",
+      "# 第1章 · 开局\n\nGuo Xu 站在大门前，第一次意识到自己的副本已经开始。\n",
     );
     // 不记账、不动设定：没有章节账单，设定卡一字不变，也不建任何老格式状态目录。
     await expect(access(join(projectDir, "ledger", "chapters", "0001.json"))).rejects.toThrow();
@@ -258,7 +259,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.title).toBe("候选一版");
+    expect(report.title).toBe("第1章 · 候选一版");
     // 候选正文走 report.draftBody 返回，路由据此并排展示
     expect(report.draftBody).toBe("Guo Xu 推开门，雪光照进来。");
     // 关键：不写工作稿文件——候选临时、不冲掉当前草稿、不污染操作历史
@@ -505,14 +506,15 @@ describe("StoryEngine-NG FastDraftWriter", () => {
   it("does not duplicate markdown chapter headings from model output", async () => {
     const cases = [
       {
+        // 只写了章号：算没起名（第 16 轮 AD1），文件里不出章名行。
         title: "第1章",
         content: "# 第一章\n\nGuo Xu 站在大门前，确认自己不能回头。",
-        expected: "# 第1章\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
+        expected: "Guo Xu 站在大门前，确认自己不能回头。\n",
       },
       {
         title: "开局",
         content: "Guo Xu 站在大门前，确认自己不能回头。",
-        expected: "# 开局\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
+        expected: "# 第2章 · 开局\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
       },
       {
         title: "开端",
@@ -572,7 +574,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     );
   });
 
-  it("falls back to a chapter label when the model omits a meaningful title", async () => {
+  it("no meaningful title from the model → no title at all (写作版本 P1 第 16 轮 AD1：不补「第N章」)", async () => {
     const projectDir = await createFixtureProject();
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({
@@ -588,9 +590,9 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       writerClient,
     });
 
-    expect(report.title).toBe("第1章");
+    expect(report.title).toBeUndefined();
     await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
-      "# 第1章\n\nGuo Xu 捏着半张申请表，纸面在掌心里一点点发热。\n",
+      "Guo Xu 捏着半张申请表，纸面在掌心里一点点发热。\n",
     );
   });
 
@@ -625,7 +627,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     }
   });
 
-  it("model writes only a chinese-numeral chapter label（第十章）→ generic path keeps 第N章", async () => {
+  it("model writes only a chinese-numeral chapter label（第十章）→ 算没起名，章号行也不留在正文里", async () => {
     const projectDir = await createFixtureProject();
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({
@@ -639,9 +641,9 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       chapterGoal: "主角推进剧情。",
       writerClient,
     });
-    expect(report.title).toBe("第10章");
+    expect(report.title).toBeUndefined();
     await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
-      "# 第10章\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
+      "Guo Xu 站在大门前，确认自己不能回头。\n",
     );
   });
 

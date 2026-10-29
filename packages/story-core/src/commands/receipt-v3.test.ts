@@ -50,7 +50,7 @@ describe("回执 v3", () => {
   });
 
   it("栅栏不过：什么都不写、原样返回它；回执已在的照常回放（回放不写）", async () => {
-    const blocked = await runCommand(book, draftSave, { chapter: 1, body: "AI 稿", baseVersion: null }, {
+    const blocked = await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "AI 稿", baseVersion: null }, {
       caller: "author",
       op: { opId: "op-2", stepId: "apply" },
       precondition: async () => fail("operation_stopped", "这次已经停了，没有写。"),
@@ -58,10 +58,10 @@ describe("回执 v3", () => {
     expect(blocked).toMatchObject({ ok: false, code: "operation_stopped" });
     await expect(readFile(join(book, "drafts/fast/chapter-0001.md"), "utf-8")).rejects.toThrow();
 
-    const done = await runCommand(book, draftSave, { chapter: 1, body: "AI 稿", baseVersion: null }, { caller: "author", op: { opId: "op-3", stepId: "apply" } });
+    const done = await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "AI 稿", baseVersion: null }, { caller: "author", op: { opId: "op-3", stepId: "apply" } });
     expect(done).toMatchObject({ ok: true, replayed: false });
     let fenced = 0;
-    const replay = await runCommand(book, draftSave, { chapter: 1, body: "AI 稿", baseVersion: null }, {
+    const replay = await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "AI 稿", baseVersion: null }, {
       caller: "author",
       op: { opId: "op-3", stepId: "apply" },
       precondition: async () => {
@@ -74,10 +74,10 @@ describe("回执 v3", () => {
   });
 
   it("什么都不用改的也留回执，effects 是空的", async () => {
-    await runCommand(book, draftSave, { chapter: 1, body: "一样的", baseVersion: null }, { caller: "author", op: { opId: "op-4", stepId: "a" } });
+    await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "一样的", baseVersion: null }, { caller: "author", op: { opId: "op-4", stepId: "a" } });
     const { readDraftState } = await import("../draft/draft.js");
     const version = (await readDraftState(book, 1)).version;
-    await runCommand(book, draftSave, { chapter: 1, body: "一样的", baseVersion: version }, { caller: "author", op: { opId: "op-4", stepId: "b" } });
+    await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "一样的", baseVersion: version }, { caller: "author", op: { opId: "op-4", stepId: "b" } });
     const second = (await receipts()).find((receipt) => receipt.stepId === "b");
     expect(second?.effects).toEqual([]);
   });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChapterPaper, PendingDraft } from "../api/workingDraftClient.js";
-import { isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
+import { hasUnsavedEdits, isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, keepPaperMine, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
 
 const PROJECT = "/books/钟楼";
@@ -34,6 +34,7 @@ function fakeServer(initial: Record<number, Disk>, committed: Record<number, { b
     disk[chapter] = { version: `v${seq}`, body, ...(title ? { title } : {}) };
     return `v${seq}`;
   };
+  const flags: { adoptWarning?: string } = {};
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (!init || !init.method || init.method === "GET") {
       const chapter = Number(new URL(url, "http://x").searchParams.get("chapter"));
@@ -56,6 +57,8 @@ function fakeServer(initial: Record<number, Disk>, committed: Record<number, { b
       }
       if (!entry) return new Response(JSON.stringify({ ok: false, error: "那一份已经不在了" }), { status: 404 });
       if (request.baseVersion !== (disk[request.chapter]?.version ?? null)) return new Response(JSON.stringify({ ok: false, error: "又改过了，没换" }), { status: 409 });
+      // 换上了、清那一份没成：服务端回成功带一句（那一份还在）。
+      if (flags.adoptWarning) return new Response(JSON.stringify({ ok: true, version: write(request.chapter, entry.body), warning: flags.adoptWarning }), { status: 200 });
       delete store[request.id];
       return new Response(JSON.stringify({ ok: true, version: write(request.chapter, entry.body) }), { status: 200 });
     }
@@ -73,7 +76,7 @@ function fakeServer(initial: Record<number, Disk>, committed: Record<number, { b
   const keepCandidate = (chapter: number, body: string, id = `${chapter}-cand`): void => {
     candidates[id] = { kind: "candidate", id, chapter, body, sha: `sha-${body}`, reason: "draft_moved" };
   };
-  return { disk, puts, decisions, recoveries, candidates, keepCandidate, fetchMock };
+  return { disk, puts, decisions, recoveries, candidates, keepCandidate, fetchMock, flags };
 }
 
 beforeEach(() => {
@@ -124,6 +127,72 @@ describe("稿纸状态", () => {
     expect(useDraftStore.getState()).toMatchObject({ title: "", savedTitle: "", baseVersion: "a" });
   });
 
+  it("手上的字等于底版、但最后那笔没存上：盘上的新版只出提示，稿纸不自己认底版（第 10 轮 X2、第 11 轮 Y1）", () => {
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "盘上的 B。", version: "b" }), { unsaved: true })).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ body: "A。", baseVersion: "a", incoming: { body: "盘上的 B。", version: "b", cause: "update" } });
+  });
+
+  it("提示只在它说的那版还在盘上时留着；存上了就收起（第 11 轮复核 Y2）", () => {
+    const conflict = { current: { chapter: 1, body: "别处的 B。", version: "b" }, currentVersion: "b", recoveryId: "r1" };
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
+    useDraftStore.getState().edit("作者的 C。");
+    useDraftStore.getState().markConflict(conflict);
+    // 盘上还是 B：撞版本那条（带恢复稿号）留着，不换成新的一条。
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "别处的 B。", version: "b" }), { unsaved: true })).toBe("incoming");
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", recoveryId: "r1" });
+    // 盘上撤回了 A：提示指着的 B 不在了，收起；作者的字还在、照旧要存。
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "A。", version: "a" }), { unsaved: true })).toBe("unchanged");
+    expect(useDraftStore.getState()).toMatchObject({ body: "作者的 C。", incoming: null });
+    // 存上了：说盘上别的版本的提示一并收起；AI 候选照旧留着等作者选。
+    useDraftStore.getState().markConflict(conflict);
+    useDraftStore.getState().markSaved("c", "作者的 C。", "", useDraftStore.getState().rev);
+    expect(useDraftStore.getState().incoming).toBeNull();
+    useDraftStore.getState().loadPaper(PROJECT, { ...paper(1, { body: "C。", version: "c" }), pending: { kind: "candidate", id: "k1", sha: "s", body: "AI 的。", reason: "draft_moved" } });
+    useDraftStore.getState().markSaved("d", "C。", "", useDraftStore.getState().rev);
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "candidate" });
+  });
+
+  it("要不要存看改动号：字改回和底版一样也是没存；存稿回执只确认它发出的那一下（第 12 轮复核 Z3）", () => {
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+    useDraftStore.getState().edit("A。");
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false); // 没变不算动
+    useDraftStore.getState().edit("C。");
+    const sentRev = useDraftStore.getState().rev;
+    useDraftStore.getState().edit("A。");
+    // 字和底版一样，但作者动过：重读盘上的新版只出提示，不换。
+    expect(isDraftDirty(useDraftStore.getState())).toBe(false);
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "B。", version: "b" }))).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ body: "A。", incoming: { body: "B。", cause: "update" } });
+    // 更早发出的那一下存上了：底版跟上，最后这一下还没存。
+    useDraftStore.getState().markSaved("c", "C。", "", sentRev);
+    expect(useDraftStore.getState()).toMatchObject({ baseVersion: "c", body: "A。" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+    // 在提示上选也算一下，两种选法存上之前都算没存：「换成那一版」那版可能已经被别处又改了，要存一笔核盘（第 13 轮复核 AA1）。
+    useDraftStore.getState().markConflict({ current: { chapter: 1, body: "D。", version: "d" }, currentVersion: "d" });
+    useDraftStore.getState().acceptIncoming();
+    expect(useDraftStore.getState()).toMatchObject({ body: "D。", baseVersion: "d" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+    useDraftStore.getState().markSaved("d", "D。", "", useDraftStore.getState().rev);
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+    useDraftStore.getState().edit("E。");
+    useDraftStore.getState().markConflict({ current: { chapter: 1, body: "F。", version: "f" }, currentVersion: "f" });
+    useDraftStore.getState().keepMine();
+    expect(useDraftStore.getState()).toMatchObject({ body: "E。", baseVersion: "f" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+  });
+
+  it("章名也算稿的一部分：盘上正文一样、章名不一样，不当成作者那份已经存上（第 12 轮复核 Z2）", () => {
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "正文。", version: "a", title: "原章名" }));
+    useDraftStore.getState().setTitle("作者的章名");
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "b", title: "别处的章名" }))).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ title: "作者的章名", savedTitle: "原章名", incoming: { title: "别处的章名" } });
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "c", title: "作者的章名" }))).toBe("own");
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+  });
+
   it("别的章、别的书的新版本不收", () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "一。", version: "a" }));
     useDraftStore.getState().receivePaper(PROJECT, paper(2, { body: "二。", version: "x" }));
@@ -147,7 +216,7 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState()).toMatchObject({ baseVersion: "v1", savedBody: "一。二。三。", saveStatus: "saved" });
   });
 
-  it("新的一章没有章名：存稿不带章名（导航上的「下一章」之类占位名不写进稿子）", async () => {
+  it("新的一章没有章名：存稿带空章名（导航上的「下一章」之类占位名不写进稿子；空 = 没章名，不沿用盘上的）", async () => {
     const server = fakeServer({});
     vi.stubGlobal("fetch", server.fetchMock);
     await openPaper(PROJECT, 11);
@@ -155,7 +224,7 @@ describe("存稿调度", () => {
     editDraft("清晨的雾还没散。");
     await flushDraftSave();
     expect(server.puts).toHaveLength(1);
-    expect(server.puts[0]).not.toHaveProperty("title");
+    expect(server.puts[0]).toMatchObject({ title: "" });
   });
 
   it("撞版本：不覆盖盘上的，挂提示；作者那份存成恢复稿，接着打的字也存进去；同一份不重发；选保留我这版后再存一次就过", async () => {
@@ -183,7 +252,7 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState().incoming).toBeNull();
   });
 
-  it("撞版本后换成那一版：作者的字换成盘上的，不再存；那份恢复稿删掉", async () => {
+  it("撞版本后换成那一版：作者的字换成盘上的，照那版存一笔核盘（盘上还是它就存上）；那份恢复稿删掉", async () => {
     const server = fakeServer({ 3: { version: "v0", body: "原稿。" } });
     vi.stubGlobal("fetch", server.fetchMock);
     await openPaper(PROJECT, 3);
@@ -194,7 +263,11 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState()).toMatchObject({ body: "AI 改过。", baseVersion: "ai", incoming: null });
     expect(server.recoveries["3-v0"]).toBeUndefined();
     await flushDraftSave();
-    expect(server.puts).toHaveLength(1);
+    expect(server.puts).toHaveLength(2);
+    expect(server.puts[1]).toMatchObject({ body: "AI 改过。", baseVersion: "ai" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+    await flushDraftSave();
+    expect(server.puts).toHaveLength(2);
   });
 
   it("上次没存上的一版：开章时提示，找回那一版换上（带眼前的版本）", async () => {
@@ -206,6 +279,16 @@ describe("存稿调度", () => {
     expect(await acceptPaperIncoming()).toEqual({ ok: true });
     expect(server.decisions).toEqual([expect.objectContaining({ kind: "recovery", id: "3-old", sha: "sha-old", decision: "adopt", baseVersion: "v0" })]);
     expect(useDraftStore.getState()).toMatchObject({ body: "上回没存上的字。", incoming: null });
+  });
+
+  it("找回换上了、但那一份没清掉：如实说出来（稿子已经是找回的那版）", async () => {
+    const server = fakeServer({ 3: { version: "v0", body: "原稿。" } });
+    server.recoveries["3-old"] = { kind: "recovery", id: "3-old", chapter: 3, body: "上回没存上的字。", sha: "sha-old" };
+    server.flags.adoptWarning = "换好了，但那一份没清掉（下次开这一章还会提示）：写不进去";
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 3);
+    expect(await acceptPaperIncoming()).toEqual({ ok: false, error: "换好了，但那一份没清掉（下次开这一章还会提示）：写不进去" });
+    expect(useDraftStore.getState()).toMatchObject({ body: "上回没存上的字。" });
   });
 
   it("换章前先把没存的字存掉", async () => {

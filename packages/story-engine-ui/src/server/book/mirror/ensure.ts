@@ -12,8 +12,7 @@
  * 最前面先收老版本中途崩溃留下的老定稿链事务残留（`.story-engine-tx/`，没有就是一次 lstat）：
  * 读路径都不再收它（重构 P7），开书是唯一入口。
  */
-import { recoverProjectCommitTransactions } from "../legacy-commit-recovery.js";
-import { bookImport, cardsImport, listChapterLedgers, listChapterTexts, readCards, runCommand, type BookImportResult, type CardsImportResult } from "@actalk/story-core";
+import { bookImport, cardsImport, listChapterLedgers, LegacyResidueError, listChapterTexts, readCards, recoverBookTransactions, runCommand, type BookImportResult, type CardsImportResult } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror, type MirrorSyncResult } from "./sync.js";
 
 export type EnsureOnCoreResult =
@@ -46,9 +45,12 @@ export async function ensureBookOnCore(bookDir: string, options: EnsureOnCoreOpt
 
 async function ensureNow(bookDir: string, options: EnsureOnCoreOptions): Promise<EnsureOnCoreResult> {
   try {
-    await recoverProjectCommitTransactions(bookDir);
+    // 老格式、新核心写到一半的事务都先收拾（下面先读盘看有没有账单）。收拾不了的如实说没接上（P1 第 18 轮 C182），不报接好了。
+    const recovery = await recoverBookTransactions(bookDir);
+    if (recovery.problems.length > 0) return { ok: false, code: "tx_residue", reason: "上次写到一半的记录读不了，先不动这本书，免得丢数据" };
   } catch (error) {
-    return { ok: false, code: "legacy_tx_residue", reason: error instanceof Error ? error.message : String(error) };
+    if (error instanceof LegacyResidueError) return { ok: false, code: "legacy_tx_residue", reason: "升级之前写到一半的记录收拾不了，先不动这本书，免得丢数据" };
+    return { ok: false, code: "book_unreadable", reason: error instanceof Error ? error.message : String(error) };
   }
   const snapshot = options.snapshot ? { snapshot: options.snapshot } : {};
   // 先导账单再搬设定：看「有没有账单」而不是书的版本号（搬设定、改设定也会让版本号往上走）。

@@ -4,7 +4,7 @@
  *
  * 规矩：AI 写好的一份先存成候选（draft-candidates.ts，「在写」），再试着换上；只在两样都对得上时换上——
  *  - 工作稿还是开工时那一版（baseVersion）：模型跑着的几十秒到几分钟里作者存了稿、撤销或恢复过，就不换；
- *  - 书还是开工时那样（开工时读的真相依据，runner 在书锁里、收拾完写到一半的事务之后核）：前文、设定、作者裁定改过，
+ *  - 书还是开工时那样（开工时读的真相依据和写的时候用过的材料，在书锁里、收拾完写到一半的事务之后核）：前文、设定、作者裁定改过，
  *    这版是照旧的写的，也不换。
  * 换上了删这份候选（只删这一份：别的没处理的候选不动）；没换上（上面两样对不上、写盘出错）这份标成「写好了」留着，
  * 如实告诉作者，稿纸上可以「换成 AI 这版」。白跑的几分钟不丢，作者那份也不被盖掉。
@@ -19,7 +19,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { draftApplyGenerated, draftPath, fail, opCommandKey, readCommandReceipt, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { draftApplyGenerated, draftPath, fail, opCommandKey, readCommandReceipt, runCommand, withBookLock, withSettledBook, type TruthBasis } from "@actalk/story-core";
 import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
 import { MIRROR_FILES } from "../book/mirror/build.js";
 import { MIRROR_MARKER } from "../book/mirror/sync.js";
@@ -41,10 +41,13 @@ export class AiDraftWriteError extends Error {
 
 export interface AiDraftInput {
   readonly chapter: number;
-  /** 正文。开头已经是「# 标题」行时整份照写，标题不另加。 */
+  /**
+   * AI 这一版的整份稿（写作版本 P1 第 14 轮复核）：拆开的正文（一行都不再拆）+ 章名（空串 = 没章名）。
+   * 调用方开工时就把章名定下来：AI 给了用它，没给就是开工时那份稿的章名——留成候选、作者后来再换上，也还是这一版的章名，
+   * 不借换上那一刻盘上的（AB3）。改文件原文的（改句、改稿、去 AI 味）先过核心 parseDraftFile。
+   */
+  readonly title: string;
   readonly body: string;
-  /** 不给就沿用盘上原来的标题。 */
-  readonly title?: string;
   /** 开工时读的工作稿版本（这一章原来没有工作稿就是 null）；和读到的正文一起读的那一版。 */
   readonly baseVersion: string | null;
   /** 开工时读的真相依据（先读它，再读写稿要用的材料）。 */
@@ -116,11 +119,11 @@ const errorText = (error: unknown): string => scrubLocalAbsolutePaths(error inst
 export async function applyAiDraft(projectDir: string, input: AiDraftInput): Promise<AiDraftOutcome> {
   const operation = currentOperation();
   if (operation) return applyInOperation(projectDir, input, operation);
-  const title = input.title?.trim();
+  const title = input.title.trim();
   const path = join(projectDir, draftPath(input.chapter));
   const candidateOf = (status: "writing" | "ready", reason?: Exclude<DraftKeptReason, "interrupted">, id?: string) => saveDraftCandidate(projectDir, {
     chapter: input.chapter,
-    ...(title ? { title } : {}),
+    title,
     body: input.body,
     baseVersion: input.baseVersion,
     basisDigest: input.basis.digest,
@@ -147,19 +150,21 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
   };
   let outcome: AiDraftOutcome | "aborted";
   try {
-    outcome = await withBookLock(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
+    // 先收拾写到一半的事务（老格式、新核心都收），再在同一把书锁里核材料、依据、底版（P1 第 17 轮 AE3）：
+    // 写手读材料时正赶上别的写断在半路，读到的是马上要回滚的那份；先核后收拾，回滚后的书和这版对不上也看不出来。
+    const settled = await withSettledBook(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
       // 作者喊停之后后到的稿不落盘，也不留候选（锁里再问一次：等锁的工夫也可能停了）。
       if (turnAborted()) return "aborted";
       const movedMaterial = await firstMovedMaterial(projectDir, input.materials);
       if (movedMaterial) return keep("basis_moved", describeMovedMaterial(movedMaterial));
       // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
       const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
-      // 依据交给 runner 核：它先收拾写到一半的事务（回滚会换代次），再在同一把锁里比，途中读到的半截真相一律对不上。
+      // 依据交给 runner 核（事务已在上面收拾过，回滚会换代次），途中读到的半截真相一律对不上。
       const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
         runCommand(projectDir, draftApplyGenerated, {
           chapter: input.chapter,
           body: input.body,
-          ...(title ? { title } : {}),
+          title,
           baseVersion: input.baseVersion,
         }, { caller: "ai", snapshot, basis: input.basis }), input.snapshotLabel);
       if (!result.ok && result.code === "basis_changed") return keep("basis_moved");
@@ -171,6 +176,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
       const content = await readFile(path, "utf-8");
       return { applied: true, path, content, version: result.result.version, unchanged: result.result.unchanged, ...(snapshotId ? { snapshotId } : {}) };
     });
+    outcome = settled.ok ? settled.value : await keep("apply_failed", settled.message);
   } catch (error) {
     if (error instanceof AiDraftWriteError) throw error;
     // 存档点、写盘这些出了意外：工作稿没动（核心事务回滚），AI 这版留着。
@@ -210,14 +216,14 @@ async function applyInOperation(projectDir: string, input: AiDraftInput, operati
   if (!stepId) throw new AiDraftWriteError("not_in_step", "AI 稿只在操作的应用步骤里换上。");
   const op = { opId: operation.opId, stepId };
   const key = `${op.opId}:${op.stepId}`;
-  const title = input.title?.trim();
+  const title = input.title.trim();
   const path = join(projectDir, draftPath(input.chapter));
   const keep = async (reason: Exclude<DraftKeptReason, "interrupted">, detail?: string): Promise<AiDraftOutcome> => {
     let kept;
     try {
       kept = await keepOperationCandidateLocked(projectDir, {
         chapter: input.chapter,
-        ...(title ? { title } : {}),
+        title,
         body: input.body,
         baseVersion: input.baseVersion,
         basisDigest: input.basis.digest,
@@ -238,14 +244,15 @@ async function applyInOperation(projectDir: string, input: AiDraftInput, operati
     return { applied: true, path, content, version, unchanged, ...(snapshotId ? { snapshotId } : {}), ...(warnings.length > 0 ? { warnings } : {}) };
   };
   try {
-    return await withBookLock(projectDir, async (): Promise<AiDraftOutcome> => {
+    // 先收拾写到一半的事务再量字数、换上（同非操作路径，P1 第 17 轮 AE3）；收拾不了如实留成候选。
+    const settled = await withSettledBook(projectDir, async (): Promise<AiDraftOutcome> => {
       let moved: MovedMaterial | undefined;
       const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
       const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
         runCommand(projectDir, draftApplyGenerated, {
           chapter: input.chapter,
           body: input.body,
-          ...(title ? { title } : {}),
+          title,
           baseVersion: input.baseVersion,
         }, {
           caller: "ai",
@@ -282,6 +289,7 @@ async function applyInOperation(projectDir: string, input: AiDraftInput, operati
       }
       return applied(result.result.version, result.result.unchanged, warnings, result.replayed ? undefined : snapshotId);
     });
+    return settled.ok ? settled.value : await keep("apply_failed", settled.message);
   } catch (error) {
     if (error instanceof AiDraftWriteError || error instanceof OperationStopped) throw error;
     // 核心提交之后的事（存档点收尾、读回盘上那份）出了意外：有回执就是换上了。

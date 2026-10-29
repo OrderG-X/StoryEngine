@@ -8,7 +8,7 @@
  */
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, numberedText, prepareUnitReplacement, readDraftFile, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { applyUnitEdits, numberedText, parseDraftFile, prepareUnitReplacement, readDraftFile, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { appendFixLog } from "../lib/fix-log.js";
 import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
 import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
@@ -236,9 +236,12 @@ export async function fixDraftByUnits(input: {
     }
     const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
     if (outcome.applied.length === 0) return outcome;
+    const fixed = parseDraftFile(outcome.text);
     const written = await applyAiDraft(projectDir, {
       chapter,
-      body: outcome.text,
+      // 改的是文件原文（带章名行）：拆一次，章名照原文的。
+      title: fixed.title ?? "",
+      body: fixed.body,
       baseVersion: file.version,
       basis,
       materials: [],

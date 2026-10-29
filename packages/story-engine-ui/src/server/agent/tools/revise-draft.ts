@@ -12,6 +12,7 @@
  *   写的途中作者改过稿就不换、留成候选（写作版本 P1b）。涉及草稿 → refreshScope:"full"。
  * - 题材中立：description / summary 用中性词。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../../lib/markdown-emphasis.js";
 import { type DraftRevisionPreview } from "../../writing/draft-revision.js";
@@ -20,7 +21,6 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceEnum, coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 
-import { stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   createRevisionModelChannel,
@@ -108,6 +108,8 @@ function refusalReason(failure: RevisionOneShotFailure): string {
       return failure.detail ?? "改好了但没换上：写的途中稿子或前文改过，AI 这版留着，稿纸上可以换成它。";
     case "preview_stale":
       return "这份修改方案对不上现在的书了，稿子没动。请重新改一次。";
+    case "book_unsettled":
+      return failure.detail ?? "上次写到一半的记录收拾不了，稿子没动。";
   }
 }
 
@@ -148,7 +150,7 @@ async function toToolOutput(
     applied: true,
     preview: outcome.preview,
     // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与 generate_draft 的 draftBody 同构。
-    draftBody: stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(outcome.updatedContent)).trim(),
+    draftBody: stripMarkdownEmphasis(parseDraftFile(outcome.updatedContent).body).trim(),
     overview,
     summary: outcome.mode === "exact"
       ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。工作稿未定稿，可继续修改或撤销。`

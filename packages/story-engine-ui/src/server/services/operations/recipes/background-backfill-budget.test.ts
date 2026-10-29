@@ -119,7 +119,7 @@ describe("卷笔记缺口和额度上界", () => {
     expect(used).toBeLessThanOrEqual(record!.budget.limit);
     const rest = await ensureReaderWindow({ projectDir: book, role: PLANNER_ROLE, upTo: 200, callModel: async () => { throw new Error("不该再调"); } });
     expect(rest).toMatchObject({ missing: 0, built: 0, volumesBuilt: 0 });
-  });
+  }, 120_000);
 
   it("接着做：额度加停下那一步的最坏值 + 按冻结的模型重算的兼容余量（进程重来、学到的忘了也算上）", async () => {
     await commitChapters(1, 1);

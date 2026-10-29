@@ -14,7 +14,7 @@ import type {
 } from "../api/types.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
-import { useUiStore } from "../stores/uiStore.js";
+import { useUiStore, type DraftCandidate } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import type { ChapterMessage } from "../types.js";
 import { compactStrings, cleanUiText } from "../utils/textUtils.js";
@@ -80,7 +80,7 @@ function draftParagraphs(draftContent: string): string[] {
   return draftContent
     .split(/\n{2,}/u)
     .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph.length > 0 && !/^#\s*/u.test(paragraph));
+    .filter((paragraph) => paragraph.length > 0 && !/^#\s*/u.test(paragraph)); // 章名行白名单：定位
 }
 
 function findExactOrContainingParagraph(draftContent: string, needle: string): string | null {
@@ -806,7 +806,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     try {
       // 顺序生成 2 版候选（避免并发把模型代理打满）；每版同方向、靠模型温度产生差异。
       // 每版各自 try：某版失败不丢掉已成功的版（部分成功也展示，别白烧 token）。
-      const candidates: { readonly content: string; readonly title?: string; readonly originTarget: WorkspaceOperationTarget }[] = [];
+      const candidates: { readonly body: string; readonly title?: string; readonly originTarget: WorkspaceOperationTarget }[] = [];
       let lastError: unknown;
       // 章纲一句话：不带方向 = 照本章已有章纲另写（作者给这章的方向在章纲里）；没有章纲才先拟一份，第二版沿用。
       let planNote: string | undefined;
@@ -818,7 +818,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
             notifyStaleOperation();
             return;
           }
-          if (result.draftContent.trim()) candidates.push({ content: result.draftContent, title: result.draftTitle, originTarget: operation });
+          if (result.draftBody.trim()) candidates.push({ body: result.draftBody, ...(result.draftTitle ? { title: result.draftTitle } : {}), originTarget: operation });
         } catch (error) {
           lastError = error;
         }
@@ -838,14 +838,14 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     }
   };
 
-  const handleApplyCandidate = async (content: string): Promise<void> => {
+  const handleApplyCandidate = async (picked: DraftCandidate): Promise<void> => {
     const nav = useNavigationStore.getState();
     const wsUi = useUiStore.getState();
-    if (!projectPath || !content.trim()) {
+    if (!projectPath || !picked.body.trim()) {
       nav.showToast("没有可应用的候选。");
       return;
     }
-    const candidate = wsUi.draftCandidates?.find((item) => item.content === content);
+    const candidate = wsUi.draftCandidates?.find((item) => item === picked);
     if (!candidate?.originTarget) {
       nav.showToast("这份候选稿缺少工作区归属，已拒绝应用。", 5000);
       return;
@@ -861,8 +861,10 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     try {
       const blocked = await saveBeforeDraftAction();
       if (blocked) throw new Error(blocked);
-      // 带作者眼前那份的版本：存完之后稿子又变了（AI、撤销）就不换，免得盖掉。
-      const result = await applyDraftCandidate({ projectPath, chapter, draftContent: content, baseVersion: useDraftStore.getState().baseVersion });
+      // 带作者眼前那份的版本：存完之后稿子又变了（AI、撤销）就不换，免得盖掉。换上的是整份稿：候选没章名就用作者眼前的
+      // （刚存上，和这个版本号说的是同一份）。
+      const paper = useDraftStore.getState();
+      const result = await applyDraftCandidate({ projectPath, chapter, title: candidate.title ?? paper.title, body: candidate.body, baseVersion: paper.baseVersion });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
         return;

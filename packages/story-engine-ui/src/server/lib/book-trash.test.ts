@@ -82,3 +82,21 @@ describe("书的回收站", () => {
     await expect(moveBookToTrash(root, "整个书库")).rejects.toThrow("和回收站重叠");
   });
 });
+
+describe("搬回来的书换代次走核心写（P1 第 22 轮 AJ4）", () => {
+  it("store-control 是指向书外的软链：恢复停下、不写书外，回收站这一条还在", async () => {
+    const { symlink } = await import("node:fs/promises");
+    const dir = await makeBook("fog", "雾港");
+    const away = join(root, "书外的代次");
+    await mkdir(away, { recursive: true });
+    await writeFile(join(away, "revision.json"), "书外的 revision", "utf-8");
+    await writeFile(join(away, "drafts.json"), "书外的 drafts", "utf-8");
+    await symlink(away, join(dir, "store-control"));
+    const id = await moveBookToTrash(dir, "雾港");
+    await expect(restoreFromTrash(id)).rejects.toThrow();
+    expect(await readFile(join(away, "revision.json"), "utf-8")).toBe("书外的 revision");
+    expect(await readFile(join(away, "drafts.json"), "utf-8")).toBe("书外的 drafts");
+    expect((await listTrash()).map((item) => item.id)).toEqual([id]);
+    await expect(stat(dir)).rejects.toThrow();
+  });
+});

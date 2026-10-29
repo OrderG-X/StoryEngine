@@ -3,8 +3,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { chapterCommit, readChapterLedger, readDraft, runCommand, sha256 } from "@actalk/story-core";
-import { readDraftCandidate, readDraftRecovery, saveDraftCandidate } from "../lib/draft-candidates.js";
+import { chapterCommit, readChapterLedger, readDraft, runCommand } from "@actalk/story-core";
+import { draftSha, readDraftCandidate, readDraftRecovery, saveDraftCandidate } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { listSnapshots } from "../lib/snapshot.js";
 import type { Middleware } from "../lib/project-io.js";
@@ -89,7 +89,7 @@ describe("/api/working-draft", () => {
 
     const opened = await call("GET", getUrl(project, 2));
     const pending = (opened.payload.paper as Record<string, unknown>).pending as Record<string, unknown>;
-    expect(pending).toMatchObject({ kind: "recovery", id: recoveryId, body: "作者的。又加一句。", sha: sha256("作者的。又加一句。") });
+    expect(pending).toMatchObject({ kind: "recovery", id: recoveryId, body: "作者的。又加一句。", sha: draftSha({ body: "作者的。又加一句。" }) });
 
     const disk = (await readDraft(project, 2))!;
     const adopted = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 2, kind: "recovery", id: recoveryId, sha: pending.sha, decision: "adopt", baseVersion: disk.version });
@@ -105,7 +105,7 @@ describe("/api/working-draft", () => {
   it("AI 候选：开章提示；正文变过、稿子变过都不换；不要了 → 删掉，再点一次也算成", async () => {
     const project = await realProject();
     const saved = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 3, body: "作者的稿。", baseVersion: null });
-    const candidate = await saveDraftCandidate(project, { chapter: 3, body: "AI 写的一版。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
+    const candidate = await saveDraftCandidate(project, { chapter: 3, title: "", body: "AI 写的一版。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
     const pending = ((await call("GET", getUrl(project, 3))).payload.paper as Record<string, unknown>).pending as Record<string, unknown>;
     expect(pending).toMatchObject({ kind: "candidate", id: candidate.id, reason: "draft_moved", body: "AI 写的一版。" });
 
@@ -136,7 +136,7 @@ describe("/api/working-draft", () => {
     const disk = (await readDraft(project, 4))!;
     await call("PUT", "/api/working-draft", { projectPath: project, chapter: 4, body: "作者的。", baseVersion: disk.version });
     expect(await readDraftRecovery(project, String(stale.payload.recoveryId))).toMatchObject({ body: "" });
-    await saveDraftCandidate(project, { chapter: 4, body: "作者的。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
+    await saveDraftCandidate(project, { chapter: 4, title: "", body: "作者的。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
     expect(((await call("GET", getUrl(project, 4))).payload.paper as Record<string, unknown>).pending).toBeUndefined();
   });
 

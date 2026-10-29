@@ -6,7 +6,7 @@
  */
 import { readChapterPaper } from "@actalk/story-core";
 import { readBookMeta, safeFileName } from "../../lib/book-info.js";
-import { extractDraftTitle, readUiChapterFileStates } from "../../lib/project-io.js";
+import { bareChapterTitle, readUiChapterFileStates } from "../../lib/project-io.js";
 import { EXPORT_MIME, toDocx, toEpub, toTxt, type ExportBook, type ExportChapter, type ExportFormat } from "./formats.js";
 
 export interface ExportOptions {
@@ -49,7 +49,7 @@ export async function collectExportBook(projectDir: string, options: Omit<Export
     const source = options.includeDrafts === true && paper.draft ? paper.draft : paper.committed;
     if (!source) continue;
     // 章名去掉「第 N 章 ·」前缀，排版时统一加回。
-    const title = source.title ? extractDraftTitle(`# ${source.title}`) : null;
+    const title = source.title ? bareChapterTitle(source.title) : null;
     chapters.push({ number: chapter, ...(title ? { title } : {}), paragraphs: splitParagraphs(source.body) });
   }
   return {

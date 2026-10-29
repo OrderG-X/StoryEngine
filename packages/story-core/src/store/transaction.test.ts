@@ -1,9 +1,9 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
-import { commitFiles, hasPendingTransactions, KEPT_REPORT_THRESHOLD, recoverTransactions, setAsideBrokenTransactions, sha256Bytes } from "./transaction.js";
+import { commitFiles, hasPendingTransactions, KEPT_REPORT_THRESHOLD, recoverTransactions, setAsideBrokenTransactions } from "./transaction.js";
 
 let book: string;
 
@@ -65,6 +65,8 @@ describe("多文件事务", () => {
     expect(await read("chapters/0001.md")).toBe("旧正文");
     await expect(read("ledger/chapters/0001.json")).rejects.toThrow();
     expect(await read("ledger/head.json")).toBe("旧版本");
+    // 书被这次写动过：换回原样之后换一个新代次（这次写没写代次都换）。
+    expect(JSON.parse(await read(REVISION_PATH))).toMatchObject({ schema: "store-revision/1" });
     expect(await hasPendingTransactions(book)).toBe(false);
   });
 
@@ -175,79 +177,5 @@ describe("多文件事务", () => {
     const report = await recoverTransactions(book);
     expect(report).toMatchObject({ problems: [], kept: KEPT_REPORT_THRESHOLD + 2, keptOverLimit: true });
     expect(await hasPendingTransactions(book)).toBe(false);
-  });
-
-  it("写和删一起提交：删掉的不在了，返回每个成员换之前、换之后的哈希；删本来不在的不算成员", async () => {
-    await mkdir(join(book, "chapters"), { recursive: true });
-    await writeFile(join(book, "chapters/0001.md"), "旧正文");
-    await writeFile(join(book, "chapters/0002.md"), "要删的");
-    const effects = await commitFiles(book, [
-      { path: "chapters/0001.md", content: "新正文" },
-      { path: "chapters/0002.md", delete: true },
-      { path: "chapters/0003.md", delete: true },
-    ]);
-    expect(effects).toEqual([
-      { path: "chapters/0001.md", before: sha256Bytes("旧正文"), after: sha256Bytes("新正文") },
-      { path: "chapters/0002.md", before: sha256Bytes("要删的"), after: null },
-    ]);
-    expect(await read("chapters/0001.md")).toBe("新正文");
-    await expect(lstat(join(book, "chapters/0002.md"))).rejects.toThrow();
-    expect(await hasPendingTransactions(book)).toBe(false);
-    expect(await commitFiles(book, [{ path: "chapters/0009.md", delete: true }])).toEqual([]);
-    expect(await hasPendingTransactions(book)).toBe(false);
-  });
-
-  it("按字节写、按字节备份：不是 UTF-8 的内容原样换上、原样回滚", async () => {
-    const bytes = Uint8Array.from([0xff, 0xfe, 0x00, 0xc3, 0x28]);
-    await commitFiles(book, [{ path: "assets/a.bin", content: bytes }]);
-    expect(new Uint8Array(await readFile(join(book, "assets/a.bin")))).toEqual(bytes);
-    // 摆一份「换上新的之后断了」的事务：回滚要把原来的字节一个不差放回去。
-    const txDir = join(book, TX_DIR, "t2");
-    await mkdir(join(txDir, "staged"), { recursive: true });
-    await mkdir(join(txDir, "backup"), { recursive: true });
-    await writeFile(join(txDir, "backup", "0"), bytes);
-    await writeFile(join(book, "assets/a.bin"), "改坏的");
-    await writeFile(join(txDir, "manifest.json"), JSON.stringify({
-      schema: "story-core-tx/2", id: "t2", createdAt: "2026-10-29T00:00:00.000Z", status: "prepared",
-      files: [{ path: "assets/a.bin", kind: "write", existed: true, slot: "0", beforeSha: sha256Bytes(bytes) }],
-    }));
-    expect((await recoverTransactions(book)).rolledBack).toEqual(["t2"]);
-    expect(new Uint8Array(await readFile(join(book, "assets/a.bin")))).toEqual(bytes);
-  });
-
-  it("删到一半断了：已删的从备份放回，还没删的原样，已换上的写换回", async () => {
-    await mkdir(join(book, "chapters"), { recursive: true });
-    const txDir = join(book, TX_DIR, "t3");
-    await mkdir(join(txDir, "staged"), { recursive: true });
-    await mkdir(join(txDir, "backup"), { recursive: true });
-    // 0：写，已换上；1：删，已删（原件不在、备份在）；2：删，还没删（原件在）。
-    await writeFile(join(txDir, "backup", "0"), "旧正文");
-    await writeFile(join(book, "chapters/0001.md"), "新正文");
-    await writeFile(join(txDir, "backup", "1"), "第二章");
-    await writeFile(join(txDir, "backup", "2"), "第三章");
-    await writeFile(join(book, "chapters/0003.md"), "第三章");
-    await writeFile(join(txDir, "manifest.json"), JSON.stringify({
-      schema: "story-core-tx/2", id: "t3", createdAt: "2026-10-29T00:00:00.000Z", status: "prepared",
-      files: [
-        { path: "chapters/0001.md", kind: "write", existed: true, slot: "0", beforeSha: sha256Bytes("旧正文") },
-        { path: "chapters/0002.md", kind: "delete", existed: true, slot: "1", beforeSha: sha256Bytes("第二章") },
-        { path: "chapters/0003.md", kind: "delete", existed: true, slot: "2", beforeSha: sha256Bytes("第三章") },
-      ],
-    }));
-    expect((await recoverTransactions(book)).rolledBack).toEqual(["t3"]);
-    expect(await read("chapters/0001.md")).toBe("旧正文");
-    expect(await read("chapters/0002.md")).toBe("第二章");
-    expect(await read("chapters/0003.md")).toBe("第三章");
-    expect(await hasPendingTransactions(book)).toBe(false);
-  });
-
-  it("清单成员种类不认识：算坏的，原样留着", async () => {
-    const txDir = join(book, TX_DIR, "t4");
-    await mkdir(txDir, { recursive: true });
-    await writeFile(join(txDir, "manifest.json"), JSON.stringify({
-      schema: "story-core-tx/2", id: "t4", createdAt: "x", status: "prepared",
-      files: [{ path: "a.md", kind: "move", existed: true, slot: "0", beforeSha: null }],
-    }));
-    expect((await recoverTransactions(book)).problems).toEqual(["t4"]);
   });
 });

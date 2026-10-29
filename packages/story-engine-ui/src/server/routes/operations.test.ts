@@ -9,7 +9,8 @@ import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { __resetExecutionsForTests } from "../lib/operations/context.js";
 import { __resetLiveForTests } from "../lib/operations/live.js";
-import { __resetOperationStoreForTests, isTerminal, listOperations, readOperation } from "../lib/operations/store.js";
+import { __resetOperationStoreForTests, isTerminal, listOperations } from "../lib/operations/store.js";
+import { untilOperation } from "../lib/operations/test-helpers.js";
 import type { Middleware } from "../lib/project-io.js";
 import { __resetRecipesForTests, registerRecipe, submitOperation } from "../services/operations/executor.js";
 import { registerOperationsRoutes } from "./operations.js";
@@ -71,12 +72,7 @@ async function submit(key: string): Promise<string> {
 }
 
 async function until(opId: string, state: string, step?: string): Promise<void> {
-  for (let i = 0; i < 200; i += 1) {
-    const stored = await readOperation(book, opId);
-    if (stored.kind === "record" && stored.record.state === state && (step === undefined || stored.record.currentStep === step)) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`没等到 ${state}`);
+  await untilOperation(book, opId, (record) => record.state === state && (step === undefined || record.currentStep === step));
 }
 
 /** SSE 用的假响应：记下写出的事件，结束时 resolve。 */

@@ -15,6 +15,7 @@ import { __resetLiveForTests } from "../../lib/operations/live.js";
 import { __resetOperationStoreForTests, operationDir, pruneOperations, readOperation, type OperationRecord } from "../../lib/operations/store.js";
 import { readWordStats, WORD_STATS_PATH } from "../../lib/word-stats.js";
 import { writeDiagnostics } from "../../writing/diagnostics.js";
+import { SETTLED_STATES, untilOperation } from "../../lib/operations/test-helpers.js";
 import {
   __resetRecipesForTests,
   cancelOperation,
@@ -102,13 +103,8 @@ async function accepted(params: Params, key?: string): Promise<string> {
   return outcome.record.opId;
 }
 
-async function settled(opId: string, states: readonly string[] = ["succeeded", "failed", "cancelled", "obsolete", "paused"]): Promise<OperationRecord> {
-  for (let i = 0; i < 300; i += 1) {
-    const stored = await readOperation(book, opId);
-    if (stored.kind === "record" && states.includes(stored.record.state)) return stored.record;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("没等到操作结束");
+function settled(opId: string, states: readonly string[] = SETTLED_STATES): Promise<OperationRecord> {
+  return untilOperation(book, opId, (record) => states.includes(record.state));
 }
 
 const statsFile = async (): Promise<{ published?: Record<string, string> }> => JSON.parse(await readFile(join(book, WORD_STATS_PATH), "utf-8"));
@@ -184,7 +180,7 @@ describe("应用步骤", () => {
     applyRecipe({ beforeApply: async () => { reached.resolve(); await release.promise; } });
     const opId = await accepted({ body: "AI 写的一版。", fixes: [FIX] });
     await reached.promise;
-    const author = await runCommand(book, draftSave, { chapter: 1, body: "作者这时写的。", baseVersion: null }, { caller: "author" });
+    const author = await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "作者这时写的。", baseVersion: null }, { caller: "author" });
     expect(author.ok).toBe(true);
     release.resolve();
     const done = await settled(opId);
@@ -201,7 +197,7 @@ describe("应用步骤", () => {
     // 同一次操作同一步再换一次（模拟恢复后整步重做）：不复活。
     const { keepOperationCandidateLocked } = await import("../../lib/draft-candidates.js");
     expect(await keepOperationCandidateLocked(book, {
-      chapter: 1, body: "AI 写的一版。", baseVersion: null, basisDigest: "d", source: "draft", reason: "draft_moved", op: { opId, stepId: "apply" },
+      chapter: 1, title: "第1章", body: "AI 写的一版。", baseVersion: null, basisDigest: "d", source: "draft", reason: "draft_moved", op: { opId, stepId: "apply" },
     })).toEqual({ kind: "handled", id });
     expect(await readDraftCandidate(book, id)).toMatchObject({ status: "handled", body: "" });
   });

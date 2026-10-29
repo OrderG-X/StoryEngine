@@ -94,7 +94,7 @@ describe("栅栏", () => {
   it("核心命令带栅栏：取消之后零写入", async () => {
     const { context } = await running();
     await changeOperation(book, context.opId, (current) => ({ ...current, state: "cancelled", runEpoch: 2 }));
-    const outcome = await runCommand(book, draftSave, { chapter: 1, body: "旧 worker 的稿", baseVersion: null }, {
+    const outcome = await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "旧 worker 的稿", baseVersion: null }, {
       caller: "author", op: { opId: context.opId, stepId: "apply" }, precondition: fencePrecondition(context),
     });
     expect(outcome).toMatchObject({ ok: false, code: "operation_stopped" });

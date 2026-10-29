@@ -147,8 +147,8 @@ describe("workspace-bound writing operations", () => {
 
   it("refuses to apply a candidate created for chapter A after switching to B", async () => {
     apiMocks.generateDraftCandidate
-      .mockResolvedValueOnce({ draftContent: "# 候选 A1\n\n第一版", draftTitle: "候选 A1" })
-      .mockResolvedValueOnce({ draftContent: "# 候选 A2\n\n第二版", draftTitle: "候选 A2" });
+      .mockResolvedValueOnce({ draftBody: "第一版", draftTitle: "候选 A1" })
+      .mockResolvedValueOnce({ draftBody: "第二版", draftTitle: "候选 A2" });
     const workflow = await actions();
 
     await workflow.handleRerollCandidates();
@@ -158,7 +158,7 @@ describe("workspace-bound writing operations", () => {
     expect(candidate).toBeTruthy();
     setChapter(2, B_DRAFT, "session-b");
     useUiStore.getState().setDraftCandidates(candidate ? [candidate] : []);
-    await workflow.handleApplyCandidate(candidate?.content ?? "");
+    await workflow.handleApplyCandidate(candidate!);
 
     expect(apiMocks.applyDraftCandidate).not.toHaveBeenCalled();
     expect(useNavigationStore.getState().toast).toContain("切换前的那本书");
@@ -166,10 +166,11 @@ describe("workspace-bound writing operations", () => {
   });
 
   it("fails closed when a candidate has no originating target", async () => {
-    useUiStore.getState().setDraftCandidates([{ content: "# 无归属候选\n\n不能写入" } as never]);
+    const orphan = { body: "不能写入", title: "无归属候选" } as never;
+    useUiStore.getState().setDraftCandidates([orphan]);
     const workflow = await actions();
 
-    await workflow.handleApplyCandidate("# 无归属候选\n\n不能写入");
+    await workflow.handleApplyCandidate(orphan);
 
     expect(apiMocks.applyDraftCandidate).not.toHaveBeenCalled();
     expect(useNavigationStore.getState().toast).toContain("缺少工作区归属");

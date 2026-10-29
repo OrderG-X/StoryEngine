@@ -22,9 +22,7 @@ import {
   readChapterText,
   runCommand,
   sha256,
-  withBookLock,
 } from "@actalk/story-core";
-import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { runInReaderCatchUpQueue } from "./catch-up.js";
 import { callConfiguredBrainModel } from "./checker.js";
@@ -97,15 +95,12 @@ async function rereadChapter(projectDir: string, chapter: number, run: string, c
   const entries = checked.accepted.filter((item) => !optIn.has(item.index)).map((item) => item.entry);
   // 这一轮这一章只记一次：记完进程被杀、接着记时重跑记账员，账会不一样，照样回放上次记下的（不算换了选择）。
   // 依据是记账员读的那一版：之后书上有写就不记（核心先回放、再核依据）。
-  // 老格式事务（升级前崩溃留下的）先收拾再记：收拾会换写入代次，照没收拾的半截真相记的就核不过依据（第 4 轮复核 R9）。
-  const outcome = await withBookLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
-    return runCommand(projectDir, ledgerReread, { chapter, entries }, {
-      caller: "author",
-      idempotencyKey: `reread:${run}:${chapter}`,
-      intent: { chapter },
-      basis: snapshot.basis,
-    });
+  // 老格式事务（升级前崩溃留下的）runner 先收拾再核依据：收拾会换写入代次，照没收拾的半截真相记的核不过（第 4 轮复核 R9）。
+  const outcome = await runCommand(projectDir, ledgerReread, { chapter, entries }, {
+    caller: "author",
+    idempotencyKey: `reread:${run}:${chapter}`,
+    intent: { chapter },
+    basis: snapshot.basis,
   });
   if (!outcome.ok) return outcome.code === "basis_changed" ? { ok: false, reason: "记的途中书改过", bookChanged: true } : { ok: false, reason: outcome.message };
   return {

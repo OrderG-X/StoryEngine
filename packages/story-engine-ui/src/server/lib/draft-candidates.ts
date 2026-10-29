@@ -6,7 +6,9 @@
  *   （本进程里登记着，见 releaseDraftCandidate）。别的流程换上了新稿，也不清作者还没处理的这些。
  * - 恢复稿 `agents/drafts/recovery/r<章>-<窗口号>.json`（draft-recovery/1）：作者存稿撞了版本时手上那份。
  *   一个稿纸窗口每章一份（窗口号前端开页面时随机给），存的是这个窗口最新的字；带请求序号，比盘上这份旧的请求不写（迟到的旧字盖不回新字）。
- *   存上了、作者说不要了、找回了，就把正文清空、留着序号（再迟到的旧请求照样不写）。
+ *   存上了、作者说不要了、找回了，就记成「已清」（settled）、清掉字、留着序号（再迟到的旧请求照样不写）。
+ *   **已清看 settled，不看正文空不空**（第 13 轮复核 AA5）：只起了章名、正文还空的也是作者的一份稿。
+ * 稿 = 章名 + 正文：比对（sameDraftContent）、指纹（draftSha，作者点「找回 / 不要了」时核的那个）都按整份算（AA3）。
  * - 存稿记号 `agents/drafts/saves/s<章>-<窗口号>.json`（draft-save-mark/1）：一个稿纸窗口在一章上最后处理的那笔存稿的序号，
  *   和它一连串存上的版本（从哪一版起头、依次存成了哪几版）。序号不比它大的存稿是迟到的旧笔，不写；
  *   盘上还是这个窗口最后存成的那版、新一笔又是照这一串里的某一版改的（关窗时补发的那笔和在路上那笔，
@@ -20,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { composeDraftFile, parseDraftFile, readDraft, sha256, withBookLock } from "@actalk/story-core";
+import { composeDraftFile, listSavedDrafts, readDraft, sameDraft, sha256, withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-io.js";
 
 /** 本进程里正在写的候选：标着「在写」却不在这里的，就是写到一半停了（进程没了、流程抛错）。 */
@@ -62,8 +64,9 @@ const DraftRecoveryFile = z.object({
   id: z.string().regex(ID),
   chapter: z.number().int().min(1),
   title: z.string().optional(),
-  /** 空 = 已经存上 / 不要了 / 找回了（留着序号挡迟到的旧请求）。 */
   body: z.string(),
+  /** 已清：存上了 / 不要了 / 找回了（字清掉、留着序号挡迟到的旧请求）。 */
+  settled: z.boolean(),
   /** 作者是在哪一版上改的（撞版本时手上的底版）。 */
   baseVersion: z.string().nullable(),
   /** 哪个稿纸窗口的。 */
@@ -103,17 +106,34 @@ async function removeEntry(dir: string, id: string): Promise<void> {
   await rm(join(dir, `${id}.json`), { force: true });
 }
 
-/** 正文开头自带「# 章名」行的拆开，和工作稿一样存（比对、换上都按拆开的比）。 */
-function splitTitle(input: { readonly title?: string; readonly body: string }): { readonly title?: string; readonly body: string } {
-  const parsed = parseDraftFile(composeDraftFile({ ...(input.title?.trim() ? { title: input.title.trim() } : {}), body: input.body }));
-  return { ...(parsed.title ? { title: parsed.title } : {}), body: parsed.body };
+/** 一份拆开的稿：章名（缺省 = 没有）+ 正文（一行都不再拆，见核心 draft/format.ts）。 */
+export interface DraftContent {
+  readonly title?: string;
+  readonly body: string;
+}
+
+/** 存进候选、恢复稿的样子：章名去空白、空就不写；正文去首尾空白。 */
+function storedDraft(title: string, body: string): DraftContent {
+  const name = title.trim();
+  return name ? { title: name, body: body.trim() } : { body: body.trim() };
+}
+
+/** 是不是同一份稿：按整份比（第 12 轮复核 Z2：只比正文会漏掉另起的章名）。没有稿算不一样。 */
+export function sameDraftContent(a: DraftContent, b: DraftContent | undefined): boolean {
+  return b !== undefined && sameDraft(a, b);
+}
+
+/** 一份稿的指纹：整份（章名 + 正文）拼成文件的哈希。作者点「找回 / 不要了」带着它，核的是作者看到的整份（第 13 轮复核 AA3）。 */
+export function draftSha(draft: DraftContent): string {
+  return sha256(composeDraftFile(draft));
 }
 
 /* ------------------------------- AI 稿候选 ------------------------------- */
 
 export async function saveDraftCandidate(projectDir: string, input: {
   readonly chapter: number;
-  readonly title?: string;
+  /** 这一版的章名（空串 = 没有）：开工时就定下，换上时照它（第 14 轮复核 AB3）。 */
+  readonly title: string;
   readonly body: string;
   readonly baseVersion: string | null;
   readonly basisDigest: string;
@@ -126,7 +146,7 @@ export async function saveDraftCandidate(projectDir: string, input: {
   const now = new Date().toISOString();
   const previous = input.id ? await readDraftCandidate(projectDir, input.id) : undefined;
   const id = previous?.id ?? `${input.chapter}-${randomUUID()}`;
-  const text = splitTitle(input);
+  const text = storedDraft(input.title, input.body);
   const candidate: DraftCandidate = {
     schema: "draft-candidate/1",
     id,
@@ -189,7 +209,7 @@ export type OperationCandidateOutcome =
  */
 export async function keepOperationCandidateLocked(projectDir: string, input: {
   readonly chapter: number;
-  readonly title?: string;
+  readonly title: string;
   readonly body: string;
   readonly baseVersion: string | null;
   readonly basisDigest: string;
@@ -211,7 +231,7 @@ async function keepOperationCandidate(projectDir: string, input: Parameters<type
     schema: "draft-candidate/1",
     id,
     chapter: input.chapter,
-    ...splitTitle(input),
+    ...storedDraft(input.title, input.body),
     baseVersion: input.baseVersion,
     basisDigest: input.basisDigest,
     source: input.source,
@@ -236,9 +256,9 @@ export async function clearCandidateTombstones(projectDir: string, opId: string)
  * 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的、和眼下工作稿一样的不算。
  * 先挑掉一样的再取最新：最新那份碰巧和工作稿一样时，更早那份作者还没处理的照样提示（第 4 轮复核 R4）。
  */
-export async function pendingDraftCandidate(projectDir: string, chapter: number, draftBody?: string): Promise<DraftCandidate | undefined> {
+export async function pendingDraftCandidate(projectDir: string, chapter: number, draft?: DraftContent): Promise<DraftCandidate | undefined> {
   const candidates = (await readEntries(candidatesDir(projectDir), DraftCandidateFile))
-    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && candidate.body.trim() !== draftBody && !writingNow.has(candidate.id))
+    .filter((candidate) => candidate.chapter === chapter && candidate.body.trim() && !sameDraftContent(candidate, draft) && !writingNow.has(candidate.id))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return candidates[0];
 }
@@ -267,7 +287,8 @@ export interface RecoverySave {
  */
 export async function saveDraftRecovery(projectDir: string, input: {
   readonly chapter: number;
-  readonly title?: string;
+  /** 作者手上那份的章名（空串 = 没有）。 */
+  readonly title: string;
   readonly body: string;
   readonly baseVersion: string | null;
   readonly from?: { readonly client: string; readonly seq: number };
@@ -282,7 +303,8 @@ export async function saveDraftRecovery(projectDir: string, input: {
       schema: "draft-recovery/1",
       id,
       chapter: input.chapter,
-      ...splitTitle(input),
+      ...storedDraft(input.title, input.body),
+      settled: false,
       baseVersion: input.baseVersion,
       client: from.client,
       seq: from.seq,
@@ -304,10 +326,10 @@ export async function readDraftRecovery(projectDir: string, id: string): Promise
   }
 }
 
-/** 清空正文、留着序号（调用方在书锁里）。 */
+/** 记成已清：字清掉、留着序号（调用方在书锁里）。 */
 async function settleRecovery(projectDir: string, recovery: DraftRecovery, seq = recovery.seq): Promise<void> {
   const { title: _title, ...rest } = recovery;
-  await writeEntry(projectDir, recoveryDir(projectDir), recovery.id, { ...rest, body: "", seq: Math.max(seq, recovery.seq), updatedAt: new Date().toISOString() });
+  await writeEntry(projectDir, recoveryDir(projectDir), recovery.id, { ...rest, body: "", settled: true, seq: Math.max(seq, recovery.seq), updatedAt: new Date().toISOString() });
 }
 
 /**
@@ -317,11 +339,11 @@ async function settleRecovery(projectDir: string, recovery: DraftRecovery, seq =
  */
 export async function dismissDraftRecovery(projectDir: string, recovery: DraftRecovery, check: { readonly sha?: string; readonly from?: { readonly client: string; readonly seq: number } }): Promise<boolean> {
   const own = check.from?.client === recovery.client;
-  if (!recovery.body.trim()) {
+  if (recovery.settled) {
     if (own && check.from!.seq > recovery.seq) await settleRecovery(projectDir, recovery, check.from!.seq);
     return true;
   }
-  if (!own && check.sha !== sha256(recovery.body)) return false;
+  if (!own && check.sha !== draftSha(recovery)) return false;
   // 本窗口迟到的旧「不要了」：它说不要的那几笔已经被后来的字顶掉了，后来的字不清（第 4 轮复核 R2）。
   if (own && check.from!.seq < recovery.seq) return true;
   await settleRecovery(projectDir, recovery, own ? check.from!.seq : recovery.seq);
@@ -336,11 +358,11 @@ export async function consumeDraftRecovery(projectDir: string, recovery: DraftRe
 /** 清空了的恢复稿留多久（挡迟到的旧请求；一个星期前发出的请求不会再到了）。 */
 const SETTLED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** 作者存上了（调用方在书锁里）：这个窗口的那份清掉（留着这次的序号），别的窗口和存上的这份一样的也清。 */
-export async function clearSavedRecoveries(projectDir: string, chapter: number, savedBody: string, from?: { readonly client: string; readonly seq: number }): Promise<void> {
+/** 作者存上了（调用方在书锁里）：这个窗口的那份清掉（留着这次的序号），别的窗口和存上的这份一样（正文和章名）的也清。 */
+export async function clearSavedRecoveries(projectDir: string, chapter: number, saved: DraftContent, from?: { readonly client: string; readonly seq: number }): Promise<void> {
   const now = Date.now();
   for (const recovery of await readEntries(recoveryDir(projectDir), DraftRecoveryFile)) {
-    if (!recovery.body && now - Date.parse(recovery.updatedAt) > SETTLED_KEEP_MS) {
+    if (recovery.settled && now - Date.parse(recovery.updatedAt) > SETTLED_KEEP_MS) {
       await removeEntry(recoveryDir(projectDir), recovery.id);
       continue;
     }
@@ -348,7 +370,7 @@ export async function clearSavedRecoveries(projectDir: string, chapter: number, 
     // 本窗口的：只清这笔之前的（迟到的旧笔恰好和盘上一样也算存上，但它之后那几笔还在恢复稿里，不能顺手清掉，第 4 轮复核 R2）。
     if (from && recovery.client === from.client) {
       if (from.seq >= recovery.seq) await settleRecovery(projectDir, recovery, from.seq);
-    } else if (recovery.body.trim() && recovery.body.trim() === savedBody.trim()) await settleRecovery(projectDir, recovery);
+    } else if (!recovery.settled && sameDraftContent(recovery, saved)) await settleRecovery(projectDir, recovery);
   }
 }
 
@@ -416,26 +438,32 @@ export async function writeSaveMark(projectDir: string, input: { readonly chapte
 
 /* ------------------------------ 稿纸上的提示 ------------------------------ */
 
-/** 稿纸打开一章时要提示作者的一份：先恢复稿（作者自己的字），再 AI 候选。和工作稿一样的不提示。 */
+/**
+ * 稿纸打开一章时要提示作者的一份：先恢复稿（作者自己的字：存稿撞了版本留下的，再是收拾没写完的事务时另存的，
+ * P1 第 19 轮 AG3，号是 `kept-…`），再 AI 候选。和工作稿一样的不提示。
+ */
 export type PendingDraft =
   | { readonly kind: "recovery"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string }
   | { readonly kind: "candidate"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string; readonly reason: DraftKeptReason };
 
 export async function pendingDraftFor(projectDir: string, chapter: number): Promise<PendingDraft | undefined> {
-  const draftBody = (await readDraft(projectDir, chapter))?.body.trim() ?? "";
+  // 和工作稿是同一份（正文和章名都一样）才不提示：只比正文，作者另起的章名就找不回了（第 12 轮复核 Z2）。
+  const draft = await readDraft(projectDir, chapter);
   const recoveries = (await readEntries(recoveryDir(projectDir), DraftRecoveryFile))
-    .filter((recovery) => recovery.chapter === chapter && recovery.body.trim() && recovery.body.trim() !== draftBody)
+    .filter((recovery) => recovery.chapter === chapter && !recovery.settled && !sameDraftContent(recovery, draft))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const recovery = recoveries[0];
-  if (recovery) return { kind: "recovery", id: recovery.id, ...(recovery.title ? { title: recovery.title } : {}), body: recovery.body, sha: sha256(recovery.body) };
-  const candidate = await pendingDraftCandidate(projectDir, chapter, draftBody);
+  if (recovery) return { kind: "recovery", id: recovery.id, ...(recovery.title ? { title: recovery.title } : {}), body: recovery.body, sha: draftSha(recovery) };
+  const saved = (await listSavedDrafts(projectDir, chapter)).find((copy) => !sameDraftContent(copy, draft));
+  if (saved) return { kind: "recovery", id: saved.id, ...(saved.title ? { title: saved.title } : {}), body: saved.body, sha: draftSha(saved) };
+  const candidate = await pendingDraftCandidate(projectDir, chapter, draft);
   if (!candidate) return undefined;
   return {
     kind: "candidate",
     id: candidate.id,
     ...(candidate.title ? { title: candidate.title } : {}),
     body: candidate.body,
-    sha: sha256(candidate.body),
+    sha: draftSha(candidate),
     reason: candidate.status === "writing" ? "interrupted" : candidate.reason ?? "draft_moved",
   };
 }

@@ -1,16 +1,21 @@
 /**
- * 老定稿链（`.story-engine-tx/`）的事务恢复和写锁。
+ * 老定稿链（`.story-engine-tx/`）的事务恢复（写作版本 P1 第 17 轮复核 AE2/AE3：从界面的 book/ 层挪进核心）。
  *
- * 老定稿链本身已删（重构 P7，2026-10-18）：界面从 P3 起走新核心的定稿命令（`.story-core-tx/`）。
- * 这里只留两件事：老版本中途崩溃留下的事务残留，开书时照旧恢复（老书不坏）；以及老读法还在用的项目写锁。
+ * 老定稿链本身已删（重构 P7，2026-10-18），这里只收老版本中途崩溃留下的残留。**收拾一本书的事务只有核心一处**：
+ * `recoverTransactions`（transaction.ts）把这里没收拾的老格式事务和核心自己的一起，按开工先后倒着退（P1 第 18 轮 AF2），
+ * 写命令、`withSettledBook`、存档都走它——存稿、AI 换稿这类先读盘再定参数的，读到的一定是两种事务都收拾过的书。
+ * 这里只给这几样：只读的逐个看清（`scanLegacyTransactions`，读侧 `hasPendingLegacyTransactions` 用同一份判断）、
+ * 退回一份（`undoLegacyTransaction`：要盖掉的先另存、退不下去整份抛）、标成收拾过（`markLegacyTransactionRecovered`）、
+ * 收尾（`tidyLegacyTransactions`：删空目录壳、归档）。调用方必须已持书锁。
  */
 import { createHash } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { constants as fsConstants, realpathSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, rmdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { draftChapterOfPath, freshDraftGensWrite, revisionWrite } from "@actalk/story-core";
-import { describeErrorBriefly } from "./project-store.js";
+import { lstat, mkdir, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { DRAFT_GENS_PATH, draftChapterOfPath, isControlPath } from "./paths.js";
+import { discardAside, readFileInBook, removeFileInBook, restoreFileInBook, settleInterruptedPlace, writeFileInBook, type SafeWriteHook, type SafeWriteHookPoint } from "./safe-fs.js";
+
+/** 老定稿链的事务目录。 */
+export const LEGACY_TX_DIR = ".story-engine-tx";
 
 export interface CommitTransactionManifest {
   readonly version: 2;
@@ -19,7 +24,7 @@ export interface CommitTransactionManifest {
   readonly files: readonly string[];
   readonly backups: readonly CommitTransactionBackup[];
   readonly status: "staged" | "applied" | "failed" | "recovered";
-  /** P1-6：回滚不完备的残留原因（新建文件无法自证为事务写入内容，原地保留并放行） */
+  /** 老版本恢复留下的「回滚不完备」原因（P1-6）。现在退不下去就挡着、不标收拾过（P1 第 19 轮 AG1）；这里只读老书上已有的。 */
   readonly recoveryIssues?: readonly string[];
 }
 
@@ -30,20 +35,15 @@ export interface CommitTransactionBackup {
   readonly sha256?: string;
 }
 
-interface TransactionFile {
-  readonly relativePath: string;
-  readonly content: string;
-}
-
 /**
  * #7：事务目录的活跃保留窗口——`.story-engine-tx/` 顶层按章号只保留最近 N 个
  * `commit-chapter-NNNN` 目录，更旧的「终态干净」目录（applied，或回滚干净的 recovered）
  * 归档进 `.story-engine-tx/archive/`（恢复扫描/残留通知只扫顶层，归档目录天然出扫描面）。
- * 归档用单次 rename(2)（同盘原子、无递归删除竞态）；归档区只留最近 COMMIT_TRANSACTION_ARCHIVE_RETENTION 份。
- * 永不归档：recovered-with-issues（listCommitRecoveryNotices 的持续上浮证据）、
+ * 归档用单次 rename(2)（同盘原子、无递归删除竞态）；归档区只留最近 LEGACY_TX_ARCHIVE_RETENTION 份。
+ * 永不归档：recovered-with-issues（listLegacyRecoveryNotices 的持续上浮证据）、
  * staged/failed（未决事务，交给恢复路径收尾）、snapshot-manifest 目录（历史审计证据）。
  */
-export const COMMIT_TRANSACTION_ACTIVE_RETENTION = 5;
+export const LEGACY_TX_ACTIVE_RETENTION = 5;
 
 /**
  * 归档区只留最近这么多份（2026-10-10 引擎升级第 4 期）。每份事务都备份了当时要改的整份故事文件，
@@ -51,63 +51,160 @@ export const COMMIT_TRANSACTION_ACTIVE_RETENTION = 5;
  * 归档区是已经收敛的旧事务（applied / 干净回滚），不参与恢复扫描；超过上限的按章号从旧到新删掉。
  * 未决的（staged / failed）和带分歧证据的（recovered-with-issues）从来不进归档区，不受影响。
  */
-export const COMMIT_TRANSACTION_ARCHIVE_RETENTION = 20;
+export const LEGACY_TX_ARCHIVE_RETENTION = 20;
 
-const commitTransactionTails = new Map<string, Promise<void>>();
-interface CommitLockContext {
-  readonly projects: ReadonlySet<string>;
-  active: boolean;
-}
-const heldCommitProjects = new AsyncLocalStorage<CommitLockContext>();
-
-export type CommitIoTestPhase = "after-precheck-before-open" | "after-open-before-verify";
-type CommitIoTestHook = (phase: CommitIoTestPhase, targetPath: string) => Promise<void> | void;
+export type CommitIoTestPhase = SafeWriteHookPoint;
+type CommitIoTestHook = SafeWriteHook;
 let commitIoTestHook: CommitIoTestHook | undefined;
 
 /** Deterministic race injection for filesystem safety regression tests only. */
-export function setCommitIoTestHookForTests(hook: CommitIoTestHook | undefined): void {
+export function setLegacyTxIoHookForTests(hook: CommitIoTestHook | undefined): void {
   commitIoTestHook = hook;
 }
 
-/**
- * Canonical, re-entrant project-wide formal-state lock. Shared ledgers are
- * project scoped, so chapter-scoped locks are insufficient.
- */
-export async function withProjectCommitLock<T>(projectDir: string, task: () => Promise<T>): Promise<T> {
-  // Canonicalize synchronously so aliases share a lock without inserting an
-  // await that could invert invocation order.
-  let key: string;
-  try {
-    key = realpathSync.native(projectDir);
-  } catch {
-    key = resolve(projectDir);
-  }
-  const held = heldCommitProjects.getStore();
-  if (held?.active && held.projects.has(key)) return task();
-  const previous = commitTransactionTails.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => gate);
-  commitTransactionTails.set(key, tail);
-  await previous;
-  const context: CommitLockContext = {
-    projects: new Set([...(held?.projects ?? []), key]),
-    active: true,
-  };
-  try {
-    return await heldCommitProjects.run(context, task);
-  } finally {
-    context.active = false;
-    release();
-    if (commitTransactionTails.get(key) === tail) {
-      commitTransactionTails.delete(key);
-    }
+/** 一份还没收拾的老格式事务（清单是 staged / failed）：恢复时和核心的事务一起按开工先后倒着退。 */
+export interface PendingLegacyTransaction {
+  /** 事务目录名（`commit-chapter-NNNN`）。 */
+  readonly name: string;
+  readonly createdAt: string;
+  /** 退回时要换回的文件 → 换回成什么（原文的 sha256；事务前没有这个文件是 null）。 */
+  readonly restores: ReadonlyMap<string, string | null>;
+}
+
+/** 老格式事务收拾不了（清单坏了、路径不安全、和核心事务谁先谁后分不清……）：原样留着，不读不写这本书。 */
+export class LegacyResidueError extends Error {
+  readonly code: string;
+  constructor(readonly original: unknown) {
+    super(original instanceof Error ? original.message : String(original), { cause: original });
+    this.name = "LegacyResidueError";
+    const code = (original as NodeJS.ErrnoException | undefined)?.code;
+    this.code = typeof code === "string" ? code : "LEGACY_TX_RESIDUE";
   }
 }
 
-/** Recover every engine commit residue before any caller reads formal state. */
-export async function recoverProjectCommitTransactions(projectDir: string): Promise<void> {
-  return withProjectCommitLock(projectDir, () => recoverProjectCommitTransactionsUnlocked(projectDir));
+async function asResidue<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw error instanceof LegacyResidueError ? error : new LegacyResidueError(error);
+  }
+}
+
+/**
+ * 老格式事务逐个看清（只读，不动任何文件）：还没收拾的（staged / failed）列出来；收拾不了的（事务根或目录不是真目录、
+ * 清单读不了或不对、审计清单不对、没清单却有文件）抛 `LegacyResidueError`。恢复和读侧用的是这同一份判断。
+ */
+export async function scanLegacyTransactions(bookDir: string): Promise<readonly PendingLegacyTransaction[]> {
+  return asResidue(async () => {
+    const pending: PendingLegacyTransaction[] = [];
+    for (const entry of await scanLegacyEntries(bookDir)) {
+      if (entry.kind !== "tx" || (entry.manifest.status !== "staged" && entry.manifest.status !== "failed")) continue;
+      pending.push({
+        name: entry.name,
+        createdAt: entry.manifest.createdAt,
+        restores: new Map(entry.manifest.backups.map((backup) => [backup.relativePath, backup.existed ? backup.sha256! : null] as const)),
+      });
+    }
+    return pending;
+  });
+}
+
+/**
+ * 退回时要盖掉 / 删掉的文件，现在的内容不是这份事务写的（老格式核不了）：先交给它另存（P1 第 19 轮 AG3）。另存不下要抛。
+ * `instance` 是这一份事务的实例号（目录名 + 清单指纹，P1 第 20 轮 AH3）：老格式按章号起目录名，同一章重定稿会复用，
+ * 只拿目录名去重会把上一回的另存（作者可能已经「不要了」）当成这一回的。
+ */
+export type KeepCurrent = (input: { readonly instance: string; readonly path: string; readonly content: string }) => Promise<void>;
+
+/** 退回一份做了什么：换没换过文件、碰了哪几章工作稿、碰没碰工作稿代次（调用方据此换代次）。 */
+export interface LegacyUndoResult {
+  readonly changed: boolean;
+  readonly draftChapters: readonly number[];
+  /** 清单里有工作稿代次（AH2）：只碰了它、说不清哪章的，调用方整本换新纪元。 */
+  readonly gensTouched: boolean;
+}
+
+/** 一份老格式事务的实例号：目录名 + 清单指纹。被杀了重来清单没变，号不变；同名的新一份清单不同，号就不同。 */
+function legacyInstance(name: string, manifest: CommitTransactionManifest): string {
+  return `${name}@${sha256Text(jsonText(manifest)).slice(0, 16)}`;
+}
+
+/**
+ * 退回一份没收拾的老格式事务（调用方已持书锁、按开工先后排好了序）：备份换回去，事务新建的删掉；盖掉 / 删掉之前，现在的内容
+ * 和要换回的不一样就先另存（keep）。有一个文件退不下去就整份抛 `LegacyResidueError`、清单不改（P1 第 19 轮 AG1：不标「收拾过」，
+ * 下次开书照样挡着、重试；比它先开工的一份都不退）。两份代次不从备份换回（AG2，调用方退完换新的）。
+ * 退完不标收拾过：调用方换完代次再调 `markLegacyTransactionRecovered`（被杀在中间，重开还是没收拾的，再退一遍）。
+ */
+export async function undoLegacyTransaction(bookDir: string, name: string, keep: KeepCurrent): Promise<LegacyUndoResult> {
+  return asResidue(async () => {
+    const txDir = legacyTxDir(bookDir, name);
+    const manifest = await pendingLegacyManifest(bookDir, txDir, name);
+    if (!manifest) return { changed: false, draftChapters: [], gensTouched: false };
+    const instance = legacyInstance(name, manifest);
+    const issues = await restoreCommitTransactionBackups(bookDir, txDir, manifest.backups, (path, content) => keep({ instance, path, content }));
+    if (issues.length > 0) throw taggedError("TX_ROLLBACK_INCOMPLETE", `Legacy commit transaction ${name} could not be fully rolled back: ${issues.join("; ")}`);
+    return {
+      changed: manifest.backups.length > 0,
+      draftChapters: [...new Set(manifest.backups.flatMap((backup) => {
+        const chapter = draftChapterOfPath(backup.relativePath);
+        return chapter === undefined ? [] : [chapter];
+      }))],
+      gensTouched: manifest.backups.some((backup) => normalize(backup.relativePath) === DRAFT_GENS_PATH),
+    };
+  });
+}
+
+/** 一份老格式事务退完、代次也换过了：标成收拾过。 */
+export async function markLegacyTransactionRecovered(bookDir: string, name: string): Promise<void> {
+  return asResidue(async () => {
+    const txDir = legacyTxDir(bookDir, name);
+    const manifest = await pendingLegacyManifest(bookDir, txDir, name);
+    if (manifest) await writeManifest(bookDir, txDir, { ...manifest, status: "recovered" });
+  });
+}
+
+function legacyTxDir(bookDir: string, name: string): string {
+  if (!/^commit-chapter-\d+$/u.test(name)) throw taggedError("UNSAFE_TX_RESIDUE_ID", `Unsafe commit transaction residue id: ${name}`);
+  return join(bookDir, LEGACY_TX_DIR, name);
+}
+
+/** 收尾（都退完之后）：删掉空目录壳、旧的干净事务归档。空目录壳删不掉抛 `LegacyResidueError`。 */
+export async function tidyLegacyTransactions(bookDir: string): Promise<void> {
+  return asResidue(async () => {
+    const entries = await scanLegacyEntries(bookDir);
+    for (const entry of entries) {
+      if (entry.kind !== "shell") continue;
+      // Zero-file shells (e.g. undo unlinked every staged file) carry no
+      // evidence; drop them instead of bricking the project. Cleanup uses
+      // rmdir-only primitives — if a file raced back in, removal fails and
+      // the fail-closed throw below still applies.
+      try {
+        await removeZeroFileDirectoryShell(entry.txDir);
+      } catch (error) {
+        throw taggedError("UNREADABLE_TX_RESIDUE", `Unreadable commit transaction residue at ${relative(resolve(bookDir), entry.txDir)}; refusing formal-state reads.`, error);
+      }
+    }
+    // #7：恢复收尾后做一次事务目录治理（保留窗口 + 归档）。这是 housekeeping 而非正确性前提——
+    // 失败（权限/瞬态 IO）就把目录原样留给下一轮，绝不让归档把正式状态读写堵死。
+    try {
+      await archiveSettledCommitTransactionsUnlocked(bookDir);
+    } catch {
+      // 归档失败 ≠ 数据问题：目录保留在原位，恢复扫描照常处理（applied/recovered 均为已收敛状态）。
+    }
+  });
+}
+
+/**
+ * 有没有还没收拾的老格式事务（读的一方用，和核心的 `hasPendingTransactions` 一起看）：和恢复同一份判断（P1 第 18 轮 C181）——
+ * 恢复要退的（staged / failed）、恢复收拾不了的（清单读不了或缺字段、审计清单不对、没清单却有文件）都算；
+ * 收拾过的（applied / recovered）、对得上的审计目录、空目录壳不算。只读，不动任何文件。
+ */
+export async function hasPendingLegacyTransactions(bookDir: string): Promise<boolean> {
+  try {
+    return (await scanLegacyTransactions(bookDir)).length > 0;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -115,7 +212,7 @@ export async function recoverProjectCommitTransactions(projectDir: string): Prom
  * 只放章号/事务目录名/条目计数——具体原因（含盘上绝对路径）留在 txDir/manifest.json 里，
  * 用户可见面绝不上浮原文（路径泄漏纪律）。
  */
-export interface CommitRecoveryNotice {
+export interface LegacyRecoveryNotice {
   readonly chapter: number;
   readonly transactionId: string;
   readonly issueCount: number;
@@ -127,8 +224,8 @@ export interface CommitRecoveryNotice {
  * 此函数给 report.issues / overview warnings 一个可持续的上浮信号，绝非只报一次就静默。
  * 只读 manifest、不动任何文件；坏 manifest 由 recover 路径 fail-closed 拦截，这里跳过不重复判。
  */
-export async function listCommitRecoveryNotices(projectDir: string): Promise<readonly CommitRecoveryNotice[]> {
-  const txRoot = join(projectDir, ".story-engine-tx");
+export async function listLegacyRecoveryNotices(projectDir: string): Promise<readonly LegacyRecoveryNotice[]> {
+  const txRoot = join(projectDir, LEGACY_TX_DIR);
   let entries;
   try {
     entries = await readdir(txRoot, { withFileTypes: true });
@@ -136,7 +233,7 @@ export async function listCommitRecoveryNotices(projectDir: string): Promise<rea
     if (isNodeError(error) && error.code === "ENOENT") return [];
     throw error;
   }
-  const notices: CommitRecoveryNotice[] = [];
+  const notices: LegacyRecoveryNotice[] = [];
   for (const entry of entries) {
     const match = /^commit-chapter-(\d+)$/u.exec(entry.name);
     if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
@@ -152,14 +249,6 @@ export async function listCommitRecoveryNotices(projectDir: string): Promise<rea
     notices.push({ chapter: Number(match[1]), transactionId: entry.name, issueCount: issues.length });
   }
   return notices.sort((left, right) => left.chapter - right.chapter);
-}
-
-/**
- * 把一条残留通知渲成用户可见的中性文本（code 前缀 `transaction_recovered_partial` + 章号 + 计数）。
- * 绝不带绝对路径/error.message——细节证据在 `.story-engine-tx/<transactionId>/manifest.json`（相对路径）。
- */
-export function formatCommitRecoveryNotice(notice: CommitRecoveryNotice): string {
-  return `transaction_recovered_partial: 第 ${notice.chapter} 章的入库事务此前中断且未能完全回滚，已按原样放行（${notice.issueCount} 项残留记录在 ${notice.transactionId}/manifest.json）；该章文件可能与伏笔/时间线等资料不一致，建议重新提交第 ${notice.chapter} 章或人工核对。`;
 }
 
 /**
@@ -192,20 +281,26 @@ async function removeZeroFileDirectoryShell(dir: string): Promise<void> {
   await rmdir(dir);
 }
 
-async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Promise<void> {
-  const txRoot = join(projectDir, ".story-engine-tx");
+type LegacyEntry =
+  | { readonly kind: "snapshot" }
+  | { readonly kind: "shell"; readonly txDir: string }
+  | { readonly kind: "tx"; readonly name: string; readonly manifest: CommitTransactionManifest };
+
+/** 老格式事务目录逐个看清（只读）。收拾不了的直接抛（错误带稳定 code，文案不带绝对路径）。 */
+async function scanLegacyEntries(projectDir: string): Promise<readonly LegacyEntry[]> {
+  const txRoot = join(projectDir, LEGACY_TX_DIR);
   let rootStats;
   try {
     rootStats = await lstat(txRoot);
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return;
+    if (isNodeError(error) && error.code === "ENOENT") return [];
     throw error;
   }
   if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
     throw taggedError("UNSAFE_TX_ROOT", `Unsafe commit transaction root at ${relative(resolve(projectDir), txRoot)}; refusing formal-state reads.`);
   }
-  const entries = await readdir(txRoot, { withFileTypes: true });
-  for (const entry of entries) {
+  const result: LegacyEntry[] = [];
+  for (const entry of await readdir(txRoot, { withFileTypes: true })) {
     const match = /^commit-chapter-(\d+)$/u.exec(entry.name);
     if (!match) continue;
     const txDir = join(txRoot, entry.name);
@@ -229,31 +324,40 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
         .catch(() => false);
       if (hasSnapshotManifest) {
         await validateSnapshotOnlyCommitResidue(projectDir, snapshotManifestPath, entry.name, chapter);
+        result.push({ kind: "snapshot" });
         continue;
       }
-      // Zero-file shells (e.g. undo unlinked every staged file) carry no
-      // evidence; drop them instead of bricking the project. Cleanup uses
-      // rmdir-only primitives — if a file raced back in, removal fails and
-      // the fail-closed throw below still applies.
       if (await isZeroFileDirectoryShell(txDir)) {
-        try {
-          await removeZeroFileDirectoryShell(txDir);
-          continue;
-        } catch {
-          // Fall through to the fail-closed throw.
-        }
+        result.push({ kind: "shell", txDir });
+        continue;
       }
       throw taggedError("UNREADABLE_TX_RESIDUE", `Unreadable commit transaction residue at ${relative(resolve(projectDir), txDir)}; refusing formal-state reads.`);
     }
-    await recoverCommitTransactionResidue(projectDir, txDir, chapter);
+    result.push({ kind: "tx", name: entry.name, manifest: await readCommitManifest(projectDir, txDir, chapter) });
   }
-  // #7：恢复收尾后做一次事务目录治理（保留窗口 + 归档）。这是 housekeeping 而非正确性前提——
-  // 失败（权限/瞬态 IO）就把目录原样留给下一轮，绝不让归档把正式状态读写堵死。
+  return result;
+}
+
+/** 读事务清单并核对（读不了、对不上都抛）。 */
+async function readCommitManifest(projectDir: string, txDir: string, expectedChapter: number): Promise<CommitTransactionManifest> {
+  const txRel = relative(resolve(projectDir), txDir);
+  let parsed: unknown;
   try {
-    await archiveSettledCommitTransactionsUnlocked(projectDir);
-  } catch {
-    // 归档失败 ≠ 数据问题：目录保留在原位，恢复扫描照常处理（applied/recovered 均为已收敛状态）。
+    const manifestPath = join(txDir, "manifest.json");
+    await assertSafeProjectPath(projectDir, manifestPath, false, "commit transaction manifest");
+    parsed = JSON.parse(await readFile(manifestPath, "utf-8")) as unknown;
+  } catch (error) {
+    throw taggedError(
+      "UNREADABLE_TX_RESIDUE",
+      `Unreadable commit transaction residue at ${txRel}; refusing to delete it: ${briefError(error, projectDir)}`,
+      error,
+    );
   }
+  const manifest = parseRecoverableCommitManifest(parsed, expectedChapter);
+  if (!manifest) {
+    throw taggedError("UNRECOVERABLE_TX_MANIFEST", `Unrecoverable commit transaction manifest at ${txRel}; refusing to delete or overwrite it.`);
+  }
+  return manifest;
 }
 
 /**
@@ -261,10 +365,10 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
  * 只做 rename(2)（同盘原子、整目录 all-or-nothing），不递归删除——旧实现刻意保留
  * applied 目录当证据（"recursive path cleanup cannot be made race-free"），本函数不改这个
  * 约束：活跃区只搬不删，搬出恢复扫描/残留通知的视野（两者只扫顶层 `commit-chapter-\d+`）；归档区超过上限的最旧几份删掉，
- * 顶层从此只留最近 N 章，长跑不再无限堆积。调用方必须已持有 project commit 锁。
+ * 顶层从此只留最近 N 章，长跑不再无限堆积。调用方必须已持有书锁。
  */
 async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Promise<void> {
-  const txRoot = join(projectDir, ".story-engine-tx");
+  const txRoot = join(projectDir, LEGACY_TX_DIR);
   let entries;
   try {
     entries = await readdir(txRoot, { withFileTypes: true });
@@ -281,7 +385,7 @@ async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Pro
   // 章号最新的 N 个保持在原位（近期取证窗口），更旧的才候选归档（不够 N 个时没有候选，照样整理归档区）。
   const candidates = chapters
     .sort((left, right) => right.chapter - left.chapter)
-    .slice(COMMIT_TRANSACTION_ACTIVE_RETENTION);
+    .slice(LEGACY_TX_ACTIVE_RETENTION);
   for (const candidate of candidates) {
     const txDir = join(txRoot, candidate.dirName);
     let raw: unknown;
@@ -295,7 +399,7 @@ async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Pro
     const manifest = parseRecoverableCommitManifest(raw, candidate.chapter);
     if (!manifest) continue;
     // 只归档终态干净的事务：applied（成功终态）或「recovered 且无 recoveryIssues」（回滚干净的残留）。
-    // recovered-with-issues 是「已放行但盘上分歧仍在」的持续证据（listCommitRecoveryNotices 会一直
+    // recovered-with-issues 是「已放行但盘上分歧仍在」的持续证据（listLegacyRecoveryNotices 会一直
     // 上浮到 report.issues/overview warnings），归档它等于把分歧信号静默抹掉——绝不动。
     if (manifest.status !== "applied" && manifest.status !== "recovered") continue;
     if (manifest.status === "recovered"
@@ -328,12 +432,12 @@ async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Pro
 }
 
 /**
- * 归档区超过 COMMIT_TRANSACTION_ARCHIVE_RETENTION 份就删最旧的（按章号，同章按重提序号）。
- * 只删归档区里名字对得上 `commit-chapter-NNNN[--N]`、本身是真目录（不是符号链接）的；调用方持有项目锁。
+ * 归档区超过 LEGACY_TX_ARCHIVE_RETENTION 份就删最旧的（按章号，同章按重提序号）。
+ * 只删归档区里名字对得上 `commit-chapter-NNNN[--N]`、本身是真目录（不是符号链接）的；调用方持有书锁。
  * 删不掉就留着，下次再试——这是空间治理，不是正确性前提。
  */
 async function pruneTransactionArchiveUnlocked(projectDir: string): Promise<void> {
-  const archiveRoot = join(projectDir, ".story-engine-tx", "archive");
+  const archiveRoot = join(projectDir, LEGACY_TX_DIR, "archive");
   const rootStats = await lstat(archiveRoot).catch(() => undefined);
   if (!rootStats || !rootStats.isDirectory() || rootStats.isSymbolicLink()) return;
   const archived: { readonly name: string; readonly chapter: number; readonly attempt: number }[] = [];
@@ -342,10 +446,10 @@ async function pruneTransactionArchiveUnlocked(projectDir: string): Promise<void
     if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
     archived.push({ name: entry.name, chapter: Number(match[1]), attempt: Number(match[2] ?? 1) });
   }
-  if (archived.length <= COMMIT_TRANSACTION_ARCHIVE_RETENTION) return;
+  if (archived.length <= LEGACY_TX_ARCHIVE_RETENTION) return;
   const oldest = archived
     .sort((left, right) => left.chapter - right.chapter || left.attempt - right.attempt)
-    .slice(0, archived.length - COMMIT_TRANSACTION_ARCHIVE_RETENTION);
+    .slice(0, archived.length - LEGACY_TX_ARCHIVE_RETENTION);
   for (const item of oldest) {
     const target = join(archiveRoot, item.name);
     const stats = await lstat(target).catch(() => undefined);
@@ -371,7 +475,7 @@ async function validateSnapshotOnlyCommitResidue(
   } catch (error) {
     throw taggedError(
       "UNREADABLE_SNAPSHOT_MANIFEST",
-      `Unreadable snapshot-only commit manifest at ${manifestRel}: ${describeErrorBriefly(error, projectDir)}`,
+      `Unreadable snapshot-only commit manifest at ${manifestRel}: ${briefError(error, projectDir)}`,
       error,
     );
   }
@@ -413,113 +517,85 @@ async function validateSnapshotOnlyCommitResidue(
   if (!validRollback) throw taggedError("INVALID_SNAPSHOT_ROLLBACK", `Invalid snapshot-only commit rollback metadata at ${manifestRel}`);
 }
 
-async function recoverCommitTransactionResidue(
-  projectDir: string,
-  txDir: string,
-  expectedChapter: number,
-): Promise<void> {
+/**
+ * 一份还没收拾的老格式事务的清单（staged / failed）；已经收拾过（recovered）、成功了的（applied）、目录不在了是 undefined。
+ * 目录不是真目录、清单坏了抛出。
+ *
+ * #7（长跑 2026-10-04 真机 50 章实证）：applied 是成功终态，恢复对它无事可做、更不能改写——apply 的收尾顺序是
+ * 「逐文件 fsync 全部落盘 → 最后写 applied manifest」，落成 applied 即证明事务写入全部完成。「recovered」只留给真正被中断、
+ * 由恢复路径收尾的事务。
+ */
+async function pendingLegacyManifest(projectDir: string, txDir: string, name: string): Promise<CommitTransactionManifest | undefined> {
   let stats;
   try {
     stats = await lstat(txDir);
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return;
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
     throw error;
   }
   const txRel = relative(resolve(projectDir), txDir);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw taggedError("UNSAFE_TX_RESIDUE", `Unsafe commit transaction residue at ${txRel}; refusing to delete or overwrite it.`);
   }
-
-  let parsed: unknown;
-  try {
-    const manifestPath = join(txDir, "manifest.json");
-    await assertSafeProjectPath(projectDir, manifestPath, false, "commit transaction manifest");
-    parsed = JSON.parse(await readFile(manifestPath, "utf-8")) as unknown;
-  } catch (error) {
-    throw taggedError(
-      "UNREADABLE_TX_RESIDUE",
-      `Unreadable commit transaction residue at ${txRel}; refusing to delete it: ${describeErrorBriefly(error, projectDir)}`,
-      error,
-    );
-  }
-  const manifest = parseRecoverableCommitManifest(parsed, expectedChapter);
-  if (!manifest) {
-    throw taggedError("UNRECOVERABLE_TX_MANIFEST", `Unrecoverable commit transaction manifest at ${txRel}; refusing to delete or overwrite it.`);
-  }
-
-  if (manifest.status === "recovered") return;
-  // #7（长跑 2026-10-04 真机 50 章实证）：applied 是成功终态，恢复扫描对它无事可做、更不能改写。
-  // apply 的收尾顺序是「逐文件 fsync 全部落盘 → 最后写 applied manifest」，manifest 落成 applied 即
-  // 证明事务写入全部完成；此前这里对 applied 无条件改写成 recovered——而恢复扫描无处不在（每次提交、
-  // 每次读概览 buildStateOverview、快照操作都先跑 recoverProjectCommitTransactions），于是每个成功
-  // 事务的 applied 终态在收尾后的第一次概览刷新就被降级成 recovered，成功/中断在盘上从此不可区分
-  // （测试书 50/50 manifest 全停 recovered、零 recoveryIssues）。「recovered」只留给真正被中断、
-  // 由恢复路径收尾的事务（staged/failed）。
-  if (manifest.status === "applied") return;
-  // recover 路径不传 writtenFiles：staged/failed 残留的新建文件可能含用户未保存的编辑，
-  // 磁盘内容不能自证为「事务写入的内容」。保持 fail-closed（拒绝删除并如实记录），
-  // 只有 apply 路径（内存里有确切 writtenContent）才安全删除。
-  const rollbackIssues = await restoreCommitTransactionBackups(projectDir, txDir, manifest.backups);
-  // 正文换回了原样：写入代次换一个新的，读到过中途那版的预览、缓存一律对不上（写作版本 P1a 第 2 轮复核）。
-  // 这里在老引擎的提交锁里，不再去拿书锁（两把锁交叉会互等），直接原子写代次文件。
-  // 换回来的里有工作稿：工作稿代次也换新纪元（P1b 第 3 轮复核），照中途那版发的存稿对不上。
-  if (manifest.backups.length > 0) {
-    const touchedDraft = manifest.backups.some((backup) => draftChapterOfPath(backup.relativePath) !== undefined);
-    for (const write of [revisionWrite(new Date()), ...(touchedDraft ? [freshDraftGensWrite()] : [])]) {
-      const path = join(projectDir, write.path);
-      await ensureSafeDirectory(projectDir, dirname(path), true, "store-control parent");
-      await writeTextNoFollow(projectDir, path, write.content, "store-control");
-    }
-  }
-  if (rollbackIssues.length > 0) {
-    // P1-6 治永久锁死：回滚不完整时不再永久抛错阻塞后续提交。无法判定的新建文件
-    // 原地保留（用户数据分毫不动），事务标记 recovered 放行——后续提交会自然覆盖它。
-    // 恢复手段从「报错让用户手工删 .story-engine-tx」升级为「如实记录 + 自动放行」。
-    await writeManifest(projectDir, txDir, {
-      ...manifest,
-      status: "recovered",
-      recoveryIssues: rollbackIssues,
-    });
-    return;
-  }
-  await writeManifest(projectDir, txDir, { ...manifest, status: "recovered" });
+  const manifest = await readCommitManifest(projectDir, txDir, Number(/^commit-chapter-(\d+)$/u.exec(name)![1]));
+  return manifest.status === "staged" || manifest.status === "failed" ? manifest : undefined;
 }
 
 async function restoreCommitTransactionBackups(
   projectDir: string,
   txDir: string,
   backups: readonly CommitTransactionBackup[],
-  /** 事务写入的新文件内容（P1-6：新建文件回滚的删除凭据） */
-  writtenFiles?: readonly TransactionFile[],
+  keep: (relativePath: string, content: string) => Promise<void>,
 ): Promise<string[]> {
   const issues: string[] = [];
-  const writtenByPath = new Map(
-    (writtenFiles ?? []).map((file) => [file.relativePath, file.content] as const),
-  );
-  for (const backup of [...backups].reverse()) {
+  const root = resolve(projectDir);
+  for (const [index, backup] of [...backups.entries()].reverse()) {
+    // 两份代次只往前走（P1 第 19 轮 AG2）：不从备份换回，调用方退完换新的。
+    if (isControlPath(backup.relativePath)) continue;
     const targetPath = join(projectDir, backup.relativePath);
+    // 换回用的固定名字（P1 第 24 轮，safe-fs 文件头四步）：aside/ 是挪开核内容的那份；被杀了下次照名字收拾。
+    const aside = resolve(join(txDir, "aside", String(index)));
     try {
+      await ensureSafeDirectory(projectDir, join(txDir, "aside"), true, "commit restore aside");
+      await assertSafeProjectPath(projectDir, targetPath, true, "formal rollback target");
+      const left = await settleInterruptedPlace(root, resolve(targetPath), { label: "formal rollback target", aside });
+      if (left !== undefined) {
+        await keep(backup.relativePath, left);
+        await discardAside(root, aside, { label: "formal rollback target", expectSha: sha256Text(left) });
+      }
+      let content: string | undefined;
       if (backup.existed) {
         const backupPath = join(txDir, backup.backupPath!);
         await assertSafeProjectPath(projectDir, backupPath, false, "commit backup");
-        const content = await readFile(backupPath, "utf-8");
-        if (sha256Text(content) !== backup.sha256) {
+        content = await readFileInBook(resolve(projectDir), resolve(backupPath), "commit backup");
+        if (content === undefined || sha256Text(content) !== backup.sha256) {
           throw taggedError("TX_BACKUP_CHECKSUM_MISMATCH", `backup checksum mismatch at ${relative(resolve(projectDir), backupPath)}`);
         }
+      }
+      // 现在盘上的（不跟软链、单链接普通文件）：已经是原来的样子就退过了；不是就先另存（老格式没记事务写了什么，
+      // 之后存下的稿可能就这一份，AG3），再只盖掉 / 删掉核过的这一份（P1 第 22 轮 AJ2）。
+      await assertSafeProjectPath(projectDir, targetPath, true, "formal rollback target");
+      const current = await readFileInBook(resolve(projectDir), resolve(targetPath), "formal rollback target");
+      if (current === content) continue;
+      if (current !== undefined) await keep(backup.relativePath, current);
+      if (content !== undefined) {
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
-        await writeTextNoFollow(projectDir, targetPath, content, "formal rollback target");
+        // 要盖掉的那份先挪到 aside/ 核过内容，再在原处独占新建、写进备份的内容（safe-fs 文件头四步；书里的文件只有一个名字）。
+        const hook = commitIoTestHook;
+        await restoreFileInBook(root, resolve(targetPath), content, {
+          label: "formal rollback target",
+          hook: hook && ((point) => hook(point, targetPath)),
+          ...(current === undefined ? { expectTarget: null } : { expectTarget: sha256Text(current), aside }),
+        });
+        await assertSafeProjectPath(projectDir, targetPath, false, "formal rollback target");
       } else {
-        await removeFileNoFollow(
-          projectDir,
-          targetPath,
-          "formal rollback target",
-          writtenByPath.get(backup.relativePath),
-        );
+        await removeFileInBook(root, resolve(targetPath), { label: "formal rollback target", expectSha: sha256Text(current!), aside });
       }
     } catch (error) {
-      // 相对文件名 + errno code/自造错误码：这条 issues 会同时进 report.issues（用户可见）和
-      // manifest.recoveryIssues（盘上取证）——error.message 原文带绝对路径，绝不直拼。
-      issues.push(`Rollback failed for ${backup.relativePath}: ${describeErrorBriefly(error, projectDir)}`);
+      // 相对文件名 + errno code/自造错误码（error.message 原文带绝对路径，绝不直拼）。
+      issues.push(`Rollback failed for ${backup.relativePath}: ${briefError(error, projectDir)}`);
+      // 有一处退不下去就停：后面的不再动（调用方整份当没收拾、挡着）。
+      break;
     }
   }
   return issues;
@@ -645,6 +721,11 @@ async function ensureSafeDirectory(
   }
 }
 
+/**
+ * 不跟软链地整份换上（P1 第 20 轮 AH4、第 21 轮 AI2）：走 safe-fs 的 writeFileInBook——同目录新建临时文件、落盘，
+ * rename 前核上级目录没换、临时文件还是自己那个、目标可换，换上后核换上的就是它。被杀在任何一步，目标要么是原来的整份、
+ * 要么是新的整份；途中路径被调换就如实报错、清单留着重来。原来有的文件沿用它的权限；原来没有的按 0600 建。
+ */
 async function writeTextNoFollow(
   projectDir: string,
   targetPath: string,
@@ -652,54 +733,8 @@ async function writeTextNoFollow(
   label: string,
 ): Promise<void> {
   await assertSafeProjectPath(projectDir, targetPath, true, label);
-  await commitIoTestHook?.("after-precheck-before-open", targetPath);
-  // Deliberately omit O_TRUNC here. Opening an existing file must not mutate a
-  // byte until its parent realpath and the opened inode have both been proven
-  // to be the same contained file. If O_CREAT races into an attacker-swapped
-  // empty location, the only possible residue before rejection is an empty
-  // file; existing outside data is never truncated or overwritten.
-  const handle = await open(
-    targetPath,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    await commitIoTestHook?.("after-open-before-verify", targetPath);
-    await verifyOpenedProjectFile(projectDir, targetPath, handle, label);
-    await handle.truncate(0);
-    await handle.writeFile(content, "utf-8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await writeFileInBook(resolve(projectDir), resolve(targetPath), content, { label, hook: commitIoTestHook });
   await assertSafeProjectPath(projectDir, targetPath, false, label);
-}
-
-async function verifyOpenedProjectFile(
-  projectDir: string,
-  targetPath: string,
-  handle: Awaited<ReturnType<typeof open>>,
-  label: string,
-): Promise<void> {
-  const [rootRealPath, parentRealPath, handleStats, pathStats] = await Promise.all([
-    realpath(projectDir),
-    realpath(dirname(targetPath)),
-    handle.stat(),
-    lstat(targetPath),
-  ]);
-  const parentRelative = relative(rootRealPath, parentRealPath);
-  if (isAbsolute(parentRelative) || parentRelative === ".." || parentRelative.startsWith(`..${sep}`)) {
-    throw taggedError("UNSAFE_CONTAINMENT", `Unsafe ${label}: parent realpath escaped project containment.`);
-  }
-  if (pathStats.isSymbolicLink() || !pathStats.isFile()) {
-    throw taggedError("UNSAFE_NOT_A_FILE", `Unsafe ${label}: final path is not a real file.`);
-  }
-  if (handleStats.dev !== pathStats.dev || handleStats.ino !== pathStats.ino) {
-    throw taggedError("UNSAFE_INODE_MISMATCH", `Unsafe ${label}: opened inode no longer matches the target path.`);
-  }
-  if (handleStats.nlink !== 1) {
-    throw taggedError("UNSAFE_HARDLINK", `Unsafe ${label}: hard-linked targets are not allowed.`);
-  }
 }
 
 /**
@@ -711,36 +746,6 @@ async function verifyOpenedProjectFile(
  * 这证明文件是本次未完成的提交产生的、没被用户/别的进程改过，删了不会丢任何用户数据。
  * 内容不匹配则保留并如实记录，绝不误删。
  */
-async function removeFileNoFollow(
-  projectDir: string,
-  targetPath: string,
-  label: string,
-  writtenContent?: string,
-): Promise<void> {
-  await assertSafeProjectPath(projectDir, targetPath, true, label);
-  try {
-    await lstat(targetPath);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return;
-    throw error;
-  }
-  const targetRel = relative(resolve(projectDir), targetPath);
-  if (writtenContent === undefined) {
-    throw taggedError(
-      "TX_UNVERIFIED_DELETE",
-      `Refusing to path-delete ${label} at ${targetRel}; no transaction content recorded for verification.`,
-    );
-  }
-  const currentContent = await readFile(targetPath, "utf-8");
-  if (sha256Text(currentContent) !== sha256Text(writtenContent)) {
-    throw taggedError(
-      "TX_CONTENT_CHANGED",
-      `Refusing to path-delete ${label} at ${targetRel}; content no longer matches the transaction's write (file was modified after the failed commit).`,
-    );
-  }
-  await rm(targetPath, { force: true });
-}
-
 function padChapter(chapter: number): string {
   return String(Math.max(0, Math.trunc(chapter))).padStart(4, "0");
 }
@@ -765,4 +770,29 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 错误的简短说法（不带绝对路径：会进作者看得到的文案和盘上的取证记录）。 */
+function briefError(error: unknown, projectDir?: string): string {
+  if (error instanceof SyntaxError) return "JSON 解析失败";
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const kind = typeof code === "string" && code.length > 0
+      ? `错误码 ${code}`
+      : (() => {
+        const message = error.message.trim();
+        return message.length > 0 && !message.includes("/") && !message.includes("\\")
+          ? message
+          : `错误类型 ${error.name || "Error"}`;
+      })();
+    const rawPath = (error as NodeJS.ErrnoException).path;
+    if (projectDir !== undefined && typeof rawPath === "string" && rawPath.length > 0) {
+      const rel = relative(resolve(projectDir), resolve(rawPath));
+      if (rel.length > 0 && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) {
+        return `${kind}（${rel}）`;
+      }
+    }
+    return kind;
+  }
+  return "未知错误";
 }

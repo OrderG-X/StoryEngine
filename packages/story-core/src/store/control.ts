@@ -11,9 +11,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BOOK_EPOCH_PATH, DRAFT_GENS_PATH, REVISION_PATH } from "./paths.js";
-import type { TxTextWrite } from "./transaction.js";
+import type { TxWrite } from "./transaction.js";
 
-export function revisionWrite(now: Date): TxTextWrite {
+export function revisionWrite(now: Date): TxWrite {
   return { path: REVISION_PATH, content: `${JSON.stringify({ schema: "store-revision/1", id: randomUUID(), at: now.toISOString() }, null, 2)}\n` };
 }
 
@@ -64,18 +64,18 @@ export function draftStampOf(gens: DraftGens, chapter: number): DraftStamp {
   return gen === undefined ? { epoch: gens.epoch } : { epoch: gens.epoch, gen };
 }
 
-function gensWrite(gens: DraftGens): TxTextWrite {
+function gensWrite(gens: DraftGens): TxWrite {
   const chapters = Object.fromEntries(Object.entries(gens.chapters).sort(([a], [b]) => Number(a) - Number(b)));
   return { path: DRAFT_GENS_PATH, content: `${JSON.stringify({ schema: DRAFT_GENS_SCHEMA, epoch: gens.epoch, chapters }, null, 2)}\n` };
 }
 
 /** 这几章的工作稿这次写了：各换成 gen。 */
-export function draftGensWrite(gens: DraftGens, chapters: readonly number[], gen: string): TxTextWrite {
+export function draftGensWrite(gens: DraftGens, chapters: readonly number[], gen: string): TxWrite {
   return gensWrite({ epoch: gens.epoch, chapters: { ...gens.chapters, ...Object.fromEntries(chapters.map((chapter) => [String(chapter), gen])) } });
 }
 
 /** 撤销 / 恢复后：换新纪元，各章的号清空（每一章的版本号都和恢复前对不上）。 */
-export function freshDraftGensWrite(): TxTextWrite {
+export function freshDraftGensWrite(): TxWrite {
   return gensWrite({ epoch: randomUUID(), chapters: {} });
 }
 
@@ -103,6 +103,6 @@ export async function readBookEpoch(bookDir: string): Promise<string> {
 }
 
 /** 换一个新纪元（整本恢复、搬回备份时和别的写放进同一个事务）。 */
-export function bookEpochWrite(now: Date): TxTextWrite {
+export function bookEpochWrite(now: Date): TxWrite {
   return { path: BOOK_EPOCH_PATH, content: `${JSON.stringify({ schema: BOOK_EPOCH_SCHEMA, epoch: randomUUID(), at: now.toISOString() }, null, 2)}\n` };
 }

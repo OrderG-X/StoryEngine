@@ -41,8 +41,9 @@ export function ChapterTitle({ chapterNumber, title, editable, onRename }: {
   }
   const save = () => {
     setEditing(false);
+    // 清空也是改（写作版本 P1 第 14 轮复核 AB2）：工作稿去掉章名；已定稿的章名不能空，服务端如实说没改。
     const next = value.trim();
-    if (next && next !== bare) onRename(next);
+    if (next !== bare) onRename(next);
   };
   return (
     <span className="cd-chapter cd-chapter-input">

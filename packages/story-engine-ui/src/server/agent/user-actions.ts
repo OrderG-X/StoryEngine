@@ -5,9 +5,10 @@
  * 事件协议与 agent 回合完全一致（tool-call / tool-result / text-delta），前端投影零分叉：
  * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import type { RequestContext } from "@mastra/core/di";
 
-import { extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
+import { bareChapterTitle } from "../lib/project-io.js";
 import { isOperationId } from "../lib/operations/store.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
@@ -815,7 +816,7 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       refreshScope: "full",
       chapter: action.chapter,
       overview,
-      ...(applied > 0 ? { draftBody: stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(result.text)).trim() } : {}),
+      ...(applied > 0 ? { draftBody: stripMarkdownEmphasis(parseDraftFile(result.text).body).trim() } : {}),
       ...(result.draftVersion !== undefined ? { draftVersion: result.draftVersion } : {}),
       ...(result.snapshotId ? { snapshotId: result.snapshotId } : {}),
     },
@@ -890,7 +891,7 @@ interface GenerateDraftLikeOutput {
  */
 export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): string {
   // 写手有时把「第 N 章 · 」也写进章名：前面已经说了第几章，书名号里只放章名。
-  const bare = typeof result.draftTitle === "string" ? extractDraftTitle(`# ${result.draftTitle.trim()}`) : null;
+  const bare = typeof result.draftTitle === "string" ? bareChapterTitle(result.draftTitle) : null;
   const title = bare ? `《${bare}》` : "";
   const actual = typeof result.draftLength?.actualLength === "number" ? result.draftLength.actualLength : undefined;
   const lower = typeof result.draftLength?.lowerBound === "number" ? result.draftLength.lowerBound : undefined;

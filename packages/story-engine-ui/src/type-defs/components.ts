@@ -1,6 +1,6 @@
 import type { CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, ImportBookRequest, StateOverview } from "../api/types.js";
 import type { SuggestedAction, ThemeMode } from "./workflow.js";
-import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, AiFlavorViolation } from "./workspace.js";
+import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, AiFlavorViolation, WorkspaceDraftCandidate } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
 import type { SelectionRevisionKey } from "../components/v2/selectionRevisionTemplates.js";
 
@@ -61,7 +61,7 @@ export interface WritingWorkspaceLayoutProps {
   readonly onSelectionRewriteCustom?: (selectionText: string, instruction: string) => Promise<void>;
   /** 抽卡（阶段三块③）：再来一版生成 2–3 个临时候选并排选。 */
   readonly onReroll?: () => void;
-  readonly onApplyCandidate?: (content: string) => void;
+  readonly onApplyCandidate?: (candidate: WorkspaceDraftCandidate) => void;
   readonly onCloseCandidates?: () => void;
 }
 

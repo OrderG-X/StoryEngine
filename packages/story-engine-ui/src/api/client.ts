@@ -231,9 +231,9 @@ export async function openBookProjectFolder(projectPath: string, signal?: AbortS
 export async function generateDraftCandidate(
   input: GenerateDraftRequest,
   signal?: AbortSignal,
-): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }> {
+): Promise<{ readonly draftBody: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }> {
   const payload = await fetchJson<
-    | { readonly ok: true; readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }
+    | { readonly ok: true; readonly draftBody: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }
     | { readonly ok: false; readonly error: string }
   >(
     "/api/draft/generate",
@@ -247,16 +247,16 @@ export async function generateDraftCandidate(
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, contextBudget: payload.contextBudget, ...(payload.planNote ? { planNote: payload.planNote } : {}) };
+  return { draftBody: payload.draftBody, ...(payload.draftTitle ? { draftTitle: payload.draftTitle } : {}), contextBudget: payload.contextBudget, ...(payload.planNote ? { planNote: payload.planNote } : {}) };
 }
 
-/** 抽卡「挑中落盘」（块③）：把选中的候选正文写进工作稿，服务端写前留可撤销快照。 */
+/** 抽卡「挑中落盘」（块③）：把选中的那份整稿（章名 + 正文，拆开的）写进工作稿，服务端写前留可撤销快照。 */
 export async function applyDraftCandidate(
-  input: { readonly projectPath: string; readonly chapter: number; readonly draftContent: string; readonly baseVersion: string | null },
+  input: { readonly projectPath: string; readonly chapter: number; readonly title: string; readonly body: string; readonly baseVersion: string | null },
   signal?: AbortSignal,
-): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview }> {
+): Promise<{ readonly overview: StateOverview }> {
   const payload = await fetchJson<
-    | { readonly ok: true; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview }
+    | { readonly ok: true; readonly overview: StateOverview }
     | { readonly ok: false; readonly error: string }
   >(
     "/api/draft/apply-candidate",
@@ -276,7 +276,7 @@ export async function applyDraftCandidate(
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, overview: payload.overview };
+  return { overview: payload.overview };
 }
 
 export async function previewDraftRevision(

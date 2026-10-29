@@ -47,11 +47,10 @@ function showChapterTitle(chapterNumber: number, title: string): void {
   });
 }
 
-/** 作者改章名：工作稿的章名跟正文一起存。 */
-function renameChapter(chapterNumber: number, title: string): void {
+/** 作者改章名：工作稿的章名跟正文一起存（章节栏跟着稿纸的章名走，见 WritingDeskCodex 里那一段）。 */
+function renameChapter(title: string): void {
   useDraftStore.getState().setTitle(title);
   scheduleDraftSave(0);
-  showChapterTitle(chapterNumber, title);
 }
 
 /**
@@ -111,6 +110,12 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
   const paperFontSize = useDisplaySettingsStore((s) => s.deskFontSize);
   const draft = useDraftPreview({ chapterNumber: props.workspace.currentChapter.chapterNumber, title: props.workspace.currentChapter.title });
+  // 章名只有一个来处（写作版本 P1 第 14 轮复核 AB5）：稿纸读进了这一章，章节栏、面包屑就跟着稿纸上的章名走——
+  // 顶上改章名、在提示上换成别的那一版，都只改稿纸，这里统一跟上。
+  const paperTitle = useDraftStore((state) => (state.loaded && state.chapter === props.workspace.currentChapter.chapterNumber ? state.title.trim() : undefined));
+  useEffect(() => {
+    if (paperTitle !== undefined && paperTitle !== props.workspace.currentChapter.title) showChapterTitle(props.workspace.currentChapter.chapterNumber, paperTitle);
+  }, [paperTitle, props.workspace.currentChapter.chapterNumber, props.workspace.currentChapter.title]);
   const committedBody = useDraftStore((state) => state.committed?.body ?? "");
   const draftCandidates = useUiStore((state) => state.draftCandidates);
   const draftActionLoading = useUiStore((state) => state.draftActionLoading);
@@ -202,7 +207,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             editable={(showEditHint || (draft.status === "committed" && draft.streaming !== true)) && !workspaceBusy}
             onRename={(title) => (draft.status === "committed"
               ? void renameCommittedChapter(draft.chapterNumber, title)
-              : renameChapter(draft.chapterNumber, title))}
+              : renameChapter(title))}
           />
           {showEditHint ? (
             <span className="cd-edit-hint">可直接编辑 · 自动保存</span>
@@ -419,7 +424,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
         <DraftCandidatesPanel
           candidates={draftCandidates}
           busy={workspaceBusy || applyingCandidate}
-          onPick={(content) => props.onApplyCandidate?.(content)}
+          onPick={(candidate) => props.onApplyCandidate?.(candidate)}
           onClose={() => props.onCloseCandidates?.()}
         />
       ) : null}

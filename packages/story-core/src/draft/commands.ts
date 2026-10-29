@@ -14,13 +14,16 @@ import { draftPath } from "../store/paths.js";
 import { fail } from "../commands/runner.js";
 import type { PlanContext, WriteCommandSpec } from "../commands/types.js";
 import type { DraftStamp } from "../store/control.js";
-import { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readDraft, readDraftStamp, type Draft } from "./draft.js";
+import { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readDraftStamp, type Draft } from "./draft.js";
 
-/** 三条命令同一份参数：都要说清是拿哪一版改 / 换的（这一章原来没有工作稿就是 null）。 */
+/**
+ * 三条命令同一份参数：一份拆开的整稿（章名必带，空串 = 没章名；正文一行都不再拆），说清是拿哪一版改 / 换的
+ * （这一章原来没有工作稿就是 null）。章名由调用方定（写作版本 P1 第 15 轮：命令里不再「没给就沿用盘上的」，两条路只剩一条）。
+ */
 export const DraftSaveArgs = z.object({
   chapter: z.number().int().min(1),
   body: z.string(),
-  title: z.string().optional(),
+  title: z.string(),
   baseVersion: z.string().min(1).nullable(),
 });
 export type DraftSaveArgs = z.infer<typeof DraftSaveArgs>;
@@ -69,17 +72,10 @@ function planWrite(context: PlanContext, chapter: number, nextText: string, curr
   };
 }
 
-/** 标题：给了用给的，没给沿用盘上的。 */
-async function nextDraftText(bookDir: string, args: { readonly chapter: number; readonly body: string; readonly title?: string }, currentText: string | undefined): Promise<string> {
-  const currentTitle = currentText === undefined ? undefined : (await readDraft(bookDir, args.chapter))?.title;
-  const title = args.title?.trim() || currentTitle;
-  return composeDraftFile({ ...(title ? { title } : {}), body: args.body });
-}
-
 async function planReplace(context: PlanContext, args: DraftSaveArgs, label: string) {
   const stamp = await readDraftStamp(context.bookDir, args.chapter);
   const currentText = await readRaw(context.bookDir, args.chapter);
-  const nextText = await nextDraftText(context.bookDir, args, currentText);
+  const nextText = composeDraftFile({ title: args.title, body: args.body });
   const conflict = await conflictIfMoved(context.bookDir, args.chapter, args.baseVersion, currentText, stamp, nextText);
   if (conflict) return conflict;
   return planWrite(context, args.chapter, nextText, currentText, stamp, label);

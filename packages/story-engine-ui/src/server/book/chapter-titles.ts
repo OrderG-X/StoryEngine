@@ -2,6 +2,7 @@
  * 已有各章章名（2026-10-14 编辑部 R7.7·报告 5：拟标题防重名，第 7、9 章都叫「铁丝」）。写手拿它避重名；
  * AI 换上稿子前按同样的读法再读一遍，名单变了就不换（写作版本 P1b 第 5 轮复核 S8，见 material-reads）。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -49,9 +50,7 @@ export async function readChapterTitles(
     .sort((a, b) => a.chapter - b.chapter);
 }
 
-/** 章节文件第一行 # 标题里的章名；没有是 undefined。 */
-export function extractMarkdownTitle(content: string | undefined): string | undefined {
-  const line = content?.split(/\r?\n/u).find((item) => item.trim().startsWith("#"))?.trim();
-  if (!line) return undefined;
-  return line.replace(/^#+\s*/u, "").trim() || undefined;
+/** 章节文件的章名（核心 parseDraftFile：第一行非空行是一级章名行）；没有是 undefined。 */
+function extractMarkdownTitle(content: string | undefined): string | undefined {
+  return content === undefined ? undefined : parseDraftFile(content).title;
 }

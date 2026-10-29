@@ -29,7 +29,7 @@ afterEach(async () => {
 async function aiWrite(body: string, candidateId?: string) {
   const basis = await readTruthBasis(book);
   const baseVersion = (await readDraft(book, 1))?.version ?? null;
-  return applyAiDraft(book, { chapter: 1, body, baseVersion, basis, materials: [], source: "draft", ...(candidateId ? { candidateId } : {}) });
+  return applyAiDraft(book, { chapter: 1, title: "", body, baseVersion, basis, materials: [], source: "draft", ...(candidateId ? { candidateId } : {}) });
 }
 
 const draftOf = (chapter: number) => readFile(join(book, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`), "utf-8").catch(() => undefined);
@@ -45,7 +45,7 @@ describe("喊停之后 AI 写不进书", () => {
       expect(turnAborted()).toBe(true);
       // 出稿流程开写时存的「在写」那份：喊停后也删掉，不留成候选。
       const basis = await readTruthBasis(book);
-      const writing = await saveDraftCandidate(book, { chapter: 1, body: "停了以后才到的一版。", baseVersion: null, basisDigest: basis.digest, source: "draft", status: "writing" });
+      const writing = await saveDraftCandidate(book, { chapter: 1, title: "", body: "停了以后才到的一版。", baseVersion: null, basisDigest: basis.digest, source: "draft", status: "writing" });
       writingId = writing.id;
       const error = await aiWrite("停了以后才到的一版。", writing.id).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(AiDraftWriteError);

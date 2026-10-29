@@ -7,9 +7,8 @@
  */
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { withBookLock } from "@actalk/story-core";
+import { bumpRevision, withBookLock } from "@actalk/story-core";
 import { resolveBooksRootDir } from "./data-dirs.js";
-import { freshRevision } from "./book-backup.js";
 import { isSafeProjectPath } from "./project-io.js";
 
 export const TRASH_KEEP_DAYS = 30;
@@ -139,7 +138,9 @@ export async function restoreFromTrash(id: string): Promise<{ readonly projectPa
   let target = original;
   for (let n = 1; await exists(target); n += 1) target = `${original}-恢复${n > 1 ? n : ""}`;
   await mkdir(dirname(target), { recursive: true });
-  await freshRevision(join(entry, BOOK_DIR));
+  // 搬回来的书换一个新的写入代次（读过原路径后来那一版的预览、缓存不能当没变）、新的书纪元（删之前受理的操作不能再写，写作版本 P2a）：
+  // 走核心事务写，store-control 是软链之类换不了就停下，回收站这一条原样留着（P1 第 22 轮 AJ4）。
+  await bumpRevision(join(entry, BOOK_DIR), new Date(), { bookEpoch: true });
   await moveDir(join(entry, BOOK_DIR), target);
   await rm(entry, { recursive: true, force: true });
   return { projectPath: target, title: record.title };

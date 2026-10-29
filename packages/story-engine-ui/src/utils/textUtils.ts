@@ -94,7 +94,7 @@ export function countTextWords(text: string): number {
   if (!isRealDraftContent(text)) return 0;
   const body = text
     .replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u, "")
-    .replace(/^#.*$/gmu, "");
+    .replace(/^#.*$/gmu, ""); // 章名行白名单：字数口径
   return (body.match(/[\u3400-\u9fff]/gu) ?? []).length;
 }
 
@@ -127,11 +127,3 @@ export function looksLikeDraftBody(text: string): boolean {
   return paragraphs.length >= 3 && normalized.length > 360;
 }
 
-export function extractDraftTitle(content: string | undefined): string | null {
-  if (!content) return null;
-  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!firstLine?.startsWith("#")) return null;
-  // 不猜白名单：章节标题
-  const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
-  return title || null;
-}

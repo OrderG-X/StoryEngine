@@ -10,6 +10,7 @@ import { beforeSend, listAttempts } from "../../lib/operations/attempts.js";
 import { __resetExecutionsForTests, currentOperation } from "../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../lib/operations/live.js";
 import { __resetOperationStoreForTests, operationDir, readOperation, type OperationRecord } from "../../lib/operations/store.js";
+import { SETTLED_STATES, untilOperation } from "../../lib/operations/test-helpers.js";
 import {
   __resetRecipesForTests,
   cancelOperation,
@@ -81,13 +82,8 @@ function twoSteps(options: { readonly hold?: Promise<void>; readonly autoResume?
 const submit = (key = "chat:m1:1", params: unknown = { n: 3 }) =>
   submitOperation(book, { kind: "test.two", params, requestKey: key, issuedAt: new Date().toISOString(), origin: { kind: "chat", messageId: key } });
 
-async function settled(opId: string, states: readonly string[] = ["succeeded", "failed", "cancelled", "obsolete", "paused"]): Promise<OperationRecord> {
-  for (let i = 0; i < 200; i += 1) {
-    const stored = await readOperation(book, opId);
-    if (stored.kind === "record" && states.includes(stored.record.state)) return stored.record;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("没等到操作结束");
+function settled(opId: string, states: readonly string[] = SETTLED_STATES): Promise<OperationRecord> {
+  return untilOperation(book, opId, (record) => states.includes(record.state));
 }
 
 describe("受理即跑", () => {
@@ -118,12 +114,7 @@ describe("取消", () => {
     twoSteps({ hold: hold.promise });
     const first = await submit();
     if (!first.ok || !("record" in first)) throw new Error("没受理");
-    await settled(first.record.opId, ["running"]);
-    for (let i = 0; i < 100 && (await readOperation(book, first.record.opId)).kind === "record"; i += 1) {
-      const stored = await readOperation(book, first.record.opId);
-      if (stored.kind === "record" && stored.record.currentStep === "b") break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await untilOperation(book, first.record.opId, (record) => record.state === "running" && record.currentStep === "b");
     expect(await cancelOperation(book, first.record.opId)).toMatchObject({ cancelled: true, record: { state: "cancelled", runEpoch: 2 } });
     hold.resolve();
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -269,7 +260,11 @@ describe("订阅", () => {
     const off = await subscribeOperation(book, first.record.opId, (event) => events.push(event));
     hold.resolve();
     await settled(first.record.opId);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // 盘上先换成终态、通知在落盘（目录 fsync）之后才发：等通知到，不按固定毫秒猜
+    const deadline = Date.now() + 10_000;
+    while (!events.some((event) => event.type === "record" && event.record.state === "succeeded") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     off?.();
     expect(events[0]?.type).toBe("snapshot");
     const seqs = events.filter((event) => event.type !== "live").map((event) => (event as { record: OperationRecord }).record.eventSeq);

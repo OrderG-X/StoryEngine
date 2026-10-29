@@ -4,8 +4,9 @@
  * 读稿 fail-closed（P2-5）：ENOENT = 真没稿；其余读错误按 FS 抖动重试（3×60ms），仍失败就抛错——
  * 绝不能把「旧稿在但读不到」当「没稿」：有稿的章就会被当成空章直接整章重写。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
-import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "./project-io.js";
+import { defaultDraftPath } from "./project-io.js";
 
 async function readExistingDraftWithRetry(draftPath: string): Promise<string> {
   let lastError: unknown;
@@ -23,5 +24,5 @@ async function readExistingDraftWithRetry(draftPath: string): Promise<string> {
 
 export async function hasWorkingDraftText(projectDir: string, chapter: number): Promise<boolean> {
   const existing = await readExistingDraftWithRetry(defaultDraftPath(projectDir, chapter));
-  return stripLeadingMarkdownChapterHeading(existing).trim().length > 0;
+  return parseDraftFile(existing).body.length > 0;
 }

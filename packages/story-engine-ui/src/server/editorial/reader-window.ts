@@ -16,6 +16,7 @@
  *     任何章数下窗口都不超过预算（READER_WINDOW_MAX_CHARS）。
  * 只依赖文件系统和注入的 callModel，不碰旧 agent/ 目录——以后整块搬进独立包。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -222,7 +223,7 @@ const materialsJoin = (materials: readonly string[]): string => materials.join("
 /** 已定稿正文（去掉首行标题、trim）。读不到或是空的返回空串。 */
 async function readFinalBody(projectDir: string, chapter: number): Promise<string> {
   const raw = await readFile(chapterFile(projectDir, chapter), "utf-8").catch(() => "");
-  return raw.replace(/^#[^\n]*\n/u, "").trim();
+  return parseDraftFile(raw).body;
 }
 
 async function readNote(root: string, roleId: string, chapter: number): Promise<NoteFile | undefined> {
