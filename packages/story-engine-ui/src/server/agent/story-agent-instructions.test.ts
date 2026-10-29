@@ -17,36 +17,36 @@ vi.mock("./model.js", () => ({
 
 import { buildInstructions, getStoryAgent, invalidateStoryAgent } from "./story-agent.js";
 
-describe("story agent 工具表（重构 P9：补资料并进 foundation_write；P12 加 settle_fact，19 个）", () => {
-  it("19 个工具；没有 enrich_foundation 和老的补全/文风样本工具；指令里也不再提它们", async () => {
+describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内容审阅 / 查 AI 味合成 run_check，加 read_operation，17 个）", () => {
+  it("17 个工具；旧的四个检查工具和老的补全/文风样本工具都没了；指令里也不再提它们", async () => {
     invalidateStoryAgent();
     const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
     invalidateStoryAgent();
     expect(tools).toEqual([
-      "ai_review",
       "brainstorm_chapter",
-      "check_ai_flavor",
-      "check_continuity",
       "commit_preview",
       "foundation_write",
       "generate_draft",
       "manage_ledger",
       "manage_snapshots",
-      "quality_check",
       "read_chapters_overview",
       "read_draft",
       "read_foundation",
+      "read_operation",
       "read_state_overview",
       "read_timeline",
       "revise_draft",
+      "run_check",
       "settle_fact",
       "suggest_next_steps",
       "web_search",
     ]);
     const instructions = buildInstructions();
-    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars"]) {
+    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor"]) {
       expect(instructions).not.toContain(gone);
     }
+    expect(instructions).toContain("run_check");
+    expect(instructions).toContain("read_operation");
   });
 });
 

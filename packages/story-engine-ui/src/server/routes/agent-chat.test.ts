@@ -364,6 +364,17 @@ describe("historyToModelMessages 历史里的工具（长篇实跑第 17 章：�
     ]);
   });
 
+  it("给了现有工具名：老会话里已经合并掉的工具不还原（写作版本 P2a），回复文字照留", () => {
+    const messages = readChatMessages([
+      { role: "assistant", content: "核了一遍。", tools: [{ name: "check_continuity", ok: true }] },
+      { role: "assistant", content: "写好了，核了。", tools: [{ name: "generate_draft", ok: true }, { name: "quality_check", ok: true }] },
+    ]);
+    const history = historyToModelMessages(messages, new Set(["generate_draft", "run_check"]));
+    expect(history[0]).toEqual({ role: "assistant", content: "核了一遍。" });
+    expect(history[1]).toMatchObject({ role: "assistant", content: [{ type: "tool-call", toolName: "generate_draft" }] });
+    expect(JSON.stringify(history)).not.toContain("quality_check");
+  });
+
   it("出的卡作者点了「不改了」：工具结果照实说这张作废、再提就重新调", () => {
     const messages = readChatMessages([{ role: "assistant", content: "查完了。", tools: [{ name: "settle_fact", ok: true, dropped: true }] }]);
     expect(messages[0]).toMatchObject({ tools: [{ name: "settle_fact", ok: true, dropped: true }] });

@@ -51,9 +51,22 @@ export const REQUEST_CONTEXT_PICKED_DIRECTION_KEY = "pickedDirection";
  */
 export const REQUEST_CONTEXT_TURN_STATE_KEY = "turnState";
 
+/**
+ * 这一轮是作者哪条消息发起的（写作版本 P2a）：消息号是前端给的 UUID、随消息存，重发沿用；issuedAt 也随消息存。
+ * 对话里交的操作键 = `chat:<消息号>`：一条作者消息只受理一个顶层操作。按钮动作不经模型，不用它。
+ */
+export const REQUEST_CONTEXT_MESSAGE_REF_KEY = "messageRef";
+
+export interface MessageRef {
+  readonly messageId: string;
+  readonly issuedAt: string;
+}
+
 export interface TurnState {
   /** 模型这一步要调的工具（turn-flow：执行前记下，这一步有出稿就只写稿）。 */
   stepTools?: readonly string[];
+  /** 这一轮交上、受理了的操作：这一步走完这一轮就结束，进度和结果由服务端出（契约第三节）。 */
+  operationAccepted?: { readonly opId: string };
   /** 这一轮的出稿正在执行（同一步别的工具不执行，第二份出稿也不写）。没写成就放开，模型可以改了再调。 */
   draftStarted?: boolean;
   /** 稿写成了：这一步走完这一轮就结束，结论、核账卡、下一步由服务端出（和「写这一章」按钮同一套）。 */
@@ -118,8 +131,10 @@ export function buildProjectRequestContext(
   authorWords?: readonly string[],
   lastTurnUndoHint?: LastTurnUndoHint,
   pickedDirection?: PickedDirection,
+  messageRef?: MessageRef,
 ): RequestContext {
   const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir], [REQUEST_CONTEXT_TURN_STATE_KEY, {} satisfies TurnState]];
+  if (messageRef) entries.push([REQUEST_CONTEXT_MESSAGE_REF_KEY, messageRef]);
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
   if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
   const words = (authorWords ?? []).filter((text) => typeof text === "string" && text.trim());
@@ -135,6 +150,22 @@ export function buildProjectRequestContext(
 export function readProjectDirFromContext(context: ToolExecutionContext | undefined): string | undefined {
   const raw = context?.requestContext?.get(REQUEST_CONTEXT_PROJECT_DIR_KEY);
   return typeof raw === "string" && raw.trim() ? raw : undefined;
+}
+
+/** 工具层：这一轮是作者哪条消息发起的（没带返回 undefined：交不了操作）。 */
+export function readMessageRefFromContext(context: ToolExecutionContext | undefined): MessageRef | undefined {
+  const raw = context?.requestContext?.get(REQUEST_CONTEXT_MESSAGE_REF_KEY) as Partial<MessageRef> | undefined;
+  return typeof raw?.messageId === "string" && typeof raw.issuedAt === "string" ? { messageId: raw.messageId, issuedAt: raw.issuedAt } : undefined;
+}
+
+/**
+ * 请求体里的消息号和 issuedAt（前端给每条作者消息的 UUID、发的时刻，随消息存）：消息号只认 1～64 位的字母数字和 `-_`，
+ * issuedAt 要能读成时间；不对就当没带（这一轮交不了操作，如实说）。
+ */
+export function parseMessageRef(messageId: unknown, issuedAt: unknown): MessageRef | undefined {
+  if (typeof messageId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(messageId)) return undefined;
+  if (typeof issuedAt !== "string" || issuedAt.length > 40 || !Number.isFinite(Date.parse(issuedAt))) return undefined;
+  return { messageId, issuedAt: new Date(Date.parse(issuedAt)).toISOString() };
 }
 
 /** 工具层：读出用户当前所在章号（缺失/非法返回 undefined）。 */

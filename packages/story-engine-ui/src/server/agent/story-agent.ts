@@ -14,7 +14,6 @@ import { resolveGlmModel } from "./model.js";
 import { readStateOverviewTool } from "./tools/read-state-overview.js";
 import { turnFlowProcessor, withTurnFlow } from "./turn-flow.js";
 import { withSlimModelOutput } from "./tool-model-output.js";
-import { checkContinuityTool } from "./tools/check-continuity.js";
 import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
 import { readTimelineTool } from "./tools/read-timeline.js";
 import { readFoundationTool } from "./tools/read-foundation.js";
@@ -25,9 +24,8 @@ import { manageLedgerTool } from "./tools/manage-ledger.js";
 import { brainstormChapterTool } from "./tools/brainstorm-chapter.js";
 import { generateDraftTool } from "./tools/generate-draft.js";
 import { reviseDraftTool } from "./tools/revise-draft.js";
-import { qualityCheckTool } from "./tools/quality-check.js";
-import { aiReviewTool } from "./tools/ai-review.js";
-import { checkAiFlavorTool } from "./tools/check-ai-flavor.js";
+import { runCheckTool } from "./tools/op-tools.js";
+import { readOperationTool } from "./tools/read-operation.js";
 import { suggestNextStepsTool } from "./tools/suggest-next-steps.js";
 import { webSearchTool } from "./tools/web-search.js";
 import { manageSnapshotsTool } from "./tools/manage-snapshots.js";
@@ -48,9 +46,11 @@ export function buildInstructions(): string {
     "",
     "执行类请求必须工具先行：写正文=generate_draft，改稿=revise_draft，写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write，" +
       "定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮，" +
-      "核账（前后对不对、有没有吃书）=check_continuity，硬伤检查=quality_check，内容审阅=ai_review，检查机器腔=check_ai_flavor，" +
+      "检查一章=run_check（mode：核账 continuity＝前后对不对、有没有吃书，硬伤检查 quality，内容审阅 review，查 AI 味 flavor），" +
       "改账=manage_ledger（事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；它只出「确认改账」按钮，作者点了才改），" +
       "撤销=manage_snapshots op=undo，裁剪操作历史=manage_snapshots op=prune（先预览、用户确认才真裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
+    "交给服务端做的事（run_check）：交出去这一轮就到此为止，进度、结果卡、结论和下一步都由系统接着出，你别说已经做完，也别再调别的。一条作者消息只交一件；同一步里交两件就一件都不做。" +
+      "每轮 system 消息里有「最近的操作」：作者问上次核出来什么、做到哪了、补读到哪了，先看它，要细节调 read_operation；停着的告诉作者点卡上的「接着做」或「不要了」，你接不了。",
     "读数据：全局概况 read_state_overview；全书每章状态 read_chapters_overview；早期某章发生了什么 read_timeline；设定本 read_foundation（带名字读一张卡）；正文全文 read_draft。凡涉及现状，先读再说，绝不凭印象。复述一律用中文，别把英文字段名念给用户。",
     "",
     "红线：",
@@ -86,9 +86,9 @@ export function buildInstructions(): string {
       "返回 'chapter_has_text'：这一章已有稿子，按钮已随这次结果出在对话里，告诉作者要整章重写就点它、只改几处就说改哪里，别重试。" +
       "返回 'chapter_goal_not_author_words'：chapterGoal 只能原样抄作者的话，改成原话（或不填）马上重调。",
     "- 改稿：revise_draft 的原文必须逐字取自工作稿且只出现一次；按审稿意见改时先 read_draft 拿到正文定位逐字原文，一次只改用户点的那一条，不批量、不形成『审→改→再审』循环。" +
-      "要把机器腔改掉才用 revise_draft 带 style:\"deai\"；『查 AI 味』只读，调 check_ai_flavor，结果在卡片里，别逐条复述。",
+      "要把机器腔改掉才用 revise_draft 带 style:\"deai\"；『查 AI 味』只读，交 run_check mode=flavor，结果在卡片里，别逐条复述。",
     "- 按核账改：只动核账「确定」的那几处；「可能」的那几处，或要改的正好是作者在对话、想法里明说过的，先问作者改不改，别自己改。",
-    "- 前后对不对以 check_continuity 为准；口吻、节奏以 ai_review 为准；quality_check 里『地点漂移 / 称谓漂移』这类只是机械线索，别当裁决。ai_review 没审完就如实说，别改调 quality_check 顶替。",
+    "- 前后对不对以核账为准；口吻、节奏以内容审阅为准；硬伤检查里『地点漂移 / 称谓漂移』这类只是机械线索，别当裁决。内容审阅没审完就如实说，别改交硬伤检查顶替。",
     "",
     "定稿与账本：",
     "- 【定稿 = 你预览、用户点按钮】你没有定稿工具。用户想定稿时先对该章 commit_preview；canCommit=true 就转告要点，请用户在定稿清单里点「确认定稿」；canCommit=false 时如实说明阻断原因。**绝不说『已定稿/已入库』**。",
@@ -128,6 +128,13 @@ export interface AgentModelInfo {
   readonly model: string;
 }
 
+/** 对话 AI 现有的工具名（还原聊天历史时只还原这些）；还没建过 agent 是 undefined。 */
+let cachedToolNames: ReadonlySet<string> | undefined;
+
+export function getStoryAgentToolNames(): ReadonlySet<string> | undefined {
+  return cachedToolNames;
+}
+
 /** 对话 AI 当前用的模型；还没建过是 undefined。 */
 export function getStoryAgentModel(): AgentModelInfo | undefined {
   return cachedAgentModel;
@@ -141,6 +148,7 @@ export function getStoryAgentModel(): AgentModelInfo | undefined {
 export function invalidateStoryAgent(): void {
   cachedAgent = undefined;
   cachedAgentModel = undefined;
+  cachedToolNames = undefined;
 }
 
 /**
@@ -151,6 +159,8 @@ export async function getStoryAgent(): Promise<Agent> {
   if (cachedAgent) return cachedAgent;
   const { model, profile, provider } = await resolveGlmModel("triage");
   cachedAgentModel = { provider: provider.id, ...(provider.label ? { providerLabel: provider.label } : {}), model: profile.model };
+  const tools = storyAgentTools();
+  cachedToolNames = new Set(Object.keys(tools));
   cachedAgent = new Agent({
     id: STORY_AGENT_ID,
     name: "写作总控助手",
@@ -158,35 +168,38 @@ export async function getStoryAgent(): Promise<Agent> {
     model,
     // 写稿这一轮的流程由服务端定（turn-flow）：执行前记下这一步要调什么，有出稿就只写稿；稿写成这一轮就结束、由服务端收尾。
     outputProcessors: [turnFlowProcessor],
-    // 工具结果给模型看精简版（去状态总览与整章正文），界面照旧拿完整结果。
-    tools: withSlimModelOutput(withTurnFlow({
-      read_state_overview: readStateOverviewTool,
-      read_chapters_overview: readChaptersOverviewTool,
-      read_timeline: readTimelineTool,
-      read_foundation: readFoundationTool,
-      read_draft: readDraftTool,
-      foundation_write: foundationWriteTool,
-      // 头脑风暴（重构 P6）：章纲员出几种走法、核账员核前文；取代原 generate_chapter_steering。
-      brainstorm_chapter: brainstormChapterTool,
-      generate_draft: generateDraftTool,
-      revise_draft: reviseDraftTool,
-      quality_check: qualityCheckTool,
-      check_continuity: checkContinuityTool,
-      ai_review: aiReviewTool,
-      check_ai_flavor: checkAiFlavorTool,
-      commit_preview: commitPreviewTool,
-      // commit_apply 不给对话 AI（2026-10-10）：定稿只能由作者点「确认定稿」按钮（结构化动作直达，不经模型）。
-      suggest_next_steps: suggestNextStepsTool,
-      // 2026-10-12 编辑部 R3b 瘦身：硬事实+线索合成 manage_ledger（重构 P3 起只提裁定草案、作者点「确认改账」才记）；
-      // 文风样本并入 foundation_write（重构 P9 起是设定卡 exemplar.add / exemplar.remove）；撤销+裁剪合成 manage_snapshots（按 op 转给原工具，
-      // 「确认裁剪」按钮仍直达原 prune_snapshots）。原名保留在原文件，界面步骤名/撤销标签/老会话回放不受影响。
-      manage_ledger: manageLedgerTool,
-      manage_snapshots: manageSnapshotsTool,
-      settle_fact: settleFactTool,
-      web_search: webSearchTool,
-    })),
+    tools,
   });
   return cachedAgent;
+}
+
+/** 对话 AI 的工具表：结果给模型看精简版（去状态总览与整章正文），界面照旧拿完整结果；每一步该执行哪些由 turn-flow 定。 */
+function storyAgentTools() {
+  return withSlimModelOutput(withTurnFlow({
+    read_state_overview: readStateOverviewTool,
+    read_chapters_overview: readChaptersOverviewTool,
+    read_timeline: readTimelineTool,
+    read_foundation: readFoundationTool,
+    read_draft: readDraftTool,
+    foundation_write: foundationWriteTool,
+    // 头脑风暴（重构 P6）：章纲员出几种走法、核账员核前文；取代原 generate_chapter_steering。
+    brainstorm_chapter: brainstormChapterTool,
+    generate_draft: generateDraftTool,
+    revise_draft: reviseDraftTool,
+    // 写作版本 P2a：核账、硬伤检查、内容审阅、查 AI 味合成一个提交工具，服务端按固定配方跑（受理了这一轮就停）。
+    run_check: runCheckTool,
+    read_operation: readOperationTool,
+    commit_preview: commitPreviewTool,
+    // commit_apply 不给对话 AI（2026-10-10）：定稿只能由作者点「确认定稿」按钮（结构化动作直达，不经模型）。
+    suggest_next_steps: suggestNextStepsTool,
+    // 2026-10-12 编辑部 R3b 瘦身：硬事实+线索合成 manage_ledger（重构 P3 起只提裁定草案、作者点「确认改账」才记）；
+    // 文风样本并入 foundation_write（重构 P9 起是设定卡 exemplar.add / exemplar.remove）；撤销+裁剪合成 manage_snapshots（按 op 转给原工具，
+    // 「确认裁剪」按钮仍直达原 prune_snapshots）。原名保留在原文件，界面步骤名/撤销标签/老会话回放不受影响。
+    manage_ledger: manageLedgerTool,
+    manage_snapshots: manageSnapshotsTool,
+    settle_fact: settleFactTool,
+    web_search: webSearchTool,
+  }));
 }
 
 /**

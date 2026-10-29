@@ -141,6 +141,11 @@ export type StoredOperation =
 /** 进程启动时随机给：开书对账认「上一个进程留下的」。 */
 export const BOOT_ID = randomUUID();
 
+/** 操作号的样子（`op-` + 20 位十六进制）：从外面来的号先过它再拼路径。 */
+export function isOperationId(value: string): boolean {
+  return /^op-[0-9a-f]{20}$/u.test(value);
+}
+
 export function opIdFor(requestKey: string): string {
   return `op-${createHash("sha256").update(requestKey, "utf-8").digest("hex").slice(0, 20)}`;
 }

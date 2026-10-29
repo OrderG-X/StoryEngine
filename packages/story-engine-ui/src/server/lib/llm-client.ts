@@ -10,6 +10,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { loadModelSettingsV0 } from "./model-settings.js";
 import type { ModelSettingsLoadResult } from "../book/types.js";
 import { writeFileAtomic } from "./project-io.js";
+import { recoverConfigCommit } from "./config-commit.js";
 import { recordPipelineUsage, recordTurnNotice, sampleFromOpenAIUsage } from "./token-meter.js";
 import { recordUsage } from "./usage-ledger.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
@@ -50,6 +51,10 @@ export function globalModelSettingsPath(): string {
 export function globalModelSecretsPath(): string {
   return join(globalStoryEngineDir(), "model-secrets.json");
 }
+/** 模型设置三份文件一起换时的恢复记录（config-commit）。 */
+export function modelConfigJournalPath(): string {
+  return join(globalStoryEngineDir(), ".model-config-commit.json");
+}
 
 /**
  * 读全局模型设置（审查 #7·单一真值源）。以 globalModelSettingsPath() 为准 → 与保存写盘同一路径、
@@ -64,6 +69,9 @@ export async function loadGlobalModelSettings(): Promise<ModelSettingsLoadResult
  * 模型设置的进程内锁（Astra P2a 第 9 轮第 1 条）：设置、密钥、任务分配是几份文件，读的一方分几次读，
  * 中间有人存了设置就会拿到新密钥配旧地址（或新档案配旧分配）。解析成一份可调用的模型、改这几份文件都在这把锁里，
  * 读到的总是同一次保存之后的样子。只包读写文件那一小段，不包发请求。可重入（锁里再要锁直接跑）。
+ *
+ * 拿到锁先收拾上次没存完的保存（第 10 轮第 1 条，config-commit）：按恢复记录把三份换回原样；换不回就抛，
+ * 锁里的活一律不做——不拿半新半旧的设置去解析、发请求。
  */
 const modelConfigHeld = new AsyncLocalStorage<{ held: boolean }>();
 let modelConfigTail: Promise<unknown> = Promise.resolve();
@@ -73,6 +81,9 @@ export function withModelConfigLock<T>(fn: () => Promise<T>): Promise<T> {
     // 放锁后这份标记就失效：锁里起的异步活放锁之后再要锁照常排队，不算重入。
     const token = { held: true };
     try {
+      await recoverConfigCommit(modelConfigJournalPath()).catch((error: unknown) => {
+        throw new ModelSetupError(`模型设置${error instanceof Error ? error.message : String(error)}在这之前先不调模型。`);
+      });
       return await modelConfigHeld.run(token, fn);
     } finally {
       token.held = false;

@@ -6,6 +6,7 @@
  * 对话里作者说「X 以这个为准」时，对话 AI 调 settle_fact 工具，出的是同一张卡（见 tools/settle-fact.ts）。
  */
 import { CANON_TEXT_MAX, type SettleApplyResult } from "@actalk/story-core";
+import { checkChapterAction } from "./next-steps.js";
 import { callConfiguredBrainModel } from "../editorial/checker.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
 import { proposeSettle, type ChapterSide, type SettleRequest, type SettleSide } from "../editorial/settle/propose.js";
@@ -251,7 +252,7 @@ export async function runSettleAction(args: SettleActionArgs & { readonly action
             label: `再核第 ${outcome.chapter} 章`,
             intent: `重新核第 ${outcome.chapter} 章的账`,
             recommended: true,
-            action: { toolName: "check_continuity", chapter: outcome.chapter, fresh: true },
+            action: checkChapterAction(outcome.chapter, { fresh: true }),
           }],
         },
       });

@@ -15,6 +15,7 @@ import { ensureBookOnCore } from "../../book/mirror/ensure.js";
 import { freezeModelChoices, frozenCompatAllowance, isFrozenModels, type FrozenModels, type ModelTaskProfileKey } from "../../lib/llm-client.js";
 import { readOperationInput } from "../../lib/operations/inputs.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
+import { outsideTurn } from "../../lib/turn-abort.js";
 import { withUsageBook } from "../../lib/usage-scope.js";
 import { listAttempts, settleAbandonedAttempt, unsettledUnknowns } from "../../lib/operations/attempts.js";
 import { inputHashOf, readCheckpoint, writeCheckpoint } from "../../lib/operations/checkpoints.js";
@@ -162,6 +163,18 @@ export async function submitOperation(bookDir: string, input: SubmitInput): Prom
 /*  跑                                                                  */
 /* ------------------------------------------------------------------ */
 
+const OBSOLETE_RECIPE: OperationFailure = { code: "recipe_changed", message: "软件升级了，这次停下的接不上，重新来一次。", retryable: true };
+
+/** 记录是按现在登记的这一版配方开工的（配方不在了也算对不上）。 */
+function recipeMatches(record: OperationRecord): boolean {
+  return recipes.get(record.kind)?.version === record.recipeVersion;
+}
+
+function obsoleteByRecipe(record: OperationRecord): OperationRecord {
+  const { currentStep: _step, pauseReason: _pause, ...rest } = record;
+  return { ...rest, state: "obsolete", failure: OBSOLETE_RECIPE };
+}
+
 interface StartOptions {
   /** 接着做（暂停、等作者之后）：额度加多少、哪些结果不明的 attempt 记成作者处理过。 */
   readonly resume?: { readonly addBudget: number; readonly settle: readonly string[] };
@@ -176,6 +189,8 @@ export async function startOperation(bookDir: string, opId: string, options: Sta
   const record = await changeOperation(bookDir, opId, (current) => {
     const runnable = current.state === "queued" || (options.resume !== undefined && (current.state === "paused" || current.state === "waiting_author"));
     if (!runnable) return undefined;
+    // 配方换过版本（软件升级了）：旧检查点不能拿新步骤解释，作废、要求重新交（Astra P2a 第 10 轮第 5 条）。
+    if (!recipeMatches(current)) return obsoleteByRecipe(current);
     changed = true;
     const { pauseReason: _pauseReason, failure: _failure, ...rest } = current;
     return {
@@ -188,7 +203,8 @@ export async function startOperation(bookDir: string, opId: string, options: Sta
     };
   });
   if (!record || !changed) return record;
-  track(execute(bookDir, record));
+  // 不跟着交它的那一轮：作者断开、喊停那一轮都不算停这次操作（停操作走 cancelOperation）。
+  track(outsideTurn(() => execute(bookDir, record)));
   return record;
 }
 
@@ -333,7 +349,7 @@ async function resumeAllowance(bookDir: string, record: OperationRecord, recipe:
 
 export type ResumeOutcome =
   | { readonly ok: true; readonly record: OperationRecord }
-  | { readonly ok: false; readonly code: "not_paused" | "unknown_operation" | "absent"; readonly message: string };
+  | { readonly ok: false; readonly code: "not_paused" | "unknown_operation" | "absent" | "obsolete"; readonly message: string };
 
 /**
  * 接着做（暂停之后作者点了）：这时还没处理的结果不明的 attempt 记成作者处理过，额度加上停下那一步的最坏值，从停下那一步整步重做。
@@ -345,8 +361,15 @@ export async function resumeOperation(bookDir: string, opId: string): Promise<Re
   if (record.state !== "paused") return { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
   const recipe = recipes.get(record.kind);
   if (!recipe) return { ok: false, code: "unknown_operation", message: "这类操作还没有。" };
+  if (!recipeMatches(record)) {
+    const obsolete = await changeOperation(bookDir, opId, (current) => (current.state === "paused" && !recipeMatches(current) ? obsoleteByRecipe(current) : undefined));
+    return obsolete?.state === "obsolete"
+      ? { ok: false, code: "obsolete", message: OBSOLETE_RECIPE.message }
+      : { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
+  }
   const settle = unsettledUnknowns(await listAttempts(bookDir, opId), record.settledUnknowns).map((attempt) => attempt.attemptId);
   const started = await startOperation(bookDir, opId, { resume: { addBudget: await resumeAllowance(bookDir, record, recipe), settle } });
+  if (started?.state === "obsolete") return { ok: false, code: "obsolete", message: OBSOLETE_RECIPE.message };
   if (!started || started.state !== "running") return { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
   return { ok: true, record: started };
 }
@@ -355,7 +378,6 @@ export async function resumeOperation(bookDir: string, opId: string): Promise<Re
 /*  开书对账                                                            */
 /* ------------------------------------------------------------------ */
 
-const OBSOLETE_RECIPE: OperationFailure = { code: "recipe_changed", message: "软件升级了，这次停下的接不上，重新来一次。", retryable: true };
 
 /**
  * 开书时对账（设计 6.5）：本进程调度表里的不碰；其余 queued / running 按有没有没处理的结果不明、配方能不能自动续处理。
@@ -364,8 +386,13 @@ const OBSOLETE_RECIPE: OperationFailure = { code: "recipe_changed", message: "�
 export async function reconcileOperations(bookDir: string): Promise<{ readonly resumed: readonly string[] }> {
   const resumed: string[] = [];
   for (const record of await listOperations(bookDir)) {
-    if (record.state !== "queued" && record.state !== "running") continue;
     if (isScheduledHere(bookDir, record.opId)) continue;
+    // 停着、等作者的：配方换过版本就作废（卡上不再给「接着做」）。
+    if ((record.state === "paused" || record.state === "waiting_author") && !recipeMatches(record)) {
+      await changeOperation(bookDir, record.opId, (current) => ((current.state === "paused" || current.state === "waiting_author") && !recipeMatches(current) ? obsoleteByRecipe(current) : undefined));
+      continue;
+    }
+    if (record.state !== "queued" && record.state !== "running") continue;
     const recipe = recipes.get(record.kind);
     const attempts = await listAttempts(bookDir, record.opId);
     const unknowns = unsettledUnknowns(attempts, record.settledUnknowns);
@@ -375,9 +402,9 @@ export async function reconcileOperations(bookDir: string): Promise<{ readonly r
       for (const attempt of unknowns) if (attempt.state === "sending") await settleAbandonedAttempt(bookDir, record.opId, attempt.attemptId);
       await withBookThenRecord(bookDir, record.opId, () => updateOperationLocked(bookDir, record.opId, (current) => {
         if (current.state !== "queued" && current.state !== "running") return undefined;
-        if (!recipe || recipe.version !== current.recipeVersion) return { ...current, state: "obsolete", failure: OBSOLETE_RECIPE };
+        if (!recipeMatches(current)) return obsoleteByRecipe(current);
         if (unknowns.length > 0) return { ...current, state: "paused", pauseReason: "attempt_unknown", runEpoch: current.runEpoch + 1 };
-        autoResume = recipe.autoResume === true;
+        autoResume = recipe?.autoResume === true;
         return { ...current, state: "paused", pauseReason: "interrupted", runEpoch: current.runEpoch + 1 };
       }));
     });

@@ -14,6 +14,14 @@ export function runAbortableTurn<T>(signal: AbortSignal, fn: () => T): T {
   return storage.run(signal, fn);
 }
 
+/**
+ * 不算在这一轮里跑（写作版本 P2a）：交给执行器的操作有自己的停法（作者点「■」= 停掉那次操作），
+ * 不跟着这一轮的连接断没断——作者关了页，操作照跑完、照样能写。
+ */
+export function outsideTurn<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 /** 这一轮作者已经喊停（不在任何一轮里 = 没停）。 */
 export function turnAborted(): boolean {
   return storage.getStore()?.aborted ?? false;

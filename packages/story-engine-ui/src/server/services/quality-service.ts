@@ -1,84 +1,13 @@
 /**
- * quality-service — draft 质检的共享 application service（双轨合一·评审簇第一波）。
- *
- * POST /api/draft/quality（routes/draft.ts handleDraftQuality）与 quality_check 工具
- * （agent/tools/quality-check.ts）此前各自进程内复刻同一编排，已实际漂移过；
- * 现在同调本 service 拿 canonical result，两侧只剩适配层投影：
- *   - 路由：HTTP 入参解析 + { ok, quality } 裸报告投影（无 refined/summary）。
- *   - 工具：ok/partialMiss/passed/refined/errorIssueCount + 用户可见 summary（D15 分层降噪输出面）。
- *
- * 重构 P4：对应的 HTTP 路已删（按钮改发结构化动作走对话通道），下面「路由」一侧的说明只作历史由来。
- *
- * 编排：取真草稿 → checkDraftBeforeCommit（只剩确定性的硬检查）→ refined。
- * 重构 P7：靠词表猜的连续性规则（楼层、交通、人称性别…）和给它们打分的 AI 判定层一起删了；前后文对不对得上交给核账员。
- * 只读：不写盘、不建快照、不带 snapshotId / refreshScope。
- *
- * 显式策略参数（原豁免清单里的分歧，收敛成参数而非暗差）：
- *   - trustExplicit（D14）：是否信任 explicitDraftContent 为权威真稿。
- *     路由传 true（前端送的是编辑器实时正文，可能比盘新）；工具默认 false（不信模型臆想的正文）。
- *   - onNoDraft（D16）：三处皆无真稿时怎么办。路由 "engine_empty_report"（把空串照常喂引擎，
- *     出 empty_draft 报告）；工具 "honest_short_circuit"（短路出 draft_not_found_for_check 诚实报告）。
+ * 取「这章要检查的真草稿」（审稿用）。硬伤检查本身（checkDraftBeforeCommit + refined）在 inspect-service 的 runQualityCheck，
+ * 写作版本 P2a 起对话、按钮都交 inspect.run，原来的 quality_check 工具和它的编排一起删了。只读：不写盘、不建快照。
  */
 import { readFile } from "node:fs/promises";
-import { checkDraftBeforeCommit, type CommitQualityIssue, type CommitQualityReport } from "../writing/commit-quality-check.js";
 
 import {
   defaultDraftPath,
   hasRealDraftContent,
 } from "../lib/project-io.js";
-import { refineQualityReport, type RefinedQualityReport } from "../writing/quality-report-refine.js";
-
-/** D16 无稿策略：engine_empty_report=照常喂引擎出空稿报告；honest_short_circuit=短路出诚实「无稿」报告。 */
-export type DraftQualityNoDraftPolicy = "engine_empty_report" | "honest_short_circuit";
-
-export interface DraftQualityCheckInput {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly explicitDraftContent?: string;
-  /** D14 显式策略：编辑器/路由传 true（实时稿顶格优先）；agent 工具路默认 false（盘稿优先）。 */
-  readonly trustExplicit?: boolean;
-  /** D16 显式策略：每条适配路必须声明无稿时的行为，不再各写各的。 */
-  readonly onNoDraft: DraftQualityNoDraftPolicy;
-  readonly retries?: number;
-  readonly delayMs?: number;
-}
-
-export interface DraftQualityCheckResult {
-  readonly chapter: number;
-  /** 三处（显式/文件/workspace）是否取到真稿；false 时 quality 按 onNoDraft 策略产出。 */
-  readonly hasRealDraft: boolean;
-  readonly draftContent: string;
-  readonly quality: CommitQualityReport;
-  /** 分层降噪（纯确定性派生）：路由不投影它（D15），工具投影成 refined/errorIssueCount/partialMiss。 */
-  readonly refined: RefinedQualityReport;
-}
-
-export async function runDraftQualityCheck(input: DraftQualityCheckInput): Promise<DraftQualityCheckResult> {
-  const { projectDir, chapter } = input;
-  const resolved = await resolveDraftContentForQualityCheck({
-    projectDir,
-    chapter,
-    ...(input.explicitDraftContent !== undefined ? { explicitDraftContent: input.explicitDraftContent } : {}),
-    ...(input.trustExplicit !== undefined ? { trustExplicit: input.trustExplicit } : {}),
-    ...(input.retries !== undefined ? { retries: input.retries } : {}),
-    ...(input.delayMs !== undefined ? { delayMs: input.delayMs } : {}),
-  });
-
-  if (!resolved.hasRealDraft && input.onNoDraft === "honest_short_circuit") {
-    // 三处皆无真稿 → 诚实短路：明确「还没正文可质检」，不把空/占位符喂引擎误报「正文为空/过短」（铁律④）。
-    const issue: CommitQualityIssue = {
-      severity: "error",
-      type: "draft_not_found_for_check",
-      message: "No draft body found to check for this chapter yet.",
-    };
-    const quality: CommitQualityReport = { passed: false, issues: [issue] };
-    return { chapter, hasRealDraft: false, draftContent: resolved.content, quality, refined: refineQualityReport(quality) };
-  }
-
-  const draftContent = resolved.content;
-  const quality = await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
-  return { chapter, hasRealDraft: resolved.hasRealDraft, draftContent, quality, refined: refineQualityReport(quality) };
-}
 
 /**
  * 健壮解析「这章要质检的真草稿」——治真机 QA bug：新书写完立刻质检误报「正文为空/过短」。

@@ -98,15 +98,27 @@ describe("parseUserAction 结构化动作解析", () => {
     });
   });
 
-  it("核账动作：fresh=true 才带上（再细核一遍）", () => {
-    expect(parseUserAction({ toolName: "check_continuity", chapter: 3, fresh: true })).toEqual({
+  it("操作动作（写作版本 P2a）：新检查要种类、章号、请求号、发出时间；接着做 / 不要了要操作号", () => {
+    const issuedAt = "2026-10-29T01:02:03.000Z";
+    expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 3, fresh: true }, requestKey: "k-1", issuedAt })).toEqual({
       kind: "action",
-      action: { toolName: "check_continuity", chapter: 3, fresh: true },
+      action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 3, fresh: true }, requestKey: "k-1", issuedAt },
     });
-    expect(parseUserAction({ toolName: "check_continuity", chapter: 3, fresh: "yes" })).toEqual({
-      kind: "action",
-      action: { toolName: "check_continuity", chapter: 3 },
+    // fresh 只给核账；别的检查带了也不收。
+    expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "review", params: { chapter: 3, fresh: true }, requestKey: "k-1", issuedAt })).toMatchObject({
+      action: { params: { chapter: 3 } },
     });
+    expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "nope", params: { chapter: 3 }, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 0 }, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 3 }, issuedAt }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 3 }, requestKey: "k-1", issuedAt: "昨天" }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "draft.generate", mode: "quality", params: { chapter: 3 }, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "resume", opId: "op-0123456789abcdef0123" })).toEqual({ kind: "action", action: { kind: "resume", opId: "op-0123456789abcdef0123" } });
+    expect(parseUserAction({ kind: "cancel", opId: "op-x" }).kind).toBe("invalid");
+    // 老按钮（核账 / 审稿 / 质检按工具名）不再收。
+    expect(parseUserAction({ toolName: "check_continuity", chapter: 3 }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "ai_review", chapter: 3 }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "quality_check", chapter: 3 }).kind).toBe("invalid");
   });
 
   it("改的天数随定稿动作带上：到第几天只跟着第几天一起认", () => {
@@ -167,7 +179,7 @@ describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
 
   it("下一章已经有工作稿（回头重定了旧章）→ 推荐核那一章，不推荐「AI 写」（点了会整章重写手头的稿子）", () => {
     expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: true }).choices).toEqual([
-      { label: "核第 18 章", intent: "核第 18 章的账", recommended: true, action: { toolName: "check_continuity", chapter: 18 } },
+      { label: "核第 18 章", intent: "核第 18 章的账", recommended: true, action: expect.objectContaining({ kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 18 } }) },
     ]);
     expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: false }).choices[0])
       .toMatchObject({ label: "AI 写第 18 章", action: { toolName: "generate_draft", chapter: 18 } });
@@ -219,30 +231,6 @@ describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () =
     });
     const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
     expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { toolName: "generate_draft", chapter: 6 } });
-    await cleanup();
-  });
-
-  it("第 6 章还没定稿时重定第 3 章 → 推荐接着写第 6 章（当前没定稿的前沿章）", async () => {
-    const projectDir = await makeProjectWithCommittedChapters([1, 2, 3, 4, 5]);
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "check_continuity", chapter: 3 },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({
-        ok: false,
-        chapter: 3,
-        sure: [],
-        maybe: [],
-        pending: { done: 4, total: 57 },
-        summary: "核账员还在读前文。",
-      }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-      projectDir,
-    });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
-    expect(next.choices[1]).toMatchObject({ label: "先让 AI 写下一章", action: { toolName: "generate_draft", chapter: 6 } });
     await cleanup();
   });
 
@@ -401,175 +389,8 @@ describe("「定稿」按钮结构化动作（commit_preview）", () => {
   });
 });
 
-describe("「核账」按钮结构化动作（check_continuity，R4.1：没核成不装作核过）", () => {
-  const runCheck = async (executeTool: UserActionToolExecutor) => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "check_continuity", chapter: 5 },
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    return events;
-  };
-  const nextStepsOutput = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
-    events.at(-1)!.data.output as { question: string; choices: { label: string; intent: string; recommended?: boolean }[] };
-  const textOf = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
-    events.filter((e) => e.event === "text-delta").map((e) => String(e.data.text)).join("");
-
-  it("没核成（还在读，ok:false + pending）→ 问句「这次没核成，接下来？」，只有再核一次/先写下一章；不写「做完了」、不给「预览定稿」", async () => {
-    const events = await runCheck(async () => ({
-      ok: false,
-      chapter: 5,
-      sure: [],
-      maybe: [],
-      failures: ["核账员还在读前文（第 4 / 57 章），这次没核"],
-      pending: { done: 4, total: 57 },
-      summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
-    }));
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta", "tool-call", "tool-result"]);
-    // 收尾文本只回工具自己的如实 summary（说清还在读、这次没核）。
-    expect(textOf(events)).toContain("这次没有核");
-    expect(textOf(events)).not.toContain("做完了");
-    const next = nextStepsOutput(events);
-    expect(next.question).toBe("这次没核成，接下来？");
-    expect(next.question).not.toContain("做完了");
-    expect(next.choices.map((c) => c.label)).toEqual(["再核一遍", "先让 AI 写下一章"]);
-    const labels = JSON.stringify(next.choices);
-    expect(labels).not.toContain("预览定稿");
-    expect(labels).not.toContain("改掉确定");
-  });
-
-  it("导入的书还在通读记账 → 回话说等它记完，不给「再核一遍」「先写下一章」（都挡着，点了白点）", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "user-actions-reread-"));
-    try {
-      await mkdir(join(projectDir, "agents", "ledger"), { recursive: true });
-      const now = new Date().toISOString();
-      await writeFile(join(projectDir, "agents", "ledger", "reread.json"), JSON.stringify({ schema: "reread/1", status: "running", run: "r1", total: 10, done: 3, recorded: 30, skipped: 0, startedAt: now, updatedAt: now, resumedAt: now, doneAtResume: 0 }));
-      const said = "这次没能核账：记账员还在通读前文、逐章记账（记完 3/10 章）。核账、定稿、想走法、AI 写稿都要等它记完，你自己写不受影响。";
-      const events: { event: string; data: Record<string, unknown> }[] = [];
-      await runUserAction({
-        action: { toolName: "check_continuity", chapter: 11 },
-        requestContext: new RequestContext(),
-        executeTool: async () => ({ ok: false, chapter: 11, sure: [], maybe: [], failures: [said], summary: said }),
-        sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-        scrubber: { push: (t: string) => t, flush: () => "" },
-        scrubError: String,
-        projectDir,
-      });
-      expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
-      expect(textOf(events)).toBe(said);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it("核出问题 → 回话只说结论那句（headline），清单留给核账卡和稿纸划线（重构 P6）", async () => {
-    const events = await runCheck(async () => ({
-      ok: true,
-      chapter: 5,
-      sure: [{ quote: "甲", earlierQuote: "乙", earlierChapter: 2, reason: "对不上" }],
-      maybe: [],
-      failures: [],
-      summary: "核了第 5 章：确定对不上 1 处。\n· 「甲」和第 2 章「乙」：对不上",
-      headline: "核了第 5 章：确定对不上 1 处。",
-    }));
-    expect(textOf(events)).toBe("核了第 5 章：确定对不上 1 处。");
-  });
-
-  it("没核成（出错，ok:false 无 pending）且 summary 缺失 → 兜底文案也不写「核账做完了」", async () => {
-    const events = await runCheck(async () => ({ ok: false, chapter: 5, sure: [], maybe: [], failures: ["第 1 遍（盯东西）没跑成"] }));
-    expect(textOf(events)).toContain("没核成");
-    expect(textOf(events)).not.toContain("做完了");
-    const next = nextStepsOutput(events);
-    expect(next.question).toBe("这次没核成，接下来？");
-    expect(next.choices.map((c) => c.label)).toEqual(["再核一遍", "先让 AI 写下一章"]);
-  });
-
-  it("没核成（还在读）且 summary 缺失 → 兜底文案用结构化 pending 说「还在读」，不解析 failures 文字", async () => {
-    const events = await runCheck(async () => ({ ok: false, chapter: 5, sure: [], maybe: [], pending: { done: 4, total: 57 } }));
-    expect(textOf(events)).toContain("还在读前文（第 4 / 57 章）");
-  });
-
-  it("核成且 0 处（ok:true）→ 问句「接下来？」、推荐「预览定稿」照旧（正常路不回归）", async () => {
-    const events = await runCheck(async () => ({
-      ok: true,
-      chapter: 5,
-      sure: [],
-      maybe: [],
-      failures: [],
-      summary: "核了第 5 章，没发现和前文对不上的地方。",
-    }));
-    expect(textOf(events)).toContain("没发现和前文对不上的地方");
-    const next = nextStepsOutput(events);
-    expect(next.question).toBe("接下来？");
-    expect(next.choices.map((c) => c.label)).toEqual(["预览定稿", "AI 写下一章"]);
-    expect(next.choices[0]).toMatchObject({ label: "预览定稿", recommended: true });
-  });
-
-  it("核成且确定 N 处 → 不挂下一步（改法都在核账卡上，稿纸工具条照样有「定稿」）", async () => {
-    const events = await runCheck(async () => ({
-      ok: true,
-      chapter: 5,
-      sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }],
-      maybe: [],
-      failures: [],
-      summary: "核了第 5 章：确定对不上 1 处。",
-    }));
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
-  });
-
-  it("核成且确定 N 处、结果复用 → 只问要不要「再核一遍」", async () => {
-    const events = await runCheck(async () => ({
-      ok: true,
-      chapter: 5,
-      reused: true,
-      sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }],
-      maybe: [],
-      failures: [],
-      summary: "核了第 5 章：确定对不上 1 处。",
-    }));
-    const next = nextStepsOutput(events);
-    expect(next.question).toBe("结果同上次，要不要重新核？");
-    expect(next.choices.map((c) => c.label)).toEqual(["再核一遍"]);
-  });
-});
-
 describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8：点击直达 body.action，不再发文本给模型）", () => {
-  const runCheck = async (executeTool: UserActionToolExecutor, chapter = 5) => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "check_continuity", chapter },
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    return events.at(-1)!.data.output as { question: string; choices: { label: string; intent: string; recommended?: boolean; action?: { toolName: string; chapter?: number; fresh?: boolean } }[] };
-  };
-
-  it("没核成 → 「再核一次」直达 check_continuity 本章、「先写下一章」直达 generate_draft 下一章", async () => {
-    const next = await runCheck(async () => ({ ok: false, chapter: 5, sure: [], maybe: [], pending: { done: 4, total: 57 } }));
-    expect(next.choices[0]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5 } });
-    expect(next.choices[0]!.action).not.toHaveProperty("fresh");
-    expect(next.choices[1]).toMatchObject({ label: "先让 AI 写下一章", action: { toolName: "generate_draft", chapter: 6 } });
-  });
-
-  it("核成且 0 处 → 「预览定稿」直达 commit_preview 本章、「写下一章」直达 generate_draft 下一章", async () => {
-    const next = await runCheck(async () => ({ ok: true, chapter: 5, sure: [], maybe: [], failures: [], summary: "核了第 5 章，没发现对不上的地方。" }));
-    expect(next.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview", chapter: 5 } });
-    expect(next.choices[1]).toMatchObject({ label: "AI 写下一章", action: { toolName: "generate_draft", chapter: 6 } });
-  });
-
-  it("结果复用 → 「再细核一遍」直达 check_continuity 且 fresh=true（重新核，不是给上次结果）", async () => {
-    const next = await runCheck(async () => ({ ok: true, chapter: 5, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }], maybe: [], failures: [], summary: "核了第 5 章：确定对不上 1 处。" }));
-    expect(next.choices[0]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
-  });
-
-  it("出稿写好（写完没核账）→ 「预览定稿」直达 commit_preview、「核账」直达 check_continuity，只这两个", async () => {
+  it("出稿写好（写完没核账）→ 「预览定稿」直达 commit_preview、「核账」交一次核账，只这两个", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
@@ -581,7 +402,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     });
     const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
     expect(next.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview", chapter: 2 } });
-    expect(next.choices[1]).toMatchObject({ label: "核账", action: { toolName: "check_continuity", chapter: 2 } });
+    expect(next.choices[1]).toMatchObject({ label: "核账", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 2 } } });
     expect(next.choices).toHaveLength(2);
   });
 
@@ -612,8 +433,9 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(calls).toEqual([]);
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
     expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了；另有可能 1 处，在卡上点开看。");
-    // 核出确定的几处：改法在核账卡上；稿子短了（P13）才另挂一个「接着往下写」。
-    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["check_continuity", "suggest_next_steps"]);
+    // 核账卡按记忆出（card 事件，不是又调了一次核账）；核出确定的几处：改法在核账卡上；稿子短了（P13）才另挂一个「接着往下写」。
+    expect(events.filter((item) => item.event === "card")).toEqual([{ event: "card", data: { type: "continuity", check: expect.objectContaining({ chapter: 2, reused: true }) } }]);
+    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["suggest_next_steps"]);
     const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { question: string; choices: { label: string; action?: unknown }[] };
     expect(next.question).toBe("接下来？");
     expect(next.choices).toEqual([expect.objectContaining({ label: "接着往下写", action: { toolName: "generate_draft", chapter: 2, continueDraft: true } })]);
@@ -662,8 +484,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
       scrubError: String,
     });
     expect(calls).toEqual(["commit_preview"]);
-    const tools = events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName);
-    expect(tools).toEqual(["check_continuity", "commit_preview"]);
+    expect(events.map((item) => item.event === "tool-call" ? `tool-call:${String(item.data.toolName)}` : item.event).filter((name) => name === "card" || name.startsWith("tool-call"))).toEqual(["card", "tool-call:commit_preview"]);
   });
 
   it("写手把「第 N 章 · 」写进了章名：回话书名号里只放章名", async () => {
@@ -868,7 +689,7 @@ describe("「写这一章」结构化动作（2026-10-10 出稿一条路）", ()
   });
 });
 
-describe("「内容审阅」「硬伤检查」「撤销上一步」按钮结构化动作（重构 P4：走对话通道，不再走 HTTP 只读路由）", () => {
+describe("「撤销上一步」按钮结构化动作（重构 P4：走对话通道）", () => {
   const run = async (action: Parameters<typeof runUserAction>[0]["action"], executeTool: UserActionToolExecutor) => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
@@ -882,39 +703,9 @@ describe("「内容审阅」「硬伤检查」「撤销上一步」按钮结构�
     return events;
   };
 
-  it("解析：ai_review / quality_check 要章号；undo 不要；manage_snapshots 不收（裁剪另有确认按钮）", () => {
-    expect(parseUserAction({ toolName: "ai_review", chapter: "3" })).toEqual({ kind: "action", action: { toolName: "ai_review", chapter: 3 } });
-    expect(parseUserAction({ toolName: "quality_check", chapter: 3 })).toEqual({ kind: "action", action: { toolName: "quality_check", chapter: 3 } });
-    expect(parseUserAction({ toolName: "ai_review" }).kind).toBe("invalid");
+  it("解析：undo 不要章号；manage_snapshots 不收（裁剪另有确认按钮）", () => {
     expect(parseUserAction({ toolName: "undo" })).toEqual({ kind: "action", action: { toolName: "undo" } });
     expect(parseUserAction({ toolName: "manage_snapshots", op: "prune" }).kind).toBe("invalid");
-  });
-
-  it("内容审阅：只读、不带确认标记；工具卡 + 工具自己的摘要", async () => {
-    let marked = true;
-    const calls: { toolName: string; input: unknown }[] = [];
-    const events = await run({ toolName: "ai_review", chapter: 3 }, async (toolName, input, context) => {
-      marked = isUserConfirmedTool({ requestContext: context } as never, toolName);
-      calls.push({ toolName, input });
-      return { ok: true, summary: "第 3 章审完了：节奏偏慢。" };
-    });
-    expect(marked).toBe(false);
-    expect(calls).toEqual([{ toolName: "ai_review", input: { chapter: 3 } }]);
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
-    expect(events[2]!.data.text).toBe("第 3 章审完了：节奏偏慢。");
-  });
-
-  it("硬伤检查没做成（ok:false 无摘要）→ 如实说没做成，不说做完了", async () => {
-    const events = await run({ toolName: "quality_check", chapter: 3 }, async () => ({ ok: false }));
-    const text = events.filter((e) => e.event === "text-delta").map((e) => String(e.data.text)).join("");
-    expect(text).toContain("没做成");
-    expect(text).not.toContain("做完了");
-  });
-
-  it("工具抛错 → tool-error（可重试）+ 如实文案", async () => {
-    const events = await run({ toolName: "ai_review", chapter: 3 }, async () => { throw new Error("连接断了"); });
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
-    expect(String(events[2]!.data.text)).toContain("没做成");
   });
 
   it("撤销上一步：调 manage_snapshots op=undo，工具卡名就是 manage_snapshots（前端据 undone 接管磁盘真值）", async () => {
@@ -996,7 +787,7 @@ describe("核账「改这处」结构化动作（revise_draft：按钮直接改�
       expect(typeof output.draftVersion).toBe("number");
       expect(output.overview).toBeTruthy();
       const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean; action?: unknown }[] };
-      expect(next.choices).toEqual([expect.objectContaining({ label: "再核一遍", recommended: true, action: { toolName: "check_continuity", chapter: 11 } })]);
+      expect(next.choices).toEqual([expect.objectContaining({ label: "再核一遍", recommended: true, action: expect.objectContaining({ kind: "new", mode: "continuity", params: { chapter: 11 } }) })]);
     });
   });
 

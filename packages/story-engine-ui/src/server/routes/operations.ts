@@ -5,14 +5,13 @@
  * - POST /api/operations/<opId>/cancel {project} —— 停掉（先持久记 cancelled 再掐在途请求）。
  * 出去的都是 `operationView`（不带参数原文、请求哈希）。
  */
-import { isTerminal, listOperations } from "../lib/operations/store.js";
+import { isOperationId, isTerminal, listOperations } from "../lib/operations/store.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { guardProjectPath, readJsonBody, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 import { cancelOperation, subscribeOperation, type OperationEvent } from "../services/operations/executor.js";
 import { operationView } from "../services/operations/view.js";
 
-const OP_ID = /^op-[0-9a-f]{20}$/u;
 const PATH = /^\/api\/operations(?:\/([^/]+)\/(events|cancel))?$/u;
 
 export function registerOperationsRoutes(middlewares: MiddlewareStack): void {
@@ -29,7 +28,7 @@ export function registerOperationsRoutes(middlewares: MiddlewareStack): void {
     }
     const [, opId, verb] = matched;
     try {
-      if (opId !== undefined && !OP_ID.test(opId)) {
+      if (opId !== undefined && !isOperationId(opId)) {
         writeJson(res, 404, { ok: false, error: "找不到这次操作。" });
         return;
       }

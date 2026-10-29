@@ -8,7 +8,7 @@
  */
 
 /** 读类工具：结果就是给模型读的，不精简。 */
-const READ_TOOLS = new Set(["read_state_overview", "read_chapters_overview", "read_timeline", "read_foundation", "read_draft"]);
+const READ_TOOLS = new Set(["read_state_overview", "read_chapters_overview", "read_timeline", "read_foundation", "read_draft", "read_operation"]);
 
 /** 只给界面用、模型不需要的字段。 */
 const UI_ONLY_FIELDS = new Set(["overview", "refreshScope"]);

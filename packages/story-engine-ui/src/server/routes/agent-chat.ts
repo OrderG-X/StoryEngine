@@ -19,23 +19,23 @@
  */
 import { stepCountIs, type ModelMessage } from "ai";
 
-import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
-import { DRAFT_TOOL, endsAfterDraft, releaseTurnFlow } from "../agent/turn-flow.js";
-import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
+import { buildProjectRequestContext, parseLastTurnUndoHint, parseMessageRef } from "../agent/request-context.js";
+import { DRAFT_TOOL, endsByFlow, releaseTurnFlow } from "../agent/turn-flow.js";
+import { getStoryAgent, getStoryAgentModel, getStoryAgentToolNames, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
-import { aiReviewTool } from "../agent/tools/ai-review.js";
-import { qualityCheckTool } from "../agent/tools/quality-check.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { finishDraftTurn, parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
+import { finishOperationTurn, followOperation, settlesTurn } from "../agent/operation-turn.js";
+import { SUBMIT_TOOL_NAMES } from "../agent/tools/op-tools.js";
+import { buildOperationSummary, operationSummaryText } from "../services/operations/summary.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
-import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
 import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
@@ -186,6 +186,17 @@ export function buildModelMessages(
   return [...history.slice(0, -1), systemMessage, history[history.length - 1]!];
 }
 
+/** 当前章那段和最近操作那段并成一条 system（都贴在作者最新那句前面）。两段都没有就没有。 */
+export function joinSystemMessages(
+  systemMessage: import("ai").ModelMessage | null,
+  extra: string | undefined,
+): import("ai").ModelMessage | null {
+  if (!extra) return systemMessage;
+  if (!systemMessage) return { role: "system", content: extra };
+  const content = typeof systemMessage.content === "string" ? systemMessage.content : "";
+  return { role: "system", content: content ? `${content}\n\n${extra}` : extra };
+}
+
 /** 历史里工具结果只说成没成，细节在那条回复里。 */
 const HISTORY_TOOL_DONE = "做完了，结果见下一条回复。";
 const HISTORY_TOOL_FAILED = "没成功；下一条回复里若说已经做成，不算数。";
@@ -196,11 +207,14 @@ const HISTORY_TOOL_DROPPED = "出了卡，作者在卡上点了「不改了」�
  * 聊天历史 → 模型消息：AI 那条回合调过的工具还原成真的工具调用和结果，再接那条回复的文字。
  * 以前是往回复文字前头塞「（上一轮注：…调了工具…）」，长篇实跑第 17 章模型照着这个开头续写：
  * 先抄一句注，再编一段「第 17 章写好了」，一个工具都没调。真的调用记录模型只会照着真调。
+ * 给了现有工具名（knownTools）就只还原现有的：老会话里已经合并掉的工具（写作版本 P2a 收进 run_check 的那几个）不还原，
+ * 免得模型照着去调一个已经没有的工具；那条回复的文字照留。
  */
-export function historyToModelMessages(messages: readonly ChatHistoryMessage[]): import("ai").ModelMessage[] {
+export function historyToModelMessages(messages: readonly ChatHistoryMessage[], knownTools?: ReadonlySet<string>): import("ai").ModelMessage[] {
   return messages.flatMap((message, index): import("ai").ModelMessage[] => {
-    if (message.role === "user" || !message.tools?.length) return [{ role: message.role, content: message.content }];
-    const calls = message.tools.map((tool, order) => ({ ...tool, toolCallId: `history-${index}-${order}` }));
+    const tools = knownTools ? message.tools?.filter((tool) => knownTools.has(tool.name)) : message.tools;
+    if (message.role === "user" || !tools?.length) return [{ role: message.role, content: message.content }];
+    const calls = tools.map((tool, order) => ({ ...tool, toolCallId: `history-${index}-${order}` }));
     return [
       { role: "assistant", content: calls.map((call) => ({ type: "tool-call" as const, toolCallId: call.toolCallId, toolName: call.name, input: {} })) },
       {
@@ -372,6 +386,8 @@ export async function runAgentTurn(args: {
   let lastToolSummary: string | undefined;
   // 稿写成了（turn-flow 到此收住这一轮）：结论、核账卡、预览、下一步由调用方按 finishDraftTurn 出，这里不再转述。
   let writtenDraft: WrittenDraft | undefined;
+  // 交出去的操作（受理了这一轮就停）：进度、结论、下一步由调用方跟着操作出，这里不再转述回执。
+  let acceptedOperation: { readonly opId: string } | undefined;
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
   let emittedText = false;
@@ -442,6 +458,10 @@ export async function runAgentTurn(args: {
         if (chunk.payload?.toolName === DRAFT_TOOL && record?.ok === true && typeof record.chapter === "number") {
           writtenDraft = { chapter: record.chapter, output, thenPreview: record.thenPreview === true };
         }
+        const receipt = output as { readonly accepted?: unknown; readonly opId?: unknown } | undefined;
+        if (typeof chunk.payload?.toolName === "string" && SUBMIT_TOOL_NAMES.has(chunk.payload.toolName) && receipt?.accepted === true && typeof receipt.opId === "string") {
+          acceptedOperation ??= { opId: receipt.opId };
+        }
         args.sendEvent("tool-result", { toolCallId, toolName: chunk.payload?.toolName, output });
         break;
       }
@@ -477,7 +497,7 @@ export async function runAgentTurn(args: {
     }
   }
 
-  const fallback = writtenDraft || (sawStreamError && !sawToolActivity)
+  const fallback = writtenDraft || acceptedOperation || (sawStreamError && !sawToolActivity)
     ? null
     : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
   if (fallback) {
@@ -491,7 +511,7 @@ export async function runAgentTurn(args: {
   }
   const remainingText = args.scrubber.flush();
   if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-  return { finishReason, emittedText, ...(writtenDraft ? { writtenDraft } : {}) };
+  return { finishReason, emittedText, ...(writtenDraft ? { writtenDraft } : {}), ...(acceptedOperation ? { acceptedOperation } : {}) };
 }
 
 /** 这一轮写成的稿：章号、出稿工具的结果、作者要不要写完就出定稿预览。 */
@@ -506,6 +526,8 @@ export interface AgentTurnResult {
   /** 模型这一轮说过话（收尾的结论另起一段）。 */
   readonly emittedText: boolean;
   readonly writtenDraft?: WrittenDraft;
+  /** 这一轮交出去的操作（受理回执里的操作号）。 */
+  readonly acceptedOperation?: { readonly opId: string };
 }
 
 export function registerAgentChatRoutes(middlewares: MiddlewareStack): void {
@@ -577,6 +599,8 @@ async function handleAgentChat(
     // 出稿流式：注入 sink，让 generate_draft 工具把正文 delta 实时转成 draft-delta SSE 事件（前端逐字进编辑器）。
     // sink 在工具 await 模型期间同步触发 sendEvent（此时 agent.stream 正 parked，draft-delta 自然单独流出）。
     const pickedDirection = readPickedDirection(body.pickedDirection, currentChapter);
+    // 写作版本 P2a：这条作者消息的号和发出时间（前端出的，重发沿用）；对话里交的操作按它认「是不是同一次」。
+    const messageRef = parseMessageRef(body.messageId, body.issuedAt);
     const requestContext = buildProjectRequestContext(
       projectDir,
       currentChapter,
@@ -584,6 +608,7 @@ async function handleAgentChat(
       [...readAuthorWords(messages), ...(pickedDirection ? [pickedDirection] : [])],
       lastTurnUndoHint,
       pickedDirection && currentChapter !== undefined ? { chapter: currentChapter, text: pickedDirection } : undefined,
+      messageRef,
     );
 
     res.writeHead(200, {
@@ -606,15 +631,18 @@ async function handleAgentChat(
         scrubError: stringifyError,
         // 编辑部 R4.6：定稿后判「占位主角卡改名建议」用（缺省不给建议）。
         projectDir,
+        // 按钮交的操作：作者断开了只是不再转发，操作照跑。
+        signal: disconnectAbort.signal,
       })));
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
       for (const notice of actionNotices) sendEvent("status", { message: notice });
       sendEvent("usage", actionUsage);
       const action = parsedAction.action;
-      await appendTurnMetrics(projectDir, "chapter" in action ? action.chapter : currentChapter, {
+      const actionChapter = "kind" in action ? (action.kind === "new" ? action.params.chapter : currentChapter) : "chapter" in action ? action.chapter : currentChapter;
+      await appendTurnMetrics(projectDir, actionChapter, {
         kind: "action",
-        label: action.toolName,
+        label: "kind" in action ? (action.kind === "new" ? `${action.type}:${action.mode}` : `operation:${action.kind}`) : action.toolName,
         ms: Date.now() - actionStarted,
         usage: actionUsage,
       });
@@ -639,15 +667,18 @@ async function handleAgentChat(
     const currentChapterStatus = currentChapter !== undefined
       ? allChapterStates.find((s) => s.chapter === currentChapter)
       : undefined;
-    const systemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates, pickedDirection);
-    const history = historyToModelMessages(messages);
+    const chapterSystemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates, pickedDirection);
+    // 写作版本 P2a：最近几次操作（OperationSummary/1）每轮都注，「上次核出来的第二处」从这里和 read_operation 查，不靠聊天记录。
+    const operationsText = operationSummaryText(await buildOperationSummary(projectDir));
+    const systemMessage = joinSystemMessages(chapterSystemMessage, operationsText);
+    const history = historyToModelMessages(messages, getStoryAgentToolNames());
     // 当前章提示紧贴用户最新指令（而非塞开头被历史淹没）——⑤头号根因 lost-in-the-middle。
     const modelMessages: ModelMessage[] = buildModelMessages(systemMessage, history);
     const visibleTextScrubber = createStreamingScrubber();
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const endedByFlow = endsAfterDraft(requestContext);
+    const endedByFlow = endsByFlow(requestContext);
     const { result: { finishReason }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => {
       const turn = await runAgentTurn({
         fullStream: (
@@ -683,6 +714,15 @@ async function handleAgentChat(
           projectDir,
         });
       }
+      // 交了操作这一轮就收：跟着这次操作转进度，到做完 / 等作者 / 停着，再按结果出一句结论和下一步（按钮交的同一套）。
+      if (turn.acceptedOperation && !disconnectAbort.signal.aborted) {
+        if (turn.emittedText) sendEvent("text-delta", { text: "\n\n" });
+        releaseTurnFlow(requestContext);
+        const record = await followOperation({ bookDir: projectDir, opId: turn.acceptedOperation.opId, sendEvent, signal: disconnectAbort.signal });
+        if (record && !disconnectAbort.signal.aborted && settlesTurn(record.state)) {
+          await finishOperationTurn({ record, projectDir, sendEvent, scrubber: visibleTextScrubber });
+        }
+      }
       return turn;
     }));
 
@@ -715,13 +755,6 @@ async function handleAgentChat(
 /** 结构化动作的工具执行器：按白名单取工具、带同一 requestContext 直接 execute。 */
 const executeUserActionTool: UserActionToolExecutor = async (toolName, input, requestContext) => {
   switch (toolName) {
-    case "check_continuity": {
-      const execute = checkContinuityTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
     case "commit_preview": {
       const execute = commitPreviewTool.execute as unknown as (
         input: Record<string, unknown>,
@@ -743,11 +776,8 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
       ) => Promise<unknown>;
       return execute(input, { requestContext });
     }
-    case "ai_review":
-    case "quality_check":
     case "manage_snapshots": {
-      const tool = toolName === "ai_review" ? aiReviewTool : toolName === "quality_check" ? qualityCheckTool : manageSnapshotsTool;
-      const execute = tool.execute as unknown as (
+      const execute = manageSnapshotsTool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

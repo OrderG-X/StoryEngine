@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callRoute } from "./test-helpers.js";
@@ -10,6 +10,8 @@ import {
   registerModelSettingsRoutes,
 } from "./model-settings.js";
 import type { TaskAssignmentsFile } from "../lib/task-assignments.js";
+import { __setConfigCommitHookForTests } from "../lib/config-commit.js";
+import { resolveConfiguredChatModel } from "../lib/llm-client.js";
 
 // M1 热生效断言用：PUT 保存后必须调 invalidateStoryAgent 清进程内 agent 缓存（改模型设置不重启即生效）。
 const storyAgentMocks = vi.hoisted(() => ({ invalidateStoryAgent: vi.fn() }));
@@ -262,6 +264,81 @@ describe("PUT 保存：origin 变更时清密钥（R1b）", () => {
     });
     expect(statusCode).toBe(200);
     expect(await readSecrets()).toEqual({ main: "sk-keep" });
+  });
+});
+
+describe("PUT 保存中途失败、被杀（Astra P2a 第 10 轮第 1 条）：三份一起换，没存完就退回原样，退回前不调模型", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-mst-journal-"));
+    process.env.SE_DATA_DIR = dir;
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText({ baseUrl: "https://api.example.com/v1" }), "utf-8");
+    await writeFile(join(dir, "model-secrets.json"), JSON.stringify({ version: 1, providerApiKeys: { main: "sk-old" } }), "utf-8");
+  });
+  afterEach(async () => {
+    __setConfigCommitHookForTests(undefined);
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const put = (body: Record<string, unknown>) => callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", body);
+  const resolved = async () => {
+    const model = await resolveConfiguredChatModel("fastDraft");
+    return { baseUrl: model.provider.baseUrl, apiKey: model.apiKey };
+  };
+  const files = async () => (await readdir(dir)).sort();
+
+  for (const [label, body] of [
+    ["换地址、附带新密钥", { rawText: sampleSettingsText({ baseUrl: "https://new.example.com/v1" }), providerApiKeys: { main: "sk-new" } }],
+    ["只换地址（应删旧密钥）", { rawText: sampleSettingsText({ baseUrl: "https://new.example.com/v1" }), providerApiKeys: {} }],
+  ] as const) {
+    it(`${label}：换上密钥那一下失败 → 没存上，地址和密钥都是原样，没留临时文件和恢复记录`, async () => {
+      __setConfigCommitHookForTests(async (index) => {
+        if (index === 1) throw new Error("磁盘满了");
+      });
+      const { statusCode, payload } = await put(body);
+      expect(statusCode).toBe(500);
+      expect(payload.ok).toBe(false);
+      __setConfigCommitHookForTests(undefined);
+      await expect(resolved()).resolves.toEqual({ baseUrl: "https://api.example.com/v1", apiKey: "sk-old" });
+      expect(await files()).toEqual(["model-secrets.json", "model-settings.json"]);
+    });
+
+    it(`${label}：换到一半进程被杀 → 之后头一次读先按恢复记录换回原样，不拿新地址配旧密钥`, async () => {
+      let atKill: Map<string, string> | undefined;
+      __setConfigCommitHookForTests(async (index) => {
+        if (index !== 1) return;
+        // 被杀那一刻盘上的样子：新设置已换上、密钥还是旧的、恢复记录和临时文件都在。
+        atKill = new Map(await Promise.all((await readdir(dir)).map(async (name) => [name, await readFile(join(dir, name), "utf-8")] as const)));
+        throw new Error("被杀了");
+      });
+      await put(body);
+      __setConfigCommitHookForTests(undefined);
+      for (const [name, content] of atKill!) await writeFile(join(dir, name), content, "utf-8");
+      expect(await readFile(join(dir, "model-settings.json"), "utf-8")).toContain("new.example.com");
+      expect(atKill!.has(".model-config-commit.json")).toBe(true);
+
+      await expect(resolved()).resolves.toEqual({ baseUrl: "https://api.example.com/v1", apiKey: "sk-old" });
+      expect(await files()).toEqual(["model-secrets.json", "model-settings.json"]);
+    });
+  }
+
+  it("恢复记录读不出来：不解析、不调模型，如实说没存完", async () => {
+    await writeFile(join(dir, ".model-config-commit.json"), "{坏的", "utf-8");
+    await expect(resolveConfiguredChatModel("fastDraft")).rejects.toThrow(/模型设置上次保存没存完.*先不调模型/u);
+    const { statusCode } = await put({ rawText: sampleSettingsText({ baseUrl: "https://new.example.com/v1" }), providerApiKeys: { main: "sk-new" } });
+    expect(statusCode).toBe(500);
+    expect(await readFile(join(dir, "model-settings.json"), "utf-8")).toContain("api.example.com");
+  });
+
+  it("正常保存：三份换上，不留恢复记录", async () => {
+    const { statusCode } = await put({ rawText: sampleSettingsText({ baseUrl: "https://new.example.com/v1" }), providerApiKeys: { main: "sk-new" } });
+    expect(statusCode).toBe(200);
+    await expect(resolved()).resolves.toEqual({ baseUrl: "https://new.example.com/v1", apiKey: "sk-new" });
+    expect(await files()).toEqual(["model-secrets.json", "model-settings.json"]);
   });
 });
 

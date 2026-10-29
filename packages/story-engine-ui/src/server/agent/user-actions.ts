@@ -6,11 +6,9 @@
  * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
  */
 import type { RequestContext } from "@mastra/core/di";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
 
 import { extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
-import { hasWorkingDraftText } from "../lib/working-draft-text.js";
+import { isOperationId } from "../lib/operations/store.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
 import { createRevisionModelChannel, type RevisionModelCaller } from "../services/revision-service.js";
@@ -20,19 +18,38 @@ import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisio
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
-import { rereadBlocker } from "../editorial/reread-state.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
-import { cachedCheckContinuity } from "./tools/check-continuity.js";
+import { cachedContinuityCheck, type InspectMode } from "../services/inspect-service.js";
+import {
+  checkChapterAction,
+  continueChoice,
+  humanizeToolNames,
+  resolveNextDraftTarget,
+  sendNextSteps,
+  writeNextChoice,
+  type NextDraftTarget,
+  type NextStepChoice,
+} from "./next-steps.js";
+import { runOperationAction } from "./operation-turn.js";
+
+export {
+  checkChapterAction,
+  continueChoice,
+  humanizeToolNames,
+  newOperationAction,
+  nextDraftChapterAfter,
+  readCommittedChapterNumbers,
+  writeNextChoice,
+  type NextDraftTarget,
+  type NextStepChoice,
+} from "./next-steps.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
 export const USER_ACTION_TOOL_NAMES = [
   "commit_apply",
   "prune_snapshots",
-  "check_continuity",
   "commit_preview",
   "generate_draft",
-  "ai_review",
-  "quality_check",
   "manage_snapshots",
   "revise_draft",
   "brainstorm_chapter",
@@ -41,8 +58,25 @@ export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 /** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」；P12：定论预览 / 改齐）。 */
 const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo", "settle_preview", "settle_apply"] as const;
 
+/**
+ * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
+ * 「接着做」「不要了」接着一次停着的操作。片 1 只有检查（inspect.run）是操作，别的按钮随各自那一片迁过来。
+ */
+export type OperationAction =
+  | {
+    readonly kind: "new";
+    readonly type: "inspect.run";
+    readonly mode: InspectMode;
+    readonly params: { readonly chapter: number; readonly fresh?: true };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  | { readonly kind: "resume"; readonly opId: string }
+  | { readonly kind: "cancel"; readonly opId: string };
+
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
+  | OperationAction
   | {
     readonly toolName: "commit_apply";
     readonly chapter: number;
@@ -55,8 +89,6 @@ export type UserAction =
     readonly dayEndOverride?: number;
   }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
-  | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。allowShort=「就这么短，照样定稿」：这一章不拿字数下限挡。 */
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   /**
@@ -64,9 +96,6 @@ export type UserAction =
    * 字数不够接着写、写完核账，和对话里让 AI 写同一套。原来按钮走 /api/draft/stream，没章纲也不核账。
    */
   | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
-  /** 「内容审阅」「硬伤检查」按钮（重构 P4）：只读，走对话通道、结果和 AI 调的一样进对话（原来走单独的 HTTP 路由）。 */
-  | { readonly toolName: "ai_review"; readonly chapter: number }
-  | { readonly toolName: "quality_check"; readonly chapter: number }
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" }
   /**
@@ -122,10 +151,48 @@ function basisOf(record: Record<string, unknown>): { readonly basis?: string } {
   return basis && basis.length <= 128 ? { basis } : {};
 }
 
+const INSPECT_MODES: readonly InspectMode[] = ["continuity", "quality", "review", "flavor"];
+
+/** 按钮带的请求号：出按钮时给的 UUID（字母数字和 `-_`，1～64 位）。 */
+function readRequestKey(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/u.test(value) ? value : undefined;
+}
+
+/** 按钮交给执行器的动作（新操作 / 接着做 / 不要了）：形状不对一律 invalid，不当普通对话。 */
+function parseOperationAction(record: Record<string, unknown>): ParsedUserAction {
+  if (record.kind === "resume" || record.kind === "cancel") {
+    const opId = typeof record.opId === "string" ? record.opId.trim() : "";
+    if (!isOperationId(opId)) return { kind: "invalid", reason: "这次操作的号不对。" };
+    return { kind: "action", action: { kind: record.kind, opId } };
+  }
+  if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
+  if (record.type !== "inspect.run") return { kind: "invalid", reason: "不支持的操作。" };
+  const mode = record.mode as InspectMode;
+  if (!INSPECT_MODES.includes(mode)) return { kind: "invalid", reason: "不认识要做哪种检查。" };
+  const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
+  const chapter = params.chapter;
+  if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
+  const requestKey = readRequestKey(record.requestKey);
+  const issuedAt = typeof record.issuedAt === "string" && record.issuedAt.length <= 40 && Number.isFinite(Date.parse(record.issuedAt)) ? record.issuedAt : undefined;
+  if (!requestKey || !issuedAt) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
+  return {
+    kind: "action",
+    action: {
+      kind: "new",
+      type: "inspect.run",
+      mode,
+      params: { chapter, ...(mode === "continuity" && params.fresh === true ? { fresh: true as const } : {}) },
+      requestKey,
+      issuedAt: new Date(Date.parse(issuedAt)).toISOString(),
+    },
+  };
+}
+
 export function parseUserAction(raw: unknown): ParsedUserAction {
   if (raw === undefined || raw === null) return { kind: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) return { kind: "invalid", reason: "动作格式不对。" };
   const record = raw as Record<string, unknown>;
+  if (record.kind !== undefined) return parseOperationAction(record);
   const toolName = record.toolName;
   if (typeof toolName !== "string" || ![...USER_ACTION_TOOL_NAMES, ...DIRECT_ACTION_NAMES].includes(toolName as never)) {
     return { kind: "invalid", reason: "不支持的操作。" };
@@ -170,16 +237,12 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
   if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter, ...(record.allowShort === true ? { allowShort: true as const } : {}) } };
-  if (toolName === "ai_review" || toolName === "quality_check") return { kind: "action", action: { toolName, chapter } };
   if (toolName === "generate_draft") {
     const chapterGoal = typeof record.chapterGoal === "string" ? record.chapterGoal.trim().slice(0, 2000) : "";
     return {
       kind: "action",
       action: { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(record.continueDraft === true ? { continueDraft: true } : {}) },
     };
-  }
-  if (toolName === "check_continuity") {
-    return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
   }
   if (toolName === "brainstorm_chapter") {
     const idea = typeof record.idea === "string" ? record.idea.trim().slice(0, MAX_BRAINSTORM_IDEA) : "";
@@ -229,80 +292,11 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   };
 }
 
-interface NextStepChoice {
-  readonly label: string;
-  readonly intent: string;
-  readonly recommended?: boolean;
-  /**
-   * 结构化动作（R4.7/验收 3.8）：带上它的选项，前端点击直接发 body.action 到 /api/agent/chat，
-   * 不再发一句意图给模型（一次省 3～5 万输入）。只给**服务端自己生成**的确定性选项填
-   * （预览定稿/再核一次/写下一章…）；模型 suggest_next_steps 生成的选项没有这个字段，照旧发文本。
-   */
-  readonly action?: UserAction;
-}
-
 interface CommitApplyLikeOutput {
   readonly committed?: unknown;
   readonly summary?: unknown;
   readonly chapter?: unknown;
   readonly threadMaintenanceHint?: unknown;
-}
-
-/** 给用户看的收尾文本：工具 summary 里偶有工具名（「尚未对该章执行 commit_preview」），换成人话。 */
-export function humanizeToolNames(text: string): string {
-  return text.replace(/commit_preview/gu, "定稿预览").replace(/commit_apply/gu, "定稿");
-}
-
-/**
- * 已定稿章号（只列 chapters/ 目录名，不读文件内容）。目录读不到（老书/异常）→ 空数组，调用方按旧口径 N+1 兜底。
- * 纯 readdir，一次目录扫描，代价可忽略。
- */
-export async function readCommittedChapterNumbers(projectDir: string): Promise<readonly number[]> {
-  const files = await readdir(join(projectDir, "chapters")).catch(() => [] as string[]);
-  const numbers: number[] = [];
-  for (const file of files) {
-    const match = /^(\d{4})\.md$/u.exec(file);
-    if (match?.[1]) {
-      const chapter = Number(match[1]);
-      if (Number.isInteger(chapter) && chapter > 0) numbers.push(chapter);
-    }
-  }
-  return numbers;
-}
-
-/**
- * 写作前沿章（R7.7·报告 4.2）：第 N 章之后第一个还没定稿的章；N 之后全都定稿了就是 N+1（旧口径）。
- * 重新定稿旧章（比如回到第 3 章改，第 4、5 章早定稿了）后，旧代码推荐「写第 4 章」会把作者拽回
- * 早就写完的旧章——正确推荐是接着写没定稿的那章（第 6 章）。从 N+1 起找而不是从 1 起找：
- * 「第一个没定稿的章」常常正是手头这本草稿（核账/出稿都在未定稿章上做），不能推荐回去重写它。
- * 纯确定性计算（扫定稿文件名），不猜说法。
- */
-export function nextDraftChapterAfter(chapter: number, committed: readonly number[]): number {
-  const set = new Set(committed.filter((n) => Number.isInteger(n) && n > 0));
-  let next = Math.max(1, Math.trunc(chapter)) + 1;
-  while (set.has(next)) next += 1;
-  return next;
-}
-
-/** 写作前沿章和它是不是已经有工作稿（「写下一章」选项用）。 */
-export interface NextDraftTarget {
-  readonly chapter: number;
-  readonly hasDraft: boolean;
-}
-
-/**
- * 「写下一章」那个选项（确定性）：下一章还空着 → AI 写；已经有工作稿（回头重定了旧章，下一章正写到一半）→
- * 改成核那一章。选项点了是作者档，generate_draft 会整章重写——不能顶着「AI 写」的名字把手头的稿子换掉（长篇连写 2026-10-24）。
- */
-export function writeNextChoice(target: NextDraftTarget, label: string = `AI 写第 ${target.chapter} 章`): NextStepChoice {
-  return target.hasDraft
-    ? { label: `核第 ${target.chapter} 章`, intent: `核第 ${target.chapter} 章的账`, action: { toolName: "check_continuity", chapter: target.chapter } }
-    : { label, intent: `继续写第 ${target.chapter} 章的正文`, action: { toolName: "generate_draft", chapter: target.chapter } };
-}
-
-/** 「接着往下写」那个选项（P13）：稿子短了，从最后一句接着写，已写的不动。 */
-export function continueChoice(chapter: number): NextStepChoice {
-  return { label: "接着往下写", intent: `第 ${chapter} 章接着往下写`, action: { toolName: "generate_draft", chapter, continueDraft: true } };
 }
 
 /**
@@ -343,14 +337,6 @@ export type UserActionToolExecutor = (
   requestContext: RequestContext,
 ) => Promise<unknown>;
 
-/** 写作前沿章（R7.7）：有书目录时按定稿文件现算；没传目录/读不到定稿章 → N+1 旧口径兜底。顺带看那章有没有工作稿。 */
-async function resolveNextDraftTarget(projectDir: string | undefined, chapter: number): Promise<NextDraftTarget> {
-  if (!projectDir) return { chapter: chapter + 1, hasDraft: false };
-  const committed = await readCommittedChapterNumbers(projectDir);
-  const next = committed.length > 0 ? nextDraftChapterAfter(chapter, committed) : chapter + 1;
-  return { chapter: next, hasDraft: await hasWorkingDraftText(projectDir, next).catch(() => false) };
-}
-
 /**
  * 执行一次用户结构化动作并把结果按 agent 回合同款事件推给前端。
  * 工具抛错 → tool-error + 如实文案（绝不静默）；标记只在本次执行期间存在，结束即清。
@@ -366,14 +352,21 @@ export async function runUserAction(args: {
   readonly projectDir?: string;
   /** 「改这处」用的修订模型（测试注入）；缺省按 repair 任务的配置。 */
   readonly fixModel?: RevisionModelCaller;
+  /** 作者断开了（关页、网断）：交给执行器的操作照跑，只是不再转发。 */
+  readonly signal?: AbortSignal;
 }): Promise<void> {
   const { action } = args;
-  if (action.toolName === "prune_snapshots") {
-    await runPruneAction({ ...args, action });
+  if ("kind" in action) {
+    if (!args.projectDir) {
+      const scrubbed = args.scrubber.push("没有打开的书，这一步没做。");
+      if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+      return;
+    }
+    await runOperationAction({ action, projectDir: args.projectDir, sendEvent: args.sendEvent, scrubber: args.scrubber, signal: args.signal ?? new AbortController().signal });
     return;
   }
-  if (action.toolName === "check_continuity") {
-    await runCheckContinuityAction({ ...args, action });
+  if (action.toolName === "prune_snapshots") {
+    await runPruneAction({ ...args, action });
     return;
   }
   if (action.toolName === "commit_preview") {
@@ -390,10 +383,6 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "foundation_decision") {
     await runFoundationDecisionAction({ ...args, action });
-    return;
-  }
-  if (action.toolName === "ai_review" || action.toolName === "quality_check") {
-    await runReadOnlyChapterAction({ ...args, action });
     return;
   }
   if (action.toolName === "undo") {
@@ -511,121 +500,54 @@ export function afterDraftCheckLine(result: CheckContinuityLikeOutput, fixed = 0
     : `写完核了一遍：${counts}${cold}。`;
 }
 
-/** 「核账」按钮：服务端直接跑核账（只读），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
-async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "check_continuity" }>;
-  /** 「写这一章」写完接着出核账卡（结果来自写完那遍核账的记忆，不再调模型）：回话换成「写完核了一遍…」。 */
-  readonly afterDraft?: boolean;
+/**
+ * 写完这一章接着出核账卡（结果来自写完那遍核账的记忆，不再调模型）：卡按 `card` 事件推给前端（不是一次工具调用，也不是一次操作），
+ * 回话「写完核了一遍…」，再给下一步。核账本身是操作（inspect.run），这里只是把出稿流程里核过的那份结果摆出来。
+ */
+async function sendAfterDraftCheck(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly chapter: number;
+  /** 写完那遍的核账记忆。 */
+  readonly output: unknown;
   /** 写完核出的按前文改了几处（改完再核的结果才进了核账记忆）。 */
   readonly fixedAfterDraft?: number;
   /** 写完的稿子比字数下限短：下一步先给「接着往下写」。 */
   readonly shortAfterDraft?: boolean;
-  /** 已经有的核账结果（写完那遍的核账记忆）：直接出卡，不再跑工具。 */
-  readonly output?: unknown;
   /** 后面还有别的接着出（写完就出定稿预览）：不给下一步。 */
   readonly skipNextSteps?: boolean;
   /** 下一步前面再加的（作者要点可能没写到：「补上这几条」）。 */
   readonly moreChoices?: readonly NextStepChoice[];
 }): Promise<void> {
-  const { action } = args;
-  const stamp = Date.now();
-  const toolCallId = `user-action-check_continuity-${stamp}`;
+  const { chapter } = args;
   const emitText = (text: string): void => {
     const scrubbed = args.scrubber.push(text);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-  };
-  const input = { chapter: action.chapter, ...(action.fresh ? { fresh: true } : {}) };
-  args.sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: input });
-  let output: unknown = args.output;
-  try {
-    if (output === undefined) output = await args.executeTool("check_continuity", input, args.requestContext);
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "check_continuity", error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章核账没跑成：${message}。可以再点一次「核账」。`);
     const rest = args.scrubber.flush();
     if (rest) args.sendEvent("text-delta", { text: rest });
-    return;
-  }
-  args.sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
-  const result = output as CheckContinuityLikeOutput | undefined;
-  // 没核成（ok:false：还在读 / 出错 / 没正文）绝不写「核账做完了」。summary 缺失时的兜底也按 pending
-  // 区分「还在读」和「出错」（结构化字段，不解析 failures 文字）——R4.1/验收 3.1。
-  const notChecked = result?.ok === false;
-  const fallbackSummary = notChecked
-    ? result?.pending
-      ? `第 ${action.chapter} 章这次没核成：核账员还在读前文（第 ${result.pending.done} / ${result.pending.total} 章）。`
-      : `第 ${action.chapter} 章这次没核成。`
-    : `第 ${action.chapter} 章核账做完了。`;
+  };
+  const result = args.output as CheckContinuityLikeOutput | undefined;
+  args.sendEvent("card", { type: "continuity", check: args.output });
   // 问题清单在核账卡和稿纸划线上（重构 P6），回话只说结论那句。
-  const said = [args.afterDraft && result ? afterDraftCheckLine(result, args.fixedAfterDraft) : undefined, result?.headline, result?.summary]
+  const said = [result ? afterDraftCheckLine(result, args.fixedAfterDraft) : undefined, result?.headline, result?.summary]
     .find((text): text is string => typeof text === "string" && text.trim().length > 0);
-  emitText(said ? said.trim() : fallbackSummary);
-  const rest = args.scrubber.flush();
-  if (rest) args.sendEvent("text-delta", { text: rest });
-  // 没核成：下一步只给「再核一次」「先写下一章」——不给「预览定稿」（没核过不该推荐定稿）、
-  // 不给「改掉确定的 N 处」（sure 是空的），问句也不写「做完了」。
-  if (notChecked) {
-    // 导入的书还在通读记账：核账、AI 写稿都挡着，「再核一遍」「先写下一章」点了也是白点——不给下一步，回话已说清等它记完。
-    if (args.projectDir && await rereadBlocker(args.projectDir, "核账")) return;
-    // 写下一章推荐写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
-    const next = await resolveNextDraftTarget(args.projectDir, action.chapter);
-    const failedCallId = `user-action-next-${stamp}`;
-    args.sendEvent("tool-call", { toolCallId: failedCallId, toolName: "suggest_next_steps", args: {} });
-    args.sendEvent("tool-result", {
-      toolCallId: failedCallId,
-      toolName: "suggest_next_steps",
-      output: {
-        ok: true,
-        question: "这次没核成，接下来？",
-        choices: [
-          {
-            label: "再核一遍",
-            intent: `重新核第 ${action.chapter} 章的账`,
-            recommended: true,
-            action: { toolName: "check_continuity", chapter: action.chapter },
-          },
-          writeNextChoice(next, "先让 AI 写下一章"),
-        ],
-      },
-    });
-    return;
-  }
+  emitText(said ? said.trim() : `第 ${chapter} 章写完核了一遍。`);
+  if (args.skipNextSteps || result?.ok === false) return;
   const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
-  // 正文没改、直接给的上次结果 → 多给一个「再细核一遍」（重新核，上次的问题照样带上）。
-  const fresh: NextStepChoice[] = result?.reused === true && !args.afterDraft
-    ? [{
-        label: "再核一遍",
-        intent: "再核一遍：这一章重新对一遍前文",
-        action: { toolName: "check_continuity", chapter: action.chapter, fresh: true },
-      }]
-    : [];
-  // 确定 N 处时，改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」，R4.5），稿纸工具条照样有「定稿」：
-  // 不再挂下一步（以前的「我自己改」会白发一句话给 AI）。只有结果是上次的，才问要不要重新核。
-  if (args.skipNextSteps) return;
-  const more: NextStepChoice[] = [...(args.shortAfterDraft ? [continueChoice(action.chapter)] : []), ...(args.moreChoices ?? [])];
+  const more: NextStepChoice[] = [...(args.shortAfterDraft ? [continueChoice(chapter)] : []), ...(args.moreChoices ?? [])];
+  // 确定 N 处时，改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」，R4.5），稿纸工具条照样有「定稿」：不再挂下一步。
   const choices: NextStepChoice[] = sureCount > 0
-    ? [...more, ...fresh]
+    ? more
     : [
       ...more,
       {
         label: "预览定稿",
-        intent: `预览第 ${action.chapter} 章的定稿改动`,
+        intent: `预览第 ${chapter} 章的定稿改动`,
         recommended: more.length === 0,
-        action: { toolName: "commit_preview", chapter: action.chapter },
+        action: { toolName: "commit_preview", chapter },
       },
       // 写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
-      writeNextChoice(await resolveNextDraftTarget(args.projectDir, action.chapter), "AI 写下一章"),
-      ...fresh,
+      writeNextChoice(await resolveNextDraftTarget(args.projectDir, chapter), "AI 写下一章"),
     ];
-  if (choices.length === 0) return;
-  const nextCallId = `user-action-next-${stamp}`;
-  args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
-  args.sendEvent("tool-result", {
-    toolCallId: nextCallId,
-    toolName: "suggest_next_steps",
-    output: { ok: true, question: sureCount > 0 && fresh.length > 0 ? "结果同上次，要不要重新核？" : "接下来？", choices },
-  });
+  sendNextSteps(args.sendEvent, "接下来？", choices);
 }
 
 interface CommitPreviewLikeOutput {
@@ -804,38 +726,6 @@ async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserA
   emitText(outcome.summary);
 }
 
-const READ_ONLY_ACTION_LABELS = { ai_review: "内容审阅", quality_check: "硬伤检查" } as const;
-
-/** 「内容审阅」「硬伤检查」按钮：服务端直接跑只读工具，结果按 agent 回合同款事件推给前端（审阅卡 / 硬伤卡照常渲染）。 */
-async function runReadOnlyChapterAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "ai_review" | "quality_check" }>;
-}): Promise<void> {
-  const { action } = args;
-  const label = READ_ONLY_ACTION_LABELS[action.toolName];
-  const toolCallId = `user-action-${action.toolName}-${Date.now()}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: action.toolName, args: { chapter: action.chapter } });
-  let output: unknown;
-  try {
-    output = await args.executeTool(action.toolName, { chapter: action.chapter }, args.requestContext);
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: action.toolName, error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章的${label}没做成：${humanizeToolNames(message)}。可以再点一次「${label}」。`);
-    return;
-  }
-  args.sendEvent("tool-result", { toolCallId, toolName: action.toolName, output });
-  const result = output as { readonly ok?: unknown; readonly summary?: unknown } | undefined;
-  emitText(typeof result?.summary === "string" && result.summary.trim()
-    ? humanizeToolNames(result.summary.trim())
-    : result?.ok === false ? `第 ${action.chapter} 章的${label}这次没做成。` : `第 ${action.chapter} 章的${label}做完了，结果在上面。`);
-}
-
 /** 「给我几种走法」按钮：服务端直接跑只读的 brainstorm_chapter，走法卡进对话、稿纸上方给作者挑；回执一句话。 */
 async function runBrainstormAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
   readonly action: Extract<UserAction, { readonly toolName: "brainstorm_chapter" }>;
@@ -941,7 +831,7 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       label: "再核一遍",
       intent: `重新核第 ${action.chapter} 章的账`,
       ...(failed.length === 0 ? { recommended: true } : {}),
-      action: { toolName: "check_continuity" as const, chapter: action.chapter },
+      action: checkChapterAction(action.chapter),
     }] : []),
   ];
   if (choices.length === 0) return;
@@ -1100,7 +990,7 @@ export async function finishDraftTurn(args: Omit<Parameters<typeof runUserAction
   const missing = written && result ? missingBeatsOf(result) : [];
   // 写完那遍核过的账：只认核账记忆（稿子又被改过、有一步没跑成没记下的都是 null），不再调模型。
   const cached = written && checked === true && args.projectDir
-    ? await (args.readCachedCheck ?? cachedCheckContinuity)(args.projectDir, action.chapter).catch(() => null)
+    ? await (args.readCachedCheck ?? cachedContinuityCheck)(args.projectDir, action.chapter).catch(() => null)
     : null;
   // 写成了：一句结论（细节在步骤里）；没写成：照原因说（summary 里是拒稿原因）。
   emitText(written && result
@@ -1124,11 +1014,10 @@ export async function finishDraftTurn(args: Omit<Parameters<typeof runUserAction
   if (cached) {
     args.sendEvent("text-delta", { text: "\n" });
     const fixed = result?.qualityPipeline?.continuity?.autoFixed?.applied;
-    await runCheckContinuityAction({
+    await sendAfterDraftCheck({
       ...args,
-      action: { toolName: "check_continuity", chapter: action.chapter },
+      chapter: action.chapter,
       output: cached,
-      afterDraft: true,
       ...(typeof fixed === "number" && fixed > 0 ? { fixedAfterDraft: fixed } : {}),
       ...(short ? { shortAfterDraft: true } : {}),
       ...(args.thenPreview ? { skipNextSteps: true } : { moreChoices: fillBeats }),
@@ -1150,7 +1039,7 @@ export async function finishDraftTurn(args: Omit<Parameters<typeof runUserAction
         recommended: !short && fillBeats.length === 0,
         action: { toolName: "commit_preview", chapter: action.chapter },
       },
-      { label: "核账", intent: "核账", action: { toolName: "check_continuity", chapter: action.chapter } },
+      { label: "核账", intent: "核账", action: checkChapterAction(action.chapter) },
     ]
     : retryDraftChoices(action, result?.blockedReason, result?.kept);
   if (choices.length === 0) return;

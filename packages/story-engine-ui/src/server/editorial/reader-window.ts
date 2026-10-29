@@ -493,58 +493,97 @@ function estimateVolumeChars(volumeNotes: ReadonlyMap<string, VolumeNoteEntry>):
 }
 
 /**
- * 只读盘数卷笔记的缺口：照 ensureReaderWindow 的规划走（盘上认领到的按实际字数、其余按估值，认领到新的就重规划），
- * 数最后那份规划里盘上没有的卷节点（含下级）。不调模型；真建时按建出来的字数还会再规划，个数可能差一点，只用来判有没有缺。
+ * 卷笔记规划（取窗口和数缺口共用这一条路，Astra P2a 第 10 轮第 3 条）：每一轮先按手上有的规划（有的按实际字数、其余按估值），
+ * 再把这份规划要用的卷节点从盘上认领一遍（只读、不生成；下级齐了才认上级）——认领到新的就按实际字数重规划，直到稳了。
+ * 稳了还缺：给了 build 就生成缺的（先下级后上级），生成出来的字数和估值不同，再回去重规划；没给（只数缺口）就数出缺几个节点。
+ * 以前数缺口先认领再重规划，真建却按初次估值先把上级建了：状态说齐了、取窗口还要建，后台又不接。
  */
+async function settleVolumeLayout(input: {
+  readonly root: string;
+  readonly role: ReaderRole;
+  readonly entries: readonly ReaderWindowEntry[];
+  readonly maxChars: number;
+  /** 手上已有的卷笔记（认领到的、生成的都记进去）。 */
+  readonly notes: Map<string, VolumeNoteEntry>;
+  readonly build?: (volume: LayoutVolume, materials: readonly string[]) => Promise<VolumeNoteEntry>;
+}): Promise<{ readonly layout: WindowLayout; readonly missing: number }> {
+  const { root, role, entries, maxChars, notes } = input;
+  /** 盘上没有（或对不上）的：键 + 材料哈希。 */
+  const absent = new Set<string>();
+  const leafMaterials = (volume: LayoutVolume): string[] => {
+    const materials: string[] = [];
+    for (let chapter = volume.from; chapter <= volume.to; chapter += 1) materials.push(entries[chapter - 1]!.note);
+    return materials;
+  };
+  const fromDisk = async (volume: LayoutVolume, materials: readonly string[]): Promise<VolumeNoteEntry | undefined> => {
+    const lookup = `${volumeKey(volume.from, volume.to)}\u0000${sha(materialsJoin(materials))}`;
+    if (absent.has(lookup)) return undefined;
+    const existing = await readVolume(root, role, volume.from, volume.to, materials);
+    if (!existing) absent.add(lookup);
+    else notes.set(volumeKey(volume.from, volume.to), existing);
+    return existing;
+  };
+  /** 认领：手上有就用，下级都认领得到、盘上有这一份就认上。不生成。 */
+  const claim = async (volume: LayoutVolume): Promise<VolumeNoteEntry | undefined> => {
+    const held = notes.get(volumeKey(volume.from, volume.to));
+    if (held) return held;
+    let materials: string[];
+    if (volume.children.length === 0) materials = leafMaterials(volume);
+    else {
+      materials = [];
+      for (const child of volume.children) {
+        const note = await claim(child);
+        if (!note) return undefined;
+        materials.push(note.note);
+      }
+    }
+    return fromDisk(volume, materials);
+  };
+  /** 备齐一个节点：下级先备齐，盘上有就认、没有就生成。 */
+  const provide = async (volume: LayoutVolume, build: NonNullable<typeof input.build>): Promise<VolumeNoteEntry> => {
+    const held = notes.get(volumeKey(volume.from, volume.to));
+    if (held) return held;
+    const materials = volume.children.length === 0 ? leafMaterials(volume) : [];
+    for (const child of volume.children) materials.push((await provide(child, build)).note);
+    const existing = await fromDisk(volume, materials);
+    if (existing) return existing;
+    const entry = await build(volume, materials);
+    notes.set(volumeKey(volume.from, volume.to), entry);
+    return entry;
+  };
+  const countMissing = (volumes: readonly LayoutVolume[]): number => {
+    const counted = new Set<string>();
+    const count = (volume: LayoutVolume): void => {
+      const key = volumeKey(volume.from, volume.to);
+      if (notes.has(key) || counted.has(key)) return;
+      counted.add(key);
+      for (const child of volume.children) count(child);
+    };
+    for (const volume of volumes) count(volume);
+    return counted.size;
+  };
+  for (let round = 0; round < VOLUME_PLAN_MAX_ROUNDS; round += 1) {
+    const layout = planWindowLayout({
+      role,
+      entries,
+      maxChars,
+      noteSizeFor: (from, to) => notes.get(volumeKey(from, to))?.note.length ?? estimateVolumeChars(notes),
+    });
+    const before = notes.size;
+    for (const volume of layout.volumes) await claim(volume);
+    if (notes.size !== before) continue;
+    const missing = layout.volumes.filter((volume) => !notes.has(volumeKey(volume.from, volume.to)));
+    if (missing.length === 0) return { layout, missing: 0 };
+    if (!input.build) return { layout, missing: countMissing(layout.volumes) };
+    for (const volume of missing) await provide(volume, input.build);
+  }
+  throw new Error("卷笔记规划没有收敛");
+}
+
+/** 只读盘数卷笔记的缺口（和取窗口同一条规划路，不调模型）。 */
 async function missingVolumeCount(root: string, role: ReaderRole, entries: readonly ReaderWindowEntry[], maxChars: number): Promise<number> {
   if (!role.volumeTask) return 0;
-  const found = new Map<string, VolumeNoteEntry>();
-  const absent = new Set<string>();
-  /** 这个卷节点在盘上的笔记；它或它的下级缺了是 undefined。 */
-  const noteOf = async (volume: LayoutVolume): Promise<string | undefined> => {
-    const key = volumeKey(volume.from, volume.to);
-    const hit = found.get(key);
-    if (hit) return hit.note;
-    if (absent.has(key)) return undefined;
-    const materials: string[] = [];
-    if (volume.children.length === 0) {
-      for (let chapter = volume.from; chapter <= volume.to; chapter += 1) materials.push(entries[chapter - 1]!.note);
-    } else {
-      let complete = true;
-      for (const child of volume.children) {
-        const note = await noteOf(child);
-        if (note === undefined) complete = false;
-        else materials.push(note);
-      }
-      if (!complete) {
-        absent.add(key);
-        return undefined;
-      }
-    }
-    const existing = await readVolume(root, role, volume.from, volume.to, materials);
-    if (!existing) {
-      absent.add(key);
-      return undefined;
-    }
-    found.set(key, existing);
-    return existing.note;
-  };
-  let layout: WindowLayout | undefined;
-  for (let round = 0; round < VOLUME_PLAN_MAX_ROUNDS; round += 1) {
-    const before = found.size;
-    layout = planWindowLayout({ role, entries, maxChars, noteSizeFor: (from, to) => found.get(volumeKey(from, to))?.note.length ?? estimateVolumeChars(found) });
-    for (const volume of layout.volumes) await noteOf(volume);
-    if (found.size === before) break;
-  }
-  const counted = new Set<string>();
-  const count = (volume: LayoutVolume): void => {
-    const key = volumeKey(volume.from, volume.to);
-    if (found.has(key) || counted.has(key)) return;
-    counted.add(key);
-    for (const child of volume.children) count(child);
-  };
-  for (const volume of layout?.volumes ?? []) count(volume);
-  return counted.size;
+  return (await settleVolumeLayout({ root, role, entries, maxChars, notes: new Map() })).missing;
 }
 
 /** 已定稿到第几章（chapters/NNNN.md 里最大的章号）。目录读不到是 0。 */
@@ -699,24 +738,8 @@ export async function ensureReaderWindow(input: {
     const roleHash = roleHashOf(input.role);
     const volumeNotes = new Map<string, VolumeNoteEntry>();
     let volumesBuilt = 0;
-    // 还没生成的卷笔记按已生成的平均长度估（estimateVolumeChars）：估大了只会多折、不会超预算；
-    // 照着已生成的估能少生成一堆马上就用不上的中间卷笔记。
-    /** 拿到一条卷笔记：内存里有就用，盘上对得上就用，否则把下级材料备齐（叶子＝十章笔记，否则＝下级卷笔记）、调模型生成、存盘。 */
-    const volumeNoteOf = async (volume: LayoutVolume): Promise<VolumeNoteEntry> => {
-      const key = volumeKey(volume.from, volume.to);
-      const cached = volumeNotes.get(key);
-      if (cached) return cached;
-      const materials: string[] = [];
-      if (volume.children.length === 0) {
-        for (let chapter = volume.from; chapter <= volume.to; chapter += 1) materials.push(entries[chapter - 1]!.note);
-      } else {
-        for (const child of volume.children) materials.push((await volumeNoteOf(child)).note);
-      }
-      const existing = await readVolume(root, input.role, volume.from, volume.to, materials);
-      if (existing) {
-        volumeNotes.set(key, existing);
-        return existing;
-      }
+    /** 生成一条卷笔记（规划里缺、盘上也没有的才走到这）：到了这次的上限就停；调模型、存盘。 */
+    const generateVolume = async (volume: LayoutVolume, materials: readonly string[]): Promise<VolumeNoteEntry> => {
       const volumeLimit = maxVolumeBuilds();
       if (volumeLimit !== undefined && volumesBuilt >= volumeLimit) throw new VolumeBuildLimit();
       const note = (await input.callModel(buildVolumeMessages(input.role, volume.from, volume.to, materials), { json: false }))
@@ -727,26 +750,12 @@ export async function ensureReaderWindow(input: {
         volumeFile(root, input.role.id, volume.from, volume.to),
         `${JSON.stringify({ from: volume.from, to: volume.to, textHash: sha(materialsJoin(materials)), roleHash: volumeRoleHashOf(input.role), note, createdAt: new Date().toISOString() } satisfies VolumeFile, null, 2)}\n`,
       ));
-      const entry = { from: volume.from, to: volume.to, note };
-      volumeNotes.set(key, entry);
       volumesBuilt += 1;
-      return entry;
+      return { from: volume.from, to: volume.to, note };
     };
-    /** 按当前笔记把窗口规划稳：该有的卷笔记都备齐（生成或从盘上认领），返回布局。 */
-    const settleVolumes = async (): Promise<WindowLayout> => {
-      for (let round = 0; round < VOLUME_PLAN_MAX_ROUNDS; round += 1) {
-        const layout = planWindowLayout({
-          role: input.role,
-          entries,
-          maxChars,
-          noteSizeFor: (from, to) => volumeNotes.get(volumeKey(from, to))?.note.length ?? estimateVolumeChars(volumeNotes),
-        });
-        const missing = layout.volumes.filter((volume) => !volumeNotes.has(volumeKey(volume.from, volume.to)));
-        if (missing.length === 0) return layout;
-        for (const volume of missing) await volumeNoteOf(volume);
-      }
-      throw new Error("卷笔记规划没有收敛");
-    };
+    /** 按当前笔记把窗口规划稳：该有的卷笔记都备齐（从盘上认领或生成），返回布局。 */
+    const settleVolumes = async (): Promise<WindowLayout> =>
+      (await settleVolumeLayout({ root, role: input.role, entries, maxChars, notes: volumeNotes, build: generateVolume })).layout;
     const renderWindow = async (): Promise<{ readonly messages: BrainMessage[]; readonly foldedChapters: number }> => {
       const layout = input.role.volumeTask ? await settleVolumes() : planWindowLayout({
         role: input.role,

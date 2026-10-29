@@ -9,15 +9,14 @@ import { mkdir, readFile } from "node:fs/promises";
 import { validateModelSettingsV0 } from "../lib/model-settings.js";
 import type { ModelSettingsLoadResult } from "../book/types.js";
 import {
-  commitFilesAtomically,
   readJsonBody,
   readString,
   readStringAllowEmpty,
   writeJson,
   isRecord,
-  type AtomicFileEntry,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { commitConfigFiles, type ConfigFileEntry } from "../lib/config-commit.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import {
   buildProviderRequestHeaders,
@@ -26,6 +25,7 @@ import {
   globalModelSecretsPath,
   globalModelSettingsPath,
   hasProviderApiKey,
+  modelConfigJournalPath,
   loadGlobalModelSettings,
   mergeProviderApiKeys,
   readModelSecrets,
@@ -212,8 +212,8 @@ async function saveModelSettings(res: import("node:http").ServerResponse, body: 
     return;
   }
 
-  // 审查 #8：三文件（设置/密钥/任务分配）「全备齐再提交」，避免中途失败留下「新档案+旧 key+旧任务」混合态。
-  // 密钥先按「坏 JSON/IO 错就抛、绝不当空」的严格读法合并，再统一原子提交。
+  // 三份（设置/密钥/任务分配）一起换（config-commit：带恢复记录，中途失败、被杀都退回原样，Astra P2a 第 10 轮第 1 条）。
+  // 密钥先按「坏 JSON/IO 错就抛、绝不当空」的严格读法合并。
   await mkdir(globalStoryEngineDir(), { recursive: true });
   const previousSettings = await loadGlobalModelSettings();
   const existingSecrets = await readModelSecrets();
@@ -236,7 +236,7 @@ async function saveModelSettings(res: import("node:http").ServerResponse, body: 
       }
     }
   }
-  const entries: AtomicFileEntry[] = [
+  const entries: ConfigFileEntry[] = [
     // customHeaders 值随本文件落盘（视同机密，API/日志全打码）→ 与 secrets 同口径 0600，
     // 机密边界前后一致。读者均为本进程同用户（llm-client 直读/引擎 loadModelSettingsV0），无跨进程读假设。
     { path: globalModelSettingsPath(), content: `${JSON.stringify(parsed, null, 2)}\n`, mode: 0o600 },
@@ -245,7 +245,7 @@ async function saveModelSettings(res: import("node:http").ServerResponse, body: 
   if (taskAssignments) {
     entries.push({ path: taskAssignmentsPath(homedir()), content: `${JSON.stringify(taskAssignments, null, 2)}\n` });
   }
-  await commitFilesAtomically(entries);
+  await commitConfigFiles(modelConfigJournalPath(), entries);
   // M1：模型设置已落盘，让缓存的聊天 agent 失效——下一句聊天即用新模型/key/思考开关重建，不必重启服务。
   invalidateStoryAgent();
   const result = await loadModelSettingsWithSecretStatus();

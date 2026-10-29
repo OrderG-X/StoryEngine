@@ -7,7 +7,7 @@ import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { buildProjectRequestContext, markUserConfirmedTool } from "./request-context.js";
-import { endsAfterDraft, releaseTurnFlow, turnFlowProcessor, turnStateOf, withTurnFlow } from "./turn-flow.js";
+import { endsByFlow, releaseTurnFlow, turnFlowProcessor, turnStateOf, withTurnFlow } from "./turn-flow.js";
 
 type Execute = (input: unknown, context: ToolExecutionContext) => Promise<unknown>;
 
@@ -64,7 +64,7 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
   it("稿写成了：这一步走完这一轮就结束（之后的由服务端出）；同一轮模型再调别的也不执行", async () => {
     const tools = fakeTools();
     const turn = buildProjectRequestContext("/tmp/book", 22);
-    const stop = endsAfterDraft(turn);
+    const stop = endsByFlow(turn);
     planStep(turn, ["generate_draft"]);
     expect(stop()).toBe(false);
     await run(tools.generate_draft, {}, turn);
@@ -90,10 +90,10 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     const turn = buildProjectRequestContext("/tmp/book", 22);
     planStep(turn, ["generate_draft"]);
     await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: false, chapter: 22 });
-    expect(endsAfterDraft(turn)()).toBe(false);
+    expect(endsByFlow(turn)()).toBe(false);
     planStep(turn, ["generate_draft"]);
     await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: true, chapter: 26 });
-    expect(endsAfterDraft(turn)()).toBe(true);
+    expect(endsByFlow(turn)()).toBe(true);
   });
 
   it("写好了但没换上（写的途中作者改过稿，留成候选）：也算这一轮写过稿，结束这一轮，不让模型再写一版", async () => {
@@ -103,7 +103,7 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     const turn = buildProjectRequestContext("/tmp/book", 22);
     planStep(turn, ["generate_draft"]);
     await run(tools.generate_draft, {}, turn);
-    expect(endsAfterDraft(turn)()).toBe(true);
+    expect(endsByFlow(turn)()).toBe(true);
     expect(turnStateOf(turn)?.draftWritten).toEqual({ chapter: 22, output: kept, thenPreview: false });
     planStep(turn, ["generate_draft"]);
     await expect(run(tools.generate_draft, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true });
@@ -126,7 +126,7 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     planStep(turn, ["read_draft", "commit_preview"]);
     await expect(run(tools.read_draft, {}, turn)).resolves.toEqual({ ok: true });
     await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
-    expect(endsAfterDraft(turn)()).toBe(false);
+    expect(endsByFlow(turn)()).toBe(false);
   });
 
   it("出稿参数没过校验、工具没跑：不算写过稿，模型改了参数再调照常写", async () => {
@@ -147,6 +147,77 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     const once = tools.commit_preview.execute;
     withTurnFlow(tools);
     expect(tools.commit_preview.execute).toBe(once);
+  });
+});
+
+describe("交操作这一轮的流程（写作版本 P2a 契约第三节）", () => {
+  function submitTools() {
+    const bodies = {
+      run_check: vi.fn(async () => ({ ok: true, accepted: true, opId: "op-1", summary: "交出去了：核账·第 3 章。" })),
+      foundation_write: vi.fn(async () => ({ ok: true })),
+      read_draft: vi.fn(async () => ({ ok: true })),
+    };
+    const tools = withTurnFlow({
+      run_check: { execute: bodies.run_check },
+      foundation_write: { execute: bodies.foundation_write },
+      read_draft: { execute: bodies.read_draft },
+    });
+    return Object.assign(tools, { bodies });
+  }
+
+  it("同一步交操作、又要改设定：整步不明，一件都不做（ambiguous_plan），读的照常；模型改成一件再交照常受理", async () => {
+    const tools = submitTools();
+    const turn = buildProjectRequestContext("/tmp/book", 3);
+    planStep(turn, ["read_draft", "run_check", "foundation_write"]);
+    await expect(run(tools.read_draft, {}, turn)).resolves.toEqual({ ok: true });
+    await expect(run(tools.run_check, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true, code: "ambiguous_plan" });
+    await expect(run(tools.foundation_write, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true, code: "ambiguous_plan" });
+    expect(tools.bodies.run_check).not.toHaveBeenCalled();
+    expect(tools.bodies.foundation_write).not.toHaveBeenCalled();
+    expect(endsByFlow(turn)()).toBe(false);
+
+    planStep(turn, ["run_check"]);
+    await expect(run(tools.run_check, {}, turn)).resolves.toMatchObject({ ok: true, accepted: true, opId: "op-1" });
+    expect(endsByFlow(turn)()).toBe(true);
+  });
+
+  it("同一步交两件：一件都不交", async () => {
+    const tools = submitTools();
+    const turn = buildProjectRequestContext("/tmp/book", 3);
+    planStep(turn, ["run_check", "run_check"]);
+    await expect(run(tools.run_check, {}, turn)).resolves.toMatchObject({ ok: false, code: "ambiguous_plan" });
+    expect(tools.bodies.run_check).not.toHaveBeenCalled();
+  });
+
+  it("受理了：这一步走完这一轮就结束；同一轮再要写的不执行，读的照常", async () => {
+    const tools = submitTools();
+    const turn = buildProjectRequestContext("/tmp/book", 3);
+    planStep(turn, ["run_check"]);
+    await run(tools.run_check, {}, turn);
+    expect(turnStateOf(turn)?.operationAccepted).toEqual({ opId: "op-1" });
+    planStep(turn, ["foundation_write", "read_draft"]);
+    await expect(run(tools.foundation_write, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true });
+    await expect(run(tools.read_draft, {}, turn)).resolves.toEqual({ ok: true });
+    expect(tools.bodies.foundation_write).not.toHaveBeenCalled();
+  });
+
+  it("没受理（参数不对、前提不满足）：不结束，模型照常往下走", async () => {
+    const tools = submitTools();
+    tools.bodies.run_check.mockResolvedValueOnce({ ok: false, code: "no_draft", summary: "第 3 章还没有正文。" } as never);
+    const turn = buildProjectRequestContext("/tmp/book", 3);
+    planStep(turn, ["run_check"]);
+    await expect(run(tools.run_check, {}, turn)).resolves.toMatchObject({ ok: false, code: "no_draft" });
+    expect(endsByFlow(turn)()).toBe(false);
+    planStep(turn, ["foundation_write"]);
+    await expect(run(tools.foundation_write, {}, turn)).resolves.toEqual({ ok: true });
+  });
+
+  it("这一步在写稿：交操作也不执行", async () => {
+    const tools = Object.assign(submitTools(), withTurnFlow({ generate_draft: { execute: vi.fn(async () => ({ ok: true, chapter: 3 })) } }));
+    const turn = buildProjectRequestContext("/tmp/book", 3);
+    planStep(turn, ["generate_draft", "run_check"]);
+    await expect(run(tools.run_check, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true });
+    expect(tools.bodies.run_check).not.toHaveBeenCalled();
   });
 });
 
@@ -209,7 +280,7 @@ describe("写稿这一轮的流程：真框架（Mastra 先跑输出处理器、
     const turn = buildProjectRequestContext("/tmp/book", 26);
     const stream = await agent.stream("写第 26 章，写完顺手出定稿预览", {
       requestContext: turn,
-      stopWhen: [stepCountIs(12), endsAfterDraft(turn)],
+      stopWhen: [stepCountIs(12), endsByFlow(turn)],
       toolCallConcurrency: 1,
     });
     const results: { name: unknown; skipped: unknown }[] = [];

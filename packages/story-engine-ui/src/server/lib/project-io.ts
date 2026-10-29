@@ -41,7 +41,7 @@ export function writeJson(res: ServerResponse, statusCode: number, payload: DevA
 }
 
 // ---------------------------------------------------------------------------
-// 原子写盘（审查 #5/#8：防半写文件 + 多文件「全备齐再提交」）
+// 原子写盘（审查 #5：防半写文件；几份一起换走 config-commit）
 // ---------------------------------------------------------------------------
 
 /**
@@ -61,45 +61,6 @@ export async function writeFileAtomic(
     await rename(tmp, path);
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-export interface AtomicFileEntry {
-  readonly path: string;
-  readonly content: string;
-  readonly mode?: number;
-}
-
-/**
- * 多文件「全备齐再提交」（审查 #8：模型设置/密钥/任务分配三文件不再各自裸写）。
- * 先把每个文件写到各自同目录的临时文件（任一失败即清理全部临时文件并抛错，原文件分毫未动）；
- * 全部临时文件就绪后再逐个 rename 提交。真正的多文件事务需 FS 支持（没有），此法把「部分提交」
- * 的窗口压到仅剩「连续几个 rename 之间」的极小时刻，远好于旧的「边算边裸写」中途失败留下混合态。
- * 提交段中途失败同样清理尚未 rename 的临时文件（tmp 名带 randomUUID，只属本次调用，不会误删
- * 并发调用各自的临时文件）；已成功 rename 的文件不回滚——「部分提交」窗口的语义不变，只是不留残渣。
- */
-export async function commitFilesAtomically(entries: readonly AtomicFileEntry[]): Promise<void> {
-  const staged: { readonly tmp: string; readonly target: string; readonly mode?: number }[] = [];
-  const cleanStaged = (): Promise<unknown[]> => Promise.all(staged.map((s) => rm(s.tmp, { force: true }).catch(() => undefined)));
-  try {
-    for (const entry of entries) {
-      const tmp = join(dirname(entry.path), `.${randomUUID()}.tmp`);
-      await writeFile(tmp, entry.content, entry.mode !== undefined ? { encoding: "utf-8", mode: entry.mode } : "utf-8");
-      if (entry.mode !== undefined) await chmod(tmp, entry.mode).catch(() => undefined);
-      staged.push({ tmp, target: entry.path, ...(entry.mode !== undefined ? { mode: entry.mode } : {}) });
-    }
-  } catch (error) {
-    await cleanStaged();
-    throw error;
-  }
-  try {
-    for (const s of staged) {
-      await rename(s.tmp, s.target);
-    }
-  } catch (error) {
-    // 已 rename 成功的临时文件不复存在，force rm 对其自然空转，只清掉没来得及提交的那部分。
-    await cleanStaged();
     throw error;
   }
 }

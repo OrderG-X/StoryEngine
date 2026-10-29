@@ -89,7 +89,7 @@ describe("定论按钮", () => {
     await runSettleAction({ ...apply, projectDir: dir, action: { toolName: "settle_apply", token, excluded: [] } });
     expect(apply.result("settle_apply")).toMatchObject({ ok: true, refreshScope: "full", snapshotId: expect.any(String) });
     expect(apply.text()).toBe("改齐了。设定本：记下定论「杜长顺十年前去世」；改了第 2 章 1 句。");
-    expect(apply.result("suggest_next_steps")).toMatchObject({ choices: [{ label: "再核第 2 章", action: { toolName: "check_continuity", chapter: 2, fresh: true } }] });
+    expect(apply.result("suggest_next_steps")).toMatchObject({ choices: [{ label: "再核第 2 章", action: expect.objectContaining({ kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 2, fresh: true } }) }] });
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toContain("“杜叔走了十年了。”");
 
     const again = recorder();

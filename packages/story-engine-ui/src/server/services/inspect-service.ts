@@ -57,20 +57,30 @@ export async function freezeChapterText(bookDir: string, chapter: number, mode: 
   return { missing: NO_TEXT[mode](chapter) };
 }
 
+/**
+ * 查的是哪一份（四种结果都带，Astra P2a 第 10 轮第 4 条）：停过再接着做查的是冻结的那份，期间作者可能改过稿；
+ * 界面和下一轮模型拿它和稿纸现在的版本比，对不上就标「这是改稿前的结论」。
+ */
+export interface CheckedFrom {
+  /** 查的是工作稿还是已定稿正文。 */
+  readonly source: "draft" | "committed" | null;
+  /** 查的是工作稿哪一版；查的是定稿时没有。 */
+  readonly checkedVersion?: string;
+}
+
+function checkedFrom(frozen: FrozenChapterText): CheckedFrom {
+  return { source: frozen.source, ...(frozen.version !== undefined ? { checkedVersion: frozen.version } : {}) };
+}
+
 /* ------------------------------------------------------------------ */
 /*  核账                                                                */
 /* ------------------------------------------------------------------ */
 
-export interface ContinuityCheckOutput extends ChapterCheckResult {
-  /** 核的是工作稿还是已定稿正文。 */
-  readonly source: "draft" | "committed" | null;
-  /** 核的是工作稿哪一版；核的是定稿时没有。 */
-  readonly checkedVersion?: string;
-}
+export type ContinuityCheckOutput = ChapterCheckResult & CheckedFrom;
 
 export async function runContinuityCheck(bookDir: string, frozen: FrozenChapterText, options: ChapterCheckOptions = {}): Promise<ContinuityCheckOutput> {
   const result = await checkChapterBody(bookDir, frozen.chapter, frozen.body.trim(), options);
-  return { ...result, source: frozen.source, ...(frozen.version !== undefined ? { checkedVersion: frozen.version } : {}) };
+  return { ...result, ...checkedFrom(frozen) };
 }
 
 /**
@@ -89,7 +99,7 @@ export async function cachedContinuityCheck(bookDir: string, chapter: number): P
 /*  硬伤检查（确定性，不调模型）                                         */
 /* ------------------------------------------------------------------ */
 
-export interface QualityCheckOutput {
+export interface QualityCheckOutput extends CheckedFrom {
   readonly chapter: number;
   readonly ok: boolean;
   /** 有拦定稿的硬伤或严重问题：卡片显「部分完成」，不显绿。 */
@@ -114,6 +124,7 @@ export async function runQualityCheck(bookDir: string, frozen: FrozenChapterText
     refined,
     errorIssueCount,
     summary: `第 ${frozen.chapter} 章硬伤检查：${refined.summary}`,
+    ...checkedFrom(frozen),
   };
 }
 
@@ -121,7 +132,7 @@ export async function runQualityCheck(bookDir: string, frozen: FrozenChapterText
 /*  内容审阅                                                            */
 /* ------------------------------------------------------------------ */
 
-export interface ReviewOutput {
+export interface ReviewOutput extends CheckedFrom {
   readonly chapter: number;
   /** 走了安全回退（模型不可用、输出不合规）= 没真审成。 */
   readonly ok: boolean;
@@ -146,14 +157,14 @@ export async function runReview(
     ...(input.userDirection !== undefined ? { userDirection: input.userDirection } : {}),
     ...(input.callModel ? { callModel: input.callModel } : {}),
   });
-  return { chapter: result.chapter, ok: result.ok, review: result.review, usedFallback: result.usedFallback, actualWordCount: result.actualWordCount, summary: result.summary };
+  return { chapter: result.chapter, ok: result.ok, review: result.review, usedFallback: result.usedFallback, actualWordCount: result.actualWordCount, summary: result.summary, ...checkedFrom(frozen) };
 }
 
 /* ------------------------------------------------------------------ */
 /*  查 AI 味                                                            */
 /* ------------------------------------------------------------------ */
 
-export type FlavorOutput = AiFlavorReport & { readonly chapter: number };
+export type FlavorOutput = AiFlavorReport & CheckedFrom & { readonly chapter: number };
 
 /**
  * 跨章「前文已建立要素」：设定本里的物品名 + 已确立硬事实，喂给体检模型，免得把前文铺垫过的道具误判成凭空出现。
@@ -183,5 +194,5 @@ export async function runFlavorCheck(bookDir: string, frozen: FrozenChapterText,
   const antiRules = await readAntiRules(bookDir);
   const establishedElements = await gatherEstablishedElements(bookDir, frozen.chapter);
   const report = await runAiFlavorCheck({ draftText: frozen.body.trim(), antiRules: antiRules.items, establishedElements, callModel });
-  return { ...(antiRules.failure ? { ...report, summary: withAntiRulesNote(report.summary, antiRules.failure) } : report), chapter: frozen.chapter };
+  return { ...(antiRules.failure ? { ...report, summary: withAntiRulesNote(report.summary, antiRules.failure) } : report), chapter: frozen.chapter, ...checkedFrom(frozen) };
 }

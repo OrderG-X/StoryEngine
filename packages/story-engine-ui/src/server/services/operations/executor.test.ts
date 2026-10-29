@@ -14,6 +14,7 @@ import {
   __resetRecipesForTests,
   cancelOperation,
   reconcileOperations,
+  recipeFor,
   registerRecipe,
   resumeOperation,
   submitOperation,
@@ -224,6 +225,37 @@ describe("开书对账、接着做", () => {
     registerRecipe({ ...({} as Recipe), kind: "test.two", version: 2, lane: "foreground", prepare: async () => ({ ok: false, code: "x", message: "x" }), run: async () => ({ schema: "operation-result/1", summary: "" }), stepBudget: () => 0 });
     await reconcileOperations(book);
     expect(await readOperation(book, first.record.opId)).toMatchObject({ record: { state: "obsolete", failure: { code: "recipe_changed" } } });
+  });
+});
+
+describe("配方换过版本（Astra P2a 第 10 轮第 5 条）", () => {
+  async function pausedUnderV1(): Promise<string> {
+    const inB = deferred();
+    twoSteps({ hold: new Promise(() => undefined), inB: inB.resolve });
+    const first = await submit();
+    if (!first.ok || !("record" in first)) throw new Error("没受理");
+    await inB.promise;
+    // 当上一个进程没了。
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    await reconcileOperations(book);
+    expect(await readOperation(book, first.record.opId)).toMatchObject({ record: { state: "paused", recipeVersion: 1 } });
+    __resetRecipesForTests();
+    twoSteps();
+    registerRecipe({ ...(recipeFor("test.two") as Recipe), version: 2 });
+    return first.record.opId;
+  }
+
+  it("停着的旧版本：开书对账就作废，卡上不再给「接着做」", async () => {
+    const opId = await pausedUnderV1();
+    await reconcileOperations(book);
+    expect(await readOperation(book, opId)).toMatchObject({ record: { state: "obsolete", failure: { code: "recipe_changed" } } });
+  });
+
+  it("手动「接着做」：不拿新步骤解释旧检查点，作废、如实说要重新来", async () => {
+    const opId = await pausedUnderV1();
+    await expect(resumeOperation(book, opId)).resolves.toMatchObject({ ok: false, code: "obsolete" });
+    expect(await readOperation(book, opId)).toMatchObject({ record: { state: "obsolete", failure: { code: "recipe_changed" } } });
   });
 });
 
