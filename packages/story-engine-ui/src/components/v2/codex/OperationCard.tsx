@@ -3,9 +3,11 @@
  * 在做：一行带呼吸点 + 最新一句进度；停着：为什么停 +「接着做」「不要了」；结束了：这一轮的话里说过结论就不再显示，
  * 后台做完、重开才收到的照实写一句结论。字都是服务端给的（what / stateText / conclusion），界面不自己拼。
  */
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { useState } from "react";
+import { newCanonStatement, type AgentUserAction } from "../../../api/agentChatClient.js";
 import type { OperationCardData } from "../../../type-defs/workspace.js";
 import { ENDED_OPERATION_STATES } from "../../../workspace/operationCards.js";
+import { SettleCard } from "./SettleCard.js";
 
 const RUNNING: ReadonlySet<OperationCardData["state"]> = new Set(["queued", "running"]);
 
@@ -44,6 +46,7 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
   }
   if (op.state === "waiting_author" && op.pending?.kind === "revise") return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   if (op.state === "waiting_author" && op.pending?.kind === "confirm") return <ChangeConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
+  if (op.state === "waiting_author" && op.pending?.kind === "canon") return <CanonConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   const running = RUNNING.has(op.state);
   const canResume = Boolean(onAction) && op.allowed.includes("resume");
   const canCancel = Boolean(onAction) && op.allowed.includes("cancel") && !inLiveTurn;
@@ -149,5 +152,35 @@ function ChangeConfirm({ op, pending, busy, onAction }: {
         </span>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 定论查完了等作者点（片 3C）：定论卡照摆，每处能划掉；「确认」带上划掉的几处接着做（一次改齐），「不改了」停掉这次，
+ * 没查全的「重新查」交新的一次（核账报过、这次没查出改法的那几句点名带上）。
+ */
+function CanonConfirm({ op, pending, busy, onAction }: {
+  readonly op: OperationCardData;
+  readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "canon" }>;
+  readonly busy: boolean;
+  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+}) {
+  const [excluded, setExcluded] = useState<readonly string[]>([]);
+  const { card } = pending;
+  if (!onAction) return <SettleCard data={card} excluded={excluded} busy={busy} />;
+  const toggle = (key: string) => setExcluded((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
+  const also = card.missed.map((item) => ({ where: "chapter" as const, chapter: item.chapter, quote: item.quote }));
+  return (
+    <SettleCard
+      data={card}
+      excluded={excluded}
+      busy={busy}
+      onToggle={toggle}
+      {...(pending.decisions.includes("apply")
+        ? { onConfirm: () => onAction({ kind: "resume", opId: op.opId, answer: { actionId: pending.actionId, decision: "apply", ...(excluded.length > 0 ? { excluded } : {}) } }) }
+        : {})}
+      {...(op.allowed.includes("cancel") ? { onDrop: () => onAction({ kind: "cancel", opId: op.opId }) } : {})}
+      onRecheck={() => onAction(newCanonStatement({ statement: card.canon, ...(card.chapter !== undefined ? { chapter: card.chapter } : {}), ...(also.length > 0 ? { also } : {}) }))}
+    />
   );
 }

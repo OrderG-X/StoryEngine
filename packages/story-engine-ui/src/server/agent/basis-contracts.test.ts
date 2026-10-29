@@ -19,6 +19,7 @@ import {
   readChapterLedger,
   readTruthBasis,
   runCommand,
+  settleApply,
   sha256,
   splitUnits,
 } from "@actalk/story-core";
@@ -29,7 +30,8 @@ import { planBasisOf, resolveChapterPlanForDraft } from "../editorial/plan-chapt
 import * as readers from "../editorial/reader-window.js";
 import { readRereadState } from "../editorial/reread-state.js";
 import { beginReread, runReread } from "../editorial/reread.js";
-import { applySettleProposal, saveSettleProposal } from "../editorial/settle/store.js";
+import { settleApplyArgs } from "../editorial/settle/apply-args.js";
+import type { SettleProposal } from "../editorial/settle/propose.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { readChapterPlan } from "../book/chapter-plan.js";
 import { createBookBackup, restoreBookFromBackup } from "../lib/book-backup.js";
@@ -79,12 +81,12 @@ describe("依据安全契约", () => {
     const original = await readFile(join(book, "chapters/0001.md"), "utf-8");
     const unit = splitUnits(original).find((item) => item.text.includes("张三"));
     if (!unit) throw new Error("没找到那句");
-    const correction = await saveSettleProposal(book, {
+    const correction: SettleProposal = {
       canon: "", canonExists: false, sceneOnly: true,
       edits: [{ key: "fix-name", chapter: 1, target: "committed", id: unit.id, from: unit.text, to: unit.text.replace("张三", "李四") }],
       facts: [], fields: [], committed: [{ chapter: 1, textSha256: sha256(original) }],
       drafts: [], searched: [1], missed: [], reviewDropped: [], failures: [], basis: await readTruthBasis(book),
-    });
+    };
     await beginReread(book, 1);
     let changed = false;
     await runReread(book, {
@@ -94,7 +96,7 @@ describe("依据安全契约", () => {
         if (!changed) {
           changed = true;
           // 记账员还在想：作者在别处确认了一条定论，正文里的张三改成了李四。
-          ok(await applySettleProposal(book, correction.token, []));
+          ok(await runCommand(book, settleApply, await settleApplyArgs(book, correction, new Set()), { ...author("fix-name"), basis: correction.basis }));
         }
         return JSON.stringify({ summary: { text: `${sees}交出钥匙后离开`, quote: "他离开了" } });
       },

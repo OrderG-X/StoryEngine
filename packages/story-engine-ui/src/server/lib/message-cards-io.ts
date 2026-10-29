@@ -100,15 +100,6 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       const versions = readDraftVersions(value.versions);
       return versions ? { type, versions } : undefined;
     }
-    case "settle": {
-      const settle = readSettleData(value.settle);
-      if (!settle) return undefined;
-      const excluded = readSettleExcluded(value.excluded, settle);
-      const applied = typeof value.applied === "string" && value.applied.trim() ? value.applied.trim().slice(0, 2000) : "";
-      // 改齐了就不算「不改了」。
-      const dropped = !applied && value.dropped === true;
-      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}), ...(dropped ? { dropped: true as const } : {}) };
-    }
     default:
       return undefined;
   }
@@ -134,6 +125,7 @@ function readOperationCard(value: unknown): OperationCardData | undefined {
   const allowed = (Array.isArray(value.allowed) ? value.allowed : [])
     .filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel");
   const progress = readString(value.progress);
+  const canon = readCanonResult(value.canon);
   return {
     opId,
     kind,
@@ -147,7 +139,15 @@ function readOperationCard(value: unknown): OperationCardData | undefined {
     ...(progress ? { progress: progress.slice(0, 500) } : {}),
     eventSeq: readNonNegativeInteger(value.eventSeq) ?? 0,
     ...(value.announced === true ? { announced: true as const } : {}),
+    ...(canon ? { canon } : {}),
   };
+}
+
+/** 定论做完的结果（核账卡认哪几条被它改掉了）：卡认不出就不存；划掉的只认卡上真有的。 */
+function readCanonResult(value: unknown): OperationCardData["canon"] {
+  if (!isRecord(value)) return undefined;
+  const card = readSettleData(value.card);
+  return card ? { card, excluded: readSettleExcluded(value.excluded, card), applied: value.applied === true } : undefined;
 }
 
 function dedupeByType(cards: readonly MessageCard[]): MessageCard[] {

@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
+// 定论卡（写作版本 P2a 片 3C 起是 canon.propose 停下等作者点时的样子）：划掉记在卡上，「确认」= 接着做这次操作带上划掉的，
+// 「不改了」= 停掉这次操作，「重新查」= 按定论新交一次。
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChapterMessage, SettleCardData } from "../../../type-defs/workspace.js";
-import { useChatStore } from "../../../stores/chatStore.js";
-import { cardOf } from "../../../utils/messageCards.js";
-import { SettleCard } from "./SettleCard.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OperationCardData, SettleCardData } from "../../../type-defs/workspace.js";
+import { OperationCard } from "./OperationCard.js";
+
+const OP_ID = "op-0123456789abcdef0123";
 
 const data: SettleCardData = {
-  token: "0123456789abcdef",
   canon: "杜长顺十年前去世",
   canonExists: false,
   chapter: 4,
@@ -22,49 +23,32 @@ const data: SettleCardData = {
   failures: [],
 };
 
-/** 卡从 store 里读（划掉记在卡上）：测试里挂一条消息，渲染时从 store 取。 */
-function Live({ onAction, busy = false }: { readonly onAction?: (action: unknown) => void; readonly busy?: boolean }) {
-  const message = useChatStore((s) => s.messages[0]!);
-  const card = cardOf(message, "settle")!;
-  return <SettleCard messageId={message.id} data={card.settle} {...(card.excluded ? { excluded: card.excluded } : {})} {...(card.applied ? { applied: card.applied } : {})} {...(card.dropped ? { dropped: true } : {})} busy={busy} {...(onAction ? { onAction } : {})} />;
+function waiting(card: SettleCardData = data): OperationCardData {
+  return {
+    opId: OP_ID,
+    kind: "canon.propose",
+    what: "定论",
+    state: "waiting_author",
+    stateText: "等你点",
+    allowed: ["cancel"],
+    summary: "",
+    eventSeq: 1,
+    pending: { kind: "canon", actionId: "confirm-canon", decisions: ["apply"], card, summary: "查完了。" },
+  };
 }
 
-beforeEach(() => {
-  const message: ChapterMessage = { id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: data }] } as unknown as ChapterMessage;
-  useChatStore.getState().setMessages([message]);
+const confirmAction = (excluded?: readonly string[]) => ({
+  kind: "resume",
+  opId: OP_ID,
+  answer: { actionId: "confirm-canon", decision: "apply", ...(excluded ? { excluded } : {}) },
 });
+
 afterEach(() => cleanup());
 
 describe("定论卡", () => {
-  // 长篇实跑：作者发现是自己记错了，说「这张不要了」，卡上「确认」还一直亮着。
-  it("「不改了」：整张收起、不再能确认，书里没动；能撤回", () => {
-    const onAction = vi.fn();
-    render(<Live onAction={onAction} />);
-    fireEvent.click(screen.getByRole("button", { name: "不改了" }));
-    expect(cardOf(useChatStore.getState().messages[0]!, "settle")?.dropped).toBe(true);
-    expect(screen.queryByRole("button", { name: "确认" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "这句不改" })).toBeNull();
-    expect(screen.getByText(/不改了，书里没动/u)).toBeTruthy();
-    expect(screen.queryByText("“杜叔走了五年了。”")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "撤回" }));
-    expect(cardOf(useChatStore.getState().messages[0]!, "settle")?.dropped).toBeUndefined();
-    expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();
-    expect(onAction).not.toHaveBeenCalled();
-  });
-
-  it("换掉设定本里原来那条：卡上写出旧的，没句子要改时按钮是「换掉旧的」", () => {
-    const onAction = vi.fn();
-    const replacing: SettleCardData = { ...data, canon: "杜长顺八年前去世", replaces: "杜长顺十年前去世", edits: [], facts: [] };
-    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: replacing }] } as unknown as ChapterMessage]);
-    render(<Live onAction={onAction} />);
-    expect(screen.getByText("换掉设定本里原来那条：杜长顺十年前去世")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "换掉旧的" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "settle_apply", token: data.token, excluded: [] });
-  });
-
   it("按章列原句 → 新句；划掉一句，确认带上划掉的；工作稿那章标出来", async () => {
     const onAction = vi.fn();
-    render(<Live onAction={onAction} />);
+    render(<OperationCard op={waiting()} inLiveTurn={false} busy={false} onAction={onAction} />);
     expect(screen.getByText("杜长顺十年前去世")).toBeTruthy();
     expect(screen.getByText("第 2 章")).toBeTruthy();
     expect(screen.getByText("第 4 章（工作稿）")).toBeTruthy();
@@ -72,51 +56,70 @@ describe("定论卡", () => {
     await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "这句不改" })[1]!); });
     expect(screen.getByText("改 1 处，改前存档、能撤销")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "settle_apply", token: data.token, excluded: ["e2"] });
+    expect(onAction).toHaveBeenCalledWith(confirmAction(["e2"]));
   });
 
-  it("账里跟着改的收起，点开才看；改齐了按钮收起，结果那句只在对话里说一遍", async () => {
-    render(<Live onAction={vi.fn()} />);
+  it("划掉了又改回来：确认不带划掉的", async () => {
+    const onAction = vi.fn();
+    render(<OperationCard op={waiting()} inLiveTurn={false} busy={false} onAction={onAction} />);
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "这句不改" })[0]!); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "改回来：这句也改" })); });
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    expect(onAction).toHaveBeenCalledWith(confirmAction());
+  });
+
+  // 长篇实跑：作者发现是自己记错了，说「这张不要了」，卡上「确认」还一直亮着。
+  it("「不改了」= 停掉这次操作（书里没动）", () => {
+    const onAction = vi.fn();
+    render(<OperationCard op={waiting()} inLiveTurn={false} busy={false} onAction={onAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "不改了" }));
+    expect(onAction).toHaveBeenCalledWith({ kind: "cancel", opId: OP_ID });
+  });
+
+  it("换掉设定本里原来那条：卡上写出旧的，没句子要改时按钮是「换掉旧的」", () => {
+    const onAction = vi.fn();
+    render(<OperationCard op={waiting({ ...data, canon: "杜长顺八年前去世", replaces: "杜长顺十年前去世", edits: [], facts: [] })} inLiveTurn={false} busy={false} onAction={onAction} />);
+    expect(screen.getByText("换掉设定本里原来那条：杜长顺十年前去世")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "换掉旧的" }));
+    expect(onAction).toHaveBeenCalledWith(confirmAction());
+  });
+
+  it("账里跟着改的收起，点开才看", async () => {
+    render(<OperationCard op={waiting()} inLiveTurn={false} busy={false} onAction={vi.fn()} />);
     expect(screen.queryByText(/杜长顺五年前去世/)).toBeNull();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账里跟着改 1 条" })); });
     expect(screen.getByText("第 2 章：杜长顺五年前去世 → 杜长顺十年前去世")).toBeTruthy();
-    await act(async () => { useChatStore.getState().markSettleApplied(data.token, "改齐了。改了第 2 章 1 句。"); });
-    expect(screen.getByText("改齐了")).toBeTruthy();
-    expect(screen.queryByText("改齐了。改了第 2 章 1 句。")).toBeNull();
-    expect(screen.queryByRole("button", { name: "确认" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "这句不改" })).toBeNull();
   });
 
-  it("没查出要改的：只「记下定论」；没查全如实说、给「重新查」（按定论查）", () => {
-    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, edits: [], facts: [], failures: ["第 3～5 章这一批没查成（连不上）"] } }] } as unknown as ChapterMessage]);
+  it("没查出要改的：只「记下定论」；没查全如实说、给「重新查」（按定论新交一次，带上核账报的那几句）", () => {
     const onAction = vi.fn();
-    render(<Live onAction={onAction} />);
+    const card: SettleCardData = { ...data, edits: [], facts: [], missed: [{ chapter: 3, quote: "海风很冷" }], failures: ["第 3～5 章这一批没查成（连不上）"] };
+    render(<OperationCard op={waiting(card)} inLiveTurn={false} busy={false} onAction={onAction} />);
     expect(screen.getByText(/没查全：第 3～5 章这一批没查成/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重新查" }));
-    expect(onAction).toHaveBeenLastCalledWith({ toolName: "settle_preview", statement: data.canon, chapter: 4 });
+    expect(onAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: "new",
+      type: "canon.propose",
+      mode: "statement",
+      params: { statement: data.canon, chapter: 4, also: [{ where: "chapter", chapter: 3, quote: "海风很冷" }] },
+    }));
     fireEvent.click(screen.getByRole("button", { name: "记下定论" }));
-    expect(onAction).toHaveBeenLastCalledWith({ toolName: "settle_apply", token: data.token, excluded: [] });
-    act(() => { useChatStore.getState().markSettleApplied(data.token, "改齐了。设定本：定论记下一条。"); });
-    expect(screen.getByText("记下了")).toBeTruthy();
-    expect(screen.queryByText("改齐了")).toBeNull();
+    expect(onAction).toHaveBeenLastCalledWith(confirmAction());
   });
 
-  it("只是那一场的事：标题「改齐」、说不记进设定本；没要改的不给按钮", () => {
-    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, sceneOnly: true } }] } as unknown as ChapterMessage]);
-    const { unmount } = render(<Live onAction={vi.fn()} />);
+  it("只是那一场的事：标题「改齐」、说不记进设定本", () => {
+    render(<OperationCard op={waiting({ ...data, sceneOnly: true })} inLiveTurn={false} busy={false} onAction={vi.fn()} />);
     expect(screen.getByText("改齐")).toBeTruthy();
     expect(screen.getByText("只是那一场的事，改句子，不记进设定本。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();
-    unmount();
-    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, sceneOnly: true, edits: [], facts: [] } }] } as unknown as ChapterMessage]);
-    render(<Live onAction={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: /确认|记下定论/ })).toBeNull();
   });
 
-  it("设定本里已经有这条、也没要改的：不给按钮", () => {
-    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, canonExists: true, edits: [], facts: [] } }] } as unknown as ChapterMessage]);
-    render(<Live onAction={vi.fn()} />);
-    expect(screen.getByText("设定本里已经记着这条。")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /确认|记下定论/ })).toBeNull();
+  it("忙的时候点不了；没接按钮回调就只摆卡、不出按钮", () => {
+    const { rerender } = render(<OperationCard op={waiting()} inLiveTurn={false} busy onAction={vi.fn()} />);
+    expect((screen.getByRole("button", { name: "确认" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "不改了" }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(<OperationCard op={waiting()} inLiveTurn={false} busy={false} />);
+    expect(screen.getByText("杜长顺十年前去世")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /确认|不改了|这句不改/ })).toBeNull();
   });
 });

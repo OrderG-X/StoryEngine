@@ -29,6 +29,7 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
       "commit_preview",
       "manage_snapshots",
       "plan_chapter",
+      "propose_canon",
       "read_chapters_overview",
       "read_draft",
       "read_foundation",
@@ -37,12 +38,11 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
       "read_timeline",
       "revise_draft",
       "run_check",
-      "settle_fact",
       "suggest_next_steps",
       "web_search",
     ]);
     const instructions = buildInstructions();
-    for (const gone of ["brainstorm_chapter", "enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft", "foundation_write"]) {
+    for (const gone of ["brainstorm_chapter", "enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft", "foundation_write", "settle_fact"]) {
       expect(instructions).not.toContain(gone);
     }
     expect(instructions).toContain("run_check");

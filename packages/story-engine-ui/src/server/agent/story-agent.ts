@@ -29,7 +29,7 @@ import { readOperationTool } from "./tools/read-operation.js";
 import { suggestNextStepsTool } from "./tools/suggest-next-steps.js";
 import { webSearchTool } from "./tools/web-search.js";
 import { manageSnapshotsTool } from "./tools/manage-snapshots.js";
-import { settleFactTool } from "./tools/settle-fact.js";
+import { proposeCanonTool } from "./tools/propose-canon.js";
 
 export const STORY_AGENT_ID = "story-writing-agent";
 
@@ -49,7 +49,7 @@ export function buildInstructions(): string {
       "检查一章=run_check（mode：核账 continuity＝前后对不对、有没有吃书，硬伤检查 quality，内容审阅 review，查 AI 味 flavor），" +
       "改账=change_ledger（changes 每项一笔：事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；理线索 review:true；作者点「确认改账」才改），" +
       "撤销=manage_snapshots op=undo，裁剪操作历史=manage_snapshots op=prune（先预览、用户确认才真裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
-    "交给服务端做的事（change_draft、revise_draft、run_check、change_settings、change_ledger、plan_chapter）：交出去这一轮就到此为止，正文流、进度、结果卡、结论和下一步都由系统接着出，你别说已经做完，也别再调别的。一条作者消息只交一件；同一步里交两件就一件都不做。" +
+    "交给服务端做的事（change_draft、revise_draft、run_check、change_settings、change_ledger、propose_canon、plan_chapter）：交出去这一轮就到此为止，正文流、进度、结果卡、结论和下一步都由系统接着出，你别说已经做完，也别再调别的。一条作者消息只交一件；同一步里交两件就一件都不做。" +
       "每轮 system 消息里有「最近的操作」：作者问上次核出来什么、做到哪了、补读到哪了，先看它，要细节调 read_operation；停着的告诉作者点卡上的「接着做」或「不要了」，你接不了。",
     "读数据：全局概况 read_state_overview；全书每章状态 read_chapters_overview；早期某章发生了什么 read_timeline；设定本 read_foundation（带名字读一张卡）；正文全文 read_draft。凡涉及现状，先读再说，绝不凭印象。复述一律用中文，别把英文字段名念给用户。",
     "",
@@ -99,8 +99,8 @@ export function buildInstructions(): string {
       "只在作者明说要改账时调，作者没说过的决定不要替作者做、也不要说成作者定过的。指的是哪条查不准时卡上会如实说，别自己编 id。",
     "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 change_ledger 一项 op=group（每组第一条留下）。作者要理线索、清过期线索、问哪些线索其实收了时，调 change_ledger review:true（记账员按全书判、点出收口原句，出「确认改账」卡），收哪几条作者定。" +
       "作者说某一条其实已经完了，就 change_ledger 一项 op=resolve。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实。",
-    "- 【定论 = 你查、作者点按钮】作者定下某个说法、要全书以它为准（『以这个为准』『前面写错了，统一成…』）时调 settle_fact：它查全书哪几句对不上、出一张定论卡，" +
-      "作者点「确认」才一次改齐。调完一句话转告查到几处，请作者在卡上看、点「确认」；**绝不说『已改齐』**。作者没明说要定下来，别替作者定；只改本章一两处用 revise_draft。",
+    "- 【定论 = 你查、作者点按钮】作者定下某个说法、要全书以它为准（『以这个为准』『前面写错了，统一成…』）时调 propose_canon：服务端查全书哪几句对不上、出一张定论卡，" +
+      "作者点「确认」才一次改齐；查到几处由系统接着说，**绝不说『已改齐』**。作者没明说要定下来，别替作者定；只改本章一两处用 revise_draft。",
     "- 定稿预览被字数下限挡住、作者让你改了每章字数下限：改完下一步选项里推荐『生成第N章定稿预览』。",
     "- 审稿报过严重问题而用户要定稿：提醒一句还有几处要紧问题，可给『仍要定稿 / 先去改』选项——这是提醒、不是拦。",
     "- 撤销：用户说撤销 / 反悔 / 刚才那步不要了，就调 manage_snapshots op=undo，按它的结果回报；没有可撤销的就如实说。回报撤销只说工具回执里列出的退回内容，回执没说没受影响的，不许说没受影响。manage_snapshots op=prune 永远只预览，真裁要用户点「确认裁剪」按钮；裁剪不在撤销链里，用户要撤销裁剪时如实说明只能靠裁前备份恢复。",
@@ -198,7 +198,7 @@ function storyAgentTools() {
     // 撤销+裁剪合成 manage_snapshots（按 op 转给原工具，「确认裁剪」按钮仍直达原 prune_snapshots）。
     change_ledger: changeLedgerTool,
     manage_snapshots: manageSnapshotsTool,
-    settle_fact: settleFactTool,
+    propose_canon: proposeCanonTool,
     web_search: webSearchTool,
   }));
 }

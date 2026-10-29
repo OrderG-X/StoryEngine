@@ -375,13 +375,6 @@ describe("historyToModelMessages 历史里的工具（长篇实跑第 17 章：�
     expect(JSON.stringify(history)).not.toContain("quality_check");
   });
 
-  it("出的卡作者点了「不改了」：工具结果照实说这张作废、再提就重新调", () => {
-    const messages = readChatMessages([{ role: "assistant", content: "查完了。", tools: [{ name: "settle_fact", ok: true, dropped: true }] }]);
-    expect(messages[0]).toMatchObject({ tools: [{ name: "settle_fact", ok: true, dropped: true }] });
-    const [, result] = historyToModelMessages(messages);
-    expect(result).toMatchObject({ role: "tool", content: [{ output: { value: "出了卡，作者在卡上点了「不改了」：这张作废、书里没动。作者再提就重新调。" } }] });
-  });
-
   it("工具记录读进来只认有名字的；用户消息带了也不认", () => {
     expect(readChatMessages([
       { role: "assistant", content: "好了", tools: [{ name: "" }, { ok: true }, { name: "read_draft" }, "x"] },

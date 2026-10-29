@@ -1,7 +1,7 @@
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { SuggestedAction, ChapterWorkflowState } from "./workflow.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
-import type { PendingActionData } from "../api/agentChatClient.js";
+import type { CanonResultData, PendingActionData } from "../api/agentChatClient.js";
 
 /** Async work is owned by the exact book, chapter, chat session and operation. */
 export interface WorkspaceOperationTarget {
@@ -108,13 +108,7 @@ export type MessageCard =
   /** 想走法（plan.propose，写作版本 P2a；P6 起的头脑风暴）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
   | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number }
   /** AI 一次写几版（写稿 candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
-  | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData }
-  /**
-   * 定论（P12：核账卡「以第 N 章为准」、对话里「以这个为准」）：定论 + 前文要改的几句、账和设定本跟着改的。
-   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）；
-   * dropped＝作者点了「不改了」（整张不要，书里没动；能撤回）。
-   */
-  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string; readonly dropped?: true };
+  | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData };
 
 export type MessageCardType = MessageCard["type"];
 
@@ -143,11 +137,12 @@ export interface OperationCardData {
   readonly announced?: true;
   /** 停着等作者点的（改写的改前改后 +「换上 / 再改一版」）：只挂在最近交它、点它的那条消息上。 */
   readonly pending?: PendingActionData;
+  /** 定论做完了：卡、作者划掉的、改没改（核账卡认哪几条被它改掉了；存进消息）。 */
+  readonly canon?: CanonResultData;
 }
 
-/** 定论卡：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
+/** 定论卡（canon.propose 的预览、结果）：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
 export interface SettleCardData {
-  readonly token: string;
   readonly canon: string;
   /** 设定本里已经有这条定论了（不再记一次）。 */
   readonly canonExists: boolean;

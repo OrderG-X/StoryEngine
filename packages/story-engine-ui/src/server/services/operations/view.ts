@@ -98,6 +98,7 @@ const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   "draft.change": { write: "写稿", continue: "接着写", revise: "改稿", fix: "按核账改", deai: "去 AI 味" },
   "settings.change": { ai: "改设定", accept: "认下设定" },
   "ledger.change": { edit: "改账", author: "改账", review: "理线索" },
+  "canon.propose": { pick: "定论", statement: "定论" },
 };
 const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",
@@ -108,6 +109,7 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   "plan.propose": "想走法",
   "settings.change": "改设定",
   "ledger.change": "改账",
+  "canon.propose": "定论",
 };
 
 /** 一次操作做的什么（中文）：认不出的种类如实说「别的操作」，不把英文种类名给模型念。 */

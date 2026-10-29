@@ -11,6 +11,7 @@ import type { DraftChangeMode, DraftChangeParams } from "../services/draft-chang
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
+import { CANON_PROPOSE_KIND, type CanonCard, type CanonProposeInput } from "../services/operations/recipes/canon-propose.js";
 import type { OperationAction, UserAction } from "./user-actions.js";
 
 export interface NextStepChoice {
@@ -50,6 +51,17 @@ export function newPlanAction(params: PlanProposeParams): OperationAction {
 /** 「认下」：那次改设定里 AI 刚写进去的那几处算作者写的（新的一次操作，参数带那次的号）。 */
 export function settingsAcceptAction(fromOpId: string): OperationAction {
   return { kind: "new", type: SETTINGS_CHANGE_KIND, params: { accept: fromOpId }, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 定论（「再查一次」）：和 newOperationAction 一样出的时候就给号。 */
+export function newCanonAction(mode: "pick" | "statement", params: CanonProposeInput): OperationAction {
+  return { kind: "new", type: CANON_PROPOSE_KIND, mode, params, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 「重新查」：按卡上那条定论再查一遍全书（核账报过、这次没查出改法的那几句点名带上）。 */
+export function recheckCanonAction(card: CanonCard): OperationAction {
+  const also = card.missed.map((item) => ({ where: "chapter" as const, chapter: item.chapter, quote: item.quote }));
+  return newCanonAction("statement", { statement: card.canon, ...(card.chapter !== undefined ? { chapter: card.chapter } : {}), ...(also.length > 0 ? { also } : {}) });
 }
 
 /** 「核账」「再核一遍」：交一次核账。fresh＝正文没改也重新核。 */

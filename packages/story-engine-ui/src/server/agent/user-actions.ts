@@ -10,12 +10,12 @@ import type { RequestContext } from "@mastra/core/di";
 import { isOperationId } from "../lib/operations/store.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
-import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
 import { LEDGER_CHANGE_KIND, MAX_LEDGER_CHANGES } from "../services/operations/recipes/ledger-change.js";
 import { readLedgerRequest, type LedgerChangeRequest } from "../services/ledger-change/plan.js";
+import { CANON_PROPOSE_KIND, canonInputOf, readCanonProposeParams, type CanonProposeInput } from "../services/operations/recipes/canon-propose.js";
 import {
   isCandidateDecisionKind,
   isDraftEditMode,
@@ -59,8 +59,8 @@ export const USER_ACTION_TOOL_NAMES = [
   "manage_snapshots",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
-/** 不走工具、服务端直接执行的作者命令（P12：定论预览 / 改齐；「撤销上一步」）。 */
-const DIRECT_ACTION_NAMES = ["undo", "settle_preview", "settle_apply"] as const;
+/** 不走工具、服务端直接执行的作者命令（「撤销上一步」）。 */
+const DIRECT_ACTION_NAMES = ["undo"] as const;
 
 /**
  * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
@@ -126,6 +126,15 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
+  /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准 / 以定论为准」、设定本「查前文」、定论卡「重新查」：查全书出定论卡。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof CANON_PROPOSE_KIND;
+    readonly mode: "pick" | "statement";
+    readonly params: CanonProposeInput;
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
   /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」「确认改账」）带上是哪个按钮、点的哪个、划掉了哪几处。 */
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
   | { readonly kind: "cancel"; readonly opId: string };
@@ -148,9 +157,7 @@ export type UserAction =
   /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。allowShort=「就这么短，照样定稿」：这一章不拿字数下限挡。 */
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
-  | { readonly toolName: "undo" }
-  /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
-  | SettleUserAction;
+  | { readonly toolName: "undo" };
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -189,7 +196,7 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
-  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && !isCandidateDecisionKind(record.type)) {
+  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && record.type !== CANON_PROPOSE_KIND && !isCandidateDecisionKind(record.type)) {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
   const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
@@ -211,6 +218,11 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
       return { kind: "invalid", reason: "改账内容不对，请刷新后再点。" };
     }
     return { kind: "action", action: { kind: "new", type: LEDGER_CHANGE_KIND, mode: "author", params: { changes: changes as LedgerChangeRequest[] }, ...stamp } };
+  }
+  if (record.type === CANON_PROPOSE_KIND) {
+    const canon = readCanonProposeParams("button", params, typeof record.mode === "string" ? record.mode : undefined);
+    if ("invalid" in canon) return { kind: "invalid", reason: canon.invalid };
+    return { kind: "action", action: { kind: "new", type: CANON_PROPOSE_KIND, mode: canon.mode, params: canonInputOf(canon), ...stamp } };
   }
   const chapter = params.chapter;
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
@@ -260,10 +272,6 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
-  if (toolName === "settle_preview" || toolName === "settle_apply") {
-    const parsed = parseSettleAction(record);
-    return "invalid" in parsed ? { kind: "invalid", reason: parsed.invalid } : { kind: "action", action: parsed.action };
-  }
   if (toolName === "manage_snapshots") return { kind: "invalid", reason: "不支持的操作。" };
   if (toolName === "prune_snapshots") {
     const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
@@ -391,10 +399,6 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "undo") {
     await runUndoAction(args);
-    return;
-  }
-  if (action.toolName === "settle_preview" || action.toolName === "settle_apply") {
-    await runSettleAction({ ...args, action });
     return;
   }
   const stamp = Date.now();

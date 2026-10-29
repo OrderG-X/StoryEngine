@@ -13,13 +13,14 @@ import { cancelOperation, resumeOperation, submitOperation, subscribeOperation, 
 import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { LEDGER_CHANGE_KIND } from "../services/operations/recipes/ledger-change.js";
+import { CANON_PROPOSE_KIND, canonInputOf, type CanonConfirmPreview, type CanonProposeBody, type CanonProposeParams } from "../services/operations/recipes/canon-propose.js";
 import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { DRAFT_ADOPT_KIND, DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
 import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
-import { checkChapterAction, humanizeToolNames, newOperationAction, newPlanAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { checkChapterAction, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
 
@@ -184,6 +185,13 @@ export async function finishOperationTurn(args: {
           { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, action: { toolName: "commit_preview", chapter } },
         ]);
       }
+      // 定论改齐了：从哪一章点进来的就给「再核这一章」；没改（没有要改的）但没查全：给「重新查」。
+      const canon = record.kind === CANON_PROPOSE_KIND ? result?.body as CanonProposeBody | undefined : undefined;
+      if (canon?.applied && canon.card.chapter !== undefined) {
+        sendNextSteps(args.sendEvent, "改齐了，接下来？", [{ label: `再核第 ${canon.card.chapter} 章`, intent: `重新核第 ${canon.card.chapter} 章的账`, recommended: true, action: checkChapterAction(canon.card.chapter, { fresh: true }) }]);
+      } else if (canon && !canon.applied && (canon.card.failures.length > 0 || canon.card.missed.length > 0)) {
+        sendNextSteps(args.sendEvent, "接下来？", [{ label: "重新查", intent: `重新查定论「${canon.card.canon}」`, recommended: true, action: recheckCanonAction(canon.card) }]);
+      }
       // AI 刚写进设定本的（作者口述让 AI 记的）：给「认下」，点了算作者写的。
       const accept = record.kind === SETTINGS_CHANGE_KIND ? (result?.body as Partial<SettingsChangeBody> | undefined)?.accept : undefined;
       if (accept) sendNextSteps(args.sendEvent, "接下来？", [{ label: "认下", intent: `认下${accept.label}`, action: settingsAcceptAction(record.opId) }]);
@@ -199,6 +207,11 @@ export async function finishOperationTurn(args: {
           recommended: true,
           action: newOperationAction(INSPECT_KIND, record.mode as InspectMode, { chapter }),
         }]);
+      }
+      // 定论没查成：照原来的再查一次（新的一次，请求号另给）；查完之后书变了（obsolete）也是重新查。
+      if (record.kind === CANON_PROPOSE_KIND && view.failure?.retryable !== false && record.params) {
+        const params = record.params as CanonProposeParams;
+        sendNextSteps(args.sendEvent, "接下来？", [{ label: "重新查", intent: "重新查这条定论", recommended: true, action: newCanonAction(params.mode, canonInputOf(params)) }]);
       }
       // 想走法没想出来：照原来的想法、避开的走法再想一次（新的一次，请求号另给）。
       const plan = record.kind === PLAN_PROPOSE_KIND ? readPlanProposeParams(record.params) : undefined;
@@ -221,11 +234,19 @@ export async function finishOperationTurn(args: {
           ? "这次要改的碰到了你写的，在卡上：点「确认改设定」才改。"
           : record.kind === LEDGER_CHANGE_KIND
             ? `${record.mode === "review" ? "理出来收了的" : "要改的账"}在卡上：点「确认改账」才记。`
-            : `${what}在等你点卡上的按钮。`);
+            : record.kind === CANON_PROPOSE_KIND
+              ? canonWaitingText(record)
+              : `${what}在等你点卡上的按钮。`);
       return;
     default:
       return;
   }
+}
+
+/** 定论查完等作者点：卡上面那句话（查到几处、在哪几章、没查全的），定论本身卡上有。 */
+function canonWaitingText(record: OperationRecord): string {
+  const preview = record.pendingActions.find((action) => !action.decisionHash)?.preview as Partial<CanonConfirmPreview> | undefined;
+  return typeof preview?.summary === "string" && preview.summary ? preview.summary : "定论在卡上：点「确认」才改。";
 }
 
 /** 按钮交的新操作的章号（「认下」这类不按章的没有）。 */
@@ -288,9 +309,10 @@ export async function runOperationAction(args: {
     }
     args.sendEvent("operation", { type: "record", operation: operationView(cancelled.record) });
     const what = operationWhat(cancelled.record.kind, cancelled.record.mode, chapterOf(cancelled.record));
-    // 改法摆着等作者点的（选中改写）：「不要了」就是这版不换，稿子没动。
-    const waited = cancelled.record.kind === DRAFT_CHANGE_KIND && cancelled.record.pendingActions.some((pending) => !pending.decisionHash);
-    emitText(!cancelled.cancelled ? `${what}已经结束了，不用停。` : waited ? `${what}：这版不要了，稿子没动。` : `${what}停掉了，不再接着做。`);
+    // 摆着等作者点的（改法、要改的设定 / 账 / 定论）：「不要了」就是不换、不改。
+    const waited = cancelled.record.pendingActions.some((pending) => !pending.decisionHash);
+    const dropped = cancelled.record.kind === DRAFT_CHANGE_KIND ? "这版不要了，稿子没动。" : "不要了，书里没动。";
+    emitText(!cancelled.cancelled ? `${what}已经结束了，不用停。` : waited ? `${what}：${dropped}` : `${what}停掉了，不再接着做。`);
     return;
   }
   const record = await followOperation({ bookDir: projectDir, opId, sendEvent: args.sendEvent, signal: args.signal });

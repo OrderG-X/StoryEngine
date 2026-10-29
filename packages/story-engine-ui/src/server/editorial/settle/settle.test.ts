@@ -1,12 +1,13 @@
 // @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { cardWrite, chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, readCards, runCommand, splitUnits, type EntryInput } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, readCards, runCommand, settleApply, splitUnits, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import type { BrainCallModel } from "../reader-window.js";
 import { aroundUnit, canonTask, parseFieldEdits, parseSweepEdits, proposeSettle, reviewTask } from "./propose.js";
-import { applySettleProposal, readSettleProposal, saveSettleProposal } from "./store.js";
+import { settleApplyArgs } from "./apply-args.js";
+import type { SettleProposal } from "./propose.js";
 
 const CH1 = "# 第1章 · 旧屋\n\n杜叔走了整整十年。屋里没人住过。\n\n许微推开门，灰扑了一脸。";
 const CH2 = "# 第2章 · 来信\n\n“杜叔走了五年了。”孟叔说。许微没接话。\n\n雾很大，码头上没人。";
@@ -74,6 +75,13 @@ const pick = {
   other: { where: "chapter" as const, chapter: 4, quote: "说他五年前就没了" },
   reason: "杜叔去世的年份对不上",
 };
+
+let applySeq = 0;
+/** 确认改齐：预览里的改法去掉划掉的 → settle.apply（作者档，带查之前的依据；同一个键点两次只做一次）。 */
+async function applyProposal(proposal: SettleProposal, excluded: readonly string[] = [], key = `settle-${++applySeq}`) {
+  const args = await settleApplyArgs(dir, proposal, new Set(excluded));
+  return runCommand(dir, settleApply, args, { caller: "author", idempotencyKey: key, intent: { excluded: [...excluded].sort() }, basis: proposal.basis });
+}
 
 describe("定论预览", () => {
   it("写定论 → 按名字圈章 → 分批扫 → 账跟着改；没提到名字的章不查", async () => {
@@ -208,7 +216,7 @@ describe("定论预览", () => {
     if (!outcome.ok) throw new Error(outcome.message);
     expect(model.prompts.find((prompt) => prompt.includes("写成一条「定论」"))).toContain("过了那一场就用不着");
     expect(outcome.proposal.sceneOnly).toBe(true);
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    const applied = await applyProposal(outcome.proposal);
     if (!applied.ok) throw new Error(applied.message);
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toContain("“杜叔走了十年了。”");
     expect(applied.result.cardLines).toEqual([]);
@@ -225,7 +233,7 @@ describe("定论预览", () => {
     const outcome = await proposeSettle({ projectDir: dir, request: onTwo, callModel: fakeModel() });
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.proposal.edits.filter((edit) => edit.chapter === 2).map((edit) => edit.target)).toEqual(["committed"]);
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    const applied = await applyProposal(outcome.proposal);
     if (!applied.ok) throw new Error(applied.message);
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toContain("“杜叔走了十年了。”");
     expect(await readFile(join(dir, draftPath(2)), "utf-8")).toContain("“杜叔走了十年了。”");
@@ -300,7 +308,7 @@ describe("按已记下的定论查", () => {
   it("带的是半句：用设定本里那一整条，不另记一条", async () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
     if (!outcome.ok) throw new Error(outcome.message);
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    const applied = await applyProposal(outcome.proposal);
     if (!applied.ok) throw new Error(applied.message);
     const model = fakeModel();
     const again = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "十年前去世", chapter: 4 }, callModel: model });
@@ -317,7 +325,7 @@ describe("按已记下的定论查", () => {
     if (!outcome.ok) throw new Error(outcome.message);
     expect(model.prompts.find((prompt) => prompt.includes("列出这件事涉及的"))).toContain("「哪章哪句写错了」");
     expect(outcome.proposal.canon).toBe("杜长顺十年前去世");
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    const applied = await applyProposal(outcome.proposal);
     if (!applied.ok) throw new Error(applied.message);
     const recorded = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "十年前去世" }, callModel: fakeModel({ namesReply: JSON.stringify({ canon: "杜叔死了十年", names: ["杜叔"] }) }) });
     if (!recorded.ok) throw new Error(recorded.message);
@@ -328,7 +336,7 @@ describe("按已记下的定论查", () => {
   it("改的是设定本里已有的那条：卡上带着旧的，确认后换掉它、不另加；模型说不是就照常加", async () => {
     const first = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
     if (!first.ok) throw new Error(first.message);
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, first.proposal)).token, []);
+    const applied = await applyProposal(first.proposal);
     if (!applied.ok) throw new Error(applied.message);
 
     const model = fakeModel({ namesReply: JSON.stringify({ names: ["杜叔"], replaces: 1 }) });
@@ -337,7 +345,7 @@ describe("按已记下的定论查", () => {
     const asked = model.prompts.find((prompt) => prompt.includes("列出这件事涉及的"))!;
     expect(asked).toContain("[1] 杜长顺十年前去世");
     expect(outcome.proposal).toMatchObject({ canon: "杜长顺是八年前去世的", canonExists: false, replaces: { text: "杜长顺十年前去世" } });
-    const replaced = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    const replaced = await applyProposal(outcome.proposal);
     if (!replaced.ok) throw new Error(replaced.message);
     expect((await readBible(dir)).bible.canon.map((item) => item.text)).toEqual(["杜长顺是八年前去世的"]);
 
@@ -351,7 +359,7 @@ describe("按已记下的定论查", () => {
   it("别的定论照样成立：查全书、查设定、复核的提示里都列上；要取代的那条不列", async () => {
     const first = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
     if (!first.ok) throw new Error(first.message);
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, first.proposal)).token, []);
+    const applied = await applyProposal(first.proposal);
     if (!applied.ok) throw new Error(applied.message);
 
     const model = fakeModel({ namesReply: JSON.stringify({ names: ["杜叔", "孟叔"], replaces: 0 }) });
@@ -372,12 +380,11 @@ describe("按已记下的定论查", () => {
 });
 
 describe("确认改齐", () => {
-  it("一次写完：定论、定稿章正文和账、工作稿；同一票号点两次只做一次", async () => {
+  it("一次写完：定论、定稿章正文和账、工作稿；同一个键点两次只做一次", async () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
     if (!outcome.ok) throw new Error(outcome.message);
-    const stored = await saveSettleProposal(dir, outcome.proposal);
-    expect((await readSettleProposal(dir, stored.token))?.canon).toBe("杜长顺十年前去世");
-    const applied = await applySettleProposal(dir, stored.token, []);
+    expect(outcome.proposal.canon).toBe("杜长顺十年前去世");
+    const applied = await applyProposal(outcome.proposal, [], "settle-once");
     if (!applied.ok) throw new Error(applied.message);
     expect(applied.result.cardLines).toEqual(["记下定论「杜长顺十年前去世」"]);
     expect(applied.result.chapters).toEqual([expect.objectContaining({ chapter: 2, factsUpdated: ["杜长顺十年前去世"], factsRetracted: [] })]);
@@ -388,7 +395,7 @@ describe("确认改齐", () => {
     expect((await projectBook(dir)).conflicts).toEqual([]);
     expect((await readBible(dir)).bible.canon.map((item) => item.text)).toEqual(["杜长顺十年前去世"]);
 
-    const again = await applySettleProposal(dir, stored.token, []);
+    const again = await applyProposal(outcome.proposal, [], "settle-once");
     expect(again).toMatchObject({ ok: true, replayed: true });
   });
 
@@ -406,8 +413,7 @@ describe("确认改齐", () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.proposal.fields).toEqual([{ key: "f1", card: "孟叔", relationWith: "杜长顺", label: "和杜长顺", from: "认识五年的老朋友", to: "认识十年的老朋友" }]);
-    const stored = await saveSettleProposal(dir, outcome.proposal);
-    const applied = await applySettleProposal(dir, stored.token, []);
+    const applied = await applyProposal(outcome.proposal);
     if (!applied.ok) throw new Error(applied.message);
     const cards = await readCards(dir);
     expect(cards?.relations.map((relation) => relation.label)).toEqual(["认识十年的老朋友"]);
@@ -439,8 +445,7 @@ describe("确认改齐", () => {
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.proposal.failures).toEqual(["第 2 章账里跟着改的那几条没问成（模型回的不是要的格式），确认后这几条会作废"]);
     expect(outcome.proposal.facts).toEqual([{ chapter: 2, factId: expect.any(String), before: "杜长顺五年前去世" }]);
-    const stored = await saveSettleProposal(dir, outcome.proposal);
-    const skipDraft = await applySettleProposal(dir, stored.token, ["e2"]);
+    const skipDraft = await applyProposal(outcome.proposal, ["e2"]);
     if (!skipDraft.ok) throw new Error(skipDraft.message);
     expect(skipDraft.result.drafts).toEqual([]);
     expect(await readFile(join(dir, draftPath(4)), "utf-8")).toBe(DRAFT4);
@@ -468,22 +473,20 @@ describe("确认改齐", () => {
       ["fact-2-90", null, true],
       [expect.any(String), "杜长顺十年前去世", false],
     ]);
-    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    const applied = await applyProposal(outcome.proposal);
     if (!applied.ok) throw new Error(applied.message);
     expect(applied.result.chapters[0]).toMatchObject({ factsUpdated: ["杜长顺十年前去世"], factsRetracted: ["孟叔记得杜叔五年前走的"] });
     expect((await readDecisions(dir)).map((decision) => (decision.type === "fact.retract" ? decision.fact : ""))).toEqual(["fact-2-90"]);
   });
 
-  it("预览后正文改过：一处都不改，如实说重新查", async () => {
+  it("预览后正文改过：一处都不改", async () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
     if (!outcome.ok) throw new Error(outcome.message);
-    const stored = await saveSettleProposal(dir, outcome.proposal);
     await writeFile(join(dir, draftPath(4)), `${DRAFT4}作者又写了一句。\n`);
-    const applied = await applySettleProposal(dir, stored.token, []);
+    const applied = await applyProposal(outcome.proposal);
     expect(applied).toMatchObject({ ok: false, code: "draft_moved" });
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toBe(CH2);
     expect((await readBible(dir)).bible.canon).toEqual([]);
-    expect(await applySettleProposal(dir, "0123456789abcdef", [])).toMatchObject({ ok: false, code: "proposal_missing" });
   });
 });
 

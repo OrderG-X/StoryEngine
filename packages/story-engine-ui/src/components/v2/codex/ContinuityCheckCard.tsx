@@ -18,7 +18,7 @@ import { useMaybeMarks } from "./maybeMarks.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { continuityItemKey, quoteInPaper } from "../../../workspace/chapterProgress.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
-import { newEditAction, type AgentUserAction } from "../../../api/agentChatClient.js";
+import { newCanonPick, newCanonStatement, newEditAction, type AgentUserAction, type ChapterSideData, type SettleSideData } from "../../../api/agentChatClient.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 
 type ContinuityCheck = ContinuityCheckData;
@@ -52,10 +52,8 @@ export function canFixDirectly(chapter: number, item: Item): boolean {
   return fixChapterOf(chapter, item) === chapter;
 }
 
-/** 定论的一边（和 AgentUserAction settle_preview 的 truth / other 同形）。 */
-type SettleSide = Extract<AgentUserAction, { readonly toolName: "settle_preview"; readonly truth: unknown }>["truth"];
-
-type ChapterSide = Extract<SettleSide, { readonly where: "chapter" }>;
+type SettleSide = SettleSideData;
+type ChapterSide = ChapterSideData;
 
 /** 定论预览一次最多捎带几句同一条报的（和服务端 MAX_ALSO 一致）。 */
 const MAX_ALSO = 10;
@@ -87,9 +85,9 @@ export function settleChoices(chapter: number, item: Item, siblings: readonly It
   const here: ChapterSide = { where: "chapter", chapter: fix, quote: item.quote };
   const hereLabel = fix === chapter ? "以本章为准" : `以第 ${fix} 章为准`;
   const reason = item.reason ? { reason: item.reason } : {};
-  const pick = (truth: SettleSide, other: SettleSide, also: readonly ChapterSide[] = []): AgentUserAction => ({
-    toolName: "settle_preview", chapter, truth, other, ...reason, ...(also.length > 0 ? { also } : {}),
-    // 以本章为准：改的是另一边，核账卡认不出这条改掉没有，带上条目键让定论卡带回来。
+  const pick = (truth: SettleSide, other: SettleSide, also: readonly ChapterSide[] = []): AgentUserAction => newCanonPick({
+    chapter, truth, other, ...reason, ...(also.length > 0 ? { also } : {}),
+    // 以本章为准：改的是另一边，核账卡认不出这条改掉没有，带上条目键让定论带回来。
     ...(truth === here ? { item: continuityItemKey(item) } : {}),
   });
   const alsoFor = (truth: SettleSide): ChapterSide[] => {
@@ -110,7 +108,7 @@ export function settleChoices(chapter: number, item: Item, siblings: readonly It
     // 核账报的这句（和同一条定论报的别几句）一起带上：定论卡一定查到它、查不出改法如实说。
     const canon: SettleSide = { where: "setting", quote: item.earlierQuote, label: setting.label };
     const also = [here, ...alsoFor(canon)].slice(0, MAX_ALSO);
-    return [{ label: "以定论为准", action: { toolName: "settle_preview", statement: item.earlierQuote, chapter, also } }];
+    return [{ label: "以定论为准", action: newCanonStatement({ statement: item.earlierQuote, chapter, also }) }];
   }
   if (setting) {
     const there: SettleSide = { where: "setting", quote: item.earlierQuote, label: setting.label, ...(setting.card ? { card: setting.card } : {}) };

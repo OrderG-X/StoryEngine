@@ -22,7 +22,7 @@ import {
 } from "../request-context.js";
 
 /** 提交操作的对话工具名（turn-flow 按它们判「这一步交了操作」）。 */
-export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft", "revise_draft", "plan_chapter", "change_settings", "change_ledger"]);
+export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft", "revise_draft", "plan_chapter", "change_settings", "change_ledger", "propose_canon"]);
 
 /** 受理回执（给模型看、也给界面认「这一步交出去了」）。 */
 export interface SubmitReceipt {

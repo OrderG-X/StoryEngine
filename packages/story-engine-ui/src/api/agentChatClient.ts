@@ -19,7 +19,7 @@ import type { AiFlavorReport } from "../types.js";
 import type { BrainstormCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import { readDraftVersions } from "../utils/draftVersions.js";
-import { readSettleData } from "../utils/settleCard.js";
+import { readSettleData, readSettleExcluded } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 import type { ChatHistoryMessage } from "../server/lib/project-io.js";
 
@@ -144,6 +144,9 @@ export type OperationActionData =
   | { readonly kind: "new"; readonly type: "settings.change"; readonly params: { readonly accept: string }; readonly requestKey: string; readonly issuedAt: string }
   /** 作者在线索板 / 梗概上直接改账（片 3）：这几笔不再问，直接记（作者档、可撤销）。 */
   | { readonly kind: "new"; readonly type: "ledger.change"; readonly mode: "author"; readonly params: { readonly changes: readonly LedgerChangeData[] }; readonly requestKey: string; readonly issuedAt: string }
+  /** 定论（片 3C）：核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（pick）；「以定论为准」、设定本「查前文」、定论卡「重新查」（statement）。 */
+  | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "pick"; readonly params: CanonPickData; readonly requestKey: string; readonly issuedAt: string }
+  | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "statement"; readonly params: CanonStatementData; readonly requestKey: string; readonly issuedAt: string }
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
   | { readonly kind: "cancel"; readonly opId: string };
 
@@ -156,6 +159,38 @@ export type LedgerChangeData =
 /** 一个直接改账的按钮（请求号这时候给：点了一次就是这一次）。 */
 export function newLedgerAction(changes: readonly LedgerChangeData[]): OperationActionData {
   return { kind: "new", type: "ledger.change", mode: "author", params: { changes }, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 定论的一边：某章的一句，或设定本的一栏。 */
+export type SettleSideData =
+  | { readonly where: "chapter"; readonly chapter: number; readonly quote: string }
+  | { readonly where: "setting"; readonly quote: string; readonly label: string; readonly card?: string };
+export type ChapterSideData = Extract<SettleSideData, { readonly where: "chapter" }>;
+
+/** 以某一边为准（和服务端 recipes/canon-propose.ts 的 CanonProposeInput 同形）：item＝核账卡上点的那条（条目键），改齐后那条算改掉了。 */
+export interface CanonPickData {
+  readonly chapter: number;
+  readonly truth: SettleSideData;
+  readonly other?: SettleSideData;
+  readonly also?: readonly ChapterSideData[];
+  readonly reason?: string;
+  readonly item?: string;
+}
+
+/** 按作者定下的说法查全书：also＝核账报过和它打架的那几句（一定查）。 */
+export interface CanonStatementData {
+  readonly statement: string;
+  readonly chapter?: number;
+  readonly also?: readonly ChapterSideData[];
+}
+
+/** 一个定论按钮（请求号这时候给：点了一次就是这一次）。 */
+export function newCanonPick(params: CanonPickData): OperationActionData {
+  return { kind: "new", type: "canon.propose", mode: "pick", params, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+export function newCanonStatement(params: CanonStatementData): OperationActionData {
+  return { kind: "new", type: "canon.propose", mode: "statement", params, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
 }
 
 /** 换上 / 不要 AI 稿（和服务端 services/draft-change/params.ts 的 CandidateDecisionParams 同形）。 */
@@ -239,18 +274,7 @@ export type AgentUserAction =
   | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number; readonly dayEndOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
-  | { readonly toolName: "undo" }
-  /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
-  | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
-  /** 设定本定论页「查前文」：拿这条定论查全书。 */
-  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[] }
-  /** 定论卡「确认」：按票号一次改齐（作者档、可撤销）；excluded＝作者划掉不改的几处。 */
-  | { readonly toolName: "settle_apply"; readonly token: string; readonly excluded: readonly string[] };
-
-/** 定论的一边：某章的一句，或设定本的一栏。 */
-export type SettleSideData =
-  | { readonly where: "chapter"; readonly chapter: number; readonly quote: string }
-  | { readonly where: "setting"; readonly quote: string; readonly label: string; readonly card?: string };
+  | { readonly toolName: "undo" };
 
 /** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
 export interface LedgerChecklistItemView {
@@ -380,10 +404,6 @@ export interface AgentToolResult {
   readonly chapter?: number;
   /** commit_apply 专属：整份入库报告（CommitReport）。前端据此渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。 */
   readonly commitReport?: unknown;
-  /** settle_preview / settle_fact 专属：定论卡（P12）。 */
-  readonly settle?: SettleCardData;
-  /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
-  readonly settleToken?: string;
   /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。
    *  choice.action（R4.7）：服务端自己生成的确定性选项带结构化动作，点击直接发 body.action 不经模型；
    *  模型生成的选项没有 action。 */
@@ -461,16 +481,25 @@ export interface OperationViewData {
   readonly draft?: DraftOperationData;
   /** 想走法做完了的几种走法（走法卡、稿纸上方给作者挑）。 */
   readonly plan?: BrainstormCardData;
-  /** 改设定、改账做完了（设定本 / 概况跟着重读、这一轮记下存档点）。 */
+  /** 改设定、改账、定论改齐了（设定本 / 概况跟着重读、这一轮记下存档点）。 */
   readonly changed?: ChangedData;
+  /** 定论做完了：卡、作者划掉的、改没改（核账卡认哪几条被改掉了）。 */
+  readonly canon?: CanonResultData;
   /** 等作者点的（改写的改前改后 +「换上 / 再改一版」、改设定的「确认改设定」、改账的「确认改账」）；点过的不算。 */
   readonly pending?: PendingActionData;
 }
 
-/** 改设定、改账做完了（两样都在设定本里：设定卡、线索板和故事地图）：打的存档点。 */
+/** 改设定、改账、定论改齐了（都在设定本里：设定卡、线索板和故事地图、定论；定论还可能改了正文）：打的存档点。 */
 export interface ChangedData {
-  readonly what: "settings" | "ledger";
+  readonly what: "settings" | "ledger" | "canon";
   readonly snapshotId?: string;
+}
+
+/** 定论做完了（服务端 CanonProposeBody 的子集）。 */
+export interface CanonResultData {
+  readonly card: SettleCardData;
+  readonly excluded: readonly string[];
+  readonly applied: boolean;
 }
 
 /** 改写的改法（等作者点「换上」，服务端 RevisePreview 的子集）。 */
@@ -487,6 +516,8 @@ export interface RevisePreviewData {
  */
 export type PendingActionData =
   | { readonly kind: "revise"; readonly actionId: string; readonly decisions: readonly string[]; readonly revise: RevisePreviewData }
+  /** 定论查完了等作者点「确认」（服务端 CanonConfirmPreview）：卡上每处能划掉。 */
+  | { readonly kind: "canon"; readonly actionId: string; readonly decisions: readonly string[]; readonly card: SettleCardData; readonly summary: string }
   | { readonly kind: "confirm"; readonly what: "settings" | "ledger"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] };
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
@@ -536,6 +567,7 @@ function editChanges(value: unknown): readonly EditChangeData[] | undefined {
 /** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）、「确认改设定」（SETTINGS_CONFIRM_KIND）、「确认改账」（LEDGER_CONFIRM_KIND）；点过的、认不出的不算。 */
 const REVISE_CONFIRM_KIND = "draft.revise.confirm";
 const CONFIRM_KINDS: Readonly<Record<string, "settings" | "ledger">> = { settings_confirm: "settings", ledger_confirm: "ledger" };
+const CANON_CONFIRM_KIND = "canon_confirm";
 
 function readPendingAction(value: unknown): PendingActionData | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -549,6 +581,11 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
       const lines = preview ? textList(preview.lines, 60) : undefined;
       if (!lines || decisions.length === 0) continue;
       return { kind: "confirm", what, actionId: item.actionId, decisions, lines, notes: textList(preview!.notes, 20) ?? [] };
+    }
+    if (item.kind === CANON_CONFIRM_KIND) {
+      const card = preview ? readSettleData(preview.card) : undefined;
+      if (!card || decisions.length === 0) continue;
+      return { kind: "canon", actionId: item.actionId, decisions, card, summary: typeof preview!.summary === "string" ? preview!.summary : "" };
     }
     if (item.kind !== REVISE_CONFIRM_KIND) continue;
     const changes = preview ? editChanges(preview.changes) : undefined;
@@ -781,13 +818,6 @@ export async function streamAgentChat(
             ...(parsed.toolName === "commit_apply" && output.committed === true && isRecord(output.report)
               ? { commitReport: output.report }
               : {}),
-            // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
-            ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)
-              ? { settle: readSettleData(output.settle)! }
-              : {}),
-            ...(parsed.toolName === "settle_apply" && output.ok === true && typeof output.settleToken === "string"
-              ? { settleToken: output.settleToken }
-              : {}),
             // commit_preview 专属：结构化定稿预览（R3）→ 透传，前端渲染固定「定稿预览」卡。裁决/阻断项不靠模型
             // 转述（模型可能把硬阻断说成「小问题」或干脆不提）。字段防御解析：缺 chapter/canCommit 的残缺输出不挂卡。
             ...(parsed.toolName === "commit_preview" && typeof output.chapter === "number" && typeof output.canCommit === "boolean"
@@ -984,6 +1014,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const draft = state === "succeeded" && (value.kind === "draft.change" || value.kind === "draft.adopt") && result ? readDraftOperation(result.body) : undefined;
   const plan = state === "succeeded" && value.kind === "plan.propose" && result ? readBrainstormData(result.body) : undefined;
   const changed = state === "succeeded" && result ? readChanged(value.kind, result.body) : undefined;
+  const canon = state === "succeeded" && value.kind === "canon.propose" && result ? readCanonResult(result.body) : undefined;
   const pending = state === "waiting_author" ? readPendingAction(value.pendingActions) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
@@ -1011,15 +1042,24 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     ...(draft ? { draft } : {}),
     ...(plan ? { plan } : {}),
     ...(changed ? { changed } : {}),
+    ...(canon ? { canon } : {}),
     ...(pending ? { pending } : {}),
   };
 }
 
-/** 改设定、改账做完了：改了哪一片、打的存档点（这一轮的「撤销到此」从它退）。不是这两类是 undefined。 */
+/** 改设定、改账、定论改齐了：改了哪一片、打的存档点（这一轮的「撤销到此」从它退）。不是这几类、定论没改是 undefined。 */
 function readChanged(kind: unknown, body: unknown): ChangedData | undefined {
-  const what = kind === "settings.change" ? "settings" : kind === "ledger.change" ? "ledger" : undefined;
-  if (!what || !isRecord(body) || body.kind !== kind) return undefined;
+  const what = kind === "settings.change" ? "settings" : kind === "ledger.change" ? "ledger" : kind === "canon.propose" ? "canon" : undefined;
+  if (!what || !isRecord(body) || body.kind !== kind || (what === "canon" && body.applied !== true)) return undefined;
   return { what, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}) };
+}
+
+/** 定论的结果：划掉的只认卡上真有的。 */
+function readCanonResult(body: unknown): CanonResultData | undefined {
+  if (!isRecord(body) || body.kind !== "canon.propose") return undefined;
+  const card = readSettleData(body.card);
+  if (!card) return undefined;
+  return { card, excluded: readSettleExcluded(body.excluded, card), applied: body.applied === true };
 }
 
 /**
@@ -1126,6 +1166,29 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
       ? { kind: "new", type: "ledger.change", mode: "author", params: { changes: changes as LedgerChangeData[] }, ...stamp }
       : undefined;
   }
+  if (value.type === "canon.propose") {
+    const params = isRecord(value.params) ? value.params : {};
+    if (value.mode === "statement") {
+      const statement = nonEmptyText(params.statement, 400);
+      const chapter = positiveInt(params.chapter);
+      const also = readChapterSides(params.also);
+      return statement ? { kind: "new", type: "canon.propose", mode: "statement", params: { statement, ...(chapter ? { chapter } : {}), ...(also.length > 0 ? { also } : {}) }, ...stamp } : undefined;
+    }
+    const chapter = positiveInt(params.chapter);
+    const truth = readSettleSide(params.truth);
+    if (value.mode !== "pick" || !chapter || !truth) return undefined;
+    const other = readSettleSide(params.other);
+    const also = readChapterSides(params.also);
+    const reason = nonEmptyText(params.reason, 400);
+    const item = typeof params.item === "string" && params.item.length > 0 && params.item.length <= 1601 ? params.item : undefined;
+    return {
+      kind: "new",
+      type: "canon.propose",
+      mode: "pick",
+      params: { chapter, truth, ...(other ? { other } : {}), ...(also.length > 0 ? { also } : {}), ...(reason ? { reason } : {}), ...(item ? { item } : {}) },
+      ...stamp,
+    };
+  }
   if (value.type === "draft.change" && isDraftEditMode(value.mode)) {
     const params = readEditParams(value.mode, value.params);
     return params ? { kind: "new", type: "draft.change", mode: params.mode, params, ...stamp } : undefined;
@@ -1148,6 +1211,23 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
     ...stamp,
   };
 }
+
+/** 定论的一边（防御解析）。 */
+function readSettleSide(value: unknown): SettleSideData | undefined {
+  if (!isRecord(value)) return undefined;
+  const quote = nonEmptyText(value.quote, 800);
+  if (!quote) return undefined;
+  if (value.where === "setting") {
+    const label = nonEmptyText(value.label, 40);
+    const card = nonEmptyText(value.card, 40);
+    return label ? { where: "setting", quote, label, ...(card ? { card } : {}) } : undefined;
+  }
+  const chapter = positiveInt(value.chapter);
+  return value.where === "chapter" && chapter ? { where: "chapter", chapter, quote } : undefined;
+}
+
+const readChapterSides = (value: unknown): ChapterSideData[] =>
+  (Array.isArray(value) ? value.slice(0, 10) : []).map(readSettleSide).filter((side): side is ChapterSideData => side?.where === "chapter");
 
 /** 直接改账的一笔（防御解析）：形状不对是 undefined。 */
 function readLedgerChange(value: unknown): LedgerChangeData | undefined {

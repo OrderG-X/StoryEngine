@@ -246,7 +246,7 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     empty.unmount();
     const { onAction } = renderBook("canon", { bible: bibleView({ canon: [{ id: "n-1", text: "杜长顺十年前去世", at: AT }] }) });
     fireEvent.click(screen.getByRole("button", { name: "查前文" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "settle_preview", statement: "杜长顺十年前去世" });
+    expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "杜长顺十年前去世" } }));
     fireEvent.click(screen.getByRole("button", { name: "杜长顺十年前去世" }));
     const box = screen.getByLabelText("改这条定论");
     fireEvent.change(box, { target: { value: "杜长顺九年前去世" } });

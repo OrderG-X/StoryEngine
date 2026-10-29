@@ -35,18 +35,11 @@ export function userActionChoiceText(
       return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
     case "undo":
       return "撤销上一步";
-    case "settle_preview":
-      if ("statement" in action) return `按定论查前文：「${action.statement}」`;
-      return action.truth.where === "setting"
-        ? `以设定为准：${action.truth.label}「${action.truth.quote}」`
-        : `以第 ${action.truth.chapter} 章为准：「${action.truth.quote}」`;
-    case "settle_apply":
-      return "确认定论，改齐前文";
   }
 }
 
 /** 等作者点的按钮点了哪个：先按按钮认（「确认改设定」「确认改账」），再按选法认（改写的「换上 / 再改一版」）。 */
-const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定", "confirm-ledger": "确认改账" };
+const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定", "confirm-ledger": "确认改账", "confirm-canon": "确认定论，改齐前文" };
 const DECISION_TEXT: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
 
 const WEIGHT_TEXT = { major: "大伏笔", normal: "普通线索", minor: "小线索" } as const;
@@ -84,6 +77,11 @@ function operationActionText(action: import("../api/agentChatClient.js").Operati
   if (action.kind === "cancel") return "不要了";
   if (action.type === "settings.change") return "认下 AI 刚写的设定";
   if (action.type === "ledger.change") return ledgerActionText(action.params.changes);
+  if (action.type === "canon.propose") {
+    if (action.mode === "statement") return `按定论查前文：「${action.params.statement}」`;
+    const { truth } = action.params;
+    return truth.where === "setting" ? `以设定为准：${truth.label}「${truth.quote}」` : `以第 ${truth.chapter} 章为准：「${truth.quote}」`;
+  }
   const chapter = action.params.chapter;
   if (isDraftEditAction(action)) return editActionText(action.params);
   if (action.type === "draft.adopt") return `第 ${chapter} 章换成 AI 写好的那版`;

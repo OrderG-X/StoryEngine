@@ -6,7 +6,7 @@
  * 账里有、卡里没有的列在「还没建卡」：是人物还是地方，作者点了算，不猜。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { newCanonStatement, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
 import { AiMark, closeAfter, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
 import { Avatar, PageHead, PresenceStrip, RelationGraph, Sec, Skeleton, firstGlyph } from "./bibleVisual.js";
@@ -218,7 +218,7 @@ function CanonPage({ ctx }: { readonly ctx: PageContext }) {
   const canon = ctx.bible.canon;
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const check = (statement: string) => ctx.onAction?.({ toolName: "settle_preview", statement });
+  const check = (statement: string) => ctx.onAction?.(newCanonStatement({ statement }));
   // 定论是一句话：框子折行好看全，粘进来的换行存的时候并掉。
   const oneLine = (text: string): string => text.replace(/\s*\n+\s*/gu, "");
   return (

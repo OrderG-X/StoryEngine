@@ -12,9 +12,8 @@ describe("消息卡读回：出错卡（P11）", () => {
   });
 });
 
-describe("消息卡读回：定论卡（P12）", () => {
-  const settle = {
-    token: "0123456789abcdef",
+describe("消息卡读回：定论做完的结果（片 3C，存在操作卡上）", () => {
+  const card = {
     canon: "杜长顺十年前去世",
     canonExists: false,
     edits: [{ key: "e1", chapter: 2, draft: false, from: "五年", to: "十年" }],
@@ -24,17 +23,16 @@ describe("消息卡读回：定论卡（P12）", () => {
     missed: [],
     failures: [],
   };
-  it("划掉的只认卡上真有的；改齐了那句跟着存；票号不对整张不认", () => {
-    expect(readMessageCards([{ type: "settle", settle, excluded: ["e1", "e9"], applied: "改齐了。" }])).toEqual([
-      { type: "settle", settle, excluded: ["e1"], applied: "改齐了。" },
+  const op = { opId: "op-0123456789abcdef0123", kind: "canon.propose", what: "定论", state: "succeeded", stateText: "做完了", allowed: [], summary: "改齐了。", eventSeq: 9 };
+  it("划掉的只认卡上真有的；卡认不出整份不存，操作卡照存", () => {
+    expect(readMessageCards([{ type: "operation", op: { ...op, canon: { card, excluded: ["e1", "e9"], applied: true } } }])).toEqual([
+      { type: "operation", op: { ...op, canon: { card, excluded: ["e1"], applied: true } } },
     ]);
-    expect(readMessageCards([{ type: "settle", settle: { ...settle, token: "x" } }])).toEqual([]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, canon: { card: { ...card, canon: "" }, excluded: [], applied: true } } }])).toEqual([{ type: "operation", op }]);
   });
 
-  it("「不改了」跟着存；改齐了的不算不改了；只认 true", () => {
-    expect(readMessageCards([{ type: "settle", settle, dropped: true }])).toEqual([{ type: "settle", settle, dropped: true }]);
-    expect(readMessageCards([{ type: "settle", settle, dropped: true, applied: "改齐了。" }])).toEqual([{ type: "settle", settle, applied: "改齐了。" }]);
-    expect(readMessageCards([{ type: "settle", settle, dropped: "true" }])).toEqual([{ type: "settle", settle }]);
+  it("老会话里的定论卡（P2a 前）不认", () => {
+    expect(readMessageCards([{ type: "settle", settle: { ...card, token: "0123456789abcdef" }, applied: "改齐了。" }])).toEqual([]);
   });
 });
 

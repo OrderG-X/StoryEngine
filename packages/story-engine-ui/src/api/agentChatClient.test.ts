@@ -591,9 +591,8 @@ describe("streamAgentChat", () => {
     expect(received?.commitReport).toBeUndefined();
   });
 
-  it("定论（P12）：settle_preview / settle_fact 的卡防御解析后透传；没查成不建卡；settle_apply 成功带票号", async () => {
-    const settle = {
-      token: "0123456789abcdef",
+  it("定论（片 3C）：停着等作者的卡防御解析后带上；做完了带结果（划掉的只认卡上有的），改了才算「改过」；按钮存下来读回来，不对的不认", async () => {
+    const card = {
       canon: "杜长顺十年前去世",
       canonExists: false,
       chapter: 4,
@@ -604,29 +603,35 @@ describe("streamAgentChat", () => {
       missed: [],
       failures: [],
     };
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "s1", toolName: "settle_preview", output: { ok: true, summary: "定论", settle } }),
-        frame("tool-result", { toolCallId: "s2", toolName: "settle_fact", output: { ok: false, summary: "没写出定论", settle } }),
-        frame("tool-result", { toolCallId: "s3", toolName: "settle_apply", output: { ok: true, summary: "改齐了。", settleToken: settle.token, refreshScope: "full" } }),
-        frame("done", {}),
-      ]),
-    ));
-    const received: { toolName: string; settle?: unknown; settleToken?: string }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "以第 1 章为准" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received.push(info); },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-    expect(received[0]?.settle).toEqual({ ...settle, edits: [settle.edits[0]] });
-    expect(received[1]?.settle).toBeUndefined();
-    expect(received[2]?.settleToken).toBe(settle.token);
+    const goodCard = { ...card, edits: [card.edits[0]] };
+    const canonView = (overrides: Record<string, unknown>) => opView("statement", null, { kind: "canon.propose", what: "定论", chapter: undefined, ...overrides });
+    const done = (body: Record<string, unknown>) => canonView({ result: { schema: "operation-result/1", summary: "改齐了。", body: { kind: "canon.propose", card, ...body } } });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: canonView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-canon", kind: "canon_confirm", decisions: ["apply"], preview: { card, summary: "查完了：第 2 章 1 句要改。" }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: canonView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-canon", kind: "canon_confirm", decisions: ["apply"], preview: { summary: "没卡" }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: done({ excluded: ["e1", "zz"], applied: true, snapshotId: "s-3" }) }),
+      frame("operation", { type: "record", operation: done({ excluded: [], applied: false }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({ kind: "canon", actionId: "confirm-canon", decisions: ["apply"], card: goodCard, summary: "查完了：第 2 章 1 句要改。" });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]?.canon).toEqual({ card: goodCard, excluded: ["e1"], applied: true });
+    expect(views[2]?.changed).toEqual({ what: "canon", snapshotId: "s-3" });
+    expect(views[3]?.canon).toEqual({ card: goodCard, excluded: [], applied: false });
+    expect(views[3]?.changed).toBeUndefined();
+
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    const truth = { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" };
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "杜长顺十年前去世", chapter: 4 }, ...stamp }))
+      .toEqual({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "杜长顺十年前去世", chapter: 4 }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "pick", params: { chapter: 4, truth, item: "k1", reason: "年份对不上" }, ...stamp }))
+      .toEqual({ kind: "new", type: "canon.propose", mode: "pick", params: { chapter: 4, truth, reason: "年份对不上", item: "k1" }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "  " }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "pick", params: { chapter: 4 }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", params: { chapter: 4, truth }, ...stamp })).toBeUndefined();
   });
 
   it("suggest_next_steps 的 choice.action（R4.7）→ 白名单内透传、白名单外/形状不对丢掉（选项保留，退回发文本）", async () => {

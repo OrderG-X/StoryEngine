@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newDraftAction, newEditAction, newInspectAction } from "../api/agentChatClient.js";
+import { newCanonPick, newCanonStatement, newDraftAction, newEditAction, newInspectAction } from "../api/agentChatClient.js";
 
 import {
   DIRECT_WRITE_FALLBACK_GOAL,
@@ -35,10 +35,10 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText(newDraftAction("continue", { chapter: 12 }))).toBe("第 12 章接着往下写");
     expect(userActionChoiceText(newDraftAction("write", { chapter: 12, rewrite: true }))).toBe("重写第 12 章");
     // 定论（P12）：回显说清以哪边为准，原句照抄。
-    expect(userActionChoiceText({ toolName: "settle_preview", chapter: 4, truth: { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" } })).toBe("以第 1 章为准：「杜叔走了整整十年」");
-    expect(userActionChoiceText({ toolName: "settle_preview", chapter: 4, truth: { where: "setting", quote: "三年前过世", label: "人物卡" } })).toBe("以设定为准：人物卡「三年前过世」");
-    expect(userActionChoiceText({ toolName: "settle_preview", statement: "杜长顺十年前去世" })).toBe("按定论查前文：「杜长顺十年前去世」");
-    expect(userActionChoiceText({ toolName: "settle_apply", token: "0123456789abcdef", excluded: [] })).toBe("确认定论，改齐前文");
+    expect(userActionChoiceText(newCanonPick({ chapter: 4, truth: { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" } }))).toBe("以第 1 章为准：「杜叔走了整整十年」");
+    expect(userActionChoiceText(newCanonPick({ chapter: 4, truth: { where: "setting", quote: "三年前过世", label: "人物卡" } }))).toBe("以设定为准：人物卡「三年前过世」");
+    expect(userActionChoiceText(newCanonStatement({ statement: "杜长顺十年前去世" }))).toBe("按定论查前文：「杜长顺十年前去世」");
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-canon", decision: "apply", excluded: ["e1"] } })).toBe("确认定论，改齐前文");
     // 检查交给执行器（写作版本 P2a）：新的一次按种类说，停着的「接着做 / 不要了」。
     expect(userActionChoiceText(newInspectAction("review", 5))).toBe("审阅第 5 章的内容");
     expect(userActionChoiceText(newInspectAction("quality", 5))).toBe("对第 5 章做硬伤检查");

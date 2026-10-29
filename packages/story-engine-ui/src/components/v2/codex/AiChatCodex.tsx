@@ -38,7 +38,6 @@ import { runningAgentCard } from "./operationCaption.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DirectionsCard } from "./Brainstorm.js";
 import { DraftVersionsCard } from "./DraftVersionsCard.js";
-import { SettleCard } from "./SettleCard.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
@@ -1003,20 +1002,6 @@ function MessageBubbles({
       case "draft-versions":
         // 另外几版：AI 一次写几版时落选的几版，点开在稿纸上并排挑。
         return <DraftVersionsCard key={card.type} data={card.versions} busy={chatLoading} />;
-      case "settle":
-        // 定论卡（P12）：定论 + 前文要改的几句，划掉不改的、点「确认」一次改齐。
-        return (
-          <SettleCard
-            key={card.type}
-            messageId={message.id}
-            data={card.settle}
-            {...(card.excluded ? { excluded: card.excluded } : {})}
-            {...(card.applied ? { applied: card.applied } : {})}
-            {...(card.dropped ? { dropped: true } : {})}
-            busy={chatLoading}
-            {...(onSendUserAction ? { onAction: onSendUserAction } : {})}
-          />
-        );
       case "operation":
         // 操作卡（P2a）：在做的进度、停着的「接着做 / 不要了」；结束了这一轮说过结论就不显示。
         return (
@@ -1111,7 +1096,6 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "continuity",
   "directions",
   "draft-versions",
-  "settle",
   "quality",
   "commit-preview",
   "commit-report",

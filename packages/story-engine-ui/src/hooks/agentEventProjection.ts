@@ -21,7 +21,7 @@
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { InspectCardsData, OperationViewData, RewriteChoiceData } from "../api/agentChatClient.js";
 import type { ChapterMessage, MessageCard, MessageSegment } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, NextStepPrompt, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, NextStepPrompt, OperationCardData } from "../type-defs/workspace.js";
 import { cardOf, updateCard, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
@@ -72,8 +72,6 @@ export interface AgentToolResultOutput {
   /** commit_apply 专属：入库报告 CommitReport（agentChatClient 透传）。投影时挂到该消息→渲染「入库」delta 卡。 */
   readonly commitReport?: unknown;
   readonly brainstorm?: BrainstormCardData;
-  /** settle_preview / settle_fact 专属：定论卡（P12）。 */
-  readonly settle?: SettleCardData;
   /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
   readonly commitPreview?: CommitPreviewCardData;
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
@@ -185,7 +183,8 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   undo_last_change: { stepLabel: "撤销上一步", card: null },
   prune_snapshots: { stepLabel: "裁剪操作历史", card: null },
   web_search: { stepLabel: "联网查资料", card: null },
-  // 定论（P12）：按钮出预览 / 对话 AI 出预览 / 确认改齐
+  // 定论（写作版本 P2a 片 3C）：交一次定论；P2a 前按钮出预览 / 对话 AI 出预览 / 确认改齐（老会话回放仍显示原名）
+  propose_canon: { stepLabel: "定论", card: null },
   settle_preview: { stepLabel: "查前文", card: null },
   settle_fact: { stepLabel: "查前文", card: null },
   settle_apply: { stepLabel: "改齐前文", card: null },
@@ -322,10 +321,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => !ids.has(a.id)), ...buttons],
         };
       }
-      // 定论卡（P12）：定论 + 前文要改的几句，作者划掉不改的、点「确认」一次改齐。
-      if ((event.toolName === "settle_preview" || event.toolName === "settle_fact") && event.output?.settle && event.output?.ok !== false) {
-        return withCard(withEffects, { type: "settle", settle: event.output.settle });
-      }
       // commit_preview 的定稿预览卡（R3）：裁决（可否定稿）+ 阻断项 + 问题计数照实显示——模型可能把硬阻断说软或略过。
       if (event.toolName === "commit_preview" && event.output?.commitPreview) {
         return withCard(withEffects, { type: "commit-preview", preview: event.output.commitPreview });
@@ -366,6 +361,8 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     eventSeq: view.eventSeq,
     ...(announced || (same && current.announced) ? { announced: true as const } : {}),
     ...(view.pending ? { pending: view.pending } : {}),
+    // 定论做完的结果（核账卡认哪几条被它改掉了）：存进消息，重开书也认得。
+    ...(view.canon ? { canon: view.canon } : same && current.canon ? { canon: current.canon } : {}),
   };
   const next = withChangeEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view);
   if (same && current.state === "succeeded") return next;
@@ -394,17 +391,27 @@ function withDraftEffects(message: ChapterMessage, view: OperationViewData): Cha
   return next;
 }
 
-/** 改设定、改账做完：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」（线索板、故事地图也在设定本里）。同一个存档点只记一次。 */
+/** 做完打了存档点的那一类 → 这一轮记的工具名（「撤销到此」按它说退的是什么）。 */
+const CHANGE_TOOL_NAMES: Readonly<Record<NonNullable<OperationViewData["changed"]>["what"], string>> = {
+  settings: "change_settings",
+  ledger: "change_ledger",
+  canon: "propose_canon",
+};
+
+/**
+ * 改设定、改账、定论改齐了：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」（线索板、故事地图也在设定本里）；
+ * 定论还改了正文，标「正文·草稿」。同一个存档点只记一次。
+ */
 function withChangeEffects(message: ChapterMessage, view: OperationViewData): ChapterMessage {
   const changed = view.changed;
   if (!changed) return message;
   const known = new Set((message.turnSnapshots ?? []).map((entry) => entry.snapshotId));
-  const toolName = changed.what === "settings" ? "change_settings" : "change_ledger";
   let next = changed.snapshotId && !known.has(changed.snapshotId)
-    ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), { toolName, snapshotId: changed.snapshotId }] }
+    ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), { toolName: CHANGE_TOOL_NAMES[changed.what], snapshotId: changed.snapshotId }] }
     : message;
+  const scope = changed.what === "canon" ? "full" : "foundation";
   const scopes = next.affectedScopes ?? [];
-  if (!scopes.includes("foundation")) next = { ...next, affectedScopes: [...scopes, "foundation"] };
+  if (!scopes.includes(scope)) next = { ...next, affectedScopes: [...scopes, scope] };
   return next;
 }
 

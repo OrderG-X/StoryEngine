@@ -561,12 +561,14 @@ export function useChat(params: UseChatParams): UseChatResult {
                 if (draftOpId === null) beginDraftStream(view);
                 if (!LIVE_STATES.has(view.state)) finishDraftStream(view);
               }
-              // 改设定、改账做完了（结果不带概况）：重读一份，设定本、主角、线索、待处理跟着变。同一次只读一回。
+              // 改设定、改账、定论改齐了（结果不带概况）：重读一份，设定本、主角、线索、待处理跟着变。同一次只读一回。
+              // 定论还可能改了这一章的正文 / 工作稿：按盘上重读稿纸（作者手上有没存的字就出提示让作者选）。
               if (view.changed && !refreshedChanges.has(view.opId) && projectPath) {
                 refreshedChanges.add(view.opId);
                 track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
                   .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
                   .catch(() => undefined));
+                if (view.changed.what === "canon") track(refreshPaper());
               }
               if (view.state === "succeeded") {
                 const flowBefore = useBookStore.getState().workspace.flowStatus;
@@ -645,8 +647,6 @@ export function useChat(params: UseChatParams): UseChatResult {
                   return;
                 }
                 if (info.toolName === "commit_apply") commitAttempt = null;
-                // 定论改齐了（P12）：那张定论卡（可能在前面的消息上）标成改齐了，按钮收起。
-                if (info.toolName === "settle_apply" && info.settleToken) useChatStore.getState().markSettleApplied(info.settleToken, info.summary ?? "");
                 // 定稿成了：顶栏「设定本」亮个小点，点进去先看这章改了什么（重构 P6 第 6 步）。
                 if (info.toolName === "commit_apply" && info.committed === true) useNavigationStore.getState().setUnseenChangesChapter(operation.chapter);
                 const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
@@ -658,10 +658,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 const flowBefore = useBookStore.getState().workspace.flowStatus;
                 const nextFlow = agentFlowStatusForTool(info.toolName, info, flowBefore);
                 if (!info.overview) {
-                  const changedBible = info.refreshScope === "foundation"
-                    || (info.toolName === "settle_apply" && info.refreshScope === "full");
-                  if (changedBible && projectPath) {
-                    // 定论改齐的结果不带概况：重读一份，设定本、主角、待处理跟着变。
+                  if (info.refreshScope === "foundation" && projectPath) {
+                    // 改了设定本的结果不带概况：重读一份，设定本、主角、待处理跟着变。
                     track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
                       .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
                       .catch(() => undefined));

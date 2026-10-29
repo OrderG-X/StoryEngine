@@ -28,6 +28,9 @@ function Controlled({ onDismiss, ...props }: Omit<CardProps, "dismissed">) {
   );
 }
 
+/** 最后一次交的按钮动作里的参数（定论按钮交 canon.propose，片 3C）。 */
+const lastParams = (fn: ReturnType<typeof vi.fn>): unknown => (fn.mock.lastCall![0] as { readonly params: unknown }).params;
+
 const item = { quote: "她把便签塞进了抽屉。", earlierQuote: "便签一直揣在她兜里。", earlierChapter: 6, reason: "便签位置对不上" };
 const check = { chapter: 8, source: "draft" as const, sure: [item], maybe: [] };
 
@@ -247,16 +250,20 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [a, cross], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
     expect(screen.getAllByRole("button", { name: "改这处" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "以第 3 章为准" }));
-    expect(onFixAction).toHaveBeenLastCalledWith({
-      toolName: "settle_preview",
-      chapter: 9,
-      truth: { where: "chapter", chapter: 3, quote: cross.earlierQuote },
-      other: { where: "chapter", chapter: 9, quote: cross.quote },
-      reason: cross.reason,
-    });
-    expect(onFixAction.mock.lastCall![0]).not.toHaveProperty("item");
+    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: "new",
+      type: "canon.propose",
+      mode: "pick",
+      params: {
+        chapter: 9,
+        truth: { where: "chapter", chapter: 3, quote: cross.earlierQuote },
+        other: { where: "chapter", chapter: 9, quote: cross.quote },
+        reason: cross.reason,
+      },
+    }));
+    expect(lastParams(onFixAction)).not.toHaveProperty("item");
     fireEvent.click(screen.getByRole("button", { name: "以本章为准" }));
-    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({ truth: { where: "chapter", chapter: 9, quote: cross.quote }, item: continuityItemKey(cross) }));
+    expect(lastParams(onFixAction)).toMatchObject({ truth: { where: "chapter", chapter: 9, quote: cross.quote }, item: continuityItemKey(cross) });
     fireEvent.click(screen.getByRole("button", { name: "改掉本章 1 处" }));
     expect((onFixAction.mock.lastCall![0] as { params: { fixes: { targetText: string }[] } }).params.fixes.map((fix) => fix.targetText)).toEqual([a.quote]);
   });
@@ -267,10 +274,10 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     expect(screen.queryByRole("button", { name: /改掉/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /改设定/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "以设定为准" }));
-    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(lastParams(onFixAction)).toMatchObject({
       truth: { where: "setting", quote: earlier.earlierQuote, label: "人物卡", card: "许微" },
       other: { where: "chapter", chapter: 3, quote: earlier.quote },
-    }));
+    });
     expect(screen.getByRole("button", { name: "以第 3 章为准" })).toBeTruthy();
   });
 
@@ -281,12 +288,12 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     const otherField = { quote: "码头上全是新船。", earlierQuote: "只剩几条旧渔船", earlierChapter: 0, reason: "船对不上", fixChapter: 6, againstSetting: { label: "现状", card: "老码头" } };
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [ch1], maybe: [], earlierOpen: [ch5, otherField] }} onFixAction={onFixAction} />);
     fireEvent.click(screen.getAllByRole("button", { name: "以设定为准" })[0]!);
-    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(lastParams(onFixAction)).toMatchObject({
       other: { where: "chapter", chapter: 1, quote: ch1.quote },
       also: [{ where: "chapter", chapter: 5, quote: ch5.quote }],
-    }));
+    });
     fireEvent.click(screen.getByRole("button", { name: "以第 1 章为准" }));
-    expect(onFixAction.mock.lastCall![0]).not.toHaveProperty("also");
+    expect(lastParams(onFixAction)).not.toHaveProperty("also");
   });
 
   it("和定论打架的：只给「以定论为准」（按定论查全书），定论要改去设定本改", () => {
@@ -296,7 +303,12 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     expect(screen.queryByRole("button", { name: "以本章为准" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "以定论为准" }));
     // 核账报的这句一起带上：定论卡一定查到它（换题材长篇实跑 2026-10-27：没带，查全书说「没有要改的」）
-    expect(onFixAction).toHaveBeenLastCalledWith({ toolName: "settle_preview", statement: "杜长顺十年前去世", chapter: 9, also: [{ where: "chapter", chapter: 9, quote: "杜叔走了五年了。" }] });
+    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: "new",
+      type: "canon.propose",
+      mode: "statement",
+      params: { statement: "杜长顺十年前去世", chapter: 9, also: [{ where: "chapter", chapter: 9, quote: "杜叔走了五年了。" }] },
+    }));
   });
 
   it("和同一条定论打架的几句：「以定论为准」一起捎上", () => {
@@ -306,7 +318,7 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     const second = { quote: "五年前那场丧事。", earlierQuote: "杜长顺十年前去世", earlierChapter: 9, reason: "和定论对不上", againstSetting: against };
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [first, second], maybe: [] }} onFixAction={onFixAction} />);
     fireEvent.click(screen.getAllByRole("button", { name: "以定论为准" })[0]!);
-    expect(onFixAction.mock.lastCall![0]).toMatchObject({ also: [{ chapter: 9, quote: "杜叔走了五年了。" }, { chapter: 9, quote: "五年前那场丧事。" }] });
+    expect(lastParams(onFixAction)).toMatchObject({ also: [{ chapter: 9, quote: "杜叔走了五年了。" }, { chapter: 9, quote: "五年前那场丧事。" }] });
   });
 });
 

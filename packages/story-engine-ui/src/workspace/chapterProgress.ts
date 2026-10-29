@@ -67,17 +67,18 @@ export interface ContinuityResult {
 }
 
 type SettledEdit = { readonly chapter: number; readonly from: string };
-/** 一张改齐了的定论卡真改了什么（划掉没改的不算）；resolves = 核账卡上点「以本章为准」的那条。 */
+/** 一次改齐了的定论真改了什么（划掉没改的不算）；resolves = 核账卡上点「以本章为准」的那条。 */
 type Settled = { readonly edits: readonly SettledEdit[]; readonly fieldsChanged: boolean; readonly resolves?: string };
 
 function settledOf(message: ChapterMessage): Settled | undefined {
-  const card = cardOf(message, "settle");
-  if (!card?.applied) return undefined;
-  const skip = new Set(card.excluded ?? []);
+  const op = cardOf(message, "operation")?.op;
+  const canon = op?.state === "succeeded" ? op.canon : undefined;
+  if (!canon?.applied) return undefined;
+  const skip = new Set(canon.excluded);
   return {
-    edits: card.settle.edits.filter((edit) => !skip.has(edit.key)).map((edit) => ({ chapter: edit.chapter, from: edit.from })),
-    fieldsChanged: card.settle.fields.some((field) => !skip.has(field.key)),
-    ...(card.settle.resolves ? { resolves: card.settle.resolves } : {}),
+    edits: canon.card.edits.filter((edit) => !skip.has(edit.key)).map((edit) => ({ chapter: edit.chapter, from: edit.from })),
+    fieldsChanged: canon.card.fields.some((field) => !skip.has(field.key)),
+    ...(canon.card.resolves ? { resolves: canon.card.resolves } : {}),
   };
 }
 

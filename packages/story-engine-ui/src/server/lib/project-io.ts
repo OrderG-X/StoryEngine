@@ -119,8 +119,7 @@ export function parseOptionalPositiveInteger(value: string | null): number | und
 export interface ChatHistoryMessage {
   readonly role: "user" | "assistant";
   readonly content: string;
-  /** dropped＝这个工具出的卡作者点了「不改了」（整张作废、书里没动）。 */
-  readonly tools?: readonly { readonly name: string; readonly ok: boolean; readonly dropped?: true }[];
+  readonly tools?: readonly { readonly name: string; readonly ok: boolean }[];
 }
 
 export function readChatMessages(value: unknown): readonly ChatHistoryMessage[] {
@@ -135,7 +134,7 @@ export function readChatMessages(value: unknown): readonly ChatHistoryMessage[] 
       const tools = Array.isArray(item.tools)
         ? item.tools.filter(isRecord).flatMap((tool) => {
           const name = readString(tool.name);
-          return name ? [{ name, ok: tool.ok !== false, ...(tool.dropped === true ? { dropped: true as const } : {}) }] : [];
+          return name ? [{ name, ok: tool.ok !== false }] : [];
         })
         : [];
       messages.push(tools.length > 0 ? { role: "assistant", content, tools } : { role: "assistant", content });

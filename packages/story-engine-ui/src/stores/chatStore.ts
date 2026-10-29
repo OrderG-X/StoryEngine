@@ -31,12 +31,6 @@ export interface ChatStore {
   setDirectionPicked: (messageId: string, picked: number | null) => void;
   /** 核账卡上记下 / 撤回一条「不是问题」（对话卡和稿纸划线共用）。 */
   setContinuityDismissed: (messageId: string, key: string, dismissed: boolean) => void;
-  /** 定论卡上划掉 / 恢复一处（P12；只改对话里的卡，点「确认」时带上）。 */
-  setSettleExcluded: (messageId: string, key: string, excluded: boolean) => void;
-  /** 定论卡整张不要了 / 撤回（只改对话里的卡；改齐了的不动）。 */
-  setSettleDropped: (messageId: string, dropped: boolean) => void;
-  /** 定论卡改齐了（settle_apply 成功，按票号找那张卡）：记下服务端回的那句结果。 */
-  markSettleApplied: (token: string, applied: string) => void;
   /** 核账 / 定稿预览结果到时记下稿纸版本（之后稿子变了就是「核过后改过稿」「要重新预览」）。 */
   /** 定稿预览卡记下预览的是工作稿哪一版（检查的结果卡由服务端带 checkedVersion）。 */
   stampPreviewVersion: (messageId: string, version: string | null) => void;
@@ -101,39 +95,6 @@ export const useChatStore = create<ChatStore>((set) => ({
           })
           : message
       )),
-    })),
-  setSettleExcluded: (messageId, key, excluded) =>
-    set((state) => ({
-      messages: state.messages.map((message) => (
-        message.id === messageId
-          ? updateCard(message, "settle", (card) => {
-            if (card.applied) return card;
-            const current = card.excluded ?? [];
-            if (excluded === current.includes(key)) return card;
-            const next = excluded ? [...current, key] : current.filter((item) => item !== key);
-            const { excluded: _old, ...rest } = card;
-            return next.length > 0 ? { ...rest, excluded: next } : rest;
-          })
-          : message
-      )),
-    })),
-  setSettleDropped: (messageId, dropped) =>
-    set((state) => ({
-      messages: state.messages.map((message) => (
-        message.id === messageId
-          ? updateCard(message, "settle", (card) => {
-            if (card.applied || dropped === Boolean(card.dropped)) return card;
-            const { dropped: _old, ...rest } = card;
-            return dropped ? { ...rest, dropped: true as const } : rest;
-          })
-          : message
-      )),
-    })),
-  markSettleApplied: (token, applied) =>
-    set((state) => ({
-      messages: state.messages.map((message) => updateCard(message, "settle", (card) => (
-        card.settle.token === token ? { ...card, applied: applied || "改齐了。" } : card
-      ))),
     })),
   stampPreviewVersion: (messageId, version) =>
     set((state) => ({

@@ -1,5 +1,5 @@
 /**
- * 定论卡（P12）的防御解析：工具输出 / 存盘数据 → 校验过的卡数据。前端投影和服务端存盘白名单共用，两边不会各认各的。
+ * 定论卡（P12；片 3C 起是 canon.propose 操作等作者时的预览、做完的结果）的防御解析：操作视图 → 校验过的卡数据。
  */
 import type { SettleCardData } from "../type-defs/workspace.js";
 
@@ -10,9 +10,8 @@ const list = (value: unknown, max: number): readonly unknown[] => (Array.isArray
 
 export function readSettleData(value: unknown): SettleCardData | undefined {
   if (!isRecord(value)) return undefined;
-  const token = text(value.token);
   const canon = text(value.canon);
-  if (!/^[0-9a-f]{16}$/u.test(token) || !canon) return undefined;
+  if (!canon) return undefined;
   const edits = list(value.edits, 200).flatMap((item) => {
     if (!isRecord(item)) return [];
     const chapter = chapterOf(item.chapter);
@@ -55,7 +54,6 @@ export function readSettleData(value: unknown): SettleCardData | undefined {
   const replaces = text(value.replaces);
   const chapter = chapterOf(value.chapter);
   return {
-    token,
     canon,
     canonExists: value.canonExists === true,
     ...(value.sceneOnly === true ? { sceneOnly: true } : {}),
@@ -71,10 +69,9 @@ export function readSettleData(value: unknown): SettleCardData | undefined {
   };
 }
 
-/** 存盘的 excluded：只认卡上真有的 key。 */
-export function readSettleExcluded(value: unknown, data: SettleCardData): readonly string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+/** 作者划掉的：只认卡上真有的 key。 */
+export function readSettleExcluded(value: unknown, data: SettleCardData): readonly string[] {
+  if (!Array.isArray(value)) return [];
   const keys = new Set([...data.edits.map((edit) => edit.key), ...data.fields.map((field) => field.key)]);
-  const excluded = [...new Set(value.filter((key): key is string => typeof key === "string" && keys.has(key)))];
-  return excluded.length > 0 ? excluded : undefined;
+  return [...new Set(value.filter((key): key is string => typeof key === "string" && keys.has(key)))];
 }
