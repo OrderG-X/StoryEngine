@@ -15,7 +15,9 @@
  * 不拿链接数、inode 代替。Node 没有「目标还是这份才换」的原子 rename（renamex_np / renameat2），就分三步、每步都不丢东西：
  *  1. 先把目标 rename 到调用方给的固定名字（aside，事务目录里）——这之后原处有人放了新的，不会被盖；
  *  2. 拿着打开的它核：挪开的就是核过的那个文件、内容（从头重读）还是该换掉的那份；不是就原样放回（原处又有了就留在 aside），如实失败；
- *  3. 独占放上（link：原处有了就不放，如实失败），再删 aside：删了以后拿着它再从头读一遍，删之前有人往里写过就原样写回 aside、如实失败。
+ *  3. 独占放上（link：原处有了就不放，如实失败），再把 aside **挪进留证区**（`.story-core-kept/displaced/`，不删）：挪完拿着它
+ *     再从头读一遍，有人往里写过就如实失败（东西在留证区）。不删是第 25 轮定的：删掉最后一个名字和「核过内容」之间总有一瞬，
+ *     外面拿着它写进去的、被杀在那一瞬的，都没处找回；挪名字是原子的，任何时刻它都有名字。留证区不自动清（回滚、恢复才走这里，很少）。
  * 被杀在任何一步，下次照固定名字 settleInterruptedPlace 收拾：放上了还没摘名字的摘掉，挪开了还没放上的放回去，原处又有了的交调用方另存。
  * 第 1 步到第 3 步之间原处是空的（读的一方读到「没有」）：只有回滚、恢复这种本来就有半截事务挡着的地方用。
  * 正常写（moveFileInBook 的 precheckTargetSha）只在 rename 前核一遍目标：守的是书锁之外的写在这之前改过的，核完到 rename
@@ -25,8 +27,9 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { link, lstat, open, realpath, rename, rm, stat, unlink, type FileHandle } from "node:fs/promises";
+import { link, lstat, mkdir, open, realpath, rename, rm, stat, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { DISPLACED_DIR, KEPT_TX_DIR } from "./paths.js";
 
 /** 测试钩子停的点（老格式事务的单测在这两处调换路径）。 */
 export type SafeWriteHookPoint = "after-precheck-before-open" | "after-open-before-verify";
@@ -324,23 +327,36 @@ async function takeAside(
  * 删掉 aside（第 3 步后半）：aside 上还是拿着的那份才删；删了以后拿着它从头再读一遍，删之前有人往里写过（不是 expect）
  * 就原样写回 aside（独占新建）、如实报错。
  */
-async function discardHeld(root: string, aside: string, held: FileHandle, expect: string, label: string): Promise<void> {
+/** 留证区的挪入目录：每一级都得是真目录（不在就建），不跟软链。 */
+async function displacedDir(root: string, label: string): Promise<string> {
+  for (const rel of [KEPT_TX_DIR, DISPLACED_DIR]) {
+    const path = join(root, rel);
+    const found = await lstatOrUndefined(path);
+    if (!found) await mkdir(path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    });
+    else if (found.isSymbolicLink() || !found.isDirectory()) throw unsafe("UNSAFE_NOT_A_DIRECTORY", `Unsafe ${label}: ${rel} is not a real directory.`);
+  }
+  const dir = join(root, DISPLACED_DIR);
+  await plainDirIdentity(root, dir, label);
+  return dir;
+}
+
+/**
+ * 挪开的那份不删，挪进留证区（见文件头第 3 步）：rename 到随机名字（原子：任何时刻它都有名字），目录落盘，再拿着它从头读一遍；
+ * 不是该换掉的那份（有人往里写过）就如实失败——东西在留证区，没丢。
+ */
+async function retireHeld(root: string, aside: string, held: FileHandle, expect: string, label: string): Promise<void> {
   await assertHeldFile(held, aside, root, label);
-  await unlink(aside);
+  const dir = await displacedDir(root, label);
+  const retired = join(dir, `${Date.now()}-${randomBytes(8).toString("hex")}-${basename(aside).replace(/[^\w.-]/gu, "_")}`);
+  await rename(aside, retired);
+  await syncDirectory(dir);
+  await syncDirectory(dirname(aside));
   const after = await bytesOf(held);
   if (sha256(after.toString("utf-8")) !== expect) {
-    const keep = await open(aside, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600)
-      .catch(() => open(`${aside}.${randomBytes(6).toString("hex")}`, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600));
-    try {
-      await keep.writeFile(after);
-      await keep.sync();
-    } finally {
-      await keep.close();
-    }
-    await syncDirectory(dirname(aside));
-    throw unsafe("UNSAFE_TARGET_CHANGED", `Unsafe ${label}: ${relative(root, aside)} was written to while it was being removed; kept as is.`);
+    throw unsafe("UNSAFE_TARGET_CHANGED", `Unsafe ${label}: ${relative(root, aside)} was written to while it was being set aside; kept at ${relative(root, retired)}.`);
   }
-  await syncDirectory(dirname(aside));
 }
 
 /**
@@ -414,7 +430,7 @@ export async function placeFileInBook(
       await assertHeldFile(handle, target, root, label);
       await syncDirectory(dirname(target));
       if (dirname(source) !== dirname(target)) await syncDirectory(dirname(source));
-      if (displaced) await discardHeld(root, displaced.aside, displaced.held, options.expectTarget as string, label);
+      if (displaced) await retireHeld(root, displaced.aside, displaced.held, options.expectTarget as string, label);
     } finally {
       await displaced?.held.close();
     }
@@ -424,8 +440,8 @@ export async function placeFileInBook(
 }
 
 /**
- * 回滚 / 恢复删掉书里一个文件，只删核过的那份（见文件头）：不在就当删过了；在的话先挪到 aside、核挪开的就是它、内容还是
- * expectSha 才删，删后再核。核不上原样放回、如实报错。
+ * 回滚 / 恢复删掉书里一个文件，只动核过的那份（见文件头）：不在就当删过了；在的话先挪到 aside、核挪开的就是它、内容还是
+ * expectSha 才挪进留证区（不删），挪完再核。核不上原样放回、如实报错。
  */
 export async function removeFileInBook(root: string, target: string, options: { readonly label: string; readonly expectSha: string; readonly aside: string }): Promise<void> {
   const { label } = options;
@@ -435,7 +451,7 @@ export async function removeFileInBook(root: string, target: string, options: { 
   const held = await takeAside(root, { path: target, dir: targetDir }, { path: options.aside, dir: asideDir }, options.expectSha, label);
   try {
     await syncDirectory(dirname(target));
-    await discardHeld(root, options.aside, held, options.expectSha, label);
+    await retireHeld(root, options.aside, held, options.expectSha, label);
   } finally {
     await held.close();
   }
@@ -483,14 +499,14 @@ export async function settleInterruptedPlace(
   return readFileInBook(root, options.aside, label);
 }
 
-/** 删掉 settleInterruptedPlace 交回来的 aside（调用方已另存）：内容还是 expectSha 才删，删后再核（同 discardHeld）。 */
+/** 收走 settleInterruptedPlace 交回来的 aside（调用方已另存）：内容还是 expectSha 才挪进留证区（不删），挪完再核（同 retireHeld）。 */
 export async function discardAside(root: string, aside: string, options: { readonly label: string; readonly expectSha: string }): Promise<void> {
   await plainDirIdentity(root, dirname(aside), options.label);
   const held = await openSource(root, aside, options.expectSha, options.label).catch((error: unknown) => {
     throw (error as NodeJS.ErrnoException).code === "UNSAFE_CONTENT_MISMATCH" ? targetChanged(root, aside, options.label) : error;
   });
   try {
-    await discardHeld(root, aside, held, options.expectSha, options.label);
+    await retireHeld(root, aside, held, options.expectSha, options.label);
   } finally {
     await held.close();
   }

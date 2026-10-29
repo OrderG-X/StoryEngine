@@ -23,6 +23,8 @@ export const DRAFT_GENS_PATH = "store-control/drafts.json";
 export const TX_DIR = ".story-core-tx";
 /** 收拾不了的坏事务挪到这里留证（作者确认后挪，不删）。 */
 export const KEPT_TX_DIR = ".story-core-kept";
+/** 回滚、恢复时被换下来的那份（不删，留证；P1 第 25 轮）：在留证区里单占一个子目录，不算坏事务份数。 */
+export const DISPLACED_DIR = `${KEPT_TX_DIR}/displaced`;
 /** 恢复要盖掉 / 删掉的文件，现在的内容不是那份事务写的，先另存在这里（store/saved-copies.ts）。 */
 export const SAVED_COPIES_DIR = ".story-core-saved";
 /** 两份代次（store/control.ts）：恢复只换新的，不从备份换回（P1 第 19 轮 AG2）。 */

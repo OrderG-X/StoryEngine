@@ -26,7 +26,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
-import { dirname, join, normalize, sep } from "node:path";
+import { basename, dirname, join, normalize, sep } from "node:path";
 import {
   hasPendingLegacyTransactions,
   LegacyResidueError,
@@ -38,7 +38,7 @@ import {
 } from "./legacy-transaction.js";
 import { withBookLock } from "./lock.js";
 import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "./control.js";
-import { assertInsideBook, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
+import { assertInsideBook, DISPLACED_DIR, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
 import { discardAside, moveFileInBook, placeFileInBook, readFileInBook, removeFileInBook, settleInterruptedPlace, writeFileInBook } from "./safe-fs.js";
 import { saveCopyBeforeRestore } from "./saved-copies.js";
 
@@ -468,7 +468,7 @@ async function listDir(path: string): Promise<string[] | undefined> {
 }
 
 async function keptCount(bookDir: string): Promise<number> {
-  return (await listDir(join(bookDir, KEPT_TX_DIR)))?.length ?? 0;
+  return (await listDir(join(bookDir, KEPT_TX_DIR)))?.filter((name) => name !== basename(DISPLACED_DIR)).length ?? 0;
 }
 
 /** 一份要退的事务（老格式或核心的）：开工时间、会换回哪些文件（→ 换回成什么）。 */
