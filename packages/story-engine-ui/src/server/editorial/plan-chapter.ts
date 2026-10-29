@@ -2,8 +2,8 @@
  * 拟章纲编排（resolveChapterPlanForDraft）：章纲员窗口拟纲（planner.ts）→ 核账员窗口审纲（checker.ts）
  * → 有问题交回章纲员改一轮（不循环）。材料和天数归一这些纯函数在 plan-materials.ts。
  */
+import { basisDigestBefore, canonicalJson, sha256 } from "@actalk/story-core";
 import { readChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { readFactLedgerStrict } from "../book/fact-ledger-store.js";
 import { readStoryTimeline } from "../book/story-timeline.js";
 import {
   callConfiguredBrainModel,
@@ -16,10 +16,10 @@ import {
   type BrainCallModel,
   type PlanProblem,
 } from "./index.js";
-import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
-import { hashEarlier } from "./continuity/check-memory.js";
-import { readFoundationDigest } from "./foundation-digest.js";
+import { containsQuote, normalize } from "./continuity/check-chapter.js";
+import { collectPlanMaterials } from "./plan-materials.js";
 import { withStep } from "../lib/token-meter.js";
+import { readWithStableBasisForWork } from "../book/truth-basis.js";
 
 export interface ResolvedChapterPlan {
   readonly plan?: ChapterPlan;
@@ -143,16 +143,27 @@ async function planByEditorialRoom(input: {
 }
 
 /**
- * 章纲依赖的前文指纹：前面各章正文、账、设定、前面各章是哪天（本章的日子不进——时间线会读本章章纲里的天数）。
+ * 章纲依赖的前文指纹（写作版本 P1a 起用真相依据）：拟纲实际读的那份材料（collectPlanMaterials：设定摘要、前一章、
+ * 最近几章正文、前几章章纲的要点和时间、线索、事实……）+ 前面各章正文和账、作者裁定、设定卡的内容摘要 + 前面各章是哪天。
+ * 前几章的章纲不在真相里，改了它也得重拟（P1a 复核）。材料夹在两次读依据之间读，中途书上有写就不给指纹。
  * 读不了 → undefined：不沿用，拟出来的也不记指纹。
  */
-export async function planBasisOf(projectDir: string, chapter: number): Promise<string | undefined> {
+export async function planBasisOf(projectDir: string, chapter: number, direction?: string): Promise<string | undefined> {
+  return (await readPlanBasis(projectDir, chapter, direction))?.key;
+}
+
+/**
+ * key 是存进章纲的指纹（只看内容：撤销回到同样的前文还能沿用）；digest 是这次读时整本书的依据（带写入代次）。
+ * 拟纲前后比两样：内容一样但中途书上有过写（比如 A→B→撤销回 A，章纲员读到的可能是 B），也不挂指纹（P1a 第 2 轮复核）。
+ */
+async function readPlanBasis(projectDir: string, chapter: number, direction?: string): Promise<{ readonly key: string; readonly digest: string } | undefined> {
   try {
-    const earlier = await readEarlierChapters(projectDir, chapter);
-    const { facts } = await readFactLedgerStrict(projectDir);
-    const foundation = await readFoundationDigest(projectDir);
-    const { timeline } = await readStoryTimeline(projectDir);
-    return hashEarlier(earlier, facts, foundation?.text, JSON.stringify(timeline.entries.filter((entry) => entry.chapter < chapter)));
+    const read = await readWithStableBasisForWork(projectDir, async () => ({
+      materials: await collectPlanMaterials(projectDir, chapter, direction || undefined),
+      timeline: (await readStoryTimeline(projectDir)).timeline.entries.filter((entry) => entry.chapter < chapter),
+    }));
+    if (!read.basis) return undefined;
+    return { key: sha256(canonicalJson({ truth: basisDigestBefore(read.basis, chapter), ...read.value })), digest: read.basis.digest };
   } catch {
     return undefined;
   }
@@ -175,16 +186,21 @@ export async function resolveChapterPlanForDraft(input: {
 }): Promise<ResolvedChapterPlan> {
   const direction = input.direction?.trim() ?? "";
   const existing = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
-  const basis = await planBasisOf(input.projectDir, input.chapter);
+  const start = await readPlanBasis(input.projectDir, input.chapter, direction);
+  const basis = start?.key;
   const sameDirection = existing !== undefined && (existing.direction ?? "") === direction;
   if (existing && sameDirection && (existing.source === "author" || (basis !== undefined && existing.basis === basis))) {
     return { plan: existing, note: `沿用本章已有章纲：${existing.summary}${directionChangeNote(existing)}`, reused: true };
   }
   const planned = await planByEditorialRoom(input, direction);
   if (!planned.plan) return planned;
-  if (basis) await writeChapterPlan(input.projectDir, { ...planned.plan, basis });
+  // 拟完再读一遍：拟纲那段时间里材料没变、书上也没写过，这份章纲才挂指纹（变了就不挂，下次重拟）。
+  const end = start ? await readPlanBasis(input.projectDir, input.chapter, direction) : undefined;
+  const plan = basis && end?.key === basis && end.digest === start?.digest
+    ? await writeChapterPlan(input.projectDir, { ...planned.plan, basis })
+    : planned.plan;
   const staleNote = sameDirection && existing.basis !== undefined && basis !== undefined ? "前文改过，章纲按现在的重拟了。" : "";
-  return { ...planned, note: `${staleNote}${planned.note}${directionChangeNote(planned.plan)}` };
+  return { ...planned, plan, note: `${staleNote}${planned.note}${directionChangeNote(plan)}` };
 }
 
 /**

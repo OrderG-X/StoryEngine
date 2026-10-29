@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,13 +7,13 @@ import { projectBook } from "../index.js";
 import type { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readHead } from "../store/book.js";
 import { draftPath, TX_DIR } from "../store/paths.js";
-import { setAsideBrokenTransactions } from "../store/transaction.js";
+import { hasPendingTransactions, setAsideBrokenTransactions } from "../store/transaction.js";
 import { chapterCommit, type ChapterCommitResult } from "./chapter-commit.js";
 import { chapterRetitle } from "./chapter-retitle.js";
 import { readDraft } from "../draft/draft.js";
 import { decisionRecord } from "./decision-record.js";
 import { BookEventHub } from "./events.js";
-import { runCommand } from "./runner.js";
+import { runCommand, withSettledBook } from "./runner.js";
 import type { BookEvent, CommandOutcome, CommandSuccess } from "./types.js";
 
 let book: string;
@@ -76,7 +77,7 @@ describe("定稿命令", () => {
     expect(outcome.result.rejected[0]?.message).toBe("「老周哭了」没记上：附的原句在正文里找不到");
   });
 
-  it("AI 调不了；没带防重复标记不执行；同一个标记再点一次只回放", async () => {
+  it("AI 调不了；没带防重复标记不执行；同一个标记再点一次只回放，换了选择再点如实拒绝", async () => {
     const asAi = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { caller: "ai", idempotencyKey: "x" });
     expect(asAi).toMatchObject({ ok: false, code: "author_only" });
     const noKey = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { caller: "author" });
@@ -84,11 +85,20 @@ describe("定稿命令", () => {
 
     const emit = vi.fn();
     const first = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("same", emit)));
-    const again = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("same", emit)));
+    const again = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("same", emit)));
     expect(again.replayed).toBe(true);
     expect(again.result).toEqual(first.result);
-    expect(emit).toHaveBeenCalledTimes(1);
-    expect((await readHead(book)).version).toBe(1);
+    // 同一个标记换了参数：不按上次的回放成「做好了」
+    const changed = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("same", emit));
+    expect(changed).toMatchObject({ ok: false, code: "idempotency_args_changed" });
+    // 调用方给了「作者的选择」：只比它，参数里照现状重算的部分不算
+    const sameIntent = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { ...author("intent", emit), intent: { pick: 1 } }));
+    expect(sameIntent.replayed).toBeFalsy();
+    const replayIntent = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: CH1_ENTRIES }, { ...author("intent", emit), intent: { pick: 1 } }));
+    expect(replayIntent.replayed).toBe(true);
+    expect(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { ...author("intent", emit), intent: { pick: 2 } })).toMatchObject({ ok: false, code: "idempotency_args_changed" });
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect((await readHead(book)).version).toBe(2);
   });
 
   it("重定稿：同一条事实、同一条线索的编号沿用，后文接得上；不见了的被引用线索如实列出", async () => {
@@ -153,6 +163,49 @@ describe("定稿命令", () => {
     expect(after.recovered).toBeUndefined();
   });
 
+  it("withSettledBook：先收拾完上次写断的事务再读盘（第 16 轮 AD3）；清单坏了和写命令一样不开工", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const stranded = join(book, TX_DIR, "t1");
+    await mkdir(join(stranded, "staged"), { recursive: true });
+    await writeFile(join(book, "chapters/0001.md"), "写了一半的正文");
+    await mkdir(join(stranded, "backup"), { recursive: true });
+    await writeFile(join(stranded, "backup", "0"), CH1);
+    await writeFile(join(stranded, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "t1", createdAt: "x", status: "prepared", files: [{ path: "chapters/0001.md", existed: true, slot: "0" }] }));
+    const read = await withSettledBook(book, () => readFile(join(book, "chapters/0001.md"), "utf-8"));
+    expect(read).toEqual({ ok: true, value: CH1 });
+
+    await mkdir(join(book, TX_DIR, "bad"), { recursive: true });
+    await writeFile(join(book, TX_DIR, "bad", "manifest.json"), "{坏");
+    const run = vi.fn(async () => "读了");
+    expect(await withSettledBook(book, run)).toMatchObject({ ok: false, code: "transaction_residue" });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("老格式事务（升级前崩溃留下的）一起收拾（第 17 轮 AE2）：withSettledBook 读到的是回滚后的；没收拾时读的一方看得出没收尾", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const legacy = join(book, ".story-engine-tx", "commit-chapter-0001");
+    await mkdir(join(legacy, "backups", "chapters"), { recursive: true });
+    await writeFile(join(legacy, "backups", "chapters", "0001.md"), CH1);
+    await writeFile(join(legacy, "manifest.json"), JSON.stringify({
+      version: 2, chapter: 1, createdAt: "2026-07-13T00:00:00.000Z", files: ["chapters/0001.md"],
+      backups: [{ relativePath: "chapters/0001.md", existed: true, backupPath: "backups/chapters/0001.md", sha256: createHash("sha256").update(CH1, "utf-8").digest("hex") }],
+      status: "staged",
+    }));
+    await writeFile(join(book, "chapters/0001.md"), "老版本写了一半的正文");
+    expect(await hasPendingTransactions(book)).toBe(true);
+    expect(await withSettledBook(book, () => readFile(join(book, "chapters/0001.md"), "utf-8"))).toEqual({ ok: true, value: CH1 });
+    expect(await hasPendingTransactions(book)).toBe(false);
+
+    // 收拾不了（清单坏了）：写命令、withSettledBook 都如实失败、不开工。
+    await mkdir(join(book, ".story-engine-tx", "commit-chapter-0002"), { recursive: true });
+    await writeFile(join(book, ".story-engine-tx", "commit-chapter-0002", "manifest.json"), "{坏");
+    expect(await hasPendingTransactions(book)).toBe(true);
+    const run = vi.fn(async () => "读了");
+    expect(await withSettledBook(book, run)).toMatchObject({ ok: false, code: "transaction_residue" });
+    expect(run).not.toHaveBeenCalled();
+    expect(await runCommand(book, chapterRetitle, { chapter: 1, title: "新名" }, author("k-retitle"))).toMatchObject({ ok: false, code: "transaction_residue" });
+  });
+
   it("参数不对如实报，不写", async () => {
     const outcome = await runCommand(book, chapterCommit, { chapter: 0, text: "", entries: "[]" }, author("k1"));
     expect(outcome).toMatchObject({ ok: false, code: "invalid_args" });
@@ -202,36 +255,61 @@ describe("作者裁定命令", () => {
         { kind: "thread", review: "auto", op: "open", type: "intent", title: "老周不让人进钟楼", note: "老周没有拦她", quote: "老周没有拦她" },
       ],
     }, author("k1")));
-    const merged = expectOk(await runCommand(book, decisionRecord, { type: "thread.merge", from: ["t1-2"], into: "t1-1" }, author("d1")));
-    expect(merged.result).toEqual({ decision: "d-1" });
+    const merged = expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "thread.merge", from: ["t1-2"], into: "t1-1" }] }, author("d1")));
+    expect(merged.result).toEqual({ decisions: ["d-1"] });
     expect(merged.changed).toEqual({ decisions: true });
     const view = await projectBook(book);
     expect(view.threads.map((thread) => [thread.id, thread.mergedFrom])).toEqual([["t1-1", ["t1-2"]]]);
 
-    const missing = await runCommand(book, decisionRecord, { type: "thread.close", thread: "t1-2", chapter: 1 }, author("d2"));
+    const missing = await runCommand(book, decisionRecord, { decisions: [{ type: "thread.close", thread: "t1-2", chapter: 1 }] }, author("d2"));
     expect(missing).toMatchObject({ ok: false, code: "unknown_thread" });
   });
 
   it("补记事实：章要定稿过、改写的那条要还在、不会变的要写清谁哪方面是什么", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
-    const added = expectOk(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "event", text: "钟楼失过一次火" }, author("d1")));
-    expect(added.result).toEqual({ decision: "d-1" });
+    const added = expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 1, nature: "event", text: "钟楼失过一次火" }] }, author("d1")));
+    expect(added.result).toEqual({ decisions: ["d-1"] });
     expect((await projectBook(book)).facts.find((fact) => fact.id === "d-1")).toMatchObject({ chapter: 1, text: "钟楼失过一次火", review: "author", status: "current" });
 
-    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 2, nature: "event", text: "x" }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
-    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "event", text: "x", corrects: "nope" }, author("d3"))).toMatchObject({ ok: false, code: "unknown_fact" });
-    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "hard", text: "老周很老" }, author("d4"))).toMatchObject({ ok: false, code: "invalid_args" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 2, nature: "event", text: "x" }] }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 1, nature: "event", text: "x", corrects: "nope" }] }, author("d3"))).toMatchObject({ ok: false, code: "unknown_fact" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 1, nature: "hard", text: "老周很老" }] }, author("d4"))).toMatchObject({ ok: false, code: "invalid_args" });
   });
 
   it("改梗概：章要定稿过，改了投影里换成作者写的", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
-    expectOk(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 1, text: "她进了钟楼。" }, author("d1")));
+    expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "她进了钟楼。" }] }, author("d1")));
     expect((await projectBook(book)).chapters[0]?.summary).toBe("她进了钟楼。");
-    expect(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 2, text: "x" }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 2, text: "x" }] }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+  });
+
+  it("一次几条：后一条按前一条记完的样子核；有一条记不上整批都不记（不会记一半）", async () => {
+    expectOk(await runCommand(book, chapterCommit, {
+      chapter: 1,
+      text: CH1,
+      entries: [
+        CH1_ENTRIES[5] as EntryInput,
+        { kind: "thread", review: "auto", op: "open", type: "intent", title: "老周不让人进钟楼", note: "老周没有拦她", quote: "老周没有拦她" },
+      ],
+    }, author("k1")));
+    const both = expectOk(await runCommand(book, decisionRecord, { decisions: [
+      { type: "thread.merge", from: ["t1-2"], into: "t1-1" },
+      { type: "chapter.summary", chapter: 1, text: "她进了钟楼。" },
+    ] }, author("d1")));
+    expect(both.result).toEqual({ decisions: ["d-1", "d-2"] });
+
+    const before = await readFile(join(book, "ledger", "decisions.json"), "utf-8");
+    const half = await runCommand(book, decisionRecord, { decisions: [
+      { type: "chapter.summary", chapter: 1, text: "改了" },
+      { type: "thread.close", thread: "t1-2", chapter: 1 },
+    ] }, author("d2"));
+    expect(half).toMatchObject({ ok: false, code: "unknown_thread" });
+    expect((half as { message: string }).message).toContain("第 2 条");
+    expect(await readFile(join(book, "ledger", "decisions.json"), "utf-8")).toBe(before);
   });
 
   it("AI 调不了", async () => {
-    const outcome = await runCommand(book, decisionRecord, { type: "issue.dismiss", issue: "x" }, { caller: "ai", idempotencyKey: "d" });
+    const outcome = await runCommand(book, decisionRecord, { decisions: [{ type: "issue.dismiss", issue: "x" }] }, { caller: "ai", idempotencyKey: "d" });
     expect(outcome).toMatchObject({ ok: false, code: "author_only" });
   });
 });

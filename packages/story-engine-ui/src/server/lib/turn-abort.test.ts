@@ -7,8 +7,10 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { readDraft, readTruthBasis } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
-import { AiDraftWriteError, writeAiDraft } from "./ai-draft-write.js";
+import { AiDraftWriteError, applyAiDraft } from "./ai-draft-write.js";
+import { readDraftCandidate, saveDraftCandidate } from "./draft-candidates.js";
 import { writeCards } from "./card-write.js";
 import { makeHomeTempDir } from "./home-test-tmp.js";
 import { runAbortableTurn, turnAborted } from "./turn-abort.js";
@@ -23,24 +25,37 @@ afterEach(async () => {
   await rm(rootDir, { recursive: true, force: true });
 });
 
+/** AI 照盘上现在这版写一稿、换上。 */
+async function aiWrite(body: string, candidateId?: string) {
+  const basis = await readTruthBasis(book);
+  const baseVersion = (await readDraft(book, 1))?.version ?? null;
+  return applyAiDraft(book, { chapter: 1, title: "", body, baseVersion, basis, materials: [], source: "draft", ...(candidateId ? { candidateId } : {}) });
+}
+
 const draftOf = (chapter: number) => readFile(join(book, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`), "utf-8").catch(() => undefined);
 
 describe("喊停之后 AI 写不进书", () => {
   it("没喊停照常写；喊停（信号翻了，哪怕是写到一半才翻）之后的 AI 稿不落盘，抛 turn_aborted", async () => {
     const controller = new AbortController();
+    let writingId = "";
     await runAbortableTurn(controller.signal, async () => {
-      await writeAiDraft(book, { chapter: 1, body: "第一版。", baseVersion: "overwrite" });
+      expect(await aiWrite("第一版。")).toMatchObject({ applied: true });
       expect(turnAborted()).toBe(false);
       controller.abort();
       expect(turnAborted()).toBe(true);
-      const error = await writeAiDraft(book, { chapter: 1, body: "停了以后才到的一版。", baseVersion: "overwrite" }).catch((caught: unknown) => caught);
+      // 出稿流程开写时存的「在写」那份：喊停后也删掉，不留成候选。
+      const basis = await readTruthBasis(book);
+      const writing = await saveDraftCandidate(book, { chapter: 1, title: "", body: "停了以后才到的一版。", baseVersion: null, basisDigest: basis.digest, source: "draft", status: "writing" });
+      writingId = writing.id;
+      const error = await aiWrite("停了以后才到的一版。", writing.id).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(AiDraftWriteError);
       expect((error as AiDraftWriteError).code).toBe("turn_aborted");
     });
     expect(await draftOf(1)).toContain("第一版。");
     expect(await draftOf(1)).not.toContain("停了以后");
+    expect(await readDraftCandidate(book, writingId)).toBeUndefined();
     // 这一轮之外（后台活、下一轮）不受影响
-    await writeAiDraft(book, { chapter: 1, body: "下一轮。", baseVersion: "overwrite" });
+    expect(await aiWrite("下一轮。")).toMatchObject({ applied: true });
     expect(await draftOf(1)).toContain("下一轮。");
   });
 

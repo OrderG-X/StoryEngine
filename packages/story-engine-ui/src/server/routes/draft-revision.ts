@@ -11,6 +11,7 @@
  * 落盘前 400 诚实拒；解析不到（草稿在预览后已大变）同样 400 诚实拒。resolvedTarget 由服务端解析，
  * 不回传、不信客户端字符串（裸 resolvedTarget 回传可伪造：传「的」→ 恒拒一切修订）。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
 import { countDraftWords, normalizeDraftRevisionPreview, type DraftRevisionPreview, type DraftRevisionTask } from "../writing/draft-revision.js";
 import {
@@ -23,7 +24,6 @@ import {
   readStringList,
   requireBodyString,
   requirePositiveBodyInteger,
-  stripTitleLineForEditor,
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
@@ -124,7 +124,9 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
       ...(targetText ? { targetText } : {}),
     });
     if (!outcome.ok) {
-      writeJson(res, 400, { ok: false, error: applyRefusalMessage(outcome) });
+      // 留成候选 / 方案过期是书的状态变了（409），其余是这份方案本身用不了（400）；都带原因代码，界面按它收场。
+      const moved = outcome.code === "draft_kept" || outcome.code === "preview_stale";
+      writeJson(res, moved ? 409 : 400, { ok: false, code: outcome.code, error: applyRefusalMessage(outcome) });
       return;
     }
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }));
@@ -137,7 +139,7 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
         updatedWordCount: countDraftWords(outcome.updatedContent),
       },
       // 编辑器只要正文：草稿文件首行的「# 章名」不回给编辑器（否则应用修改后稿纸顶上冒出一行标题）。
-      draftContent: stripTitleLineForEditor(`${outcome.updatedContent.trimEnd()}\n`),
+      draftContent: `${parseDraftFile(outcome.updatedContent).body}\n`,
       overview,
     });
   } catch (error) {
@@ -186,6 +188,8 @@ function applyRefusalMessage(failure: RevisionFailure): string {
       return "修订后内容与原文一致，等于没有任何修改；工作稿未改动。";
     case "target_unchanged":
       return "改写后你选择的片段仍原样留在工作稿里，等于没真改到；工作稿未改动。请重试或换个改写方向。";
+    case "preview_stale":
+      return "这份修改方案对不上现在的书了（生成得太早，或服务重启过），工作稿没动。请重新生成一次。";
     default:
       return failure.detail ?? "修订应用失败。";
   }
@@ -228,7 +232,8 @@ export function readDraftRevisionPreviewObj(value: unknown): DraftRevisionPrevie
   const taskId = requireBodyString(value.taskId, "修订预览缺少任务 ID。");
   const beforeText = requireBodyString(value.beforeText, "修订预览缺少原文。");
   const afterText = requireBodyString(value.afterText, "修订预览缺少修订后文本。");
-  return normalizeDraftRevisionPreview({
+  const basis = readString(value.basis);
+  const preview = normalizeDraftRevisionPreview({
     ...value,
     taskId,
     beforeText,
@@ -243,4 +248,5 @@ export function readDraftRevisionPreviewObj(value: unknown): DraftRevisionPrevie
     constraints: [],
     status: "preview_generated",
   });
+  return basis ? { ...preview, basis } : preview;
 }

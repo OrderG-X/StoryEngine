@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
 import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
@@ -13,7 +13,8 @@ import {
   readThreadPool,
   readTimelineEvents,
 } from "../book/project-store.js";
-import { selectRelevant } from "@actalk/story-core";
+import { parseDraftFile, readDraftState, selectRelevant } from "@actalk/story-core";
+import { readChapterTitles } from "../book/chapter-titles.js";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
@@ -246,7 +247,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     readPreviousChapterContext(input.projectDir, input.chapter)
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
     // 已有各章标题（R7.7·报告 5：拟标题防重名，第 7、9 章都叫「铁丝」）。读不到按空（不出段），不炸出稿。
-    readExistingChapterTitles(input.projectDir, input.chapter)
+    readChapterTitles(input.projectDir, input.chapter)
       .catch(() => [] as readonly { chapter: number; title: string }[]),
   ]);
   const plan = input.chapterPlan;
@@ -354,11 +355,12 @@ async function readPreviousUncommittedDraftContext(
   });
   if (committedContent !== undefined) return undefined;
 
-  const draftPath = join(projectDir, "drafts", "fast", `chapter-${padChapter(previousChapter)}.md`);
-  const draftContent = await readFile(draftPath, "utf-8").catch(() => undefined);
-  const body = stripMarkdownHeading(draftContent ?? "");
+  // 前一章没定稿：它的工作稿当前情（不在真相依据里；换上前出稿服务按开写时拍的那份核，见 book/material-reads）。
+  const draft = await readDraftState(projectDir, previousChapter).catch(() => undefined);
+  if (!draft) return undefined;
+  // 文件原文只经核心 parseDraftFile 拆一次（写作版本 P1 第 15 轮 AC2：自己写的正则会把正文开头的小节当章名吃掉）。
+  const { title, body } = parseDraftFile(draft.file?.text ?? "");
   if (!body.trim()) return undefined;
-  const title = extractMarkdownTitle(draftContent);
 
   return {
     kind: "working_draft_context",
@@ -393,9 +395,8 @@ async function readPreviousChapterContext(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  const body = stripMarkdownHeading(content);
+  const { title, body } = parseDraftFile(content);
   if (!body.trim()) return undefined;
-  const title = extractMarkdownTitle(content);
   const { text, truncated } = previousChapterExcerpt(body);
   return {
     kind: "previous_chapter_text",
@@ -424,58 +425,6 @@ function previousChapterExcerpt(body: string): { readonly text: string; readonly
 
 function padChapter(chapter: number): string {
   return String(chapter).padStart(4, "0");
-}
-
-/** 拟标题防重名时最多带多少章的已有标题（长书只看最近的，防上下文膨胀）。 */
-const MAX_EXISTING_CHAPTER_TITLES = 60;
-
-/**
- * 已有各章标题（2026-10-14 编辑部 R7.7·报告 5）：定稿章（chapters/000N.md）+ 工作稿（drafts/fast/chapter-NNNN.md），
- * 取章号最大的最近 MAX_EXISTING_CHAPTER_TITLES 章、不含本章（重写本章时不能把自己的标题当「重名」）。
- * 定稿标题优先（正稿为准），只有工作稿的章用工作稿标题；读不出标题的章跳过。纯读盘、题材中立。
- */
-async function readExistingChapterTitles(
-  projectDir: string,
-  currentChapter: number,
-): Promise<readonly { chapter: number; title: string }[]> {
-  const chapters = new Set<number>();
-  const [committedFiles, draftFiles] = await Promise.all([
-    readdir(join(projectDir, "chapters")).catch(() => [] as string[]),
-    readdir(join(projectDir, "drafts", "fast")).catch(() => [] as string[]),
-  ]);
-  for (const file of committedFiles) {
-    const chapter = Number(/^(\d{4})\.md$/u.exec(file)?.[1]);
-    if (Number.isInteger(chapter) && chapter > 0) chapters.add(chapter);
-  }
-  for (const file of draftFiles) {
-    const chapter = Number(/^chapter-(\d{4})\.md$/u.exec(file)?.[1]);
-    if (Number.isInteger(chapter) && chapter > 0) chapters.add(chapter);
-  }
-  const recent = [...chapters]
-    .filter((chapter) => chapter !== currentChapter)
-    .sort((a, b) => b - a)
-    .slice(0, MAX_EXISTING_CHAPTER_TITLES);
-  const withTitles = await Promise.all(recent.map(async (chapter) => {
-    const [committedTitle, draftTitle] = await Promise.all([
-      extractMarkdownTitle(await readFile(join(projectDir, "chapters", `${padChapter(chapter)}.md`), "utf-8").catch(() => undefined)),
-      extractMarkdownTitle(await readFile(join(projectDir, "drafts", "fast", `chapter-${padChapter(chapter)}.md`), "utf-8").catch(() => undefined)),
-    ]);
-    const title = committedTitle ?? draftTitle;
-    return title ? { chapter, title } : undefined;
-  }));
-  return withTitles
-    .filter((item): item is { chapter: number; title: string } => item !== undefined)
-    .sort((a, b) => a.chapter - b.chapter);
-}
-
-function extractMarkdownTitle(content: string | undefined): string | undefined {
-  const line = content?.split(/\r?\n/u).find((item) => item.trim().startsWith("#"))?.trim();
-  if (!line) return undefined;
-  return line.replace(/^#+\s*/u, "").trim() || undefined;
-}
-
-function stripMarkdownHeading(content: string): string {
-  return content.replace(/^#{1,6}\s+.*(?:\r?\n){1,2}/u, "").trim();
 }
 
 function section(name: string, content: unknown, cachePolicy: "stable" | "dynamic"): ContextSection {

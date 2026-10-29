@@ -21,8 +21,10 @@ import {
   CARDS_PATH,
   DECISIONS_PATH,
   HEAD_PATH,
+  REVISION_PATH,
 } from "./paths.js";
 import { hasPendingTransactions } from "./transaction.js";
+import { rawHash, truthBasisOf, type TruthBasis } from "./basis.js";
 
 /** 真相文件坏了（不是不存在）。 */
 export class BookFileError extends Error {
@@ -71,13 +73,16 @@ export async function readChapterText(bookDir: string, chapter: number): Promise
   return readOptional(bookDir, chapterTextPath(chapter));
 }
 
-export async function readChapterLedger(bookDir: string, chapter: number): Promise<ChapterLedger | undefined> {
+function parseChapterLedger(chapter: number, raw: string): ChapterLedger {
   const path = chapterLedgerPath(chapter);
-  const raw = await readOptional(bookDir, path);
-  if (raw === undefined) return undefined;
   const ledger = parseJson(path, raw, ChapterLedger);
   if (ledger.chapter !== chapter) throw new BookFileError(path, `里面写的是第 ${ledger.chapter} 章`);
   return ledger;
+}
+
+export async function readChapterLedger(bookDir: string, chapter: number): Promise<ChapterLedger | undefined> {
+  const raw = await readOptional(bookDir, chapterLedgerPath(chapter));
+  return raw === undefined ? undefined : parseChapterLedger(chapter, raw);
 }
 
 /** 有账单的章号，按章号排好（只列目录，不读内容）。 */
@@ -152,19 +157,65 @@ export interface BookSnapshot {
   readonly cards: SettingCardsFileType | undefined;
   /** 每章正文现在的 sha256（和账单里的比，就知道定稿后改没改过）。 */
   readonly textHashes: ReadonlyMap<number, string>;
+  /** 这份快照读到的四样真相的原样哈希（写作版本 P1a）：按它算出来的预览，确认时拿它核书变没变。 */
+  readonly basis: TruthBasis;
   /** 读的时候正好在写、重试几次都没读稳：数据可能是新旧混着的，调用方要如实说。 */
   readonly unsettled: boolean;
 }
 
+interface RawTruth {
+  readonly revision: string | undefined;
+  readonly ledgers: readonly { readonly chapter: number; readonly raw: string }[];
+  readonly decisions: string | undefined;
+  readonly cards: string | undefined;
+  readonly texts: ReadonlyMap<number, string>;
+}
+
+/** 四样真相按原样读出来（不解析）：快照和确认时核依据都从这里读，两边算的哈希同一个口径。 */
+async function readRawTruth(bookDir: string): Promise<RawTruth> {
+  // 代次先读：读真相的中途有写，记下的是旧代次，确认时对不上（见 basis.ts）。
+  const revision = await readOptional(bookDir, REVISION_PATH);
+  const [ledgerChapters, decisions, cards, textChapters] = await Promise.all([
+    listChapterLedgers(bookDir),
+    readOptional(bookDir, DECISIONS_PATH),
+    readOptional(bookDir, CARDS_PATH),
+    listChapterTexts(bookDir),
+  ]);
+  const ledgers: { chapter: number; raw: string }[] = [];
+  for (const chapter of ledgerChapters) {
+    const raw = await readOptional(bookDir, chapterLedgerPath(chapter));
+    if (raw !== undefined) ledgers.push({ chapter, raw });
+  }
+  const texts = new Map<number, string>();
+  for (const chapter of textChapters) {
+    const text = await readChapterText(bookDir, chapter);
+    if (text !== undefined) texts.set(chapter, sha256(text));
+  }
+  return { revision, ledgers, decisions, cards, texts };
+}
+
+function basisOfRaw(raw: RawTruth): TruthBasis {
+  return truthBasisOf({
+    revision: rawHash(raw.revision),
+    texts: raw.texts,
+    ledgers: new Map(raw.ledgers.map((item) => [item.chapter, sha256(item.raw)])),
+    decisions: rawHash(raw.decisions),
+    cards: rawHash(raw.cards),
+  });
+}
+
+/** 书现在的真相依据（不写盘、不拿锁；要和写互斥的调用方自己在书锁里调）。 */
+export async function readTruthBasis(bookDir: string): Promise<TruthBasis> {
+  return basisOfRaw(await readRawTruth(bookDir));
+}
+
 async function readOnce(bookDir: string): Promise<Omit<BookSnapshot, "unsettled">> {
   const head = await readHead(bookDir);
-  const [ledgers, decisions, cards, chapters] = await Promise.all([readAllLedgers(bookDir), readDecisions(bookDir), readCards(bookDir), listChapterTexts(bookDir)]);
-  const textHashes = new Map<number, string>();
-  for (const chapter of chapters) {
-    const text = await readChapterText(bookDir, chapter);
-    if (text !== undefined) textHashes.set(chapter, sha256(text));
-  }
-  return { version: head.version, ledgers, decisions, cards, textHashes };
+  const raw = await readRawTruth(bookDir);
+  const ledgers = raw.ledgers.map((item) => parseChapterLedger(item.chapter, item.raw));
+  const decisions = raw.decisions === undefined ? [] : parseJson(DECISIONS_PATH, raw.decisions, AuthorDecisionsFile).decisions;
+  const cards = raw.cards === undefined ? undefined : parseJson(CARDS_PATH, raw.cards, SettingCardsFile);
+  return { version: head.version, ledgers, decisions, cards, textHashes: raw.texts, basis: basisOfRaw(raw) };
 }
 
 /** 读一份前后一致的真相快照（不写盘、不拿锁）。 */

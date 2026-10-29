@@ -4,7 +4,7 @@
  *
  * 存档点由核心在真要写盘时、在书锁里打：指错了卡、没变化、按钮点第二次都不打（撤销不会插进中间）。
  */
-import { cardFill, cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { cardFill, cardWrite, runCommand, type CardOp, type TruthBasis } from "@actalk/story-core";
 import { runWithLazySnapshot } from "./snapshot.js";
 import { TURN_ABORTED_MESSAGE, turnAborted } from "./turn-abort.js";
 
@@ -17,11 +17,17 @@ export type CardWriteOutcome =
       /** 同一个按钮点了第二次：上次已经做过，这次没再做。 */
       readonly replayed?: true;
     }
-  | { readonly ok: false; readonly code: string; readonly message: string };
+  | { readonly ok: false; readonly code: string; readonly message: string; readonly details?: unknown };
 
 export async function writeCards(
   projectDir: string,
-  input: { readonly by: "author" | "ai"; readonly ops: readonly CardOp[]; readonly idempotencyKey?: string },
+  input: {
+    readonly by: "author" | "ai";
+    readonly ops: readonly CardOp[];
+    readonly idempotencyKey?: string;
+    /** 按钮带的依据：书从那以后变了就不改（核心在书锁里比）。 */
+    readonly basis?: TruthBasis;
+  },
 ): Promise<CardWriteOutcome> {
   if (input.ops.length === 0) return { ok: true, lines: [] };
   if (input.by === "ai" && turnAborted()) return { ok: false, code: "turn_aborted", message: TURN_ABORTED_MESSAGE };
@@ -31,8 +37,9 @@ export async function writeCards(
       caller: input.by,
       snapshot,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.basis ? { basis: input.basis } : {}),
     }));
-  if (!result.ok) return { ok: false, code: result.code, message: result.message };
+  if (!result.ok) return { ok: false, code: result.code, message: result.message, ...(result.details !== undefined ? { details: result.details } : {}) };
   return {
     ok: true,
     lines: result.result.lines,

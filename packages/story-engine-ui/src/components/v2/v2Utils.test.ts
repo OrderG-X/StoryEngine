@@ -50,9 +50,9 @@ describe("flow copy", () => {
   });
 });
 
-describe("cleanProseForDisplay：定稿只读视图去掉标题行与粗体记号", () => {
-  it("去开头 # 第N章 标题行、去成对 **", () => {
-    expect(cleanProseForDisplay("# 第34章 · 看手\n\n他说：**九号，西侧。**\n\n完。")).toBe("他说：九号，西侧。\n\n完。");
+describe("cleanProseForDisplay：定稿只读视图去掉粗体记号，正文一行不拆", () => {
+  it("去成对 **；开头的「# 某某」是正文，原样留着（拆开的正文不再拆，第 15 轮）", () => {
+    expect(cleanProseForDisplay("# 第一节 · 看手\n\n他说：**九号，西侧。**\n\n完。")).toBe("# 第一节 · 看手\n\n他说：九号，西侧。\n\n完。");
   });
   it("正文中间的 # 行与单星号不动", () => {
     expect(cleanProseForDisplay("开头。\n# 不是标题\n* * *")).toBe("开头。\n# 不是标题\n* * *");

@@ -26,7 +26,7 @@ import type {
   StateOverviewApiResponse,
   StateOverviewRequest,
 } from "./types.js";
-import { fetchJson } from "./fetchJson.js";
+import { FetchJsonError, fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
 
 
@@ -231,9 +231,9 @@ export async function openBookProjectFolder(projectPath: string, signal?: AbortS
 export async function generateDraftCandidate(
   input: GenerateDraftRequest,
   signal?: AbortSignal,
-): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }> {
+): Promise<{ readonly draftBody: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }> {
   const payload = await fetchJson<
-    | { readonly ok: true; readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }
+    | { readonly ok: true; readonly draftBody: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }
     | { readonly ok: false; readonly error: string }
   >(
     "/api/draft/generate",
@@ -247,16 +247,16 @@ export async function generateDraftCandidate(
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, contextBudget: payload.contextBudget, ...(payload.planNote ? { planNote: payload.planNote } : {}) };
+  return { draftBody: payload.draftBody, ...(payload.draftTitle ? { draftTitle: payload.draftTitle } : {}), contextBudget: payload.contextBudget, ...(payload.planNote ? { planNote: payload.planNote } : {}) };
 }
 
-/** 抽卡「挑中落盘」（块③）：把选中的候选正文写进工作稿，服务端写前留可撤销快照。 */
+/** 抽卡「挑中落盘」（块③）：把选中的那份整稿（章名 + 正文，拆开的）写进工作稿，服务端写前留可撤销快照。 */
 export async function applyDraftCandidate(
-  input: { readonly projectPath: string; readonly chapter: number; readonly draftContent: string },
+  input: { readonly projectPath: string; readonly chapter: number; readonly title: string; readonly body: string; readonly baseVersion: string | null },
   signal?: AbortSignal,
-): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview }> {
+): Promise<{ readonly overview: StateOverview }> {
   const payload = await fetchJson<
-    | { readonly ok: true; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview }
+    | { readonly ok: true; readonly overview: StateOverview }
     | { readonly ok: false; readonly error: string }
   >(
     "/api/draft/apply-candidate",
@@ -266,11 +266,17 @@ export async function applyDraftCandidate(
       body: JSON.stringify(input),
     },
     signal,
-  );
+  ).catch((error: unknown) => {
+    // 稿子在这期间改过（409）这类：给作者看服务端那句，不给状态码。
+    const said = error instanceof FetchJsonError && typeof (error.payload as { error?: unknown } | null)?.error === "string"
+      ? (error.payload as { error: string }).error
+      : undefined;
+    throw said ? new Error(said) : error;
+  });
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, overview: payload.overview };
+  return { overview: payload.overview };
 }
 
 export async function previewDraftRevision(
@@ -303,19 +309,36 @@ export async function applyDraftRevision(
   readonly draftContent: string;
   readonly overview: StateOverview;
 }> {
-  const payload = await fetchJson<DraftRevisionApplyApiResponse>(
-    "/api/draft/revision/apply",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...input, confirm: true }),
-    },
-    signal,
-  );
+  let payload: DraftRevisionApplyApiResponse;
+  try {
+    payload = await fetchJson<DraftRevisionApplyApiResponse>(
+      "/api/draft/revision/apply",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...input, confirm: true }),
+      },
+      signal,
+    );
+  } catch (error) {
+    if (error instanceof FetchJsonError) {
+      const refused = error.payload as { code?: unknown; error?: unknown } | null;
+      if (typeof refused?.code === "string") throw new DraftRevisionRefused(refused.code, typeof refused.error === "string" ? refused.error : error.message);
+    }
+    throw error;
+  }
   if (!payload.ok) {
     throw new Error(payload.error);
   }
   return { result: payload.result, draftContent: payload.draftContent, overview: payload.overview };
+}
+
+/** 应用修订被服务端如实拒了，带原因代码：draft_kept = AI 这版没换上、留成候选；preview_stale = 方案过期，要重新生成。 */
+export class DraftRevisionRefused extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "DraftRevisionRefused";
+  }
 }
 
 export interface DeAiFlavorBatchChange {
@@ -342,7 +365,6 @@ export async function applyDeAiFlavorBatch(
     readonly projectPath: string;
     readonly chapter: number;
     readonly violations: readonly { readonly id?: string; readonly text: string; readonly reason?: string; readonly severity?: string; readonly suggestedFix?: string }[];
-    readonly draftContent?: string;
   },
   signal?: AbortSignal,
 ): Promise<DeAiFlavorBatchResponse> {

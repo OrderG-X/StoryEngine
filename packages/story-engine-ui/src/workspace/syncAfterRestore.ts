@@ -15,8 +15,8 @@ import { applyOverviewToWorkspace, flowStatusForPaper } from "./applyOverview.js
 export async function syncWorkspaceAfterRestore(projectPath: string): Promise<void> {
   const overview = await fetchStateOverview({ projectPath, maxTimelineEvents: 8 });
   if (useNavigationStore.getState().projectPath !== projectPath) return;
-  // 作者自己点的撤销 / 恢复：盘上那版直接换上。
-  await refreshPaper({ force: true });
+  // 盘上那版换上；撤销发出后作者又打了字（或存稿没成），字留着、出提示让作者选。
+  await refreshPaper();
   if (useNavigationStore.getState().projectPath !== projectPath) return;
   // 撤销前挂着的审稿、改写预览、候选稿都对不上新稿了，清掉。
   useUiStore.getState().resetTransientUiState();

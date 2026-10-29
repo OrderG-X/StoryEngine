@@ -14,7 +14,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { findRecurringPhrases } from "@actalk/story-core";
+import { findRecurringPhrases, parseDraftFile } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
 import {
   readArcGoalPool,
@@ -62,7 +62,7 @@ async function readPreviousChapterText(projectDir: string, chapter: number): Pro
   const content = await readFile(join(projectDir, "chapters", `${pad}.md`), "utf-8")
     .catch(() => readFile(join(projectDir, "drafts", "fast", `chapter-${pad}.md`), "utf-8"))
     .catch(() => "");
-  const body = content.replace(/^#[^\n]*\n/u, "").trim();
+  const body = parseDraftFile(content).body;
   if (!body) return undefined;
   return { chapter: chapter - 1, text: body.length > PREVIOUS_TAIL_CHARS ? `（前略）${body.slice(-PREVIOUS_TAIL_CHARS)}` : body };
 }
@@ -72,7 +72,7 @@ async function readRecentChapterBodies(projectDir: string, chapter: number): Pro
   const out: { chapter: number; body: string }[] = [];
   for (let n = Math.max(1, chapter - RECURRING_WINDOW); n < chapter; n += 1) {
     const content = await readFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), "utf-8").catch(() => "");
-    const body = content.replace(/^#[^\n]*\n/u, "").trim();
+    const body = parseDraftFile(content).body;
     if (body) out.push({ chapter: n, body });
   }
   return out;

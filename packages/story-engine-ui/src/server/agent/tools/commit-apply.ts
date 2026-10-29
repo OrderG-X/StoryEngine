@@ -8,7 +8,7 @@
  * 定稿前由 writeTool 存撤销点。确认时不再调模型——要记的账在预览时就交齐了。
  */
 import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
-import { nameKey, project, readBookSnapshot, readCardsOrLegacy, readChapterLedger } from "@actalk/story-core";
+import { nameKey, parseDraftFile, project, readBookSnapshot, readCardsOrLegacy, readChapterLedger } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
@@ -18,7 +18,7 @@ import { recordChapterWords } from "../../lib/word-stats.js";
 import { confirmChapterCommit, draftFingerprint } from "../../editorial/commit-flow.js";
 import { markdownTitle, syncLegacyMirror } from "../../book/mirror/sync.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
-import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
+import { defaultDraftPath } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
 import { writeTool } from "../withSnapshot.js";
 import { latestTicketFor, MERGED_ID_JOIN, OPT_IN_PREFIX, ticketStoreFor } from "./commit-preview.js";
@@ -143,6 +143,10 @@ export async function applyCommitToolLogic(input: {
     ...(input.dayEndOverride !== undefined ? { dayEnd: input.dayEndOverride } : {}),
     tickets: ticketStoreFor(projectDir),
   });
+  if (!outcome.ok && outcome.code === "idempotency_args_changed") {
+    // 同一张票已经按上次的选择定过稿了：这次没做事，但不能说「没定稿」。
+    return { ...refusal(chapter, outcome.reason, "already_committed"), summary: `第 ${chapter} 章已经定稿过了：这次改的天数或勾选没用上；要改，重新点「定稿」预览一次再确认。` };
+  }
   if (!outcome.ok) {
     const blockedReason = outcome.code === "text_changed" ? "draft_changed_since_preview" : outcome.code === "ticket_missing" ? "no_preview" : undefined;
     return refusal(chapter, outcome.reason, blockedReason);
@@ -212,7 +216,7 @@ export async function applyCommitToolLogic(input: {
     committed: true,
     refused: false,
     report,
-    draftBody: stripLeadingMarkdownChapterHeading(text).trim(),
+    draftBody: parseDraftFile(text).body,
     ...(title ? { draftTitle: title } : {}),
     overview,
     summary: parts.join(" "),

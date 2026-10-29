@@ -1,21 +1,21 @@
 /**
  * 把镜像写到书目录：读真相 → 投影 → 生成老文件 → 逐个原子写入 → 最后写「镜像对应的书版本号」。
  *
- * - 每条写命令之后调一次；打开书时发现版本号对不上（镜像过期）也调一次。
- * - 同一本书的同步在本进程里排队，写完再看一眼版本号，期间又有新写入就再生成一遍，绝不留下旧的。
+ * - 每条写命令之后调一次；打开书时发现版本号对不上（镜像过期）也调一次；取依据时落后了也调（book/truth-basis.ts）。
+ * - **整个在书锁里**（写作版本 P1 第 8 轮复核）：写真相的命令都在书锁里，锁里读到的真相是一整版、同步途中不会再变；
+ *   书删了（挪进回收站也在书锁里）就停，不在原处建出幽灵目录。在书锁里调也行（可重入）。
  * - 内容没变的文件不重写（不白白改动修改时间、不给撤销快照添噪音）。
  * - 第一次生成之前，把书里原来的老文件原样留一份到 `.story-core-kept/legacy-before-mirror/`。
  */
-import { copyFile, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { KEPT_TX_DIR, project, readBookSnapshot, readChapterText, readHead, type BookSnapshot } from "@actalk/story-core";
+import { KEPT_TX_DIR, parseDraftFile, project, readBookSnapshot, readChapterText, readHead, withBookLock, type BookSnapshot } from "@actalk/story-core";
 import { buildLegacyMirror, MIRROR_FILES, serializeLegacyMirror } from "./build.js";
 
 export const MIRROR_MARKER = ".story-core-mirror.json";
 // 2：出场人物改成名字（重构 P9）；标记换代，老书打开时镜像按过期重生成一遍。
 export const MIRROR_MARKER_SCHEMA = "legacy-mirror/2" as const;
 export const MIRROR_BACKUP_DIR = `${KEPT_TX_DIR}/legacy-before-mirror`;
-const MAX_ROUNDS = 5;
 
 export type MirrorSyncResult =
   | {
@@ -24,9 +24,7 @@ export type MirrorSyncResult =
       readonly written: readonly string[];
       readonly backedUp: readonly string[];
     }
-  | { readonly ok: false; readonly code: "not_imported" | "unsettled" | "failed"; readonly reason: string };
-
-const queues = new Map<string, Promise<unknown>>();
+  | { readonly ok: false; readonly code: "not_imported" | "unsettled" | "gone" | "failed"; readonly reason: string };
 
 /** 镜像对应的书版本号；还没生成过（或标记坏了）就是 undefined。 */
 export async function readMirrorVersion(bookDir: string): Promise<number | undefined> {
@@ -45,36 +43,25 @@ export async function mirrorIsStale(bookDir: string): Promise<boolean> {
 }
 
 export async function syncLegacyMirror(bookDir: string): Promise<MirrorSyncResult> {
-  const key = await realpath(bookDir).catch(() => bookDir);
-  const previous = queues.get(key) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(() => syncNow(key));
-  queues.set(key, run);
-  try {
-    return await run;
-  } finally {
-    if (queues.get(key) === run) queues.delete(key);
-  }
+  return withBookLock(bookDir, () => syncNow(bookDir));
 }
 
 async function syncNow(bookDir: string): Promise<MirrorSyncResult> {
   try {
-    const written = new Set<string>();
-    let backedUp: readonly string[] = [];
-    for (let round = 0; round < MAX_ROUNDS; round += 1) {
-      const snapshot = await readBookSnapshot(bookDir);
-      // 有定稿章却没有账单 = 老书还没导入：这时生成镜像会拿空账盖掉老账。看账单本身，不看版本号（改设定也会涨版本号）。
-      if (snapshot.version === 0 || (snapshot.ledgers.length === 0 && snapshot.textHashes.size > 0)) {
-        return { ok: false, code: "not_imported", reason: "这本书的账还没搬到新核心，先导入再生成镜像" };
-      }
-      if (snapshot.unsettled) return { ok: false, code: "unsettled", reason: "书正在写入，没读稳；写完会再同步" };
-      if ((await readMirrorVersion(bookDir)) === undefined && round === 0) backedUp = await backupOriginals(bookDir);
-      for (const file of await writeMirror(bookDir, snapshot)) written.add(file);
-      await writeIfChanged(bookDir, MIRROR_MARKER, `${JSON.stringify({ schema: MIRROR_MARKER_SCHEMA, version: snapshot.version }, null, 2)}\n`);
-      if ((await readHead(bookDir)).version === snapshot.version) {
-        return { ok: true, version: snapshot.version, written: [...written], backedUp };
-      }
+    if (!(await stat(bookDir).then((info) => info.isDirectory(), () => false))) {
+      return { ok: false, code: "gone", reason: "这本书已经不在原处了（删了或挪走了），镜像不再生成" };
     }
-    return { ok: false, code: "unsettled", reason: `书一直在写入，连续 ${MAX_ROUNDS} 遍都没追上；写完会再同步` };
+    const snapshot = await readBookSnapshot(bookDir);
+    // 有定稿章却没有账单 = 老书还没导入：这时生成镜像会拿空账盖掉老账。看账单本身，不看版本号（改设定也会涨版本号）。
+    if (snapshot.version === 0 || (snapshot.ledgers.length === 0 && snapshot.textHashes.size > 0)) {
+      return { ok: false, code: "not_imported", reason: "这本书的账还没搬到新核心，先导入再生成镜像" };
+    }
+    // 书锁里还有没收尾的事务 = 上次写到一半进程没了：等下一条写命令先收拾。
+    if (snapshot.unsettled) return { ok: false, code: "unsettled", reason: "上次写到一半还没收拾，下次写的时候会先收拾再同步" };
+    const backedUp = (await readMirrorVersion(bookDir)) === undefined ? await backupOriginals(bookDir) : [];
+    const written = await writeMirror(bookDir, snapshot);
+    await writeIfChanged(bookDir, MIRROR_MARKER, `${JSON.stringify({ schema: MIRROR_MARKER_SCHEMA, version: snapshot.version }, null, 2)}\n`);
+    return { ok: true, version: snapshot.version, written, backedUp };
   } catch (error) {
     return { ok: false, code: "failed", reason: error instanceof Error ? error.message : String(error) };
   }
@@ -131,9 +118,7 @@ async function readChapterTitles(bookDir: string, chapters: readonly number[]): 
   return titles;
 }
 
-/** 正文第一行非空行是 markdown 标题就取它（和老定稿取章名的办法一样）。 */
+/** 章节文件的章名（核心 parseDraftFile：第一行非空行是一级章名行）。 */
 export function markdownTitle(text: string | undefined): string | undefined {
-  const first = text?.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!first?.startsWith("#")) return undefined;
-  return first.replace(/^#+\s*/u, "").trim() || undefined;
+  return text === undefined ? undefined : parseDraftFile(text).title;
 }

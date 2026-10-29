@@ -20,7 +20,7 @@
  * 未知工具仍 push 一个带可读标签的 toolStep（保证不静默、不崩），但不强造一张可能误导的卡。
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
-import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
+import type { ChapterMessage, AiFlavorReport, MessageSegment, ProposalBasis } from "../types.js";
 import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, DraftVersionsCardData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
@@ -94,13 +94,13 @@ export interface AgentToolResultOutput {
   /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
-  readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
   /** generate_draft 专属：有稿的章 AI 不覆盖，挂「重写这一章」按钮。 */
   readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string; readonly canContinue?: boolean };
   /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
-  readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
   /** foundation_write 专属：AI 刚写进去的那几处，挂「认下」按钮。 */
-  readonly foundationAcceptAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  readonly foundationAcceptAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
 }
 
 export type AgentProjectionEvent =
@@ -531,13 +531,14 @@ function recordTurnEffects(
 }
 
 /**
- * 「停止」收尾结算：用户点「■」abort 了流，残留 running 的步骤/卡片结算成 stopped——
- * 不是 failed（不是工具自己失败，是人喊停），补 endedAt 让耗时落地。其余状态原样保留。
- * 纯函数、不改入参；供 useChat 回合 finally 在 clean-abort 时调用（错误路径仍走 tool-error→failed）。
+ * 回合收尾结算：回合到头了还在转的步骤/卡片一律落定成 stopped，补 endedAt 让耗时落地。其余状态原样保留。
+ * - 用户点「■」停的：不是工具自己失败，是人喊停，不带说明。
+ * - 连接断了 / 出错收尾、这一步没等到结果（第 6 轮复核 T3）：带一句 detail 说清没收到结果——不说成了，也不说失败（盘上以重读为准）。
+ * 纯函数、不改入参；供 useChat 回合 finally 调用。
  */
-export function settleStoppedAgentTurn(message: ChapterMessage, endedAt: number): ChapterMessage {
+export function settleUnfinishedAgentTurn(message: ChapterMessage, endedAt: number, detail?: string): ChapterMessage {
   const toolSteps = message.toolSteps?.map((step) =>
-    step.status === "running" ? { ...step, status: "stopped" as const, endedAt } : step);
+    step.status === "running" ? { ...step, status: "stopped" as const, endedAt, ...(detail ? { detail } : {}) } : step);
   const agentCards = message.agentCards?.map((card) =>
     card.status === "running" ? { ...card, status: "stopped" as const } : card);
   return {

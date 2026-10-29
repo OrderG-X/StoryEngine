@@ -8,7 +8,7 @@ import type { DraftPreview } from "../types.js";
 import { isRealDraftContent } from "../utils/draftContent.js";
 import { countTextWords } from "../utils/textUtils.js";
 
-type PreviewSource = Pick<DraftStoreState, "chapter" | "title" | "body" | "committed" | "streaming">;
+type PreviewSource = Pick<DraftStoreState, "loaded" | "chapter" | "title" | "body" | "committed" | "streaming">;
 
 export function draftPreviewOf(state: PreviewSource, fallback: { readonly chapterNumber: number; readonly title: string }): DraftPreview {
   const streaming = state.streaming !== null;
@@ -16,7 +16,8 @@ export function draftPreviewOf(state: PreviewSource, fallback: { readonly chapte
   const chapterNumber = state.chapter > 0 ? state.chapter : fallback.chapterNumber;
   return {
     chapterNumber,
-    title: state.title.trim() || fallback.title,
+    // 稿纸读进了这一章，章名就只认稿纸上的（空就是没章名，写作版本 P1 第 14 轮复核 AB5）；还没读进来才用外面给的。
+    title: state.loaded && state.chapter > 0 ? state.title.trim() : fallback.title,
     status: !streaming && paperStage(state) === "committed" ? "committed" : "draft",
     content: body,
     wordCount: body.trim() ? countTextWords(body) : 0,
@@ -25,14 +26,15 @@ export function draftPreviewOf(state: PreviewSource, fallback: { readonly chapte
 }
 
 export function useDraftPreview(fallback: { readonly chapterNumber: number; readonly title: string }): DraftPreview {
+  const loaded = useDraftStore((s) => s.loaded);
   const chapter = useDraftStore((s) => s.chapter);
   const title = useDraftStore((s) => s.title);
   const body = useDraftStore((s) => s.body);
   const committed = useDraftStore((s) => s.committed);
   const streaming = useDraftStore((s) => s.streaming);
   return useMemo(
-    () => draftPreviewOf({ chapter, title, body, committed, streaming }, fallback),
-    [chapter, title, body, committed, streaming, fallback.chapterNumber, fallback.title],
+    () => draftPreviewOf({ loaded, chapter, title, body, committed, streaming }, fallback),
+    [loaded, chapter, title, body, committed, streaming, fallback.chapterNumber, fallback.title],
   );
 }
 

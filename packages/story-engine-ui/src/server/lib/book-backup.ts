@@ -8,7 +8,7 @@
  */
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { withBookLock } from "@actalk/story-core";
+import { bumpRevision, withBookLock } from "@actalk/story-core";
 import { readBookMeta, safeFileName } from "./book-info.js";
 import { resolveBooksRootDir, resolveGlobalDataDir } from "./data-dirs.js";
 import { isRecord, isSafeProjectPath, writeFileAtomic } from "./project-io.js";
@@ -136,6 +136,9 @@ export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date())
       await writeFile(dest, entry.data);
     }
     if (suffix) await retitle(join(staging, "project.json"), title);
+    // 解出来的书换一个新的写入代次（P1a 第 2 轮、P1b 第 3 轮复核）：备份里的代次是那时候的，书露面之前就换好；
+    // 走核心事务写（不跟软链写到书外，P1 第 22 轮 AJ3），换不了整个恢复停下。
+    await bumpRevision(staging, now);
     await rename(staging, target);
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);

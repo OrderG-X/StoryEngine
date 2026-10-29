@@ -91,7 +91,7 @@ describe("通读记账", () => {
   it("不打快照、版本号照常 +1；同一个标记再来只回放", async () => {
     const snapshots: string[] = [];
     const first = ok(await runCommand(book, ledgerReread, { chapter: 1, entries: CH1_ENTRIES }, { ...author("reread:1"), snapshot: async (label) => { snapshots.push(label); } }));
-    const again = ok(await runCommand(book, ledgerReread, { chapter: 1, entries: [] }, author("reread:1")));
+    const again = ok(await runCommand(book, ledgerReread, { chapter: 1, entries: CH1_ENTRIES }, author("reread:1")));
     expect(snapshots).toEqual([]);
     expect(again.replayed).toBe(true);
     expect((await readHead(book)).version).toBe(first.version);

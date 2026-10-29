@@ -5,12 +5,13 @@
  * 事件协议与 agent 回合完全一致（tool-call / tool-result / text-delta），前端投影零分叉：
  * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import type { RequestContext } from "@mastra/core/di";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
-import { hasWorkingDraftText } from "../lib/snapshot-on-draft-overwrite.js";
+import { bareChapterTitle } from "../lib/project-io.js";
+import { hasWorkingDraftText } from "../lib/working-draft-text.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
 import { createRevisionModelChannel, type RevisionModelCaller } from "../services/revision-service.js";
@@ -82,12 +83,12 @@ export type UserAction =
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
+  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string; readonly basis?: string }
   /**
    * 「确认改设定」按钮（重构 P4）：foundation_write 被拦下的那次写入（删角色 / 覆盖已确立设定）原样带回，
    * 服务端按入参 schema 校验后带作者确认执行（点两次只做一次 = key）。
    */
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly basis?: string }
   /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
   | SettleUserAction;
 
@@ -115,6 +116,12 @@ export type ParsedUserAction =
 /** 按钮标识最长多少字：一轮里提了几次改账 / 改设定，界面并成一个按钮，标识是几次的拼起来（「+」隔开）。 */
 const MAX_ACTION_KEY_LENGTH = 600;
 
+/** 按钮带的依据摘要（写作版本 P1a）：原样带给执行那步取回核对；不是字符串、太长的当没带（执行时如实说按钮旧了）。 */
+function basisOf(record: Record<string, unknown>): { readonly basis?: string } {
+  const basis = typeof record.basis === "string" ? record.basis.trim() : "";
+  return basis && basis.length <= 128 ? { basis } : {};
+}
+
 export function parseUserAction(raw: unknown): ParsedUserAction {
   if (raw === undefined || raw === null) return { kind: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) return { kind: "invalid", reason: "动作格式不对。" };
@@ -131,7 +138,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
       return { kind: "invalid", reason: `一次最多改 ${MAX_DECISIONS_PER_CHANGE} 条账，这次有 ${record.decisions.length} 条，请让 AI 分几次提。` };
     }
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
-    return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}) } };
+    return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}), ...basisOf(record) } };
   }
   if (toolName === "foundation_decision") {
     const key = typeof record.key === "string" ? record.key.trim() : "";
@@ -141,7 +148,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return {
       kind: "action",
-      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}) },
+      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}), ...basisOf(record) },
     };
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
@@ -734,7 +741,12 @@ async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserActio
   }
   let outcome: Awaited<ReturnType<typeof applyLedgerDecisions>>;
   try {
-    outcome = await applyLedgerDecisions(args.projectDir, { key: action.key, decisions: action.decisions, ...(action.label ? { label: action.label } : {}) });
+    outcome = await applyLedgerDecisions(args.projectDir, {
+      key: action.key,
+      decisions: action.decisions,
+      ...(action.label ? { label: action.label } : {}),
+      ...(action.basis ? { basis: action.basis } : {}),
+    });
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "manage_ledger", error: message, retryable: true });
@@ -771,7 +783,7 @@ async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserA
   }
   let outcome: Awaited<ReturnType<typeof applyFoundationDecision>>;
   try {
-    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input });
+    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input, ...(action.basis ? { basis: action.basis } : {}) });
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "foundation_write", error: message, retryable: true });
@@ -894,14 +906,15 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
     emitText(`${total === 1 ? "这一处" : `这 ${total} 处`}没改成：${message}。可以再点一次。`);
     return;
   }
-  const applied = result.applied.length;
-  const failed = result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
+  // 改好了但没换上（改的途中稿子或前文变了）：如实说，AI 这版留在稿纸上等作者选。
+  const applied = result.kept ? 0 : result.applied.length;
+  const failed = result.kept ? [] : result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
   const also = applied > 0 && result.alsoChanged > 0 ? `本章别处说同一件事的 ${result.alsoChanged} 句跟着改了。` : "";
   const done = applied === 0 ? "" : `${total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`}${also}`;
   const notDone = failed.length === 0
     ? ""
     : total === 1 ? `这一处没改成：${failed[0]!.why}。` : `${failed.length} 处没改成：${failed[0]!.why}。`;
-  const summary = `${done}${notDone}`;
+  const summary = result.kept ? result.kept.message : `${done}${notDone}`;
   args.sendEvent("tool-result", {
     toolCallId,
     toolName: "revise_draft",
@@ -912,7 +925,7 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       refreshScope: "full",
       chapter: action.chapter,
       overview,
-      ...(applied > 0 ? { draftBody: stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(result.text)).trim() } : {}),
+      ...(applied > 0 ? { draftBody: stripMarkdownEmphasis(parseDraftFile(result.text).body).trim() } : {}),
       ...(result.draftVersion !== undefined ? { draftVersion: result.draftVersion } : {}),
       ...(result.snapshotId ? { snapshotId: result.snapshotId } : {}),
     },
@@ -931,6 +944,7 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       action: { toolName: "check_continuity" as const, chapter: action.chapter },
     }] : []),
   ];
+  if (choices.length === 0) return;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
   args.sendEvent("tool-result", {
@@ -975,6 +989,8 @@ interface GenerateDraftLikeOutput {
   readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown; readonly autoFixed?: { readonly applied?: unknown } } };
   readonly continued?: { readonly kept?: unknown; readonly added?: unknown };
   readonly blockedReason?: unknown;
+  /** 写好了但没换上（AI 这版留在稿纸上等作者选）。 */
+  readonly kept?: unknown;
   readonly beatFidelity?: { readonly missingBeats?: readonly unknown[]; readonly postDeAiNewMisses?: readonly unknown[] };
 }
 
@@ -984,7 +1000,7 @@ interface GenerateDraftLikeOutput {
  */
 export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): string {
   // 写手有时把「第 N 章 · 」也写进章名：前面已经说了第几章，书名号里只放章名。
-  const bare = typeof result.draftTitle === "string" ? extractDraftTitle(`# ${result.draftTitle.trim()}`) : null;
+  const bare = typeof result.draftTitle === "string" ? bareChapterTitle(result.draftTitle) : null;
   const title = bare ? `《${bare}》` : "";
   const actual = typeof result.draftLength?.actualLength === "number" ? result.draftLength.actualLength : undefined;
   const lower = typeof result.draftLength?.lowerBound === "number" ? result.draftLength.lowerBound : undefined;
@@ -1002,9 +1018,11 @@ export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): st
 }
 
 /** 出稿没成的下一步：接着写没得接 → 改成从头写；这章已定稿 → 不给（回话里说了怎么办）；其余照原样再来一次。 */
-export function retryDraftChoices(action: Extract<UserAction, { readonly toolName: "generate_draft" }>, blockedReason: unknown): NextStepChoice[] {
+export function retryDraftChoices(action: Extract<UserAction, { readonly toolName: "generate_draft" }>, blockedReason: unknown, kept?: unknown): NextStepChoice[] {
   // 导入的书还在通读记账：再点也是同一句「等它记完」，不给「再写一次」。
   if (blockedReason === "rereading") return [];
+  // 写好了没换上：AI 这版在稿纸上等作者选，不再写一遍。
+  if (kept) return [];
   if (action.continueDraft && blockedReason === "chapter_committed") return [];
   if (action.continueDraft && blockedReason === "nothing_to_continue") {
     return [{ label: `AI 写第 ${action.chapter} 章`, intent: "写这一章的正文", recommended: true, action: { toolName: "generate_draft", chapter: action.chapter } }];
@@ -1134,7 +1152,7 @@ export async function finishDraftTurn(args: Omit<Parameters<typeof runUserAction
       },
       { label: "核账", intent: "核账", action: { toolName: "check_continuity", chapter: action.chapter } },
     ]
-    : retryDraftChoices(action, result?.blockedReason);
+    : retryDraftChoices(action, result?.blockedReason, result?.kept);
   if (choices.length === 0) return;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });

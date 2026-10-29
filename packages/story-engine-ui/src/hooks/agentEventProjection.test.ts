@@ -5,7 +5,7 @@ import {
   presentationFor,
   resolveToolStepLabel,
   projectAgentEvent,
-  settleStoppedAgentTurn,
+  settleUnfinishedAgentTurn,
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
 import { cardOf } from "../utils/messageCards.js";
@@ -913,7 +913,7 @@ describe("质检明细投影（quality_check → message 的 quality 卡）", ()
   });
 });
 
-describe("settleStoppedAgentTurn（A-5 「停止」收尾结算）", () => {
+describe("settleUnfinishedAgentTurn（A-5 「停止」收尾结算）", () => {
   it("残留 running 的步骤/卡片 → stopped + 补 endedAt；completed/failed 原样保留", () => {
     const message = project([
       { type: "tool-call", toolCallId: "c1", toolName: "read_state_overview", startedAt: 100 },
@@ -926,7 +926,7 @@ describe("settleStoppedAgentTurn（A-5 「停止」收尾结算）", () => {
       },
       { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 300 },
     ]);
-    const settled = settleStoppedAgentTurn(message, 999);
+    const settled = settleUnfinishedAgentTurn(message, 999);
     expect(settled.toolSteps).toHaveLength(2);
     // 已完成的步骤原样（状态/endedAt 不动）。
     expect(settled.toolSteps![0]).toMatchObject({ id: "c1", status: "completed", endedAt: 200 });
@@ -941,14 +941,14 @@ describe("settleStoppedAgentTurn（A-5 「停止」收尾结算）", () => {
     const message = project([
       { type: "tool-call", toolCallId: "f1", toolName: "foundation_write", startedAt: 10 },
     ]);
-    const settled = settleStoppedAgentTurn(message, 20);
+    const settled = settleUnfinishedAgentTurn(message, 20);
     expect(settled.toolSteps![0].status).toBe("stopped");
     expect(settled.agentCards![0].status).toBe("stopped");
   });
 
   it("没有 running 步骤 → 内容等价（纯问答回合零成本）", () => {
     const message = project([{ type: "text-delta", text: "好的。" }]);
-    const settled = settleStoppedAgentTurn(message, 5);
+    const settled = settleUnfinishedAgentTurn(message, 5);
     expect(settled.toolSteps ?? []).toEqual([]);
     expect(settled.content).toBe("好的。");
   });
@@ -957,7 +957,7 @@ describe("settleStoppedAgentTurn（A-5 「停止」收尾结算）", () => {
     const message = project([
       { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
     ]);
-    settleStoppedAgentTurn(message, 2);
+    settleUnfinishedAgentTurn(message, 2);
     expect(message.toolSteps![0].status).toBe("running");
   });
 });

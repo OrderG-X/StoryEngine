@@ -1,5 +1,5 @@
 import type { ChapterPlan } from "../book/chapter-plan.js";
-import { cjkBigrams } from "@actalk/story-core";
+import { bareChapterName, cjkBigrams, hasChapterNumberPrefix } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -48,7 +48,8 @@ export interface WriterClient {
     readonly context: WriterContextEnvelope;
     readonly maxOutputTokens: number;
   }) => Promise<{
-    readonly title: string;
+    /** 写手起的章名；写手只回正文就不带（写作版本 P1 第 16 轮 AD1：没起名就是没起名，不补「第N章」）。 */
+    readonly title?: string;
     readonly content: string;
     readonly tokenUsage?: TokenUsage;
     readonly cacheMetrics?: CacheMetrics;
@@ -122,7 +123,7 @@ export interface FastDraftInput {
 export interface FastDraftReport {
   readonly chapter: number;
   readonly passed: boolean;
-  /** 通过时的正文（不含标题行）。引擎不写盘：落工作稿统一走核心的 draft.write（重构 P7）。 */
+  /** 通过时的正文（不含标题行）。引擎不写盘：落工作稿统一走核心的 draft.applyGenerated（AI 写稿唯一通道）。 */
   readonly draftBody?: string;
   readonly title?: string;
   readonly contextStats: {
@@ -361,7 +362,7 @@ async function generateBySegments(input: {
   const firstRatio = Math.min(SEGMENT_RATIO_MAX, Math.max(SEGMENT_RATIO_MIN, countDraftChineseCharacters(firstBody) / Math.max(1, half)));
   const secondTarget = Math.round(Math.max(half, aim - countDraftChineseCharacters(firstBody)) / firstRatio);
   // 稿纸上：前半章（重写过就是用上的那版）+ 空行，后半章从这里往下流。
-  const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`;
+  const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`; // 章名行白名单：模型输出
   input.restream?.(firstVisible);
   const secondGoal = [
     input.rawChapterGoal,
@@ -435,7 +436,7 @@ async function generateBySegments(input: {
     return {
       generated: {
         ...first,
-        content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`,
+        content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`, // 章名行白名单：模型输出
       },
       info: { split, replayedFound: replays.length, retried, replayedRemaining, copiedFromPrevious: copied.length, copiedRemaining, ...(lengthRetry ? { lengthRetry } : {}) },
     };
@@ -762,7 +763,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         }
         : {}),
     });
-    const normalizedGenerated = { ...generated, title: generatedTitle, content: draftBody };
+    const normalizedGenerated = { content: draftBody };
     // 出稿后确定性保真核对：用户/agent 指定的必命中要点里的具体锚点（编号/数字+量词+名物）漏了就软警告（不阻塞）。
     const beatFidelity = input.mustHitBeats && input.mustHitBeats.length > 0
       ? checkDraftBeatFidelity({ draftContent: normalizedGenerated.content, mustHitBeats: input.mustHitBeats })
@@ -782,7 +783,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       return withFastDraftDiagnostics(input.projectDir, {
         chapter: input.chapter,
         passed: false,
-        title: generatedTitle,
+        ...(generatedTitle ? { title: generatedTitle } : {}),
         contextStats,
         promptFingerprint,
         draftLength,
@@ -796,12 +797,12 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       }, latencyTimer);
     }
 
-    // 引擎只出正文、不写盘：落工作稿由调用方走核心的 draft.write（重构 P7 第 3 步）。
+    // 引擎只出正文、不写盘：落工作稿由调用方走核心的 draft.applyGenerated（AI 写稿唯一通道）。
     return withFastDraftDiagnostics(input.projectDir, {
       chapter: input.chapter,
       passed: true,
       draftBody: normalizedGenerated.content.trim(),
-      title: generatedTitle,
+      ...(generatedTitle ? { title: generatedTitle } : {}),
       contextStats,
       promptFingerprint,
       draftLength,
@@ -892,15 +893,12 @@ function buildContextStats(context: WriterContextEnvelope): FastDraftReport["con
 
 function validateDraft(
   generated: {
-    readonly title: string;
     readonly content: string;
   },
   context: WriterContextEnvelope,
 ): string[] {
   const issues: string[] = [];
-  const title = generated.title.trim();
   const content = generated.content.trim();
-  if (!title) issues.push("Draft title is required.");
   if (!content) issues.push("Draft content is required.");
   if (content && looksLikeToolOrJsonArtifact(content)) {
     issues.push("Draft content looks like JSON or a tool-call artifact.");
@@ -978,59 +976,51 @@ function stripLeadingMarkdownChapterHeading(content: string): string {
   return nextLines.join("\n").trim();
 }
 
-function chooseDraftTitle(chapter: number, title: string, content: string): string {
-  const modelHeadingTitle = extractLeadingChapterTitle(content);
-  const cleanTitle = title.trim();
-  if (modelHeadingTitle && !isGenericChapterTitle(modelHeadingTitle, chapter)) {
-    return normalizeModelChapterTitle(chapter, modelHeadingTitle);
-  }
-  if (cleanTitle && !isGenericChapterTitle(cleanTitle, chapter)) return cleanTitle;
-  return `第${chapter}章`;
-}
-
 /**
- * 模型写的开头标题统一成「第N章 · 标题」（2026-10-14 编辑部 R7.7，报告第 5 节）：
- * 章号一律用代码里的本章章号（阿拉伯数字）——模型会写成「第九章」「第十章」，还会数错章；
- * 分隔符统一「 · 」。把模型自己写的第X章前缀（汉字/阿拉伯数字、带不带分隔符都认）剥掉后按规范重拼，
- * 纯确定性后处理，不改标题文字本身。剥完没有剩余（模型只写了「第九章」这类章号行）→ 只留「第N章」。
+ * 写手起的章名：正文开头的章名行、或写手另给的章名，去掉章号还剩名字才算起了名（统一成「第N章 · 名字」，章号用本章的：
+ * 模型会写成「第九章」、还会数错）。没起就是 undefined（写作版本 P1 第 16 轮 AD1、第 17 轮 AE1）：一路带到接口都是「没起名」，
+ * 由用的一方沿用作者的章名，不补「第N章」盖掉它。认章名行、剥章号用核心同一条规则（`bareChapterName`）。
  */
-function normalizeModelChapterTitle(chapter: number, modelTitle: string): string {
-  const bare = modelTitle
-    .trim()
-    // 不猜白名单：章节标题
-    .replace(/^第[一二三四五六七八九十百千万〇零\d]+\s*章[\s·：:、\-—]*/u, "")
-    .trim();
-  return bare ? `第${chapter}章 · ${bare}` : `第${chapter}章`;
+function chooseDraftTitle(chapter: number, title: string | undefined, content: string): string | undefined {
+  for (const candidate of [extractLeadingChapterTitle(content), title]) {
+    const name = candidate ? bareChapterName(candidate) : "";
+    if (name) return `第${chapter}章 · ${name}`;
+  }
+  return undefined;
 }
 
 function extractLeadingChapterTitle(content: string): string | undefined {
   const normalized = content.replace(/\r\n?/gu, "\n").trimStart();
   const firstLine = normalized.split("\n").find((line) => line.trim().length > 0)?.trim();
   if (!firstLine) return undefined;
-  if (isMarkdownChapterHeading(firstLine)) return firstLine.replace(/^#{1,6}\s+/u, "").trim();
+  if (isMarkdownChapterHeading(firstLine)) return markdownHeadingText(firstLine);
   if (isPlainChapterHeading(firstLine)) return firstLine.trim();
   return undefined;
 }
 
-function isGenericChapterTitle(title: string, chapter: number): boolean {
-  const trimmed = title.trim();
-  // 不猜白名单：章节标题
-  return trimmed === `第${chapter}章` || /^第[一二三四五六七八九十百千万\d]+章$/u.test(trimmed);
+/**
+ * Markdown 标题行里的字：去掉开头的 `#`，也去掉结尾的闭合 `#`（`# 第一章 #`、`## 第 1 章 ##`，P1 第 18 轮 AF3）——
+ * 闭合的井号前面得有空格（或整行只有井号），名字中间、贴着字的 `#` 是名字的一部分，留着。
+ */
+function markdownHeadingText(line: string): string {
+  return line.replace(/^#{1,6}\s+/u, "").replace(/(?:^|\s+)#+\s*$/u, "").trim(); // 章名行白名单：模型输出
 }
 
 function isMarkdownChapterHeading(line: string): boolean {
-  if (!/^#{1,6}\s+\S/u.test(line)) return false;
-  const title = line.replace(/^#{1,6}\s+/u, "").trim();
+  if (!/^#{1,6}\s+\S/u.test(line)) return false; // 章名行白名单：模型输出
+  const title = markdownHeadingText(line);
   if (!title) return false;
-  // 不猜白名单开始：章节标题
-  if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;
+  if (hasChapterNumberPrefix(title)) return true;
+  // 不猜白名单：章节标题
   return title.length <= 40 && !/[。！？!?；;]/u.test(title);
-  // 不猜白名单结束
 }
 
+/** 不带 # 的章名行：开头是章号，后面的名字不长、不像句子。 */
 function isPlainChapterHeading(line: string): boolean {
+  if (!hasChapterNumberPrefix(line)) return false;
+  const name = bareChapterName(line);
   // 不猜白名单：章节标题
-  return /^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*[^。！？!?；;]{1,32})?$/u.test(line.trim());
+  return name.length <= 32 && !/[。！？!?；;]/u.test(name);
 }
 
 function unique(values: readonly string[]): string[] {

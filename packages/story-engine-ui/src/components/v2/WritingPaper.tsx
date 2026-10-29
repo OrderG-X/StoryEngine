@@ -49,14 +49,14 @@ export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelection
     return <EditablePaper draft={draft} onEdit={onEdit} paperStyle={paperStyle} onSelectionRewrite={onSelectionRewrite} onSelectionRewriteCustom={onSelectionRewriteCustom} onAskAboutSelection={onAskAboutSelection} />;
   }
 
-  const rawContent = draft.content;
-  const body = normalizeBody(rawContent);
+  // 稿纸上是拆开的稿：正文原样显示（开头的「# 某某」也是正文），章名就是 draft.title。
+  const body = uiText(draft.content.trim(), "");
   return (
     <section className="se-v2-writing-canvas">
       <div className="se-v2-editor-wrap se-v2-paper" style={paperStyle}>
         {body ? (
           <>
-            <h1 className="se-v2-paper-title">{normalizeTitle(draft.title, rawContent)}</h1>
+            <h1 className="se-v2-paper-title">{uiText(draft.title, "未命名章节")}</h1>
             <div className="se-v2-editor-text">{body}</div>
           </>
         ) : (
@@ -183,7 +183,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
 
   const editor = useEditor({
     // 纯文本纸面：关掉 StarterKit 的标题/列表/引用/代码/分隔线与加粗斜体等输入规则，
-    // 否则用户在行首敲「# 」会被转成 <h1>、getText 吞掉「#」前缀，破坏 extractDraftTitle 的标题识别契约。
+    // 否则用户在行首敲「# 」会被转成 <h1>、getText 吞掉「#」前缀，作者打的「# 某某」就该原样是正文里的字（章名只从章名入口改）。
     extensions: [
       StarterKit.configure({
         heading: false,
@@ -526,11 +526,3 @@ function centerCaret(instance: Editor, host: HTMLElement | null): void {
   }
 }
 
-function normalizeBody(content: string): string {
-  return uiText(content.replace(/^# .*(?:\r?\n){1,2}/u, "").trim(), "");
-}
-
-function normalizeTitle(title: string, content: string): string {
-  const markdownTitle = content.split(/\r?\n/u).find((line) => line.trim().startsWith("#"))?.replace(/^#+\s*/u, "").trim();
-  return uiText(markdownTitle || title, "未命名章节");
-}

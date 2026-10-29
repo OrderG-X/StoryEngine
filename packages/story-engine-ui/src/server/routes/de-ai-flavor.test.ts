@@ -18,11 +18,18 @@ vi.mock("../lib/llm-client.js", () => ({
 }));
 vi.mock("../lib/snapshot.js", () => ({
   createSnapshot: snapshotMocks.createSnapshot,
-  // 审计 High-2 后路由走 runWithSnapshot（快照+落盘同一临界区）：mock 仍经 createSnapshot 建「快照」，
-  // fn 拿其 id 执行——既保持既有断言（createSnapshot 被调 1 次）语义，也覆盖新临界区形态。
-  runWithSnapshot: async (projectDir: string, label: string, fn: (snapshotId: string) => Promise<unknown>) => {
-    const snapshot = await snapshotMocks.createSnapshot(projectDir, label);
-    return { snapshot, result: await fn(snapshot.id) };
+  // 写作版本 P1b：改写走 AI 写稿唯一通道，换上前（真要写才）打存档点：mock 经 createSnapshot 建「快照」。
+  runWithLazySnapshot: async (
+    projectDir: string,
+    fn: (snapshot: (label: string, command: string) => Promise<void>) => Promise<unknown>,
+    fixedLabel?: string,
+  ) => {
+    let id: string | undefined;
+    const result = await fn(async (label) => {
+      if (id) return;
+      id = ((await snapshotMocks.createSnapshot(projectDir, fixedLabel ?? label)) as { id: string }).id;
+    });
+    return { ...(id ? { snapshotId: id } : {}), result };
   },
 }));
 
@@ -124,6 +131,25 @@ describe("POST /api/draft/de-ai-flavor/apply · 一键全修端点", () => {
     expect(snapshotMocks.createSnapshot).not.toHaveBeenCalled();
     const onDisk = await readFile(join(projectDir, "drafts/fast/chapter-0001.md"), "utf-8");
     expect(onDisk).toContain("他深吸一口气，压下怒火。"); // 原稿没动
+  });
+
+  it("改写的途中作者存了稿 → 不换上、如实说（409 draft_kept），AI 那版留成候选，作者那份不动", async () => {
+    await makeProject("他深吸一口气，压下怒火。");
+    llmMocks.streamChatModelToText.mockImplementation(async () => {
+      await writeFile(join(projectDir, "drafts/fast/chapter-0001.md"), "作者在这期间存的。\n", "utf-8");
+      return { content: JSON.stringify({ rewrites: [{ text: "他深吸一口气，压下怒火。", afterText: "他胸口起伏了一下。" }] }) };
+    });
+    const { statusCode, payload } = await call({
+      projectPath: projectDir, chapter: 1, confirm: true,
+      violations: [{ id: "a", text: "他深吸一口气，压下怒火。", reason: "x", severity: "medium" }],
+    });
+    expect(statusCode).toBe(409);
+    expect(payload).toMatchObject({ ok: false, code: "draft_kept" });
+    expect(String(payload.error)).toContain("AI 这版没换上");
+    expect(snapshotMocks.createSnapshot).not.toHaveBeenCalled();
+    expect(await readFile(join(projectDir, "drafts/fast/chapter-0001.md"), "utf-8")).toBe("作者在这期间存的。\n");
+    const candidate = JSON.parse(await readFile(join(projectDir, "agents/drafts/candidates", `${String(payload.candidateId)}.json`), "utf-8")) as { body: string; reason: string };
+    expect(candidate).toMatchObject({ body: "他胸口起伏了一下。", reason: "draft_moved" });
   });
 
   it("confirm 不为 true → 400 拒绝", async () => {

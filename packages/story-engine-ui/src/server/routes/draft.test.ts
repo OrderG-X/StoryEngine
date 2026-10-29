@@ -312,6 +312,62 @@ describe("draft length guard routes", () => {
       chapterGoal: "林远连夜对账。",
       chapterPlan: expect.objectContaining({ beats: ["收截图", "算总数", "接催收电话", "打电话请假"] }),
     }));
+    // 交回拆开的稿（第 15 轮 AC3）：章名、正文各一栏，不拼成文件。
+    expect(response.payload).toMatchObject({ draftTitle: "对账", draftBody: "林远把截图一张张抄下来。" });
+    expect(response.payload.draftContent).toBeUndefined();
+  });
+
+  it("选这一版（写作版本 P1b）：带眼前那份的版本才换，换前存档；这期间稿子改过就不换、如实说", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-pick-");
+    await writeProjectJson(projectDir);
+    const draftFile = join(projectDir, "drafts", "fast", "chapter-0001.md");
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    await writeFile(draftFile, "# 第1章\n\n作者的稿。\n", "utf-8");
+    const { readDraft } = await import("@actalk/story-core");
+    const version = (await readDraft(projectDir, 1))!.version;
+
+    const stale = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, title: "第1章", body: "另写的一版。", baseVersion: "旧的" });
+    expect(stale.statusCode).toBe(409);
+    expect(String(stale.payload.error)).toContain("没换上");
+    expect(await readFile(draftFile, "utf-8")).toContain("作者的稿。");
+
+    const missing = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, title: "第1章", body: "另写的一版。" });
+    expect(missing.statusCode).toBe(500);
+    expect(String(missing.payload.error)).toContain("baseVersion");
+
+    const picked = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, title: "第1章", body: "另写的一版。", baseVersion: version });
+    expect(picked.statusCode).toBe(200);
+    expect(await readFile(draftFile, "utf-8")).toBe("# 第1章\n\n另写的一版。\n");
+    const { listSnapshots } = await import("../lib/snapshot.js");
+    expect((await listSnapshots(projectDir)).some((entry) => entry.label === "抽卡选用候选前快照：第1章")).toBe(true);
+  });
+
+  it.each([
+    { label: "原稿有章名", file: "# 作者旧章名\n\n作者的稿。\n" },
+    { label: "原稿没章名", file: "作者的稿。\n" },
+  ])("AC3：选用「另写几版」的候选（$label）：换上的是它那份整稿，章名照它的，正文开头的「# 某某」原样是正文（第 15 轮）", async ({ file }) => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-pick-split-");
+    await writeProjectJson(projectDir);
+    const draftFile = join(projectDir, "drafts", "fast", "chapter-0001.md");
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    await writeFile(draftFile, file, "utf-8");
+    const { readDraft } = await import("@actalk/story-core");
+    let version = (await readDraft(projectDir, 1))!.version;
+    const picked = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, title: "候选新章名", body: "# 候选第一节\n\n候选正文。", baseVersion: version });
+    expect(picked.statusCode).toBe(200);
+    expect(await readDraft(projectDir, 1)).toMatchObject({ title: "候选新章名", body: "# 候选第一节\n\n候选正文。" });
+    version = (await readDraft(projectDir, 1))!.version;
+    // 候选没章名、作者眼前也没有：换上的就是没章名的一份
+    const untitled = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, title: "", body: "另一版。", baseVersion: version });
+    expect(untitled.statusCode).toBe(200);
+    expect(await readFile(draftFile, "utf-8")).toBe("另一版。\n");
+    // 旧的整份文件参数、缺章名一律不收
+    const legacy = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, draftContent: "# 候选\n\n正文。", baseVersion: version });
+    expect(legacy.statusCode).toBe(500);
+    const noTitle = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, body: "正文。", baseVersion: (await readDraft(projectDir, 1))!.version });
+    expect(noTitle.statusCode).toBe(500);
+    expect(String(noTitle.payload.error)).toContain("章名");
+    expect(await readFile(draftFile, "utf-8")).toBe("另一版。\n");
   });
 
   it("重构 P4：落盘出稿的 HTTP 路已撤（persist 不是 false 一律 410，不调模型、不写盘）", async () => {

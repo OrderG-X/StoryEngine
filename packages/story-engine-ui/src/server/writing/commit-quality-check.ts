@@ -1,4 +1,4 @@
-import { readCardsOrLegacy } from "@actalk/story-core";
+import { parseDraftFile, readCardsOrLegacy } from "@actalk/story-core";
 import { describeErrorBriefly } from "../book/project-store.js";
 import { countDraftChineseCharacters, lengthRulesOf, readWritingRulesLengthIntent } from "./draft-length-control.js";
 import {
@@ -44,7 +44,8 @@ export async function checkDraftHardGates(input: {
 }): Promise<readonly CommitQualityIssue[]> {
   const issues: CommitQualityIssue[] = [];
   const content = input.draftContent.trim();
-  const body = stripMarkdownHeadings(content).trim();
+  // 文件原文只经核心 parseDraftFile 拆一次（写作版本 P1 第 15 轮）：没章名时正文开头的「# 小节」也是正文。
+  const body = parseDraftFile(content).body;
   const minBodyChineseCharacters = await resolveMinBodyChineseCharacters(input.projectDir);
 
   if (!content) {
@@ -59,7 +60,7 @@ export async function checkDraftHardGates(input: {
   // 长跑 2026-10-04 #5：计数口径统一 countDraftChineseCharacters（[\u3400-\u9fff] 纯汉字，去标题行）——
   // 与出稿执法（draft-length-control）、UI 写作区显示（countTextWords 同字符集）同源，
   // 不再用自己的 \p{Script=Han} 另算一套（〇/扩展B 等边缘字符三处口径不一致）。
-  const bodyChineseCharacters = countDraftChineseCharacters(body);
+  const bodyChineseCharacters = countDraftChineseCharacters(withoutHeadingLines(body));
   if (content && bodyChineseCharacters < minBodyChineseCharacters) {
     issues.push({
       ...errorIssue(
@@ -79,9 +80,9 @@ export async function checkDraftBeforeCommit(input: {
 }): Promise<CommitQualityReport> {
   const issues: CommitQualityIssue[] = [...(await checkDraftHardGates(input))];
   const content = input.draftContent.trim();
-  const body = stripMarkdownHeadings(content).trim();
+  const { title, body } = parseDraftFile(content);
 
-  if (content && !hasMarkdownHeading(content)) {
+  if (content && !title) {
     issues.push({
       severity: "warning",
       type: "missing_chapter_title",
@@ -188,15 +189,12 @@ async function listCharacterNames(projectDir: string): Promise<{ readonly names:
   }
 }
 
-function stripMarkdownHeadings(content: string): string {
-  return content
+/** 字数不算标题行（全仓同一口径：前端 countTextWords、出稿执法都这样数）。 */
+function withoutHeadingLines(body: string): string {
+  return body
     .split(/\r?\n/u)
-    .filter((line) => !/^#{1,6}\s+\S/u.test(line.trim()))
+    .filter((line) => !/^#{1,6}\s+\S/u.test(line.trim())) // 章名行白名单：字数口径
     .join("\n");
-}
-
-function hasMarkdownHeading(content: string): boolean {
-  return content.split(/\r?\n/u).some((line) => /^#{1,6}\s+\S/u.test(line.trim()));
 }
 
 function looksLikeToolOrJsonArtifact(content: string): boolean {

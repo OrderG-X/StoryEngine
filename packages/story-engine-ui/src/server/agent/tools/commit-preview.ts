@@ -14,12 +14,13 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { readCardsOrLegacy, readChapterPaper } from "@actalk/story-core";
+import { readCardsOrLegacy, readChapterPaper, type TruthBasis } from "@actalk/story-core";
 
 import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { MirrorLagError, readTruthBasisForWork } from "../../book/truth-basis.js";
 import { describeQualityIssue, QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
 import { WEEKDAY_NAMES } from "../../book/story-timeline.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
@@ -110,6 +111,21 @@ export async function buildCommitPreviewToolOutput(input: {
   const rereading = await rereadBlocker(projectDir, "定稿");
   if (rereading) return blocked(chapter, [rereading], rereading);
 
+  const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
+  if (!onCore.ok) {
+    return blocked(chapter, [`这本书的账没能接到新格式上：${onCore.reason}`], `第 ${chapter} 章现在还定不了：这本书的账没能接到新格式上（${onCore.reason}）。`);
+  }
+
+  // 依据在读字数下限、人物名单这些材料之前取（第 8 轮复核 V4）：读的途中作者改了设定，这张票确认时对不上、作废。
+  // 老书先接到新核心（接的时候会写真相），接完再取。
+  let basis: TruthBasis;
+  try {
+    basis = await readTruthBasisForWork(projectDir);
+  } catch (error) {
+    if (!(error instanceof MirrorLagError)) throw error;
+    return blocked(chapter, [error.message], `第 ${chapter} 章现在还定不了：${error.message}`);
+  }
+
   const allGates = await checkDraftHardGates({ projectDir, draftContent: text });
   const short = allGates.find((issue) => issue.type === "too_short")?.length;
   const shortBefore = await committedShortOf(projectDir, chapter, allGates);
@@ -129,11 +145,6 @@ export async function buildCommitPreviewToolOutput(input: {
     };
   }
 
-  const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
-  if (!onCore.ok) {
-    return blocked(chapter, [`这本书的账没能接到新格式上：${onCore.reason}`], `第 ${chapter} 章现在还定不了：这本书的账没能接到新格式上（${onCore.reason}）。`);
-  }
-
   const cards = await readCardsOrLegacy(projectDir);
   const knownNames = cards.cards.filter((card) => card.kind === "character").flatMap((card) => [card.name, ...card.aliases]);
   const callModel = input.callModel ?? callConfiguredBrainModel;
@@ -143,6 +154,7 @@ export async function buildCommitPreviewToolOutput(input: {
     text,
     callModel,
     tickets: ticketStoreFor(projectDir),
+    basis,
     knownNames,
     maxCatchUp: input.maxCatchUp ?? LEDGER_MAX_CATCH_UP,
   }));

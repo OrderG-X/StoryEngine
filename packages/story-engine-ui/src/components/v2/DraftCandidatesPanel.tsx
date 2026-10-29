@@ -9,7 +9,7 @@ import { countTextWords } from "../../utils/textUtils.js";
 export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose }: {
   readonly candidates: readonly DraftCandidate[];
   readonly busy: boolean;
-  readonly onPick: (content: string) => void;
+  readonly onPick: (candidate: DraftCandidate) => void;
   readonly onClose: () => void;
 }) {
   const versions = candidates.length > 0 && candidates.every((candidate) => candidate.version !== undefined);
@@ -22,19 +22,18 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
         </header>
         <div className="se-v2-candidates-grid">
           {candidates.map((candidate, index) => {
-            const body = candidateBody(candidate.content);
             return (
               <article className="se-v2-candidate-card" key={index}>
                 <div className="se-v2-candidate-meta">
-                  <span>{candidate.version !== undefined ? `第 ${candidate.version} 版` : `候选 ${index + 1}`}</span>
+                  <span>{candidate.version !== undefined ? `第 ${candidate.version} 版` : `候选 ${index + 1}`}{candidate.title ? ` ·「${candidate.title}」` : ""}</span>
                   {/* T14 统一口径：候选字数与稿纸顶栏同函数（正文中文字符，不含标题）。 */}
-                  <span>{countTextWords(candidate.content).toLocaleString()} 字</span>
+                  <span>{countTextWords(candidate.body).toLocaleString()} 字</span>
                 </div>
-                <div className="se-v2-candidate-body">{body}</div>
+                <div className="se-v2-candidate-body">{candidate.body}</div>
                 <button
                   className="se-v2-btn se-v2-btn-primary se-v2-candidate-pick"
                   disabled={busy}
-                  onClick={() => onPick(candidate.content)}
+                  onClick={() => onPick(candidate)}
                   type="button"
                 >
                   用这版
@@ -47,9 +46,4 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
       </div>
     </div>
   );
-}
-
-/** 去掉候选正文开头的 markdown 标题行，只展示正文。 */
-function candidateBody(content: string): string {
-  return content.replace(/^#\s.*(?:\r?\n){1,2}/u, "").trim();
 }

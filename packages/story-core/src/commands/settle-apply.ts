@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { applyCardOps, CardOp, MAX_OPS_PER_CHANGE } from "../bible/ops.js";
 import { readCardsOrLegacy } from "../bible/commands.js";
-import { draftVersionOf } from "../draft/draft.js";
+import { draftVersionOf, readDraftStamp } from "../draft/draft.js";
 import type { AuthorDecision } from "../schema/decisions.js";
 import { ChapterLedger, entryShapeProblem, type LedgerEntry } from "../schema/ledger.js";
 import { cardsFileText, decisionsFileText, readAllLedgers, readChapterText, readDecisions, sha256 } from "../store/book.js";
@@ -237,14 +237,15 @@ export const settleApply: WriteCommandSpec<SettleApplyArgs, SettleApplyResult> =
     for (const item of args.drafts) {
       if (draftSeen.has(item.chapter)) return fail("invalid_args", `第 ${item.chapter} 章的工作稿给了两份改法。`);
       draftSeen.add(item.chapter);
+      const stamp = await readDraftStamp(context.bookDir, item.chapter);
       const raw = await readOptional(join(context.bookDir, draftPath(item.chapter)));
       if (raw === undefined) return fail("draft_missing", `第 ${item.chapter} 章的工作稿不在了，没改。`);
-      if (draftVersionOf(raw) !== item.baseVersion) return fail("draft_moved", `第 ${item.chapter} 章的工作稿在预览之后改过，这次一处都没改，重新查一遍。`);
+      if (draftVersionOf(raw, stamp) !== item.baseVersion) return fail("draft_moved", `第 ${item.chapter} 章的工作稿在预览之后改过，这次一处都没改，重新查一遍。`);
       const applied = applyUnitEdits(raw, item.edits);
       if (!applied.ok) return fail(applied.code, `第 ${item.chapter} 章工作稿没改成：${applied.message}。`);
       if (applied.applied.length === 0) continue;
       writes.push({ path: draftPath(item.chapter), content: applied.text });
-      drafts.push({ chapter: item.chapter, edits: applied.applied.length, version: draftVersionOf(applied.text) });
+      drafts.push({ chapter: item.chapter, edits: applied.applied.length, version: draftVersionOf(applied.text, { epoch: stamp.epoch, gen: context.draftGen }) });
     }
 
     const changedChapters = chapters.map((item) => item.chapter);

@@ -53,7 +53,8 @@ describe("snapshotKindOf：操作历史分类按写入方工具名定（重构 P
     expect(snapshotKindOf(imported)).toBe("bible");
     expect(humanizeUndoLabel(imported)).toBe("导入老书的账");
     expect(snapshotKindOf(coreSnapshotLabel("chapter.commit", "定稿：第 9 章"))).toBe("commit");
-    expect(snapshotKindOf(coreSnapshotLabel("draft.write", "AI 写稿：第 9 章"))).toBe("draft");
+    expect(snapshotKindOf(coreSnapshotLabel("draft.applyGenerated", "AI 写稿：第 9 章"))).toBe("draft");
+    expect(snapshotKindOf(coreSnapshotLabel("draft.adoptCandidate", "换上 AI 稿：第 9 章"))).toBe("draft");
     expect(snapshotKindOf("导入老书的账")).toBe("bible");
   });
 });

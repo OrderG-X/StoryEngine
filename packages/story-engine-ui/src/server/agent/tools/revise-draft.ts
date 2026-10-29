@@ -8,22 +8,20 @@
  * 安全/诚实（铁律，全部由 service 的守卫承接，本路文案口径不变）：
  * - 原文须唯一命中：缺失/出现多次 → 诚实回报 applied:false，绝不写坏草稿、绝不谎称改了。
  * - 模型输出格式不全（缺 afterText）→ 解析抛错 → 诚实拒，applied:false。
- * 快照策略：草稿是「待保存」工作稿，不建 git 快照（同 generate_draft）；故用 createTool 而非 writeTool，
- *   output 不带 snapshotId。涉及草稿 → refreshScope:"full"。
+ * 存档点：换上前、同一把书锁里打（AI 写稿唯一通道 ai-draft-write，同 generate_draft），真改了稿 output 带 snapshotId；
+ *   写的途中作者改过稿就不换、留成候选（写作版本 P1b）。涉及草稿 → refreshScope:"full"。
  * - 题材中立：description / summary 用中性词。
  */
+import { parseDraftFile } from "@actalk/story-core";
 import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../../lib/markdown-emphasis.js";
 import { type DraftRevisionPreview } from "../../writing/draft-revision.js";
-import { withBookLock } from "@actalk/story-core";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceEnum, coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 
-import { stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import {
   createRevisionModelChannel,
   reviseDraftOneShot,
@@ -106,6 +104,12 @@ function refusalReason(failure: RevisionOneShotFailure): string {
       return "AI 改出来的和原文一样，等于没有任何修改；稿子没动。";
     case "target_unchanged":
       return "改写后你点名的那句仍原样留在工作稿里，等于没真改到；工作稿未改动。请重试或把要改的原文逐字说清。";
+    case "draft_kept":
+      return failure.detail ?? "改好了但没换上：写的途中稿子或前文改过，AI 这版留着，稿纸上可以换成它。";
+    case "preview_stale":
+      return "这份修改方案对不上现在的书了，稿子没动。请重新改一次。";
+    case "book_unsettled":
+      return failure.detail ?? "上次写到一半的记录收拾不了，稿子没动。";
   }
 }
 
@@ -146,7 +150,7 @@ async function toToolOutput(
     applied: true,
     preview: outcome.preview,
     // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与 generate_draft 的 draftBody 同构。
-    draftBody: stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(outcome.updatedContent)).trim(),
+    draftBody: stripMarkdownEmphasis(parseDraftFile(outcome.updatedContent).body).trim(),
     overview,
     summary: outcome.mode === "exact"
       ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。工作稿未定稿，可继续修改或撤销。`
@@ -177,7 +181,9 @@ export async function runReviseDraftToolLogic(input: {
   readonly callModel: (prompt: string) => Promise<string>;
 }): Promise<ReviseDraftToolOutput> {
   const outcome = await reviseDraftOneShot(input);
-  return toToolOutput(input.projectDir, input.chapter, outcome);
+  const result = await toToolOutput(input.projectDir, input.chapter, outcome);
+  // 只在真改了草稿时挂 snapshotId（未命中/未写回=没覆盖，无需撤销点）。
+  return outcome.ok && outcome.snapshotId ? { ...result, snapshotId: outcome.snapshotId } : result;
 }
 
 export const reviseDraftTool = createTool({
@@ -185,7 +191,7 @@ export const reviseDraftTool = createTool({
   description:
     "对某章工作稿里某段原文做局部修订（确定性替换：原文必须逐字取自工作稿且只出现一次）。" +
     "当用户说『把这段改成…… / 修一下这一句 / 这段语气太冲，改克制点』时调用。" +
-    "工作稿不建 git 快照（改坏了走操作历史撤销）。原文未命中或出现多次会被拒绝、不写坏工作稿。",
+    "改前存档、可撤销。原文未命中或出现多次会被拒绝、不写坏工作稿。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -200,12 +206,8 @@ export const reviseDraftTool = createTool({
       throw new Error("revise_draft 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
     }
     const channel = await createRevisionModelChannel();
-    // 快照 + 改稿写回放进同一把项目锁，和其他写类工具（writeTool）一样：撤销、定稿不会切进快照和写盘中间。
-    // （同一份稿子的读改写本身已由 revision-service 的 runExclusive 串行。）
-    return withBookLock(projectDir, async () => {
-    // M6：修订会覆盖现有草稿，覆盖前建快照让修订可撤销（修订必有非空草稿）。
-    const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章修订前快照`);
-    const outcome = await reviseDraftOneShot({
+    // 存档点在换上前、同一把书锁里打（AI 写稿唯一通道）；模型跑着时不占书锁，同一章几处改稿排队。
+    return runReviseDraftToolLogic({
       projectDir,
       chapter: resolvedChapter,
       targetText: input.targetText,
@@ -215,10 +217,6 @@ export const reviseDraftTool = createTool({
       ...(input.constraints !== undefined ? { constraints: input.constraints } : {}),
       ...(input.replacementText !== undefined ? { replacementText: input.replacementText } : {}),
       callModel: channel.call,
-    });
-    const result = await toToolOutput(projectDir, resolvedChapter, outcome);
-    // 只在真改了草稿时挂 snapshotId（未命中/未写回=没覆盖，无需撤销点）。
-    return result.ok && result.applied && snapshotId ? { ...result, snapshotId } : result;
     });
   },
 });

@@ -3,8 +3,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
-import { recoverTransactions as recoverCoreTransactions, withBookLock } from "@actalk/story-core";
+import { bumpRevision, recoverTransactions, REVISION_PATH, SAVED_COPIES_DIR, withBookLock } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
@@ -98,6 +97,12 @@ const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（�
 /** 新核心留证的东西（坏事务、镜像前的老文件原样）：撤销不能把它们抹掉。 */
 const CORE_KEPT_DIR = ".story-core-kept";
 const CORE_KEPT_MARKER = "# story-engine-ui: 新核心留证目录不入快照（撤销不抹证据）";
+/** 收拾半截事务时另存的（P1 第 19 轮 AG3）：作者还没处理的稿，撤销不能把它们抹掉。 */
+const CORE_SAVED_DIR = SAVED_COPIES_DIR;
+const CORE_SAVED_MARKER = "# story-engine-ui: 恢复前另存的稿不入快照（撤销不抹作者的稿）";
+/** 书的写入代次（写作版本 P1a）：撤销 / 恢复不能把它翻回去，恢复完换一个新的（按恢复前算的预览一律作废）。 */
+const CORE_REVISION_DIR = dirname(REVISION_PATH);
+const CORE_REVISION_MARKER = "# story-engine-ui: 写入代次不入快照（撤销不回退代次）";
 /** 写作统计（P10）：撤销不回退统计，恢复后重数。 */
 const WORD_STATS_DIR = ".story-engine-ui/stats";
 const WORD_STATS_MARKER = "# story-engine-ui: 写作统计不入快照（撤销不回退统计）";
@@ -111,7 +116,9 @@ const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: strin
   { dir: CORE_PREVIEW_DIR, line: `/${CORE_PREVIEW_DIR}/`, marker: CORE_PREVIEW_MARKER },
   { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
   { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
+  { dir: CORE_SAVED_DIR, line: `/${CORE_SAVED_DIR}/`, marker: CORE_SAVED_MARKER },
   { dir: WORD_STATS_DIR, line: `/${WORD_STATS_DIR}/`, marker: WORD_STATS_MARKER },
+  { dir: CORE_REVISION_DIR, line: `/${CORE_REVISION_DIR}/`, marker: CORE_REVISION_MARKER },
 ];
 /** git 路径魔法：diff / checkout 时跳过这些目录。 */
 const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);
@@ -191,10 +198,21 @@ async function createSnapshotUnlocked(projectDir: string, label: string): Promis
   return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
 }
 
+/**
+ * 存档类入口（建存档点、存档里写、恢复、裁剪）先收拾上次写到一半的事务；有收拾不了的就停下、不动稿、不报成功
+ * （P1 第 22 轮 AJ3：恢复接口不看收拾结果，作者刚选的那版之后又被那份没退完的事务退掉）。老格式收拾不了照样抛。
+ */
+async function settleOrStop(projectDir: string): Promise<void> {
+  const recovery = await recoverTransactions(projectDir);
+  if (recovery.problems.length > 0) {
+    throw Object.assign(new Error("上次写到一半的记录收拾不了，先不动这本书，免得丢数据。"), { code: "TX_RESIDUE" });
+  }
+}
+
 /** 写入前调用：把当前全部状态存为一个快照。 */
 export async function createSnapshot(projectDir: string, label: string): Promise<SnapshotEntry> {
   return withProjectLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     return createSnapshotUnlocked(projectDir, label);
   });
@@ -218,7 +236,7 @@ export async function runWithSnapshot<T>(
   fn: (snapshotId: string) => Promise<T>,
 ): Promise<{ readonly snapshot: SnapshotEntry; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     const snapshot = await createSnapshotUnlocked(projectDir, label);
     const result = await fn(snapshot.id);
@@ -245,10 +263,12 @@ export async function runWithLazySnapshot<T>(
   fixedLabel?: string,
 ): Promise<{ readonly snapshotId?: string; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
+    // 老格式事务（升级前崩溃留下的）先收拾，再进核心命令：收拾会换写入代次，核心随后核依据就对得上真相；
+    // 留到要打存档点才收拾，核心已经照没收拾的半截真相核过依据了（第 4 轮复核 R9）。
+    await settleOrStop(projectDir);
     let taken: SnapshotEntry | undefined;
     const result = await fn(async (label, command) => {
       if (taken) return;
-      await recoverProjectCommitTransactions(projectDir);
       await ensureRepoUnlocked(projectDir);
       taken = await createSnapshotUnlocked(projectDir, fixedLabel ?? coreSnapshotLabel(command, label));
     });
@@ -294,9 +314,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     // Recovery must happen before git add/commit/checkout; otherwise a partial
     // formal transaction becomes part of the pre-restore history and may be
     // resurrected by a later undo.
-    await recoverProjectCommitTransactions(projectDir);
-    // 新核心的写盘事务同理：先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
-    await recoverCoreTransactions(projectDir);
+    // 老格式和新核心的写盘事务都先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     // 先解析目标：失败即抛，不污染历史
     const target = parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`, id]));
@@ -319,6 +338,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     // 当场把零文件空壳收掉；有内容的目录 rmdir 不动（ENOTEMPTY 停手），漏网壳由引擎 recover 兜底。
     await removeEmptiedTransactionShells(projectDir);
     await git(projectDir, ["checkout", id, "--", ".", ...EXCLUDE_PATHSPECS]);
+    // 真相换回去了：换一个新代次，恢复前照着书算的预览、提议按钮一律作废（哪怕又回到了和它一模一样的内容）。
+    await bumpRevision(projectDir);
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
     // 账单和老格式镜像同在快照里，恢复后本该一致；万一对不上（镜像那次没写完就存了快照），按恢复后的账重生成一遍。
@@ -610,7 +631,8 @@ const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "decision.record": "bible",
   "book.import": "bible",
   "book.importText": "commit",
-  "draft.write": "draft",
+  "draft.applyGenerated": "draft",
+  "draft.adoptCandidate": "draft",
   "card.write": "bible",
   "card.fill": "bible",
   "cards.import": "bible",
@@ -899,7 +921,7 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
   const keep = clampPruneKeep(options.keep);
   const dryRun = options.dryRun !== false;
   return withProjectLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
+    await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     const branch = await assertRepoHealthyForPrune(projectDir);
 

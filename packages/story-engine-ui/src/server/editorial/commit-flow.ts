@@ -3,7 +3,8 @@
  *
  *   prepareChapterCommit：读真相 → 投影（算到上一章）→ 记账员交账单 → checkEntries 核原句 → classifyForReview 分流
  *                         → 存预览票（条目、正文哈希）→ 返回清单（要你看的 / 自动记下的 / 没记上的 / 这章是第几天）
- *   confirmChapterCommit：取票 → 正文哈希对得上 → 减掉作者去掉的、套上作者改的天数 → chapter.commit（幂等键 = 票号）
+ *   confirmChapterCommit：取票 → 正文哈希对得上 → 减掉作者去掉的、套上作者改的天数 → chapter.commit（幂等键 = 票号；
+ *                         带预览时读到的真相依据：预览之后前面的章、账、设定、裁定有一样变了，核心不写、如实说哪里变了）
  *
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
@@ -32,7 +33,9 @@ import {
   type ThreadInput,
   type TimeBasis,
   type TimeInput,
+  type TruthBasis,
 } from "@actalk/story-core";
+import { describeBasisChanges } from "../lib/truth-basis-store.js";
 import type { KeeperDrop } from "./keeper-parse.js";
 import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";
@@ -60,6 +63,8 @@ export interface PreviewTicket {
   readonly reviewIndexes: readonly number[];
   /** 默认不写、作者勾上才写的条目下标（和前文不会变的事实对不上、要推翻前文不会变的事实）。 */
   readonly optInIndexes?: readonly number[];
+  /** 预览时读到的真相（写作版本 P1a）：条目、天数都是照它算的。老票没有这栏，当过期。 */
+  readonly basis?: TruthBasis;
   readonly createdAt: string;
 }
 
@@ -164,7 +169,7 @@ export interface CommitPreview {
   readonly waited?: ReaderWaited;
 }
 
-export type PrepareFailureCode = "book_unsettled" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
+export type PrepareFailureCode = "book_unsettled" | "basis_changed" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
 
 export interface PrepareFailure {
   readonly ok: false;
@@ -432,6 +437,11 @@ export interface PrepareInput {
   readonly text: string;
   readonly callModel: BrainCallModel;
   readonly tickets: TicketStore;
+  /**
+   * 调用方读字数下限、人物名单这些材料之前取的依据（book/truth-basis.ts，第 8 轮复核 V4），记进票里。
+   * 这里读到的真相和它对不上（取完之后书上有写）就不出票，请调用方重新预览。
+   */
+  readonly basis: TruthBasis;
   /** 设定卡上已有的人名（还没在账单里出场过的也算认识，不当新面孔）。 */
   readonly knownNames?: readonly string[];
   readonly notesRoot?: string;
@@ -445,6 +455,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   if (input.text.trim().length === 0) return { ok: false, code: "empty_text", reason: "正文是空的，没有可定稿的" };
   const snapshot = await readBookSnapshot(input.bookDir);
   if (snapshot.unsettled) return { ok: false, code: "book_unsettled", reason: "这本书正在写盘，稍等几秒再定稿" };
+  if (snapshot.basis.digest !== input.basis.digest) return { ok: false, code: "basis_changed", reason: "预览的途中书里有地方改过，请重新预览一次" };
   const committed = snapshot.ledgers.map((ledger) => ledger.chapter);
   // 有定稿正文却一份账单都没有 = 老书还没导入：先导入，不然导入会因为「已经有账单」做不了。
   if (committed.length === 0 && snapshot.textHashes.size > 0) {
@@ -507,6 +518,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     entries,
     reviewIndexes: plan.review.map((item) => position.get(item.index) ?? -1),
     optInIndexes: plan.review.filter(optIn).map((item) => position.get(item.index) ?? -1),
+    basis: input.basis,
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
   await input.tickets.put(ticket);
@@ -573,7 +585,7 @@ function indexOf(value: unknown): number | undefined {
 
 export async function confirmChapterCommit(input: ConfirmInput): Promise<ConfirmOutcome> {
   const ticket = await input.tickets.get(input.ticket);
-  if (!ticket) return { ok: false, code: "ticket_missing", reason: "这次预览已经过期了，请重新点「定稿」预览一次" };
+  if (!ticket || !ticket.basis) return { ok: false, code: "ticket_missing", reason: "这次预览已经过期了，请重新点「定稿」预览一次" };
   if (draftFingerprint(input.text) !== ticket.textSha256) {
     return { ok: false, code: "text_changed", reason: "预览之后正文又改过，请重新点「定稿」预览一次" };
   }
@@ -612,11 +624,21 @@ export async function confirmChapterCommit(input: ConfirmInput): Promise<Confirm
     {
       caller: "author",
       idempotencyKey: `chapter-commit:${ticket.id}`,
+      // 作者的选择：正文按指纹比（存稿只差行尾空白不算换了），清单是照票和作者的勾选算的。
+      intent: { text: draftFingerprint(input.text), entries },
+      basis: ticket.basis,
       ...(input.snapshot ? { snapshot: input.snapshot } : {}),
       ...(input.emit ? { emit: input.emit } : {}),
       ...(input.now ? { now: input.now } : {}),
     },
   );
-  if (!outcome.ok) return { ok: false, code: outcome.code, reason: (outcome as CommandFailure).message };
+  if (!outcome.ok) {
+    const failure = outcome as CommandFailure;
+    if (failure.code === "basis_changed") {
+      const changes = (failure.details as { readonly changes?: Parameters<typeof describeBasisChanges>[0] } | undefined)?.changes ?? [];
+      return { ok: false, code: failure.code, reason: `预览之后${describeBasisChanges(changes)}改过，这张预览是照改之前算的，请重新点「定稿」预览一次` };
+    }
+    return { ok: false, code: failure.code, reason: failure.message };
+  }
   return { ok: true, result: outcome.result, version: outcome.version, replayed: outcome.replayed };
 }

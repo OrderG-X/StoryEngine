@@ -21,10 +21,12 @@ import {
   RULE_SCALAR_LABELS,
   readCardsOrLegacy,
   splitForAi,
+  withSettledBook,
 } from "@actalk/story-core";
 import type { SettingCardsFile } from "@actalk/story-core";
 
 import { writeCards } from "../../lib/card-write.js";
+import { rememberCurrentBasis } from "../../lib/truth-basis-store.js";
 import { coerceJsonArray } from "../../lib/lenient-args.js";
 import { readProjectDirFromContext } from "../request-context.js";
 
@@ -49,8 +51,8 @@ const outputSchema = z.object({
   ok: z.boolean().describe("true = 有改动真写进去了，或者全部交给作者确认。"),
   applied: z.array(z.string()).describe("真改了的（只有名字）。"),
   needsConfirmation: z.boolean().optional().describe("有改动碰了作者写的：等作者点「确认改设定」。"),
-  foundationConfirm: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string() }).optional(),
-  foundationAccept: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string() }).optional()
+  foundationConfirm: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string(), basis: z.string(), basisFrom: z.string() }).optional(),
+  foundationAccept: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string(), basis: z.string(), basisFrom: z.string() }).optional()
     .describe("AI 刚写进去的那几处：作者点「认下」就算作者写的（作者口述让 AI 记的，认下后就不显示「AI 补」）。"),
   pending: z.array(z.string()).optional().describe("等作者点头的（只有名字）。"),
   notDone: z.array(z.string()).optional().describe("没改成的和原因。"),
@@ -168,8 +170,12 @@ function acceptOpsFor(direct: readonly CardOp[], before: SettingCardsFile): Card
   return [...out.values()];
 }
 
-function confirmKey(ops: readonly CardOp[]): string {
-  return `card-${createHash("sha256").update(JSON.stringify(ops)).digest("hex").slice(0, 24)}`;
+/**
+ * 按钮的防重复标记：同一份改动 + 同一份依据才是同一个按钮（点两次只做一次）。依据带进来，
+ * 之后再提一模一样的改动也是新按钮：不会撞上以前做过的那次的回执、被当成「刚才已经做过了」（P1a 复核）。
+ */
+function confirmKey(ops: readonly CardOp[], basis: string): string {
+  return `card-${createHash("sha256").update(JSON.stringify({ ops, basis })).digest("hex").slice(0, 24)}`;
 }
 
 export async function foundationWriteLogic(input: { readonly projectDir: string; readonly ops: readonly Record<string, unknown>[] }): Promise<FoundationWriteOutput> {
@@ -181,22 +187,38 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     else notDone.push(describeIssue(index, raw, parsed.error.issues[0]));
   });
 
+  // 整批在一把书锁里做完（没有模型调用，很快）：先记依据、再读设定卡分批（第 8 轮复核 V4 同类：材料在依据之后读），
+  // 读到的卡、AI 这批写、写完的依据、按钮上的试算是同一个样子，中间插不进作者的改动。
+  // 先收拾写到一半的事务再读（P1 第 17 轮）：对着马上要回滚的半截设定分批、试算按钮，作者看到的不是书真正的样子。
+  const settled = await withSettledBook(input.projectDir, () => writeLocked(input.projectDir, valid, notDone));
+  return settled.ok ? settled.value : { ok: false, applied: [], notDone: [...notDone, settled.message], summary: `设定没改：${settled.message}` };
+}
+
+async function writeLocked(projectDir: string, valid: readonly CardOp[], notDone: string[]): Promise<FoundationWriteOutput> {
+  // 一处能做的都没有就不记依据（不写依据库）。
+  const startBasis = valid.length > 0 ? await rememberCurrentBasis(projectDir) : "";
   const at = new Date().toISOString();
-  const base = await readCardsOrLegacy(input.projectDir, at);
+  const base = await readCardsOrLegacy(projectDir, at);
   const split = splitForAi(base, valid, at);
   const direct = split.direct;
   notDone.push(...split.invalid.map((item) => item.reason));
 
+  // 按钮的依据（写作版本 P1a）：作者点的时候书变了，就不执行、请 AI 重提。AI 这批写和前后两份依据在同一把锁里记：
+  // basisFrom 是写之前、basis 是写完的样子，一轮里先后几个按钮合成一个时，界面凭「后一个的 basisFrom = 前一个的 basis」
+  // 认定中间只有 AI 自己这批写，接不上就留前一个的依据（点了如实说过期）。
   let applied: readonly string[] = [];
   let snapshotId: string | undefined;
+  const basisFrom = startBasis;
+  let basis = startBasis;
   if (split.direct.length > 0) {
-    const outcome = await writeCards(input.projectDir, { by: "ai", ops: split.direct });
+    const outcome = await writeCards(projectDir, { by: "ai", ops: split.direct });
     if (outcome.ok) {
       applied = outcome.lines;
       snapshotId = outcome.snapshotId;
     } else {
       notDone.push(outcome.message);
     }
+    basis = await rememberCurrentBasis(projectDir);
   }
 
   // 要作者点头的：按作者身份在「AI 那批改完之后」的样子上试一遍，拿到按钮上的人话；作者身份都做不了的如实列进没改成。
@@ -204,12 +226,12 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   let pending: readonly string[] = [];
   if (split.needsAuthor.length > 0) {
     const ops = split.needsAuthor.map((item) => item.op);
-    const after = await readCardsOrLegacy(input.projectDir, at);
+    const after = await readCardsOrLegacy(projectDir, at);
     const dry = applyCardOps(after, ops, { by: "author", at });
     if (dry.ok && dry.lines.length > 0) {
       pending = dry.lines;
       // 按钮回显是「确认改设定：<这里>」，不再带「改设定：」前缀。
-      confirm = { key: confirmKey(ops), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}` };
+      confirm = { key: confirmKey(ops, basis), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}`, basis, basisFrom };
     } else if (!dry.ok) {
       notDone.push(`要你点头的那几处也做不了：${dry.message}`);
     }
@@ -219,9 +241,9 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   let accept: FoundationWriteOutput["foundationAccept"];
   if (applied.length > 0 && !confirm) {
     const ops = acceptOpsFor(direct, base);
-    const after = ops.length > 0 ? await readCardsOrLegacy(input.projectDir, at) : undefined;
+    const after = ops.length > 0 ? await readCardsOrLegacy(projectDir, at) : undefined;
     const dry = after ? applyCardOps(after, ops, { by: "author", at }) : undefined;
-    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops), input: { ops }, label: "刚写的这几处" };
+    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops, basis), input: { ops }, label: "刚写的这几处", basis, basisFrom };
   }
 
   const parts = [

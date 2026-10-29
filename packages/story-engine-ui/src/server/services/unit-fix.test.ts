@@ -1,7 +1,12 @@
 // @vitest-environment node
+import { rm } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+import { draftSave, readDraft, runCommand } from "@actalk/story-core";
 
-import { fixByUnits } from "./unit-fix.js";
+import { createStoryProject } from "../book/project-store.js";
+import { readDraftCandidate } from "../lib/draft-candidates.js";
+import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { fixByUnits, fixDraftByUnits } from "./unit-fix.js";
 
 const goal = "和第 3 章「他那年二十九」对上";
 const reply = (edits: readonly { id: number | string; to: string }[]) => JSON.stringify({ edits });
@@ -116,5 +121,43 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     const out = await fixByUnits({ chapter: 5, text: "他走了。\n", fixes: [{ quote: "他走了", goal }], callModel });
     expect(callModel).toHaveBeenCalledTimes(1);
     expect(out).toMatchObject({ text: "他走了。\n", applied: [], failed: [{ fix: 0, why: "AI 没改成（服务商超时）" }] });
+  });
+});
+
+describe("fixDraftByUnits：改完走 AI 写稿唯一通道（写作版本 P1b）", () => {
+  async function book(body: string) {
+    const rootDir = await makeHomeTempDir("unit-fix-");
+    const { projectDir } = await createStoryProject({ rootDir, title: "白沙渡", genre: "武侠", protagonistName: "许微" });
+    const saved = await runCommand(projectDir, draftSave, { chapter: 5, title: "", body, baseVersion: null }, { caller: "author" });
+    if (!saved.ok) throw new Error(saved.message);
+    return { rootDir, projectDir };
+  }
+  const authorSaves = async (projectDir: string, body: string) => {
+    const outcome = await runCommand(projectDir, draftSave, { chapter: 5, title: "", body, baseVersion: (await readDraft(projectDir, 5))?.version ?? null }, { caller: "author" });
+    if (!outcome.ok) throw new Error(outcome.message);
+  };
+
+  it("稿子没动 → 换上、存档可撤销", async () => {
+    const { rootDir, projectDir } = await book("他走了。\n许微没接话。");
+    const out = await fixDraftByUnits({ projectDir, chapter: 5, fixes: [{ quote: "许微没接话", goal }], callModel: async () => reply([{ id: 2, to: "许微点了点头。" }]) });
+    expect(out.kept).toBeUndefined();
+    expect(typeof out.snapshotId).toBe("string");
+    expect((await readDraft(projectDir, 5))?.body).toBe("他走了。\n许微点了点头。");
+    await rm(rootDir, { recursive: true, force: true });
+  });
+
+  it("模型改的时候作者存了稿 → 不换、留成候选、如实说；作者那份不动", async () => {
+    const { rootDir, projectDir } = await book("他走了。\n许微没接话。");
+    const out = await fixDraftByUnits({
+      projectDir, chapter: 5, fixes: [{ quote: "许微没接话", goal }],
+      callModel: async () => {
+        await authorSaves(projectDir, "他走了。\n许微没接话。\n作者又加了一句。");
+        return reply([{ id: 2, to: "许微点了点头。" }]);
+      },
+    });
+    expect(out.kept?.message).toContain("AI 这版没换上");
+    expect((await readDraft(projectDir, 5))?.body).toBe("他走了。\n许微没接话。\n作者又加了一句。");
+    expect(await readDraftCandidate(projectDir, out.kept!.candidateId)).toMatchObject({ source: "unit-fix", reason: "draft_moved" });
+    await rm(rootDir, { recursive: true, force: true });
   });
 });

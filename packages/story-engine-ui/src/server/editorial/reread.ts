@@ -5,6 +5,8 @@
  *   读真相 → 投影（算到上一章）→ 记账员交账单（前文笔记必须补齐，不走冷窗口）→ 核原句、分流
  *   → 去掉「会改前文不会变的事实」那几条（定稿时这种默认不写、要作者勾，通读没人勾，就不写）→ 「通读记账」命令。
  * 一章最多试 REREAD_ATTEMPTS 次，还不成就停下、如实记原因，等作者点「接着记」。
+ * 记账员读的是哪一版书（依据）跟着命令走：读完之后书上有任何写（作者确认了定论、改了设定、撤销……），这章这遍的账不记，
+ * 照新的样子重读重记（写作版本 P1a 复核：不然旧正文的梗概会挂到新正文上）。这种重来不算一次失败，最多 BASIS_RETRIES 回。
  *
  * 在书的补读队列里跑（和后台补读排同一条队，不同时打模型服务商）。进程重启后开书接着记（状态文件里是 running）；
  * 停下的不自动重试（一直失败的话每次开书都白花一轮调用），作者点了才接着记。
@@ -19,6 +21,7 @@ import {
   readChapterLedger,
   readChapterText,
   runCommand,
+  sha256,
 } from "@actalk/story-core";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { runInReaderCatchUpQueue } from "./catch-up.js";
@@ -30,6 +33,8 @@ import { readRereadState, REREAD_STATE_SCHEMA, writeRereadState, type RereadStat
 
 /** 一章最多试几次（模型偶尔交坏 JSON、连接断一下都很正常）。 */
 export const REREAD_ATTEMPTS = 3;
+/** 记的途中书变了、照新的重记：一章最多重来几回（作者一直在改就停下，等「接着记」）。 */
+export const BASIS_RETRIES = 5;
 
 export interface RereadOptions {
   readonly callModel?: BrainCallModel;
@@ -63,7 +68,10 @@ export async function beginReread(projectDir: string, total: number, now: Date =
   });
 }
 
-type ChapterOutcome = { readonly ok: true; readonly recorded: number; readonly skipped: number } | { readonly ok: false; readonly reason: string };
+type ChapterOutcome =
+  | { readonly ok: true; readonly recorded: number; readonly skipped: number }
+  /** bookChanged：记的途中书变了（不是记账员的错），照新的重记。 */
+  | { readonly ok: false; readonly reason: string; readonly bookChanged?: true };
 
 function oneLine(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
@@ -71,10 +79,12 @@ function oneLine(error: unknown): string {
 }
 
 async function rereadChapter(projectDir: string, chapter: number, run: string, callModel: BrainCallModel): Promise<ChapterOutcome> {
+  // 先读快照（带依据）再读正文；正文和快照里记的对不上 = 两次读之间有写，照新的重来。
+  const snapshot = await readBookSnapshot(projectDir);
+  if (snapshot.unsettled) return { ok: false, reason: "这本书正在写盘", bookChanged: true };
   const text = await readChapterText(projectDir, chapter);
   if (text === undefined) return { ok: false, reason: `第 ${chapter} 章的正文不见了` };
-  const snapshot = await readBookSnapshot(projectDir);
-  if (snapshot.unsettled) return { ok: false, reason: "这本书正在写盘" };
+  if (snapshot.basis.texts[String(chapter)] !== sha256(text)) return { ok: false, reason: "记的途中这章正文改过", bookChanged: true };
   const before = project(snapshot, { upTo: chapter - 1 });
   const keeper = await runLedgerKeeper({ projectDir, chapter, draft: text, before, callModel, maxCatchUp: Number.MAX_SAFE_INTEGER });
   if (!keeper.ok) return { ok: false, reason: keeper.reason };
@@ -82,8 +92,16 @@ async function rereadChapter(projectDir: string, chapter: number, run: string, c
   const plan = classifyForReview(checked.accepted, before, { chapter });
   const optIn = new Set(plan.review.filter((item) => touchesHardFact(item, before)).map((item) => item.index));
   const entries = checked.accepted.filter((item) => !optIn.has(item.index)).map((item) => item.entry);
-  const outcome = await runCommand(projectDir, ledgerReread, { chapter, entries }, { caller: "author", idempotencyKey: `reread:${run}:${chapter}` });
-  if (!outcome.ok) return { ok: false, reason: outcome.message };
+  // 这一轮这一章只记一次：记完进程被杀、接着记时重跑记账员，账会不一样，照样回放上次记下的（不算换了选择）。
+  // 依据是记账员读的那一版：之后书上有写就不记（核心先回放、再核依据）。
+  // 老格式事务（升级前崩溃留下的）runner 先收拾再核依据：收拾会换写入代次，照没收拾的半截真相记的核不过（第 4 轮复核 R9）。
+  const outcome = await runCommand(projectDir, ledgerReread, { chapter, entries }, {
+    caller: "author",
+    idempotencyKey: `reread:${run}:${chapter}`,
+    intent: { chapter },
+    basis: snapshot.basis,
+  });
+  if (!outcome.ok) return outcome.code === "basis_changed" ? { ok: false, reason: "记的途中书改过", bookChanged: true } : { ok: false, reason: outcome.message };
   return {
     ok: true,
     recorded: outcome.result.recorded,
@@ -103,11 +121,17 @@ async function rereadLoop(projectDir: string, options: RereadOptions): Promise<R
     // 上次记完这章、还没来得及落进度就停了：账单已经是通读记的，不再花一次调用。
     const existing = await readChapterLedger(projectDir, chapter).catch(() => undefined);
     let outcome: ChapterOutcome = existing?.origin === "reread" ? { ok: true, recorded: 0, skipped: 0 } : { ok: false, reason: "" };
+    let changedRetries = 0;
     for (let attempt = 1; attempt <= REREAD_ATTEMPTS && !outcome.ok; attempt += 1) {
       try {
         outcome = await rereadChapter(projectDir, chapter, state.run, callModel);
       } catch (error) {
         outcome = { ok: false, reason: oneLine(error) };
+      }
+      // 书变了不算记账员失败：照新的重来，不占次数（一直在变就算一次，免得停不下来）。
+      if (!outcome.ok && outcome.bookChanged && changedRetries < BASIS_RETRIES) {
+        changedRetries += 1;
+        attempt -= 1;
       }
     }
     if (!outcome.ok) {

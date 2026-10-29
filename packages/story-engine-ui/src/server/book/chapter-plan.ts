@@ -10,6 +10,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-store.js";
 import { chapterEndDay, readStoryTimeline } from "./story-timeline.js";
 
@@ -68,6 +69,8 @@ export interface ChapterPlan {
 const MAX_BEATS = 8;
 const MAX_LIST = 12;
 const MAX_TEXT = 160;
+/** 一条要点最长多少字（改纲按核账改出来的要点会长些）：拟纲、改纲、落盘、读回都按这一个数，写手拿到的就是盘上那份。 */
+export const PLAN_BEAT_MAX = 400;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -150,7 +153,7 @@ export function normalizeChapterPlan(
 ): ChapterPlan | undefined {
   const record = asRecord(raw);
   if (!record) return undefined;
-  const beats = cleanList(record.beats ?? record.outline ?? record.steps, MAX_BEATS).map(stripStoryDayNumbering).filter(Boolean);
+  const beats = cleanList(record.beats ?? record.outline ?? record.steps, MAX_BEATS, PLAN_BEAT_MAX).map(stripStoryDayNumbering).filter(Boolean);
   const rawSummary = cleanText(record.summary ?? record.goal);
   const summary = (rawSummary ? stripStoryDayNumbering(rawSummary) : "") || beats[0];
   if (!summary || beats.length === 0) return undefined;
@@ -251,10 +254,31 @@ export function chapterPlanPath(projectDir: string, chapter: number): string {
   return join(projectDir, "drafts", "plans", `chapter-${String(chapter).padStart(4, "0")}.json`);
 }
 
-export async function writeChapterPlan(projectDir: string, plan: ChapterPlan): Promise<string> {
-  const path = chapterPlanPath(projectDir, plan.chapter);
-  await writeFileAtomic(path, `${JSON.stringify(plan, null, 2)}\n`);
-  return path;
+/**
+ * 章纲落盘：先按读回的同一套归一（读回来和返回的一模一样），在书锁里写（AI 换上稿子前在书锁里核章纲，
+ * 核完到换上之间不会被另一轮拟纲换掉，第 6 轮复核 T9）。返回落盘的那份：调用方往后只用它（第 6 轮 T7）。
+ */
+export async function writeChapterPlan(projectDir: string, plan: ChapterPlan): Promise<ChapterPlan> {
+  const stored = storedChapterPlan(plan);
+  await withBookLock(projectDir, () => writeFileAtomic(chapterPlanPath(projectDir, plan.chapter), `${JSON.stringify(stored, null, 2)}\n`));
+  return stored;
+}
+
+/** 这份章纲落盘、再读回来是什么样（readChapterPlan 同一套归一）。 */
+function storedChapterPlan(plan: ChapterPlan): ChapterPlan {
+  const stored = planFromFile(JSON.parse(JSON.stringify(plan)) as Record<string, unknown>, plan.chapter);
+  if (!stored) throw new Error(`第 ${plan.chapter} 章章纲没有要点，不能落盘`);
+  return stored;
+}
+
+function planFromFile(parsed: Record<string, unknown>, chapter: number): ChapterPlan | undefined {
+  return normalizeChapterPlan(parsed, {
+    chapter,
+    source: parsed.source === "author" ? "author" : "model",
+    ...(typeof parsed.direction === "string" ? { direction: parsed.direction } : {}),
+    ...(typeof parsed.basis === "string" ? { basis: parsed.basis } : {}),
+    ...(typeof parsed.createdAt === "string" && !Number.isNaN(Date.parse(parsed.createdAt)) ? { now: new Date(parsed.createdAt) } : {}),
+  });
 }
 
 /** 读本章章纲。没有（ENOENT）→ undefined；文件坏了 → undefined + onCorrupt 留痕（读侧降级，不堵出稿）。 */
@@ -272,14 +296,7 @@ export async function readChapterPlan(
     return undefined;
   }
   try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return normalizeChapterPlan(parsed, {
-      chapter,
-      source: parsed.source === "author" ? "author" : "model",
-      ...(typeof parsed.direction === "string" ? { direction: parsed.direction } : {}),
-      ...(typeof parsed.basis === "string" ? { basis: parsed.basis } : {}),
-      ...(typeof parsed.createdAt === "string" && !Number.isNaN(Date.parse(parsed.createdAt)) ? { now: new Date(parsed.createdAt) } : {}),
-    });
+    return planFromFile(JSON.parse(raw) as Record<string, unknown>, chapter);
   } catch {
     onCorrupt?.(`第 ${chapter} 章章纲文件损坏（不是合法 JSON），本次按没有章纲出稿`);
     return undefined;

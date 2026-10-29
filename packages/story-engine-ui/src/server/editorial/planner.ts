@@ -6,7 +6,7 @@
  * 输出宽进归一（normalizeChapterPlan）+ reconcileStoryDay 天数归一，落盘 drafts/plans/。
  * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
-import { normalizeChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { normalizeChapterPlan, PLAN_BEAT_MAX, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
@@ -108,8 +108,7 @@ async function finalizePlan(projectDir: string, plan: ChapterPlan, dayOffset: nu
   const withAvoid = materials.recurringPhrases.length > 0
     ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
     : dated;
-  await writeChapterPlan(projectDir, withAvoid);
-  return withAvoid;
+  return writeChapterPlan(projectDir, withAvoid);
 }
 
 /**
@@ -335,17 +334,16 @@ export async function revisePlanByPlanner(input: {
     const record = item as Record<string, unknown>;
     const beat = typeof record.beat === "string" ? record.beat.replace(/\s+/gu, " ").trim() : "";
     const point = readPoint(record.point ?? record.beat, input.plan.beats);
-    if (!point || !beat || beat.length > 400) continue;
+    if (!point || !beat || beat.length > PLAN_BEAT_MAX) continue;
     if (beats[point - 1] === beat) continue;
     beats[point - 1] = beat;
     changed += 1;
   }
   if (changed === 0 && !revisedSummary) return { ok: false, reason: "改纲没改出任何要点（revised 为空或序号越界）" };
-  const settled: ChapterPlan = {
+  const settled = await writeChapterPlan(input.projectDir, {
     ...input.plan,
     beats,
     ...(revisedSummary ? { summary: revisedSummary } : {}),
-  };
-  await writeChapterPlan(input.projectDir, settled);
+  });
   return { ok: true, plan: settled, ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
 }

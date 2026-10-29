@@ -12,10 +12,11 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../lib/project-io.js";
-import type { ContinuityIssueV2, EarlierText } from "./check-chapter.js";
+import { basisDigestBefore, type TruthBasis } from "@actalk/story-core";
+import type { ContinuityIssueV2 } from "./check-chapter.js";
 
-/** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。 */
-export const CHECK_MEMORY_VERSION = 5;
+/** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。v6：前文指纹改用真相依据。 */
+export const CHECK_MEMORY_VERSION = 6;
 
 export interface CheckMemory {
   readonly version: number;
@@ -40,18 +41,21 @@ export function hashBody(body: string): string {
 }
 
 /**
- * 前文 + 账本 + 设定本（v3 起账本数字对账也算核账的输入：账本改了，上次的结果不能原样复用；
- * 设定本同理——核账有一遍专对设定本，作者改了设定再核，不能端出按旧设定核的结果，长篇连写 2026-10-24；
- * v5 起时间线表也进键：核账员照表判「昨天 / 前天」，作者改了哪天，上次「没问题」的结果不能原样端出来）。
- * 键尾固定拼 |engine:reader（R3 前新旧两路的记忆键不一样，防切换后互相复用；旧组合查错留下的记忆
- * 没带这个尾巴，自然对不上、会重新核一次——两路查出来的东西本来就不一样）。
+ * 前文指纹（v6 起，写作版本 P1a）：真相依据里本章之前的正文、全书的账、作者裁定、设定卡（basisDigestBefore），
+ * 一个字节变了就不复用——前文、账本、设定、裁定哪样改了，上次的结果都不能原样端出来。
+ * 核账实际吃的几样派生材料也照旧拼进来（账本数字、设定摘要、时间线）：本章没定稿时它的天数来自章纲（不在真相里），
+ * 核账员照表判「昨天 / 前天」；没搬上核心的老书，设定和账还在老文件里。
+ * 调用方要先读依据、再读核账的材料：中间有写，记下的指纹旧、下次自然重核，不会把新材料的结果挂在旧指纹上。
  */
-export function hashEarlier(earlier: EarlierText, ledger: readonly unknown[] = [], setting = "", timeline = ""): string {
-  return sha([...earlier.chapters]
-    .sort((a, b) => a.chapter - b.chapter)
-    .map((item) => `${item.chapter}:${item.sentences.join("")}`)
-    .join("\n")
-    .replace(/\s+/gu, "") + (ledger.length > 0 ? `|ledger:${JSON.stringify(ledger)}` : "") + (setting ? `|setting:${setting}` : "") + (timeline ? `|timeline:${timeline}` : "") + "|engine:reader");
+export function hashEarlier(
+  basis: TruthBasis,
+  chapter: number,
+  derived: { readonly ledger?: readonly unknown[]; readonly setting?: string; readonly timeline?: string } = {},
+): string {
+  const ledger = derived.ledger && derived.ledger.length > 0 ? `|ledger:${JSON.stringify(derived.ledger)}` : "";
+  const setting = derived.setting ? `|setting:${derived.setting}` : "";
+  const timeline = derived.timeline ? `|timeline:${derived.timeline}` : "";
+  return sha(`${basisDigestBefore(basis, chapter, { laterLedgers: true })}${ledger}${setting}${timeline}|engine:reader`);
 }
 
 export async function readCheckMemory(projectDir: string, chapter: number): Promise<CheckMemory | undefined> {

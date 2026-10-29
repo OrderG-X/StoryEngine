@@ -19,10 +19,12 @@ import {
   type SettleApplyResult,
 } from "@actalk/story-core";
 import { runWithLazySnapshot } from "../../lib/snapshot.js";
+import { describeBasisChanges } from "../../lib/truth-basis-store.js";
 import { writeAtomically } from "../reader-window.js";
 import type { SettleProposal } from "./propose.js";
 
-export const SETTLE_PROPOSAL_SCHEMA = "settle-proposal/2" as const;
+/** 3：带真相依据（写作版本 P1a）；2 的老预览读不出来 = 过期，重新查一遍。 */
+export const SETTLE_PROPOSAL_SCHEMA = "settle-proposal/3" as const;
 /** 留最近这么多份预览，旧的删掉。 */
 const KEEP_PROPOSALS = 20;
 
@@ -119,10 +121,24 @@ export async function applySettleProposal(projectDir: string, token: string, exc
   if (args.cardOps.length + args.chapters.length + args.drafts.length === 0) {
     return { ok: false, code: "nothing", message: proposal.sceneOnly ? "要改的几处都划掉了，这次什么都没改。" : "这条定论已经记着，要改的几处也都划掉了，这次什么都没改。" };
   }
-  const key = `settle:${token}:${[...skip].sort().join(",")}`;
+  // 一张票只改一次：同一张票换了划掉的几处再点，核心如实拒绝（不按旧的选择回放成「改好了」）。
+  const key = `settle:${token}`;
   const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
-    runCommand(projectDir, settleApply, args, { caller: "author", snapshot, idempotencyKey: key }));
-  if (!result.ok) return { ok: false, code: result.code, message: result.message };
+    runCommand(projectDir, settleApply, args, {
+      caller: "author",
+      snapshot,
+      idempotencyKey: key,
+      // 作者的选择只有划掉哪几处（参数里的账是照现在的正文重算的，改完再点会不一样）。
+      intent: { excluded: [...skip].sort() },
+      basis: proposal.basis,
+    }));
+  if (!result.ok) {
+    if (result.code === "basis_changed") {
+      const changes = (result.details as { readonly changes?: Parameters<typeof describeBasisChanges>[0] } | undefined)?.changes ?? [];
+      return { ok: false, code: result.code, message: `查完之后${describeBasisChanges(changes)}改过，这份定论预览是照改之前查的，请重新查一遍。` };
+    }
+    return { ok: false, code: result.code, message: result.message };
+  }
   return {
     ok: true,
     result: result.result,

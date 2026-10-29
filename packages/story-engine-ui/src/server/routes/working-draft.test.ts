@@ -3,8 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { chapterCommit, readChapterLedger, runCommand } from "@actalk/story-core";
+import { chapterCommit, readChapterLedger, readDraft, runCommand } from "@actalk/story-core";
+import { draftSha, readDraftCandidate, readDraftRecovery, saveDraftCandidate } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { listSnapshots } from "../lib/snapshot.js";
 import type { Middleware } from "../lib/project-io.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
 
@@ -43,12 +45,14 @@ async function call(method: "GET" | "PUT" | "POST", url: string, body?: Record<s
 }
 
 const getUrl = (project: string, chapter: number) => `/api/working-draft?project=${encodeURIComponent(project)}&chapter=${chapter}`;
+/** 稿纸窗口号（前端每开一次稿纸一个）。 */
+const WINDOW = "testwindow01";
 const draftPath = (project: string, chapter: number) => join(project, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`);
 
 describe("/api/working-draft", () => {
   it("新章读到 null；带 null 存进去，再读拿到同一个版本号", async () => {
     const project = await realProject();
-    expect((await call("GET", getUrl(project, 1))).payload).toEqual({ ok: true, paper: { chapter: 1, draft: null, committed: null, editedSinceCommit: null } });
+    expect((await call("GET", getUrl(project, 1))).payload).toEqual({ ok: true, paper: { chapter: 1, draft: null, draftVersion: null, committed: null, editedSinceCommit: null } });
     const saved = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 1, title: "钟停", body: "钟停了。", baseVersion: null });
     expect(saved.status).toBe(200);
     expect(saved.payload).toMatchObject({ ok: true, unchanged: false });
@@ -65,6 +69,75 @@ describe("/api/working-draft", () => {
     expect(stale.status).toBe(409);
     expect(stale.payload).toMatchObject({ ok: false, code: "draft_conflict", current: { chapter: 2, body: "AI 改过的。" } });
     expect(await readFile(draftPath(project, 2), "utf-8")).toBe("AI 改过的。\n");
+  });
+
+  it("撞版本：作者那份存成恢复稿（号带回去），接着打的同一底版存进同一份；开这一章提示；找回 → 写进工作稿、可撤销、恢复稿删掉（写作版本 P1b）", async () => {
+    const project = await realProject();
+    const first = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 2, body: "第一版。", baseVersion: null });
+    await writeFile(draftPath(project, 2), "AI 改过的。\n", "utf-8");
+    const stale = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 2, body: "作者的。", baseVersion: first.payload.version, client: WINDOW, seq: 1 });
+    expect(stale.status).toBe(409);
+    const recoveryId = String(stale.payload.recoveryId);
+    expect(await readDraftRecovery(project, recoveryId)).toMatchObject({ chapter: 2, body: "作者的。", baseVersion: first.payload.version });
+    const again = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 2, body: "作者的。又加一句。", baseVersion: first.payload.version, client: WINDOW, seq: 2 });
+    expect(again.payload.recoveryId).toBe(recoveryId);
+    expect((await readDraftRecovery(project, recoveryId))?.body).toBe("作者的。又加一句。");
+    // 迟到的旧笔（序号小）不把新字倒写回去。
+    const late = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 2, body: "作者的。", baseVersion: first.payload.version, client: WINDOW, seq: 1 });
+    expect(late.status).toBe(409);
+    expect((await readDraftRecovery(project, recoveryId))?.body).toBe("作者的。又加一句。");
+
+    const opened = await call("GET", getUrl(project, 2));
+    const pending = (opened.payload.paper as Record<string, unknown>).pending as Record<string, unknown>;
+    expect(pending).toMatchObject({ kind: "recovery", id: recoveryId, body: "作者的。又加一句。", sha: draftSha({ body: "作者的。又加一句。" }) });
+
+    const disk = (await readDraft(project, 2))!;
+    const adopted = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 2, kind: "recovery", id: recoveryId, sha: pending.sha, decision: "adopt", baseVersion: disk.version });
+    expect(adopted.status).toBe(200);
+    expect(typeof adopted.payload.snapshotId).toBe("string");
+    expect((await readDraft(project, 2))?.body).toBe("作者的。又加一句。");
+    // 找回了：正文清空、序号留着（再迟到的旧笔也不写回来）。
+    expect(await readDraftRecovery(project, recoveryId)).toMatchObject({ body: "", seq: 2 });
+    expect((await listSnapshots(project)).some((entry) => entry.label.includes("找回没存上的稿：第2章"))).toBe(true);
+    expect(((await call("GET", getUrl(project, 2))).payload.paper as Record<string, unknown>).pending).toBeUndefined();
+  });
+
+  it("AI 候选：开章提示；正文变过、稿子变过都不换；不要了 → 删掉，再点一次也算成", async () => {
+    const project = await realProject();
+    const saved = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 3, body: "作者的稿。", baseVersion: null });
+    const candidate = await saveDraftCandidate(project, { chapter: 3, title: "", body: "AI 写的一版。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
+    const pending = ((await call("GET", getUrl(project, 3))).payload.paper as Record<string, unknown>).pending as Record<string, unknown>;
+    expect(pending).toMatchObject({ kind: "candidate", id: candidate.id, reason: "draft_moved", body: "AI 写的一版。" });
+
+    const wrongSha = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: "别的", decision: "adopt", baseVersion: saved.payload.version });
+    expect(wrongSha.status).toBe(409);
+    const moved = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: pending.sha, decision: "adopt", baseVersion: null });
+    expect(moved.status).toBe(409);
+    expect(String(moved.payload.error)).toContain("没换");
+    expect((await readDraft(project, 3))?.body).toBe("作者的稿。");
+    expect(await readDraftCandidate(project, candidate.id)).toBeDefined();
+
+    // 不要了也要是作者看到的那一份（这期间变过就不删）。
+    const changed = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: "别的", decision: "dismiss", baseVersion: null });
+    expect(changed.status).toBe(409);
+    expect(await readDraftCandidate(project, candidate.id)).toBeDefined();
+    const dropped = await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: pending.sha, decision: "dismiss", baseVersion: null });
+    expect(dropped.payload).toEqual({ ok: true });
+    expect(await readDraftCandidate(project, candidate.id)).toBeUndefined();
+    expect((await call("POST", "/api/working-draft/pending", { projectPath: project, chapter: 3, kind: "candidate", id: candidate.id, sha: "", decision: "dismiss", baseVersion: null })).payload).toEqual({ ok: true });
+    expect((await readDraft(project, 3))?.body).toBe("作者的稿。");
+  });
+
+  it("存上的和恢复稿一样 → 恢复稿清掉；和工作稿一样的候选不提示", async () => {
+    const project = await realProject();
+    const first = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 4, body: "第一版。", baseVersion: null });
+    await writeFile(draftPath(project, 4), "别处改的。\n", "utf-8");
+    const stale = await call("PUT", "/api/working-draft", { projectPath: project, chapter: 4, body: "作者的。", baseVersion: first.payload.version });
+    const disk = (await readDraft(project, 4))!;
+    await call("PUT", "/api/working-draft", { projectPath: project, chapter: 4, body: "作者的。", baseVersion: disk.version });
+    expect(await readDraftRecovery(project, String(stale.payload.recoveryId))).toMatchObject({ body: "" });
+    await saveDraftCandidate(project, { chapter: 4, title: "", body: "作者的。", baseVersion: null, basisDigest: "d", source: "draft", status: "ready", reason: "draft_moved" });
+    expect(((await call("GET", getUrl(project, 4))).payload.paper as Record<string, unknown>).pending).toBeUndefined();
   });
 
   it("baseVersion 缺了不收", async () => {

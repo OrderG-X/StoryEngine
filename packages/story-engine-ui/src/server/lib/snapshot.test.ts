@@ -1,12 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, symlink, unlink, writeFile, access, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, symlink, unlink, writeFile, access, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createStoryProject } from "../book/project-store.js";
-import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
-import { withBookLock } from "@actalk/story-core";
+import { recoverBookTransactions, withBookLock } from "@actalk/story-core";
 import { buildRestoreReceipt } from "./snapshot-changes.js";
 import {
   CHAT_SESSIONS_EXCLUDE_LINE,
@@ -789,7 +788,7 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
 });
 
 // P1-6：崩溃残留的 staged 事务（新建文件无法自证为事务写入内容）不许砖住撤销线。
-// restoreSnapshot 第一道门就是 recoverProjectCommitTransactions——修复前 recover 对这类残留
+// restoreSnapshot 第一道门就是收拾事务（核心 recoverTransactions，老格式先收）——修复前 recover 对这类残留
 // 永久抛错，导致快照/撤销/预览全线 500，用户只能手工删 .story-engine-tx。修复后 recover 标记
 // recovered 放行（新建文件原地保留、绝不误删用户数据），撤销照常可用。
 describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () => {
@@ -805,7 +804,7 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
     return projectDir;
   }
 
-  it("staged 新建文件无法自证 → recover 放行（半章原地保留）、restoreSnapshot 不再抛错", async () => {
+  it("staged 新建文件核不了 → 先另存再删、标 recovered 放行，restoreSnapshot 不再抛错（P1 第 19 轮 AG3）", async () => {
     const projectDir = await makeBookProject();
     const target = await createSnapshot(projectDir, "撤销目标");
     const relativePath = join("chapters", "0007.md");
@@ -827,18 +826,45 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
       "utf-8",
     );
 
-    // 修复前：这一步直接 reject（撤销线第一道门就死）。修复后：标 recovered 放行，
-    // 无法自证的新建文件绝不被事务回滚误删——原地保留，等后续提交自然覆盖。
-    await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
-    await expect(readFile(chapterPath, "utf-8")).resolves.toBe("崩溃残留的半章正文");
+    // 修复前：这一步直接 reject（撤销线第一道门就死）。现在：核不了是不是这份写的新建文件，先原样另存、再删（不毁唯一副本），标 recovered 放行。
+    await expect(recoverBookTransactions(projectDir)).resolves.toMatchObject({ problems: [] });
+    await expect(access(chapterPath)).rejects.toThrow();
+    const saved = await readdir(join(projectDir, ".story-core-saved"));
+    expect(saved).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(projectDir, ".story-core-saved", saved[0]!), "utf-8"))).toMatchObject({ path: "chapters/0007.md", content: "崩溃残留的半章正文" });
     await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
       .resolves.toMatch(/"status":\s*"recovered"/u);
 
     // 撤销线恢复可用：restoreSnapshot 不再被残留事务砖住，正常落「恢复到：撤销目标」。
     const restored = await restoreSnapshot(projectDir, target.id);
     expect(restored.restored.label).toBe("恢复到：撤销目标");
-    // 恢复目标之后新增的文件由 restoreSnapshot 按 git diff 正常清理（这是它的设计语义，
-    // 与事务回滚的不可判定删除是两回事）。
     await expect(access(chapterPath)).rejects.toThrow();
   }, 60_000);
+});
+
+describe("有收拾不了的半截事务：存档类入口都停下（P1 第 22 轮 AJ3）", () => {
+  it("建存档点、存档里写、恢复、裁剪都如实失败，稿不动、事务留着", async () => {
+    const dir = await makeProject();
+    const DRAFT = "drafts/fast/chapter-0001.md";
+    await mkdir(join(dir, "drafts", "fast"), { recursive: true });
+    await writeFile(join(dir, DRAFT), "# 选定 A\n\n完整的 A。\n", "utf-8");
+    const snap = await createSnapshot(dir, "完整 A");
+    // 一份退不下去的核心事务：备份多了一个链接，安全层拒绝换回。
+    const tx = join(dir, ".story-core-tx", "stuck");
+    await mkdir(join(tx, "backup"), { recursive: true });
+    await mkdir(join(tx, "staged"), { recursive: true });
+    await writeFile(join(tx, "backup", "0"), "# 更早 D\n\n更早的 D。\n", "utf-8");
+    await execFileAsync("ln", [join(tx, "backup", "0"), join(dir, "linked-backup")]);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "stuck", createdAt: "2026-10-20T00:00:00Z", status: "prepared", files: [{ path: DRAFT, slot: "0", existed: true }] }));
+    await writeFile(join(dir, DRAFT), "# 当前 C\n\n当前的 C。\n", "utf-8");
+    expect((await recoverBookTransactions(dir)).problems).toEqual(["stuck"]);
+
+    const residue = { code: "TX_RESIDUE" };
+    await expect(createSnapshot(dir, "不该成功")).rejects.toMatchObject(residue);
+    await expect(runWithSnapshot(dir, "不该成功", async () => "写了")).rejects.toMatchObject(residue);
+    await expect(restoreSnapshot(dir, snap.id)).rejects.toMatchObject(residue);
+    await expect(pruneSnapshots(dir, { keep: 1 })).rejects.toMatchObject(residue);
+    expect(await readFile(join(dir, DRAFT), "utf-8")).toBe("# 当前 C\n\n当前的 C。\n");
+    expect((await readdir(join(dir, ".story-core-tx")))).toEqual(["stuck"]);
+  });
 });

@@ -86,6 +86,7 @@ export {
 export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
 
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteFromText, quoteInText } from "./text/quote.js";
+export { bareChapterName, CHAPTER_NUMERAL, hasChapterNumberPrefix } from "./text/chapter-title.js";
 export {
   applyUnitEdits,
   dropNeighborEcho,
@@ -143,14 +144,29 @@ export {
   readChapterText,
   readDecisions,
   readHead,
+  readTruthBasis,
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
+export { bumpRevision, revisionWrite } from "./store/revision.js";
+export { draftStampOf, freshDraftGensWrite, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
+export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
-export { CARDS_PATH, chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
+export {
+  LEGACY_TX_ACTIVE_RETENTION,
+  LEGACY_TX_ARCHIVE_RETENTION,
+  LEGACY_TX_DIR,
+  LegacyResidueError,
+  listLegacyRecoveryNotices,
+  setLegacyTxIoHookForTests,
+  type LegacyRecoveryNotice,
+} from "./store/legacy-transaction.js";
+export { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR } from "./store/paths.js";
+export { isSavedCopyId, listSavedDrafts, readSavedDraft, settleSavedCopy, type SavedDraft } from "./store/saved-copies.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,
+  recoverBookTransactions,
   recoverTransactions,
   setAsideBrokenTransactions,
   type RecoveryReport,
@@ -195,11 +211,11 @@ export {
 export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
-export { runCommand } from "./commands/runner.js";
+export { runCommand, withSettledBook } from "./commands/runner.js";
 export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
-export { decisionRecord, type DecisionRecordResult } from "./commands/decision-record.js";
+export { decisionRecord, DecisionRecordArgs, MAX_DECISIONS_PER_RECORD, type DecisionRecordResult } from "./commands/decision-record.js";
 export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
@@ -214,8 +230,8 @@ export {
   type SerialPart,
   type SerialSplit,
 } from "./text/serial-split.js";
-export { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
-export { DraftSaveArgs, DraftWriteArgs, draftSave, draftWrite, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
+export { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, readDraftVersions, sameDraft, sameDraftBody, type ChapterPaper, type Draft, type DraftText } from "./draft/draft.js";
+export { draftAdoptCandidate, draftApplyGenerated, DraftSaveArgs, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
 export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";
 export { BookEventHub, type BookEventListener } from "./commands/events.js";

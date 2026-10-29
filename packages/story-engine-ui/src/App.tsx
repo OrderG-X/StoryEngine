@@ -14,10 +14,10 @@ import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
 import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
 import { setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
-import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
+import { countTextWords } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
 import { isRealDraftContent } from "./utils/draftContent.js";
-import { editDraft } from "./drafts/draftSync.js";
+import { editDraft, flushDraftSave, hasFailedUnsavedDraft } from "./drafts/draftSync.js";
 import { saveChatNow, scheduleChatSave } from "./sync/chatSync.js";
 import { flushAllSaves, saveAllKeepalive } from "./sync/saveAll.js";
 import type { ChapterNavItem, LastFormalCommitApply } from "./types.js";
@@ -118,16 +118,26 @@ export function App() {
   useEffect(() => {
     // 关窗 / 刷新：keepalive 发出最后一笔，不等回执。
     const onHide = () => saveAllKeepalive();
+    // 上一笔明确没存上：拦下离页（浏览器 / 桌面壳会问作者），马上再正常存一次；作者仍要关，pagehide 照样补发 keepalive。
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasFailedUnsavedDraft()) {
+        saveAllKeepalive();
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+      void flushDraftSave();
+    };
     // 只是切后台：页面还活着，走常规保存。
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") void flushAllSaves({ background: true });
+      if (document.visibilityState === "hidden") void flushAllSaves();
     };
     window.addEventListener("pagehide", onHide);
-    window.addEventListener("beforeunload", onHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("pagehide", onHide);
-      window.removeEventListener("beforeunload", onHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
@@ -285,7 +295,7 @@ export function App() {
               if (useChatStore.getState().chatError) useChatStore.getState().setChatError(null);
             },
             onDraftContentChange: (content: string) => {
-              editDraft(content, extractDraftTitle(content) ?? undefined);
+              editDraft(content);
               // 作者自己写出了正文：章节状态跟着进「有草稿」，下面的按钮换成核账 / 审稿 / 定稿
               // （2026-10-10 验收：作者贴完一整章，状态还是「待开始」，只给「写这一章 / 先给方案」两个让 AI 写的按钮）。
               const wsBook = useBookStore.getState();
@@ -296,7 +306,7 @@ export function App() {
             onSelectionRewrite: workflow.handleSelectionRewrite,
             onSelectionRewriteCustom: workflow.handleSelectionRewriteCustom,
             onReroll: () => void workflow.handleRerollCandidates(),
-            onApplyCandidate: (content: string) => void workflow.handleApplyCandidate(content),
+            onApplyCandidate: (candidate) => void workflow.handleApplyCandidate(candidate),
             onCloseCandidates: workflow.handleCloseCandidates,
             onToggleTheme: toggleTheme,
             overview: currentOverview,

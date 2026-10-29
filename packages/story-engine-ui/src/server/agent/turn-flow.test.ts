@@ -96,6 +96,20 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     expect(endsAfterDraft(turn)()).toBe(true);
   });
 
+  it("写好了但没换上（写的途中作者改过稿，留成候选）：也算这一轮写过稿，结束这一轮，不让模型再写一版", async () => {
+    const tools = fakeTools();
+    const kept = { ok: false, chapter: 22, kept: { candidateId: "22-x", reason: "draft_moved" } };
+    tools.bodies.generate_draft.mockResolvedValueOnce(kept as never);
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    planStep(turn, ["generate_draft"]);
+    await run(tools.generate_draft, {}, turn);
+    expect(endsAfterDraft(turn)()).toBe(true);
+    expect(turnStateOf(turn)?.draftWritten).toEqual({ chapter: 22, output: kept, thenPreview: false });
+    planStep(turn, ["generate_draft"]);
+    await expect(run(tools.generate_draft, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true });
+    expect(tools.bodies.generate_draft).toHaveBeenCalledTimes(1);
+  });
+
   it("出稿抛错：不算在写，模型可以再调", async () => {
     const tools = fakeTools();
     tools.bodies.generate_draft.mockRejectedValueOnce(new Error("断了"));

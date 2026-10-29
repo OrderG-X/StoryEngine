@@ -61,7 +61,7 @@ describe("locateTargetSpan B4 改写定位（空白归一兜底）", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Mocks for the execute path (LLM + snapshot are not needed in unit tests)
+// Mocks for the execute path (LLM is not needed in unit tests)
 // ──────────────────────────────────────────────────────────────────────────
 // 修订模型 2026-10-02 起走 streamChatModelToText（流式空闲超时，不再是非流式 60s 固定死表）。
 const { callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredChatModel } = vi.hoisted(() => ({
@@ -70,9 +70,6 @@ const { callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredC
   resolveConfiguredChatModel: vi.fn(),
 }));
 vi.mock("../../lib/llm-client.js", () => ({ callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredChatModel }));
-
-const { snapshotBeforeDraftOverwrite } = vi.hoisted(() => ({ snapshotBeforeDraftOverwrite: vi.fn() }));
-vi.mock("../../lib/snapshot-on-draft-overwrite.js", () => ({ snapshotBeforeDraftOverwrite }));
 
 import { reviseDraftTool } from "./revise-draft.js";
 
@@ -108,7 +105,7 @@ async function writeDraft(projectDir: string, chapter: number, content: string):
 }
 
 describe("revise_draft 草稿局部修订工具", () => {
-  it("命中唯一原文 → 确定性替换并写回草稿，返回 preview 与 refreshScope:full，不带 snapshotId", async () => {
+  it("命中唯一原文 → 确定性替换并写回草稿，返回 preview 与 refreshScope:full；换上前打了存档点", async () => {
     const projectDir = await makeProject("修订");
     await writeDraft(projectDir, 1, "# 第1章\n\n林远推开了那扇门，门后是空荡的走廊。\n");
     const out = await runReviseDraftToolLogic({
@@ -126,7 +123,7 @@ describe("revise_draft 草稿局部修订工具", () => {
     expect(out.ok).toBe(true);
     expect(out.applied).toBe(true);
     expect(out.refreshScope).toBe("full");
-    expect("snapshotId" in out).toBe(false);
+    expect(typeof (out as { snapshotId?: unknown }).snapshotId).toBe("string");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("林远轻轻带上了那扇门");
     expect(onDisk).not.toContain("林远推开了那扇门");
@@ -450,7 +447,6 @@ describe("revise_draft execute 章号缺省回退", () => {
       profile: { temperature: 0.45, maxTokens: 1800 },
     });
     streamChatModelToText.mockResolvedValue({ content: MOCK_REVISION_JSON, thinking: "" });
-    snapshotBeforeDraftOverwrite.mockResolvedValue(undefined);
 
     const context = makeContext(projectDir, 5);
     const out = await executeRevise(
@@ -492,8 +488,7 @@ describe("revise_draft 并行两处精确替换", () => {
   it("同一章同时改两处 → 两处都落在稿子上（读改写串行），两次都报成功", async () => {
     const projectDir = await makeProject("并行两处");
     await writeDraft(projectDir, 4, "# 第4章\n\n扉页上写着：林秋，一九八五年春。\n\n他说你们以前住槐树巷九号，就隔他家一个门。\n");
-    // 快照要花时间（真机里是 git 操作）：两次调用都先停在快照这一步，没有串行的话会同时读到旧稿。
-    snapshotBeforeDraftOverwrite.mockImplementation(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); return undefined; });
+    // 换上前要打存档点（git 操作，要花时间）：同一章的 AI 改稿排队，后一笔等前一笔换上了再读稿，不然后一笔照旧稿改、换不上。
     resolveConfiguredChatModel.mockResolvedValue({ profile: { temperature: 0.45, maxTokens: 1800 } });
     const context = makeContext(projectDir, 4);
     const [first, second] = await Promise.all([
@@ -517,7 +512,6 @@ describe("revise_draft 修订目标缺省", () => {
     expect(parsed?.issues).toBeUndefined();
     const projectDir = await makeProject("缺目标精确替换");
     await writeDraft(projectDir, 51, "# 第51章\n\n出南门第三天，车到了白鹭渡。小满跳下车。\n");
-    snapshotBeforeDraftOverwrite.mockResolvedValue(undefined);
     resolveConfiguredChatModel.mockResolvedValue({ profile: { temperature: 0.45, maxTokens: 1800 } });
     const out = await executeRevise(
       { chapter: 51, targetText: "出南门第三天，车到了白鹭渡。", replacementText: "出了南门，太阳落山的时候，车到了白鹭渡。" },

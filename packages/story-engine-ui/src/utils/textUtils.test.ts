@@ -5,7 +5,6 @@ import {
   compactStrings,
   formatRelativeTimeMs,
   looksLikeDraftBody,
-  extractDraftTitle,
 } from "./textUtils.js";
 
 describe("cleanUiText", () => {
@@ -96,24 +95,6 @@ describe("looksLikeDraftBody", () => {
 
   it("returns false for short text", () => {
     expect(looksLikeDraftBody("short")).toBe(false);
-  });
-});
-
-describe("extractDraftTitle", () => {
-  it("returns null for undefined", () => {
-    expect(extractDraftTitle(undefined)).toBeNull();
-  });
-
-  it("extracts title from heading", () => {
-    expect(extractDraftTitle("# My Title")).toBe("My Title");
-  });
-
-  it("strips chapter prefix", () => {
-    expect(extractDraftTitle("## 第三章 · 冲突升级")).toBe("冲突升级");
-  });
-
-  it("returns null for non-heading first line", () => {
-    expect(extractDraftTitle("plain text")).toBeNull();
   });
 });
 

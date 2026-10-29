@@ -1,6 +1,7 @@
 import {
   previewDraftRevision,
   applyDraftRevision,
+  DraftRevisionRefused,
   applyDeAiFlavorBatch,
   generateDraftCandidate,
   applyDraftCandidate,
@@ -13,7 +14,7 @@ import type {
 } from "../api/types.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
-import { useUiStore } from "../stores/uiStore.js";
+import { useUiStore, type DraftCandidate } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import type { ChapterMessage } from "../types.js";
 import { compactStrings, cleanUiText } from "../utils/textUtils.js";
@@ -79,7 +80,7 @@ function draftParagraphs(draftContent: string): string[] {
   return draftContent
     .split(/\n{2,}/u)
     .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph.length > 0 && !/^#\s*/u.test(paragraph));
+    .filter((paragraph) => paragraph.length > 0 && !/^#\s*/u.test(paragraph)); // 章名行白名单：定位
 }
 
 function findExactOrContainingParagraph(draftContent: string, needle: string): string | null {
@@ -138,7 +139,9 @@ export interface UseWorkflowActionsParams {
 async function saveBeforeDraftAction(): Promise<string | null> {
   const flushed = await flushDraftSave();
   if (!flushed.ok) return `稿子还没存上（${flushed.error}），这次没有动手。`;
-  if (useDraftStore.getState().incoming) return "稿纸上方有一条「稿子在别处改过」的提示，先选好用哪一版再来。";
+  // 撞了版本、盘上变了：作者眼前的字和盘上的不是一份，先选。（AI 候选、恢复稿不在工作稿里，不挡。）
+  const cause = useDraftStore.getState().incoming?.cause;
+  if (cause === "conflict" || cause === "update") return "稿纸上方有一条「稿子在别处改过」的提示，先选好用哪一版再来。";
   return null;
 }
 
@@ -500,13 +503,41 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         notifyStaleOperation();
         return;
       }
+      // 写的途中书变了：没换上，这版留成候选（不是出错）。预览收起（再点也换不上），稿纸上方出提示让作者选。
+      if (error instanceof DraftRevisionRefused && error.code === "draft_kept") {
+        updateAgentFlow(messageId, {
+          role: "assistant",
+          content: error.message,
+          card: completedAgentCard({
+            id: messageId.replace(/^assistant-/u, "agent-"),
+            kind: "revision",
+            agentName: "revisionAgent",
+            title: "这版没换上，留着",
+            summary: error.message,
+            detail: ["稿纸上方可以换成它"],
+          }),
+        });
+        const sUi = useUiStore.getState();
+        sUi.setActiveRevisionTask(null);
+        sUi.setActiveRevisionPreview(null);
+        await refreshPaper().catch(() => undefined);
+        return;
+      }
       failAgentFlow(messageId, {
         kind: "revision",
         agentName: "revisionAgent",
         title: "应用修订",
         error,
       });
-      useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
+      if (error instanceof DraftRevisionRefused && error.code === "preview_stale") {
+        // 方案过期：如实说，这份预览再点也没用，收起。
+        nav.showToast(error.message, 5000);
+        const sUi = useUiStore.getState();
+        sUi.setActiveRevisionTask(null);
+        sUi.setActiveRevisionPreview(null);
+      } else {
+        useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       finishOwnedOperation(operation);
     }
@@ -737,6 +768,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         return;
       }
       nav.showToast(`一键全修没成：${error instanceof Error ? error.message : String(error)}`, 5000);
+      // 没换上的那版留成了候选：重读一次，稿纸出提示。
+      await refreshPaper().catch(() => undefined);
     } finally {
       if (isWorkspaceOperationCurrent(operation)) {
         if (ownsCurrentWorkspace(operation)) {
@@ -773,7 +806,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     try {
       // 顺序生成 2 版候选（避免并发把模型代理打满）；每版同方向、靠模型温度产生差异。
       // 每版各自 try：某版失败不丢掉已成功的版（部分成功也展示，别白烧 token）。
-      const candidates: { readonly content: string; readonly title?: string; readonly originTarget: WorkspaceOperationTarget }[] = [];
+      const candidates: { readonly body: string; readonly title?: string; readonly originTarget: WorkspaceOperationTarget }[] = [];
       let lastError: unknown;
       // 章纲一句话：不带方向 = 照本章已有章纲另写（作者给这章的方向在章纲里）；没有章纲才先拟一份，第二版沿用。
       let planNote: string | undefined;
@@ -785,7 +818,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
             notifyStaleOperation();
             return;
           }
-          if (result.draftContent.trim()) candidates.push({ content: result.draftContent, title: result.draftTitle, originTarget: operation });
+          if (result.draftBody.trim()) candidates.push({ body: result.draftBody, ...(result.draftTitle ? { title: result.draftTitle } : {}), originTarget: operation });
         } catch (error) {
           lastError = error;
         }
@@ -805,14 +838,14 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     }
   };
 
-  const handleApplyCandidate = async (content: string): Promise<void> => {
+  const handleApplyCandidate = async (picked: DraftCandidate): Promise<void> => {
     const nav = useNavigationStore.getState();
     const wsUi = useUiStore.getState();
-    if (!projectPath || !content.trim()) {
+    if (!projectPath || !picked.body.trim()) {
       nav.showToast("没有可应用的候选。");
       return;
     }
-    const candidate = wsUi.draftCandidates?.find((item) => item.content === content);
+    const candidate = wsUi.draftCandidates?.find((item) => item === picked);
     if (!candidate?.originTarget) {
       nav.showToast("这份候选稿缺少工作区归属，已拒绝应用。", 5000);
       return;
@@ -828,7 +861,10 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     try {
       const blocked = await saveBeforeDraftAction();
       if (blocked) throw new Error(blocked);
-      const result = await applyDraftCandidate({ projectPath, chapter, draftContent: content });
+      // 带作者眼前那份的版本：存完之后稿子又变了（AI、撤销）就不换，免得盖掉。换上的是整份稿：候选没章名就用作者眼前的
+      // （刚存上，和这个版本号说的是同一份）。
+      const paper = useDraftStore.getState();
+      const result = await applyDraftCandidate({ projectPath, chapter, title: candidate.title ?? paper.title, body: candidate.body, baseVersion: paper.baseVersion });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
         return;

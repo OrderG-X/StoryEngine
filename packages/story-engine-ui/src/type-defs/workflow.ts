@@ -34,11 +34,21 @@ export interface SuggestedAction {
   /** 「确认裁剪」按钮的参数（prune-confirm 专用）：保留最近多少条，缺省=引擎默认。 */
   readonly pruneTarget?: { readonly keep?: number };
   /** 「确认改账」按钮带的裁定草案（ledger-confirm 专用，manage_ledger 提的）。 */
-  readonly ledgerTarget?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  readonly ledgerTarget?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
   /** 「重写这一章」「接着往下写」按钮的目标（rewrite-confirm / continue-confirm，generate_draft 遇到有稿的章时给的）。 */
   readonly rewriteTarget?: { readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean };
   /** 「确认改设定」按钮带的写入（foundation-confirm 专用，foundation_write 被拦下的那次）。 */
-  readonly foundationTarget?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  readonly foundationTarget?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
+}
+
+/**
+ * AI 提议按钮带的依据（写作版本 P1a）：basis = 提议时书的样子（摘要），作者点了服务端拿它核，变了就不执行。
+ * basisFrom = 这次提议的工具自己写之前的样子（foundation_write 先写 AI 那批再提按钮）；一轮几个按钮合成一个时，
+ * 后一个的 basisFrom 接得上前一个的 basis 才换成后一个的依据，接不上就留前一个的（点了如实说过期）。
+ */
+export interface ProposalBasis {
+  readonly basis?: string;
+  readonly basisFrom?: string;
 }
 
 /** 「确认定稿」结构化动作的目标章与预览令牌（令牌让服务重启后仍能凭「这版草稿已预览」放行）。 */

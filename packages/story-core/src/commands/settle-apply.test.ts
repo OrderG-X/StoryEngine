@@ -6,7 +6,7 @@ import { projectBook, readBible } from "../index.js";
 import type { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readDecisions, sha256 } from "../store/book.js";
 import { draftPath } from "../store/paths.js";
-import { draftVersionOf } from "../draft/draft.js";
+import { draftVersionOf, readDraft } from "../draft/draft.js";
 import { splitUnits } from "../text/units.js";
 import { chapterCommit } from "./chapter-commit.js";
 import { runCommand } from "./runner.js";
@@ -170,11 +170,13 @@ describe("定论并改齐", () => {
       label: "定论",
       cardOps: [],
       chapters: [],
-      drafts: [{ chapter: 3, baseVersion: draftVersionOf(draft), edits }],
+      drafts: [{ chapter: 3, baseVersion: (await readDraft(book, 3))!.version, edits }],
     }, author("s6")));
     const written = await readFile(join(book, draftPath(3)), "utf-8");
     expect(written).toBe("# 第3章 · 夜\n\n孟叔又说，杜叔走了十年。许微摇头。\n");
-    expect(outcome.result.drafts).toEqual([{ chapter: 3, edits: 1, version: draftVersionOf(written) }]);
+    expect(outcome.result.drafts).toEqual([{ chapter: 3, edits: 1, version: (await readDraft(book, 3))!.version }]);
+    // 老书第一次写工作稿：版本号带上这次的代次，和全文的哈希不一样（撤销回原样也对不上旧的）。
+    expect(outcome.result.drafts[0]!.version).not.toBe(draftVersionOf(written, { epoch: "" }));
     expect(outcome.changed).toEqual({ drafts: [3] });
   });
 

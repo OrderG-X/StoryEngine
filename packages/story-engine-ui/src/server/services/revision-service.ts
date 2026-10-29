@@ -46,11 +46,12 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { draftVersionOf, withBookLock } from "@actalk/story-core";
-import { writeAiDraft } from "../lib/ai-draft-write.js";
+import { parseDraftFile, readDraftFile, withSettledBook, type TruthBasis } from "@actalk/story-core";
+import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
+import { applyAiDraft, oneAiWriterPerChapter, type AiDraftOutcome } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
-import { runWithSnapshot } from "../lib/snapshot.js";
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 /* ---------------------------------------------------------------------------
  * D21 定位：精确子串优先 + 空白/引号归一兜底
@@ -138,7 +139,13 @@ export type RevisionFailureCode =
   | "before_text_ambiguous"
   | "drift_rejected"
   | "noop"
-  | "target_unchanged";
+  | "target_unchanged"
+  /** 改好了，但写的途中稿子或前文变了、写盘出错，没换上：留成候选（detail 是给作者看的一句）。 */
+  | "draft_kept"
+  /** 两步改稿的预览没带生成时的依据（旧预览、服务重启后记录不在了）：不认。 */
+  | "preview_stale"
+  /** 上次写到一半的事务收拾不了：书不动（detail 是核心的原话）。 */
+  | "book_unsettled";
 
 export interface RevisionFailure {
   readonly ok: false;
@@ -149,6 +156,8 @@ export interface RevisionFailure {
   readonly task?: DraftRevisionTask;
   /** 模型已产出预览后的失败，带上模型预览（工具路原样回填 output.preview）。 */
   readonly preview?: DraftRevisionPreview;
+  /** draft_kept：留下的那份候选。 */
+  readonly candidateId?: string;
 }
 
 export interface RevisionPreviewSuccess {
@@ -168,6 +177,8 @@ export interface RevisionApplySuccess {
   readonly updatedContent: string;
   /** 这次写回的版本号（见 nextDraftVersion）。 */
   readonly draftVersion?: number;
+  /** 换上前打的存档点。 */
+  readonly snapshotId?: string;
 }
 
 export interface RevisionOneShotSuccess extends RevisionApplySuccess {
@@ -414,10 +425,32 @@ export function nextDraftVersion(): number {
   return lastDraftVersion;
 }
 
-/** 改稿写回走 draft.write（重构 P7：AI 写工作稿只有这一条路）。 */
-async function persistRevisionUpdate(projectDir: string, chapter: number, updatedContent: string, readContent: string): Promise<number> {
-  await writeAiDraft(projectDir, { chapter, body: updatedContent, baseVersion: draftVersionOf(readContent) });
-  return nextDraftVersion();
+/** 改稿写回走 AI 写稿唯一通道（写作版本 P1b）：读稿后稿子或前文变了就不换上，留成候选。 */
+async function persistRevisionUpdate(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly updatedContent: string;
+  /** 读稿时那一版（和读到的正文一起读的）。 */
+  readonly baseVersion: string;
+  readonly basis: TruthBasis;
+  readonly snapshotLabel: string;
+}): Promise<AiDraftOutcome> {
+  // 改的是文件原文（带章名行）：拆一次，章名照原文的。
+  const draft = parseDraftFile(input.updatedContent);
+  return applyAiDraft(input.projectDir, {
+    chapter: input.chapter,
+    title: draft.title ?? "",
+    body: draft.body,
+    baseVersion: input.baseVersion,
+    basis: input.basis,
+    materials: [],
+    source: "revise",
+    snapshotLabel: input.snapshotLabel,
+  });
+}
+
+function keptFailure(outcome: Extract<AiDraftOutcome, { applied: false }>): RevisionFailure {
+  return { ok: false, code: "draft_kept", detail: outcome.message, candidateId: outcome.candidateId };
 }
 
 /* ---------------------------------------------------------------------------
@@ -438,6 +471,9 @@ export async function previewRevision(input: {
   };
 }): Promise<RevisionPreviewSuccess | RevisionFailure> {
   const { projectDir, chapter } = input;
+  // 先记依据、再读稿和材料（写作版本 P1b 第 3 轮复核）：应用时照这份核，读材料之后书上有写就不换上。
+  const basis = await readTruthBasisForWork(projectDir);
+  const bound = async (preview: DraftRevisionPreview): Promise<DraftRevisionPreview> => ({ ...preview, basis: await rememberBasis(projectDir, basis) });
   const draftContent = input.draftContent ?? await readFile(defaultDraftPath(projectDir, chapter), "utf-8");
   const located = resolveRevisionTarget(draftContent, input.task);
   if (located.ok === false) return located;
@@ -449,7 +485,7 @@ export async function previewRevision(input: {
     if (exactReplacement === resolvedTarget.trim()) {
       return { ok: false, code: "exact_replacement_noop", task };
     }
-    return { ok: true, mode: "exact", task, preview: exactReplacementPreview(task, resolvedTarget, exactReplacement) };
+    return { ok: true, mode: "exact", task, preview: await bound(exactReplacementPreview(task, resolvedTarget, exactReplacement)) };
   }
 
   let preview: DraftRevisionPreview;
@@ -475,7 +511,7 @@ export async function previewRevision(input: {
   if (typeof placement === "string") {
     return { ok: false, code: placement, task, preview };
   }
-  return { ok: true, mode: "model", task, preview };
+  return { ok: true, mode: "model", task, preview: await bound(preview) };
 }
 
 export async function applyRevision(input: {
@@ -488,9 +524,13 @@ export async function applyRevision(input: {
 }): Promise<RevisionApplySuccess | RevisionFailure> {
   const { projectDir, chapter } = input;
   const draftPath = defaultDraftPath(projectDir, chapter);
-  // #9：读稿→算稿→写盘整段在书锁里（与 reviseDraftOneShot、存档、定稿同一把，可重入）——两笔并发 apply
-  // 不会交错出「各自基于旧稿、最后写者赢」。原来按草稿文件另加一把互斥，和书锁嵌套顺序相反时会互相等死。
-  return withBookLock(projectDir, () => applyRevisionLocked(input, draftPath));
+  // #9：读稿→算稿→写盘整段在书锁里（不调模型，一瞬间）——两笔并发 apply 不会交错出「各自基于旧稿、最后写者赢」。
+  // 同一章别的 AI 改稿（模型跑着、不占书锁）也排在一起，换上时都在上一笔的结果上。
+  // 先收拾写到一半的事务再读稿（P1 第 17 轮）：对着马上要回滚的半截稿改，换上时版本对不上，白改一遍。
+  return oneAiWriterPerChapter(projectDir, chapter, async () => {
+    const settled = await withSettledBook(projectDir, () => applyRevisionLocked(input, draftPath));
+    return settled.ok ? settled.value : { ok: false as const, code: "book_unsettled" as const, detail: settled.message };
+  });
 }
 
 async function applyRevisionLocked(
@@ -498,7 +538,13 @@ async function applyRevisionLocked(
   draftPath: string,
 ): Promise<RevisionApplySuccess | RevisionFailure> {
   const { projectDir, chapter, preview } = input;
-  const draftContent = await readFile(draftPath, "utf-8");
+  // 依据用生成预览时记的那份（不在应用时重读：那等于拿新书给旧预览背书）。
+  // 稿子按改句定位、在锁里对着眼前这份换：作者这之间在别处打的字照样留着，改的那句变了就对不上、不改。
+  const basis = preview.basis ? await recallBasis(projectDir, preview.basis) : undefined;
+  if (!basis) return { ok: false, code: "preview_stale" };
+  const file = await readDraftFile(projectDir, chapter);
+  if (!file) return { ok: false, code: "before_text_not_found" };
+  const draftContent = file.text;
   const beforeSpan = locateRevisionSpan(draftContent, preview.beforeText);
   if (beforeSpan === "not_found") return { ok: false, code: "before_text_not_found" };
   if (beforeSpan === "ambiguous") return { ok: false, code: "before_text_ambiguous" };
@@ -521,13 +567,10 @@ async function applyRevisionLocked(
       return { ok: false, code: "target_unchanged", preview };
     }
   }
-  // 审计 High-2：快照与落盘同一临界区（此前 HTTP 路的 createSnapshot 在锁内一瞬、紧接的覆盖写在
-  // 锁外，commit_apply 在锁内读同一工作稿并定稿——交错可丢修订或把半截稿定稿）。修订应用前快照的
-  // 时序语义不变：守卫全过之后才进 runWithSnapshot（拒绝路径不建快照）。
-  await runWithSnapshot(projectDir, "修订应用前快照", async () => {
-    await persistRevisionUpdate(projectDir, chapter, updatedContent, draftContent);
-  });
-  return { ok: true, applied: true, preview, draftPath, updatedContent };
+  // 存档点在换上前、同一把书锁里打（守卫全过、真要写才打）。
+  const written = await persistRevisionUpdate({ projectDir, chapter, updatedContent, baseVersion: file.version, basis, snapshotLabel: "修订应用前快照" });
+  if (!written.applied) return keptFailure(written);
+  return { ok: true, applied: true, preview, draftPath, updatedContent, ...(written.snapshotId ? { snapshotId: written.snapshotId } : {}) };
 }
 
 /* ---------------------------------------------------------------------------
@@ -552,20 +595,32 @@ export async function reviseDraftOneShot(input: {
   // 这段读-改-写此前无任何互斥：同轮 N 笔 revise_draft 并发跑时各自读到同一份「本轮开头的
   // 工作稿」、各自写回「开头稿+自己的修订」，最后写者赢——前面的修订被静默覆盖（真机第 2 章
   // 两笔丢一笔、第 14 章四笔并发只活最后一笔，AI 会话原话「并发改写只保留了最后一处」）。
-  // 修法：整段进书锁——第二笔排队等第一笔写完才读盘，每笔修订天然基于磁盘最新工作稿（含上一笔的结果）。
-  // 重构 P7 起用书锁（可重入，revise_draft 工具外层本就拿着它）：读概览不拿锁，修订模型跑几十秒只让写操作排队。
-  return withBookLock(input.projectDir, () => reviseDraftOneShotLocked(input, draftPath));
+  // 修法：同一章的 AI 改稿排队——第二笔等第一笔换上了才读盘，每笔修订都基于磁盘最新工作稿（含上一笔的结果）。
+  // 写作版本 P1b 起不占书锁跑模型（作者存稿不被卡几十秒）；读稿后作者改过稿或前文变了，换上时对不上就留成候选。
+  return oneAiWriterPerChapter(input.projectDir, input.chapter, () => reviseDraftOneShotQueued(input, draftPath));
 }
 
-async function reviseDraftOneShotLocked(
+async function reviseDraftOneShotQueued(
   input: Parameters<typeof reviseDraftOneShot>[0],
   draftPath: string,
 ): Promise<RevisionOneShotSuccess | RevisionOneShotFailure> {
-  const draftContent = await readFile(draftPath, "utf-8");
+  // 先读依据、再读稿（正文和版本一起读）：读稿之后书上有写、稿子改过，换上时就对不上。
+  const basis = await readTruthBasisForWork(input.projectDir);
+  const file = await readDraftFile(input.projectDir, input.chapter);
+  if (!file) throw new Error(`第 ${input.chapter} 章还没有工作稿，没法改。`);
+  const draftContent = file.text;
   const revised = await reviseDraftText({ ...input, draftContent });
   if (!revised.ok) return revised;
-  const draftVersion = await persistRevisionUpdate(input.projectDir, input.chapter, revised.updatedContent, draftContent);
-  return { ...revised, applied: true, draftPath, draftVersion };
+  const written = await persistRevisionUpdate({
+    projectDir: input.projectDir,
+    chapter: input.chapter,
+    updatedContent: revised.updatedContent,
+    baseVersion: file.version,
+    basis,
+    snapshotLabel: `第${input.chapter}章修订前快照`,
+  });
+  if (!written.applied) return { ...keptFailure(written), task: revised.task, preview: revised.preview };
+  return { ...revised, applied: true, draftPath, draftVersion: nextDraftVersion(), ...(written.snapshotId ? { snapshotId: written.snapshotId } : {}) };
 }
 
 export type RevisedText =

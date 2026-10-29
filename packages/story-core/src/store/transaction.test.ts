@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { KEPT_TX_DIR, TX_DIR } from "./paths.js";
+import { KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
 import { commitFiles, hasPendingTransactions, KEPT_REPORT_THRESHOLD, recoverTransactions, setAsideBrokenTransactions } from "./transaction.js";
 
 let book: string;
@@ -65,7 +65,34 @@ describe("多文件事务", () => {
     expect(await read("chapters/0001.md")).toBe("旧正文");
     await expect(read("ledger/chapters/0001.json")).rejects.toThrow();
     expect(await read("ledger/head.json")).toBe("旧版本");
+    // 书被这次写动过：换回原样之后换一个新代次（这次写没写代次都换）。
+    expect(JSON.parse(await read(REVISION_PATH))).toMatchObject({ schema: "store-revision/1" });
     expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("写到一半断了：写入代次换上了就不退回，内容换回原样后再换一个新的（途中读到的代次和回滚后的都对不上）", async () => {
+    await strandedTransaction("prepared", [
+      { path: REVISION_PATH, existed: true, renamed: true, old: "代次一", next: "代次二" },
+      { path: "chapters/0001.md", existed: true, renamed: true, old: "旧正文", next: "新正文" },
+      { path: "ledger/head.json", existed: true, renamed: false, old: "旧版本", next: "新版本" },
+    ]);
+    await recoverTransactions(book);
+    expect(await read("chapters/0001.md")).toBe("旧正文");
+    expect(await read("ledger/head.json")).toBe("旧版本");
+    const after = await read(REVISION_PATH);
+    expect(after).not.toBe("代次一");
+    expect(after).not.toBe("代次二");
+    expect(JSON.parse(after)).toMatchObject({ schema: "store-revision/1" });
+  });
+
+  it("代次还没换上就断了：书里什么都没动，代次也不动", async () => {
+    await strandedTransaction("prepared", [
+      { path: REVISION_PATH, existed: true, renamed: false, old: "代次一", next: "代次二" },
+      { path: "chapters/0001.md", existed: true, renamed: false, old: "旧正文", next: "新正文" },
+    ]);
+    await recoverTransactions(book);
+    expect(await read(REVISION_PATH)).toBe("代次一");
+    expect(await read("chapters/0001.md")).toBe("旧正文");
   });
 
   it("已经写完只差收尾的：留着新内容，只清目录", async () => {

@@ -206,9 +206,14 @@ describe("commit_apply", () => {
     expect(await exists(join(book, ".story-core-mirror.json"))).toBe(true);
     expect(warmUpReadersMock).toHaveBeenCalledWith(book, 1);
 
-    const again = (await applyExecute({ chapter: 1, previewToken: preview.previewToken, excluded: [stranger?.id] }, buttonContext(1))) as ApplyOut;
+    const again = (await applyExecute({ chapter: 1, previewToken: preview.previewToken, excluded: [stranger?.id, "day"], dayOverride: 3 }, buttonContext(1))) as ApplyOut;
     expect(again).toMatchObject({ ok: true, committed: true });
     expect(again.summary).toContain("已经定稿过了");
+    // 同一张票换了选择再点：不按上次的回放成「定好了」，也不说「没定稿」
+    const otherChoice = (await applyExecute({ chapter: 1, previewToken: preview.previewToken, excluded: [stranger?.id] }, buttonContext(1))) as ApplyOut;
+    expect(otherChoice).toMatchObject({ ok: false, committed: false, blockedReason: "already_committed" });
+    expect(otherChoice.summary).toContain("已经定稿过了");
+    expect(otherChoice.summary).toContain("没用上");
     expect(await readHead(book)).toMatchObject({ version: base + 1 });
   });
 

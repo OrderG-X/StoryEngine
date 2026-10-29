@@ -40,5 +40,7 @@ export const CommandReceipt = z.object({
   at: z.string().min(1),
   changed: ChangeSet,
   result: z.unknown(),
+  /** 当时的参数（键排好序）的 sha256：同一个键换了参数再来，不回放、如实拒绝（写作版本 P1a；老回执没有这栏）。 */
+  argsHash: z.string().optional(),
 });
 export type CommandReceipt = z.infer<typeof CommandReceipt>;

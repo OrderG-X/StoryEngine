@@ -36,6 +36,11 @@ export interface DraftRevisionPreview {
   readonly riskNotes: readonly string[];
   readonly preservedFacts: readonly string[];
   readonly warnings: readonly string[];
+  /**
+   * 两步改稿（写作版本 P1b 第 3 轮复核）：生成这份预览前记下的真相依据摘要（服务端填，不出自模型）。
+   * 「应用」时照它核：这之间前文、设定、作者裁定改过，就不换上、留成候选；没有它的预览不认。
+   */
+  readonly basis?: string;
 }
 
 export interface DraftRevisionApplyResult {
@@ -222,7 +227,7 @@ function findTargetText(draftContent: string, hint: string): string {
     .replace(/\r\n?/gu, "\n")
     .split(/\n{2,}/u)
     .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph && !/^#{1,6}\s+/u.test(paragraph));
+    .filter((paragraph) => paragraph && !/^#{1,6}\s+/u.test(paragraph)); // 章名行白名单：定位
   if (cleanedHint) {
     const keyword = cleanedHint.slice(0, Math.min(cleanedHint.length, 16));
     const found = paragraphs.find((paragraph) => paragraph.includes(keyword));

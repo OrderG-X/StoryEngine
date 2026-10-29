@@ -11,12 +11,8 @@
  *
  * 每一步失败都如实记进 failures，不当成「没有要改的」。纯提议：不写正文、不写真相，只把结果交回去（存盘由 store 管）。
  */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
   applyUnitEdits,
-  draftPath,
-  draftVersionOf,
   listChapterTexts,
   nameKey,
   numberedText,
@@ -26,14 +22,17 @@ import {
   readCardsOrLegacy,
   readChapterLedger,
   readChapterText,
+  readDraftFile,
   sha256,
   splitNumberedReply,
   splitUnits,
   type SettingCardsFile,
   type TextUnit,
+  type TruthBasis,
 } from "@actalk/story-core";
 import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
+import { readTruthBasisForWork } from "../../book/truth-basis.js";
 
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
 export type SettleSide =
@@ -119,6 +118,8 @@ export interface SettleProposal {
   /** 复核去掉的改法（不上卡，留在存盘里查问题用）。 */
   readonly reviewDropped: readonly { readonly chapter?: number; readonly card?: string; readonly label?: string; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly failures: readonly string[];
+  /** 开查之前书的真相（写作版本 P1a）：确认时书里有一样变了（别的章、设定、账、裁定），整条不写、重新查。 */
+  readonly basis: TruthBasis;
 }
 
 /** 一批最多这么多字（编号后的正文）：一章超了就自己一批。 */
@@ -156,15 +157,6 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 
 const str = (value: unknown): string => (typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "");
 const int = positiveIntLike;
-
-async function readOptional(path: string): Promise<string | undefined> {
-  try {
-    return await readFile(path, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-}
 
 function sideLine(side: SettleSide, docs: ReadonlyMap<number, SweepDoc>, cards?: SettingCardsFile): string {
   if (side.where === "setting") {
@@ -582,6 +574,8 @@ export async function proposeSettle(input: {
 }): Promise<{ readonly ok: true; readonly proposal: SettleProposal } | { readonly ok: false; readonly message: string }> {
   const { projectDir, request, callModel } = input;
   const failures: string[] = [];
+  // 先记依据再读：读的中途书变了，确认时现读的和它对不上，照样作废，不会拿一半新一半旧的结果去改。
+  const basis = await readTruthBasisForWork(projectDir);
   const cards = await readCardsOrLegacy(projectDir);
   const committedNumbers = await listChapterTexts(projectDir);
   const focusChapter = request.chapter;
@@ -593,8 +587,9 @@ export async function proposeSettle(input: {
   const committed: { chapter: number; textSha256: string; draftVersion?: string; draftText?: string }[] = [];
   const drafts: { chapter: number; baseVersion: string }[] = [];
   if (focusChapter !== undefined) {
-    const raw = await readOptional(join(projectDir, draftPath(focusChapter)));
-    if (raw !== undefined && raw.trim()) {
+    const file = await readDraftFile(projectDir, focusChapter);
+    const raw = file?.text;
+    if (file !== undefined && raw !== undefined && raw.trim()) {
       const draftDoc = docOf(focusChapter, "draft", raw);
       const text = committedNumbers.includes(focusChapter) ? await readChapterText(projectDir, focusChapter) : undefined;
       const committedDoc = text === undefined ? undefined : docOf(focusChapter, "committed", text);
@@ -602,7 +597,7 @@ export async function proposeSettle(input: {
         .flatMap((side) => (side?.where === "chapter" && side.chapter === focusChapter ? [side.quote] : []));
       if (!committedDoc || quotes.some((quote) => !unitOfQuote(committedDoc, quote) && unitOfQuote(draftDoc, quote))) {
         docs.set(focusChapter, draftDoc);
-        drafts.push({ chapter: focusChapter, baseVersion: draftVersionOf(raw) });
+        drafts.push({ chapter: focusChapter, baseVersion: file.version });
       }
     }
   }
@@ -611,8 +606,8 @@ export async function proposeSettle(input: {
     const text = await readChapterText(projectDir, chapter);
     if (text === undefined) continue;
     docs.set(chapter, docOf(chapter, "committed", text));
-    const draftRaw = await readOptional(join(projectDir, draftPath(chapter)));
-    committed.push({ chapter, textSha256: sha256(text), ...(draftRaw?.trim() ? { draftVersion: draftVersionOf(draftRaw), draftText: draftRaw } : {}) });
+    const draftFile = await readDraftFile(projectDir, chapter);
+    committed.push({ chapter, textSha256: sha256(text), ...(draftFile?.text.trim() ? { draftVersion: draftFile.version, draftText: draftFile.text } : {}) });
   }
   // 每章是故事第几天（账里记的；没记、估的不给）：改「隔了多久」时照它算。投影读不了就不带，照常查。
   const projection = await projectBook(projectDir).catch(() => undefined);
@@ -818,6 +813,7 @@ export async function proposeSettle(input: {
       missed,
       reviewDropped,
       failures,
+      basis,
     },
   };
 }

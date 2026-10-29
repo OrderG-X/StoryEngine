@@ -1,12 +1,13 @@
 // @vitest-environment node
 //
 // generate_draft 纯逻辑单测：复刻 routes/draft.ts 的 runFastDraft 落工作稿编排（进程内）。
-// 草稿待保存 → 不建 git 快照（withSnapshot 不参与）；写盘后 refreshScope:"full"。
+// 换上工作稿前打存档点（写作版本 P1b：AI 写的都可撤销，一次出稿只写一次）；写盘后 refreshScope:"full"。
 // writerClient 注入一个 mock model（不调真实 LLM），引擎应用走临时项目 fixture。
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { cardWrite, readDraft, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, draftSave, readDraft, runCommand, type CardOp } from "@actalk/story-core";
+import { pendingDraftFor } from "../../lib/draft-candidates.js";
 import { runDraftQualityPipeline } from "../../services/draft-pipeline/run-quality-pipeline.js";
 import type { BrainCallModel } from "../../editorial/index.js";
 import { createStoryProject } from "../../book/project-store.js";
@@ -127,7 +128,7 @@ describe("generate_draft 输出格式", () => {
 });
 
 describe("generate_draft 写工作稿工具", () => {
-  it("生成成功 → 写入工作稿文件，返回 draftPath/draftBody 与 refreshScope:full，且不带 snapshotId（草稿不建 git 快照）", async () => {
+  it("生成成功 → 写入工作稿文件，返回 draftPath/draftBody 与 refreshScope:full；换上前打了存档点（可撤销）", async () => {
     const projectDir = await makeProject("出稿", "林远");
     const out = await runGenerateDraftToolLogic({
       projectDir,
@@ -139,8 +140,7 @@ describe("generate_draft 写工作稿工具", () => {
     expect(out.refreshScope).toBe("full");
     expect(out.draftPath).toBe(defaultDraftPath(projectDir, 1));
     expect(out.draftBody && out.draftBody.includes("林远")).toBe(true);
-    // 草稿待保存：不建 git 快照、不带 snapshotId
-    expect("snapshotId" in out).toBe(false);
+    expect(typeof out.snapshotId).toBe("string");
     // 工作稿确实落盘
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("林远");
@@ -650,6 +650,31 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     }
   });
 
+  it("重写一章、写手没起名：沿用作者的章名，不补「第N章」盖掉它（写作版本 P1 第 16 轮 AD1）", async () => {
+    const projectDir = await makeProject("重写留章名", "林远");
+    const draftPath = defaultDraftPath(projectDir, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, "# 作者起的章名\n\n旧稿。", "utf-8");
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue({
+      async generateDraft() {
+        return { content: longBody("林远") };
+      },
+    });
+    try {
+      const requestContext = buildProjectRequestContext(projectDir, 1);
+      markUserConfirmedTool(requestContext, "generate_draft");
+      const out = await execute({}, { requestContext } as unknown as ToolExecutionContext) as { ok: boolean; draftTitle?: string };
+      expect(out.ok).toBe(true);
+      expect(out.draftTitle).toBeUndefined();
+      const file = await readFile(draftPath, "utf-8");
+      expect(file.startsWith("# 作者起的章名\n\n林远在走廊尽头停下脚步")).toBe(true);
+      expect(file).not.toContain("旧稿。");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("接着往下写（P13）：已写的一个字不动、从最后一句接；稿纸先推已写的；不用作者点按钮；标题沿用", async () => {
     const projectDir = await makeProject("接着写", "林远");
     const draftPath = defaultDraftPath(projectDir, 1);
@@ -684,10 +709,85 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     }
   });
 
+  it("接着往下写：接的那半章和底版一起读（写作版本 P1b 第 3 轮复核 B9）——写手接好前作者存的新句也接上；写的途中作者又存了 → 不换上、留候选", async () => {
+    const projectDir = await makeProject("接着写别丢字", "林远");
+    const old = "林远推开门，屋里没人。";
+    const added = "钥匙其实已经丢了。";
+    const authorSave = async (body: string) => {
+      const disk = await readDraft(projectDir, 1);
+      expect(await runCommand(projectDir, draftSave, { chapter: 1, title: "", body, baseVersion: disk?.version ?? null }, { caller: "author" })).toMatchObject({ ok: true });
+    };
+    await authorSave(old);
+    const writerClientModule = await import("../../writing/writer-client.js");
+    let writerSaw = "";
+    let saveDuringWriting: string | undefined;
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockImplementation(async () => {
+      // 工具已经查过没定稿；写手接好之前作者存了一句。
+      await authorSave(`${old}\n\n${added}`);
+      return {
+        async generateDraft({ context }) {
+          writerSaw = JSON.stringify(context.sections.find((section) => section.name === "already_written")?.content ?? null);
+          if (saveDuringWriting) await authorSave(saveDuringWriting);
+          return { title: "第1章", content: longBody("林远") };
+        },
+      };
+    });
+    try {
+      const run = () => execute(
+        { continueDraft: true, chapter: 1, autoDeAi: false },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["接着写"]) } as unknown as ToolExecutionContext,
+      ) as Promise<{ ok: boolean; kept?: { reason: string } }>;
+      const first = await run();
+      expect(first.ok).toBe(true);
+      expect(writerSaw).toContain(added);
+      expect((await readDraft(projectDir, 1))?.body).toContain(added);
+
+      const authorNow = `${(await readDraft(projectDir, 1))!.body}\n\n作者写的途中又补的一段。`;
+      saveDuringWriting = authorNow;
+      const second = await run();
+      expect(second).toMatchObject({ ok: false, kept: { reason: "draft_moved" } });
+      expect((await readDraft(projectDir, 1))?.body).toBe(authorNow);
+      expect(await pendingDraftFor(projectDir, 1)).toMatchObject({ kind: "candidate", reason: "draft_moved" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("前一章没定稿、作者知情后提前写：写的途中前一章工作稿改了 → 照旧前情写的不换上、留候选（第 4 轮复核 R6）", async () => {
+    const projectDir = await makeProject("前章工作稿依据", "林远");
+    const old = "林远把唯一的钥匙交给老周，约定明天去海州。";
+    expect(await runCommand(projectDir, draftSave, { chapter: 1, title: "", body: old, baseVersion: null }, { caller: "author" })).toMatchObject({ ok: true });
+    const writerClientModule = await import("../../writing/writer-client.js");
+    let writerSaw = "";
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockImplementation(async () => ({
+      async generateDraft({ context }) {
+        writerSaw = JSON.stringify(context.sections.find((section) => section.name === "previous_uncommitted_draft")?.content ?? null);
+        const current = (await readDraft(projectDir, 1))!;
+        expect(await runCommand(projectDir, draftSave, { chapter: 1, title: "", body: "林远已经把唯一的钥匙熔了，不去海州了。", baseVersion: current.version }, { caller: "author" })).toMatchObject({ ok: true });
+        return { title: "第2章", content: longBody("林远") };
+      },
+    }));
+    try {
+      const result = await execute(
+        { chapter: 2, allowWriteAhead: true, autoDeAi: false },
+        { requestContext: buildProjectRequestContext(projectDir, 2, undefined, ["前章没定稿，继续写第二章"]) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; kept?: { reason: string } };
+      expect(writerSaw).toContain(old);
+      expect(result).toMatchObject({ ok: false, kept: { reason: "basis_moved" } });
+      expect(await readDraft(projectDir, 2)).toBeUndefined();
+      expect(await pendingDraftFor(projectDir, 2)).toMatchObject({ kind: "candidate", reason: "basis_moved" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("接着往下写：这章还没正文 → nothing_to_continue；已定稿 → chapter_committed；都不调模型", async () => {
     const projectDir = await makeProject("没得接", "林远");
     const writerClientModule = await import("../../writing/writer-client.js");
-    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    // 有没有正文和版本号一起读（写作版本 P1b 第 3 轮复核），读的时候写手可能已经接好了；要看的是一个字都没让它写。
+    const writer = mockWriterClient(longBody("林远"));
+    const generate = vi.spyOn(writer, "generateDraft");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(writer);
     try {
       const empty = await execute(
         { continueDraft: true, chapter: 1 },
@@ -705,7 +805,7 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
       ) as { ok: boolean; blockedReason?: string; summary: string };
       expect(committed).toMatchObject({ ok: false, blockedReason: "chapter_committed" });
       expect(committed.summary).toContain("已经定稿");
-      expect(spy).not.toHaveBeenCalled();
+      expect(generate).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }
@@ -1211,7 +1311,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     expect(onDisk).not.toContain("第三块砖"); // 锚点确实被吃掉了
   });
 
-  it("去味排在核账前（外部审查 2026-10-28）：核账拿到的是去味后落盘的那版正文和版本，核账卡对得上", async () => {
+  it("去味排在核账前（外部审查 2026-10-28）：核账拿到的是去味后的那版正文，最后换上的就是它，核账卡对得上", async () => {
     const projectDir = await makeProject("去味先于核账", "林远");
     const pipeline = vi.mocked(runDraftQualityPipeline);
     pipeline.mockClear();
@@ -1228,7 +1328,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     const checkRun = pipeline.mock.calls.map(([input]) => input).find((input) => input.checkCallModel === checker);
     const onDisk = (await readDraft(projectDir, 1))!;
     expect(checkRun?.draftBody).toBe("林远撬开第三块砖，取出薄铁盒。");
-    expect(checkRun?.baseVersion).toBe(onDisk.version);
+    expect(onDisk.body.trim()).toBe("林远撬开第三块砖，取出薄铁盒。");
   });
 
   it("去味改写保住锚点 → 无 postDeAiNewMisses、beatFidelity 字段不出现、summary 无新漏噪音", async () => {
@@ -1512,9 +1612,9 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
 
     expect(out.ok).toBe(true);
     expect(out.draftPath).toBe(defaultDraftPath(projectDir, 1));
-    // 只有优胜者（第 2 个）落盘，格式与 candidates=1 完全一致（# 标题行 + 正文）
+    // 只有优胜者（第 2 个）落盘，格式与 candidates=1 完全一致（有章名才有章名行）
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
     expect(out.draftBody).toBe(clean);
     // 逐候选透明报告：得分/AI 腔计数/字数/中选/原因
     expect(out.candidatesReport).toHaveLength(3);
@@ -1594,7 +1694,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: true });
     expect(out.summary).toContain("已生成 3 个候选并选出第 3 个");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
   });
 
   // 真机验收：落选稿 persist:false 不落盘、candidatesReport 只有分数，用户完全读不到落选稿长什么样 →
@@ -1728,7 +1828,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport).toHaveLength(2);
     expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
   });
 
   it("execute 端到端接线：candidates:3 → 3 个 writer 的 temperature 依次错开（基准/+0.15/封顶 1.0），不走单候选 writer、不接流式 sink", async () => {
@@ -1777,7 +1877,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
       expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
       expect(out.summary).toContain("已生成 3 个候选并选出第 2 个");
       const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-      expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+      expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
     } finally {
       spyResolve.mockRestore();
       spyCreate.mockRestore();
@@ -1830,7 +1930,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
       expect(out.candidatesReport?.map((entry) => entry.temperature)).toEqual([1.0, 0.85, 0.7]);
       expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
       const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-      expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+      expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
     } finally {
       spyResolve.mockRestore();
       spyCreate.mockRestore();

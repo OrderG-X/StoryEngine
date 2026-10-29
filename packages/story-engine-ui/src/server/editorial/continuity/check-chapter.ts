@@ -12,7 +12,7 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { splitUnits } from "@actalk/story-core";
+import { parseDraftFile, splitUnits } from "@actalk/story-core";
 import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js";
 import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
 import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
@@ -86,7 +86,7 @@ export async function readEarlierChapters(projectDir: string, chapter: number, l
   const chapters = [];
   for (const n of numbers) {
     const raw = await readFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), "utf-8").catch(() => "");
-    chapters.push({ chapter: n, sentences: splitSentences(raw.replace(/^#[^\n]*\n/u, "")) });
+    chapters.push({ chapter: n, sentences: splitSentences(parseDraftFile(raw).body) });
   }
   return { chapters };
 }

@@ -346,6 +346,22 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(prompt).toContain("never re-discover or redo");
   });
 
+  // 写作版本 P1 第 15 轮 AC2：上一章的文件原文只经核心 parseDraftFile 拆一次，没章名时正文开头的小节标题、垫的空章名行都不吃掉正文。
+  it.each([
+    { label: "已定稿、没章名、正文开头是二级小节", where: "chapters/0001.md", file: "## 小节：钥匙已交给乙\n甲离开了。\n", section: "previous_chapter" },
+    { label: "没定稿、垫了空章名、正文开头是一级标题", where: "drafts/fast/chapter-0001.md", file: "#\n\n# 正文：钥匙已交给乙\n甲离开了。\n", section: "previous_uncommitted_draft" },
+  ])("上一章正文的首行不丢（$label）", async ({ where, file, section }) => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-previous-heading-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "交钥匙", genre: "urban", logline: "甲把钥匙交给乙。", protagonistName: "甲" });
+    await mkdir(join(projectDir, dirname(where)), { recursive: true });
+    await writeFile(join(projectDir, where), file, "utf-8");
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。" });
+    const found = envelope.sections.find((item) => item.name === section)?.content as { title?: string; text?: string; excerpt?: string } | undefined;
+    expect(found?.title).toBeUndefined();
+    expect(found?.text ?? found?.excerpt).toContain("钥匙已交给乙");
+    expect(found?.text ?? found?.excerpt).toContain("甲离开了。");
+  });
+
   // R7.7·报告第 5 节：拟标题防重名——已有各章标题（定稿优先、工作稿兜底）进 chapter_titles 段，不含本章。
   it("lists existing chapter titles for the writer to avoid duplicates（R7.7）", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-chapter-titles-"));

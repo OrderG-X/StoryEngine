@@ -1,6 +1,6 @@
 /**
  * POST /api/draft/generate — 抽卡候选（persist:false）：生成一版正文，不写盘、不快照。
- * POST /api/draft/apply-candidate — 把挑中的候选写进工作稿（先存档，不调模型）。
+ * POST /api/draft/apply-candidate — 把挑中的候选写进工作稿（作者档：带眼前那份的版本，先存档，不调模型）。
  *
  * 重构 P4 删掉了这里的落盘出稿、流式出稿、审稿、硬伤检查、直接改稿五条路：
  * 出稿/审稿/硬伤检查都走对话通道（按钮发结构化动作，或 AI 调工具），只有一条路。
@@ -9,7 +9,6 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { resolveDraftLengthTarget } from "../writing/draft-length-control.js";
 import {
   assertStoryEngineProject,
-  extractDraftTitle,
   guardProjectPath,
   readJsonBody,
   readPositiveInteger,
@@ -23,8 +22,9 @@ import {
 import { withUiOverviewDetails } from "../services/ui-overview.js";
 import { createConfiguredWriterClient } from "../writing/writer-client.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { runWithSnapshot } from "../lib/snapshot.js";
-import { writeAiDraft } from "../lib/ai-draft-write.js";
+import { join } from "node:path";
+import { draftAdoptCandidate, draftPath as coreDraftPath, runCommand } from "@actalk/story-core";
+import { runWithLazySnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload } from "../writing/rank-writer-context.js";
 import { callConfiguredPlannerModel } from "../editorial/index.js";
 import { countCjkChars, generateDraftCandidate } from "../services/draft-service.js";
@@ -85,12 +85,12 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
       writeJson(res, 422, { ok: false, error: candidate.issues?.[0] ?? "候选生成失败，请重试。" });
       return;
     }
-    const candidateTitle = candidate.title ?? `第${chapter}章`;
+    // 交回拆开的稿（写作版本 P1 第 15 轮 AC3）：章名、正文各一栏，不拼成文件让前端再拆。写手没起章名就不带，选用时沿用作者眼前的。
     writeJson(res, 200, {
       ok: true,
       report: candidate,
-      draftContent: `# ${candidateTitle}\n\n${candidate.draftBody.trim()}\n`,
-      draftTitle: candidateTitle,
+      draftBody: candidate.draftBody.trim(),
+      ...(candidate.title?.trim() ? { draftTitle: candidate.title.trim() } : {}),
       contextBudget: contextBudgetPayload(contextRanking),
       characterSelection,
       ...(planNote ? { planNote } : {}),
@@ -115,18 +115,29 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
-    const draftContent = requireBodyString(body.draftContent, "候选正文不能为空。");
+    // 选中的是一份拆开的整稿：章名必带（空串 = 没章名），正文一行都不拆（写作版本 P1 第 15 轮 AC3）。
+    const draftBody = requireBodyString(body.body, "候选正文不能为空。");
+    if (typeof body.title !== "string") throw new Error("章名不能缺（没有章名就传空串）。");
+    const title = body.title;
+    // 作者眼前那份是哪一版（这一章原来没有工作稿就是 null）：盘上已经不是它就不换（写作版本 P1b，不再整份硬盖）。
+    const baseVersion = body.baseVersion === null ? null
+      : typeof body.baseVersion === "string" && body.baseVersion.trim() ? body.baseVersion.trim()
+      : (() => { throw new Error("baseVersion 要么是眼前那份的版本号，要么是 null（这一章原来没有工作稿）。"); })();
     await assertStoryEngineProject(projectDir);
-    // 快照与写稿同一把书锁（commit_apply 切不进「读稿与落章之间」）；写稿走 draft.write（重构 P7）。
-    const { result: written } = await runWithSnapshot(projectDir, `抽卡选用候选前快照：第${chapter}章`, () =>
-      writeAiDraft(projectDir, { chapter, body: draftContent, baseVersion: "overwrite" }));
-    const draftPath = written.path;
+    // 作者点的「选这一版」：作者档命令，换上前在同一把书锁里存档、可撤销。
+    const { result: outcome } = await runWithLazySnapshot(projectDir, (snapshot) =>
+      runCommand(projectDir, draftAdoptCandidate, { chapter, body: draftBody, title, baseVersion }, { caller: "author", snapshot }), `抽卡选用候选前快照：第${chapter}章`);
+    if (!outcome.ok) {
+      writeJson(res, outcome.code === "draft_conflict" ? 409 : 400, {
+        ok: false,
+        error: outcome.code === "draft_conflict" ? "这一章的稿子在这期间改过了，这版没换上。看一眼稿纸再选。" : outcome.message,
+      });
+      return;
+    }
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }));
     writeJson(res, 200, {
       ok: true,
-      result: { applied: true, chapter, draftPath },
-      draftContent: written.content,
-      draftTitle: extractDraftTitle(draftContent) ?? `第${chapter}章`,
+      result: { applied: true, chapter, draftPath: join(projectDir, coreDraftPath(chapter)), version: outcome.result.version },
       overview,
     });
   } catch (error) {

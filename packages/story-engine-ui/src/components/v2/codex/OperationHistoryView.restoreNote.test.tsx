@@ -6,6 +6,7 @@ import * as chatSync from "../../../sync/chatSync.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import OperationHistoryView from "./OperationHistoryView.js";
+import { beginWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../../../utils/workspaceOperation.js";
 
 vi.mock("../../../api/client.js", () => ({
   fetchSnapshots: vi.fn(),
@@ -28,6 +29,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  resetWorkspaceOperationForTests();
 });
 
 async function restoreFirst(): Promise<void> {
@@ -51,5 +53,25 @@ describe("操作历史里恢复后在对话里记一行（2026-10-25 桌面包�
     await screen.findByRole("button", { name: "恢复到这之前" });
     expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["a1"]);
     expect(chatSync.saveChatNow).not.toHaveBeenCalled();
+  });
+});
+
+describe("恢复期间占着工作区（第 6 轮复核 T10）", () => {
+  it("恢复途中工作区被占着，开不了新的一轮；恢复完交还", async () => {
+    let busyDuringRestore = false;
+    vi.mocked(client.restoreSnapshotApi).mockImplementationOnce(async () => { busyDuringRestore = isWorkspaceBusy(); });
+    await restoreFirst();
+    await waitFor(() => expect(chatSync.saveChatNow).toHaveBeenCalled());
+    expect(busyDuringRestore).toBe(true);
+    await waitFor(() => expect(isWorkspaceBusy()).toBe(false));
+  });
+
+  it("AI 或别的操作正占着工作区：不恢复、说清楚", async () => {
+    beginWorkspaceOperation("agent-chat", { projectPath: "/b/fog", chapter: 1, sessionId: "" });
+    render(<OperationHistoryView projectPath="/b/fog" />);
+    fireEvent.click(await screen.findByRole("button", { name: "恢复到这之前" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "恢复" }));
+    expect(await screen.findByText(/正在进行，等它结束再恢复/u)).toBeInTheDocument();
+    expect(client.restoreSnapshotApi).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./draft-format": {
+      "types": "./dist/draft/format.d.ts",
+      "import": "./dist/draft/format.js"
     }
   },
   "files": [

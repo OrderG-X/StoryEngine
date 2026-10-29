@@ -54,6 +54,8 @@ describe("接着往下写的按钮动作（P13）", () => {
     expect(retryDraftChoices(action, undefined)).toEqual([expect.objectContaining({ label: "再写一次", action })]);
     // 导入的书还在通读记账：再点也是同一句「等它记完」。
     expect(retryDraftChoices({ toolName: "generate_draft", chapter: 11 }, "rereading")).toEqual([]);
+    // 写好了没换上（写作版本 P1b）：AI 这版留在稿纸上等作者选，不给「再写一次」
+    expect(retryDraftChoices(action, undefined, { candidateId: "4-x", reason: "draft_moved" })).toEqual([]);
   });
 });
 

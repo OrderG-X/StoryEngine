@@ -14,11 +14,11 @@ import { useNavigationStore } from "../stores/navigationStore.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
 import { emptyCommitSelections, useUiStore } from "../stores/uiStore.js";
-import { useDraftStore } from "../stores/draftStore.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
 import { bookCreationPromptText, bookImportPromptText } from "../utils/bookCreationPrompt.js";
 import { isFreshBook } from "../utils/isFreshBook.js";
 import { flushAllSaves } from "../sync/saveAll.js";
+import { clearPaperNow, drainPaper, paperReadMark, replacePaperNow, UnsavedPaperError } from "../drafts/draftSync.js";
 import { markChatLoaded } from "../sync/chatSync.js";
 import { flowStatusForPaper } from "../workspace/applyOverview.js";
 import {
@@ -359,6 +359,23 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   const ownsNavigationOrigin = (token: WorkspaceOperationToken): boolean =>
     isWorkspaceOperationTargetCurrent(token, currentNavigationIdentity());
 
+  /**
+   * 换稿纸前的最后一步：等的这会儿作者在原来那章又打了字，先存完（存不上就留在原地、如实说）。
+   * 返回 true 之后调用方要同步换上（replacePaperNow / clearPaperNow 放在同步段最前），中间不再 await（第 5 轮 S6/S7）。
+   */
+  const drainBeforeReplace = async (transition: WorkspaceOperationToken, stay: string, rethrow = false): Promise<boolean> => {
+    try {
+      await drainPaper();
+    } catch (error) {
+      if (!(error instanceof UnsavedPaperError)) throw error;
+      const message = `保存失败，${stay}：${error.reason}`;
+      if (rethrow) throw new Error(message);
+      if (ownsNavigationOrigin(transition)) showToast(message, 5200);
+      return false;
+    }
+    return ownsNavigationOrigin(transition);
+  };
+
   /* ---- recent books store (for openRecentBook lookup) ---- */
   const recentBooks = useRecentBooksStore((s) => s.books);
 
@@ -386,6 +403,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       const baseChapterNumber = nextWorkspace.currentChapter.chapterNumber;
       // 打开哪一章从盘上算：最新有工作稿的那章 → 最新定稿章 → 引擎当前章（重构 P5，不再读按章存的 JSON 去猜）。
       const activeChapterNumber = resolveInitialChapterNumber(nextWorkspace.chapters, baseChapterNumber);
+      const paperRead = paperReadMark();
       const paper = await fetchChapterPaper(nextProjectPath, activeChapterNumber);
       if (!ownsNavigationOrigin(transition)) return false;
       const fileStates = new Map<number, ChapterFileState>([[activeChapterNumber, fileStateFromPaper(paper)]]);
@@ -444,7 +462,9 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         fileStates,
       );
       const entryMessages = entryChatMessages(backendSessionMessages);
-      // 所有异步读取完成、来源身份没变：同一个同步回合里换上新书的项目 / 会话 / 工作区 / 稿纸。
+      if (!(await drainBeforeReplace(transition, "仍停留在当前书籍"))) return false;
+      // 所有异步读取完成、来源身份没变：同一个同步回合里换上新书的稿纸 / 项目 / 会话 / 工作区。
+      replacePaperNow(nextProjectPath, paper, paperRead);
       resetTransientUiState();
       setActiveBookId(null);
       setProjectPath(nextProjectPath);
@@ -471,7 +491,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         chapters,
       });
       setMessages(entryMessages);
-      useDraftStore.getState().loadPaper(nextProjectPath, paper);
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
@@ -522,9 +541,10 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         showToast(`保存失败，仍停留在当前书籍：${flushed.error}`, 5200);
         return false;
       }
+      if (!(await drainBeforeReplace(transition, "仍停留在当前书籍"))) return false;
+      clearPaperNow();
       setActiveBookId(book.id);
       setProjectPath(null);
-      useDraftStore.getState().reset();
       setCurrentOverview(null);
       setOpenProjectError(null);
       setSteeringDirection("");
@@ -564,10 +584,11 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         showToast(`保存失败，仍停留在当前工作区：${flushed.error}`, 5200);
         return false;
       }
+      if (!(await drainBeforeReplace(transition, "仍停留在当前工作区"))) return false;
+      clearPaperNow();
       setWorkspaceReady(false);
       setActiveBookId(null);
       setProjectPath(null);
-      useDraftStore.getState().reset();
       setCurrentOverview(null);
       setOpenProjectError(null);
       setSteeringDirection("");
@@ -600,8 +621,12 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         return;
       }
       const currentProjectPath = transition.projectPath || null;
+      const paperRead = paperReadMark();
       const paper: ChapterPaper | null = currentProjectPath ? await fetchChapterPaper(currentProjectPath, chapter.chapterNumber) : null;
       if (!ownsNavigationOrigin(transition)) return;
+      // 读新章那会儿作者又在原来那章打了字：换上之前再存完，存不上就留在原地（第 4 轮复核 R3）。这之后到换上不再 await。
+      if (!(await drainBeforeReplace(transition, "仍停留在当前章节"))) return;
+      if (currentProjectPath && paper) replacePaperNow(currentProjectPath, paper, paperRead);
       const outgoingChapter = useBookStore.getState().workspace.currentChapter?.chapterNumber ?? null;
       // 章节表给没写的章垫的占位名「下一章」不当这章的名字（不管从哪个入口打开）。
       const draftTitle = paper?.draft?.title ?? paper?.committed?.title
@@ -627,7 +652,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           flowStatus,
         });
       }
-      if (currentProjectPath && paper) useDraftStore.getState().loadPaper(currentProjectPath, paper);
       // 输入框里没发的字按章存着：切走不丢，切回来还在；不会把这章的话带到别的章（P11）。
       useUiStore.getState().switchComposerChapter(outgoingChapter, chapter.chapterNumber);
       setChatError(null);
@@ -637,8 +661,9 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionPreview(null);
       setCommitSelections(emptyCommitSelections());
     } catch (error) {
+      // 在写作台里点的：说在写作台里（书架那栏错误这里看不见，第 6 轮复核 T8）。稿纸、工作区都还在原来那章。
       if (ownsNavigationOrigin(transition)) {
-        setOpenProjectError(`打开章节失败：${error instanceof Error ? error.message : String(error)}`);
+        showToast(`第 ${chapter.chapterNumber} 章没打开（${error instanceof Error ? error.message : String(error)}），还在原来那章。`, 5200);
       }
     } finally {
       finishWorkspaceOperation(transition);
@@ -727,13 +752,28 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         }
       }
       const nextWorkspace = workspaceFromStateOverview(created.overview);
-      const firstPaper = await fetchChapterPaper(created.projectDir, nextWorkspace.currentChapter.chapterNumber).catch(() => null);
+      const book = bookSummaryFromOverview(created.overview, created.projectDir);
+      // 书已经建好 / 导入好了；头一章读不出来就先不打开（不拿空稿冒充，第 6 轮复核 T11），书架上能找到它。
+      let firstPaper: ChapterPaper;
+      try {
+        firstPaper = await fetchChapterPaper(created.projectDir, nextWorkspace.currentChapter.chapterNumber);
+      } catch (error) {
+        bookManagement.upsertRecentBook(book);
+        const message = `《${input.title}》已${input.verb}，但第 ${nextWorkspace.currentChapter.chapterNumber} 章没读出来（${error instanceof Error ? error.message : String(error)}），先没打开；在书架上能找到它。`;
+        if (input.rethrow) throw new Error(message);
+        if (ownsNavigationOrigin(transition)) showToast(message, 6400);
+        return;
+      }
       if (!ownsNavigationOrigin(transition)) {
         showToast(switched, 5000);
         return;
       }
-      const book = bookSummaryFromOverview(created.overview, created.projectDir);
+      if (!(await drainBeforeReplace(transition, `《${input.title}》已${input.verb}、先没打开`, input.rethrow))) {
+        if (!ownsNavigationOrigin(transition)) showToast(switched, 5000);
+        return;
+      }
       // 从这里起同步换上新书（中间不再 await，免得半新半旧的状态被存进新书）。
+      replacePaperNow(created.projectDir, firstPaper);
       setActiveBookId(null);
       setProjectPath(created.projectDir);
       setCurrentOverview(created.overview);
@@ -744,12 +784,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         setSessions([], "");
       }
       setActiveArchivedCount(0);
-      useDraftStore.getState().loadPaper(created.projectDir, firstPaper ?? {
-        chapter: nextWorkspace.currentChapter.chapterNumber,
-        draft: null,
-        committed: null,
-        editedSinceCommit: null,
-      });
       setWorkspace(nextWorkspace);
       // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 messagesWhenBackendSessionMissing）：
       // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。
@@ -831,7 +865,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   };
 }
 
-/** 打开书失败时给作者看的一句话：找不到文件夹单独说清楚怎么办，其它错误去掉「Request failed with status 500」这类前缀。 */
+/** 打开书失败时给作者看的一句话：找不到文件夹单独说清楚怎么办。 */
 export function describeOpenProjectFailure(
   raw: string,
   projectPath: string,
@@ -843,6 +877,5 @@ export function describeOpenProjectFailure(
   if (/项目目录不存在|ENOENT|no such file/iu.test(raw)) {
     return `找不到${name}的文件夹，可能被移走或删掉了。可以在书的「···」里把它从书架移除，或用「打开书文件夹」重新选位置。`;
   }
-  const cleaned = raw.replace(/^Request failed with status \d+\s*/u, "").trim();
-  return `${name}没打开：${cleaned || "原因不明"}`;
+  return `${name}没打开：${raw.trim() || "原因不明"}`;
 }

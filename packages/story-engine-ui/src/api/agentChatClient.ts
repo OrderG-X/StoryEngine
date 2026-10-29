@@ -14,7 +14,7 @@
  */
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
-import type { AiFlavorReport } from "../types.js";
+import type { AiFlavorReport, ProposalBasis } from "../types.js";
 import type { BrainstormCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import { readDraftVersions } from "../utils/draftVersions.js";
@@ -264,14 +264,14 @@ export interface RewriteConfirmTarget {
 }
 
 /** 「确认改设定」按钮带回的东西（被拦下的那次资料写入，服务端执行前再校验）。 */
-export interface FoundationConfirmTarget {
+export interface FoundationConfirmTarget extends ProposalBasis {
   readonly key: string;
   readonly input: Readonly<Record<string, unknown>>;
   readonly label?: string;
 }
 
 /** 「确认改账」按钮带回服务端的东西（manage_ledger 提的裁定草案，服务端执行前再校验）。 */
-export interface LedgerConfirmTarget {
+export interface LedgerConfirmTarget extends ProposalBasis {
   readonly key: string;
   readonly decisions: readonly unknown[];
   readonly label?: string;
@@ -568,6 +568,7 @@ export async function streamAgentChat(
                     key: output.ledgerConfirm.key,
                     decisions: output.ledgerConfirm.decisions,
                     ...(typeof output.ledgerConfirm.label === "string" && output.ledgerConfirm.label ? { label: output.ledgerConfirm.label } : {}),
+                    ...proposalBasisOf(output.ledgerConfirm),
                   },
                 }
               : {}),
@@ -588,6 +589,7 @@ export async function streamAgentChat(
                     key: output.foundationConfirm.key,
                     input: output.foundationConfirm.input,
                     ...(typeof output.foundationConfirm.label === "string" && output.foundationConfirm.label ? { label: output.foundationConfirm.label } : {}),
+                    ...proposalBasisOf(output.foundationConfirm),
                   },
                 }
               : {}),
@@ -597,6 +599,7 @@ export async function streamAgentChat(
                     key: output.foundationAccept.key,
                     input: output.foundationAccept.input,
                     ...(typeof output.foundationAccept.label === "string" && output.foundationAccept.label ? { label: output.foundationAccept.label } : {}),
+                    ...proposalBasisOf(output.foundationAccept),
                   },
                 }
               : {}),
@@ -699,6 +702,14 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
     }];
   });
+}
+
+/** 提议按钮带的依据摘要原样透传（服务端点按钮时核）。 */
+function proposalBasisOf(value: Record<string, unknown>): ProposalBasis {
+  return {
+    ...(typeof value.basis === "string" && value.basis ? { basis: value.basis } : {}),
+    ...(typeof value.basisFrom === "string" && value.basisFrom ? { basisFrom: value.basisFrom } : {}),
+  };
 }
 
 function isLedgerConfirm(value: unknown): value is { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: unknown } {

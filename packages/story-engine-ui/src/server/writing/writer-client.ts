@@ -30,10 +30,8 @@ export function createOpenAICompatibleWriterClient(configured: ResolvedChatModel
         // 出稿流式：传了 onDelta 就把正文逐字外发（agent 路流式进编辑器）；runFastDraft 仍拿完整 content，引擎零改。
         ...(onDelta ? { onDelta: untilEndMark(onDelta) } : {}),
       });
-      return {
-        title: `第${context.chapter}章`,
-        content: cutAtWriterEndMark(content).trim(),
-      };
+      // 写手只回正文：章名由正文开头的章名行出（fast-draft-writer 的 chooseDraftTitle），没写就是没起名。
+      return { content: cutAtWriterEndMark(content).trim() };
     },
   };
 }
