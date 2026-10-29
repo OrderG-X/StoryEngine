@@ -36,7 +36,6 @@ import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
-import { reviseDraftTool } from "../agent/tools/revise-draft.js";
 import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
   assertStoryEngineProject,
@@ -763,13 +762,6 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
     }
     case "prune_snapshots": {
       const execute = pruneSnapshotsTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
-    case "revise_draft": {
-      const execute = reviseDraftTool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

@@ -527,67 +527,6 @@ export interface DraftAIReviewReport {
   readonly blockingReasons: readonly string[];
 }
 
-export type DraftRevisionTargetType = "paragraph" | "section" | "dialogue" | "opening" | "ending" | "whole_draft_note";
-export type DraftRevisionStatus = "pending" | "preview_generated" | "applied" | "dismissed";
-
-export interface DraftRevisionTask {
-  readonly id: string;
-  readonly sourceIssueId?: string;
-  readonly sourceSuggestionId?: string;
-  readonly chapter: number;
-  readonly targetType: DraftRevisionTargetType;
-  readonly targetText: string;
-  readonly targetRangeHint?: string;
-  readonly problemSummary: string;
-  readonly revisionGoal: string;
-  readonly constraints: readonly string[];
-  readonly status: DraftRevisionStatus;
-}
-
-export interface DraftRevisionPreview {
-  readonly taskId: string;
-  readonly beforeText: string;
-  readonly afterText: string;
-  readonly changeSummary: string;
-  readonly rationale: string;
-  readonly riskNotes: readonly string[];
-  readonly preservedFacts: readonly string[];
-  readonly warnings: readonly string[];
-  /** 服务端记的生成依据：应用时原样带回。 */
-  readonly basis?: string;
-}
-
-export interface DraftRevisionApplyResult {
-  readonly applied: boolean;
-  readonly chapter: number;
-  readonly draftPath: string;
-  readonly updatedWordCount: number;
-}
-
-export interface DraftRevisionPreviewRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly task: DraftRevisionTask;
-  readonly draftContent?: string;
-}
-
-export interface DraftRevisionApplyRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly preview: DraftRevisionPreview;
-  /** 用户原始点名片段（task.targetText 原样回传）——带上即启用服务端目标级诚实守卫（target_unchanged）；
-   *  服务端在 apply 时的当前草稿上自己重新解析目标区间，不信客户端字符串。 */
-  readonly targetText?: string;
-}
-
-export type DraftRevisionPreviewApiResponse =
-  | { readonly ok: true; readonly task: DraftRevisionTask; readonly preview: DraftRevisionPreview; readonly model?: string; readonly profileId?: string; readonly usedFallback?: boolean }
-  | { readonly ok: false; readonly error: string };
-
-export type DraftRevisionApplyApiResponse =
-  | { readonly ok: true; readonly result: DraftRevisionApplyResult; readonly draftContent: string; readonly overview: StateOverview }
-  | { readonly ok: false; readonly error: string; readonly code?: string };
-
 export interface CommitSelectiveConfirmation {
   readonly assetDecisions?: readonly CommitSelectiveDecision[];
   readonly locationDecisions?: readonly CommitSelectiveDecision[];

@@ -26,7 +26,7 @@ async function bookDirExists(bookDir: string): Promise<boolean> {
 export async function checkFence(context: OperationContext): Promise<CommandFailure | undefined> {
   if (context.signal.aborted) {
     const stop = stopOf(context.signal.reason);
-    return fail("operation_stopped", stop?.type === "pause" ? "这次已经暂停了，没有写。" : "这次已经停掉了，没有写。");
+    return fail("operation_stopped", stop?.type === "pause" ? "这次已经暂停了，没有写。" : stop?.type === "wait" ? "这次在等作者点按钮，没有写。" : "这次已经停掉了，没有写。");
   }
   if (!(await bookDirExists(context.bookDir))) return fail("book_gone", "这本书已经不在原处了，没有写。");
   if ((await readBookEpoch(context.bookDir)) !== context.bookEpoch) {
@@ -106,7 +106,7 @@ export async function pauseOperation(
 /** 这次执行被停了：给调用方抛的错（暂停、取消都是）。 */
 export function stoppedError(context: OperationContext): OperationStopped {
   const stop = stopOf(context.signal.reason);
-  return new OperationStopped("operation_stopped", stop?.type === "pause" ? "这次已经暂停了。" : "这次已经停掉了。");
+  return new OperationStopped("operation_stopped", stop?.type === "pause" ? "这次已经暂停了。" : stop?.type === "wait" ? "这次在等作者点按钮。" : "这次已经停掉了。");
 }
 
 export { StopSignal };

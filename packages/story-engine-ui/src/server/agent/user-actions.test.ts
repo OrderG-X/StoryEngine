@@ -1,11 +1,9 @@
 import { RequestContext } from "@mastra/core/di";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { createStoryProject } from "../book/project-store.js";
-import { defaultDraftPath } from "../lib/project-io.js";
 import { isUserConfirmedTool } from "./request-context.js";
 import {
   commitApplyNextSteps,
@@ -448,112 +446,44 @@ describe("「撤销上一步」按钮结构化动作（重构 P4：走对话通�
   });
 });
 
-describe("核账「改这处」结构化动作（revise_draft：按钮直接改，P12 起按编号句子一次改齐）", () => {
+describe("改稿按钮（draft.change fix / deai / revise，片 2C）", () => {
+  const stamp = { requestKey: "edit-key-1", issuedAt: "2026-10-30T08:00:00.000Z" };
   const fix = (targetText: string) => ({ targetText, revisionGoal: "和第 10 章「八几年就没了」对上" });
-  const withBook = async (draft: string, body: (projectDir: string) => Promise<void>) => {
-    const rootDir = await mkdtemp(join(tmpdir(), "user-actions-fix-"));
-    try {
-      const { projectDir } = await createStoryProject({ rootDir, title: "改这处", genre: "都市", logline: "一句话。", protagonistName: "林远" });
-      await mkdir(dirname(defaultDraftPath(projectDir, 11)), { recursive: true });
-      await writeFile(defaultDraftPath(projectDir, 11), draft, "utf-8");
-      await body(projectDir);
-    } finally {
-      await rm(rootDir, { recursive: true, force: true });
-    }
-  };
-  const run = async (projectDir: string, fixes: readonly { targetText: string; revisionGoal: string }[], fixModel: (prompt: string) => Promise<string>) => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    const executeTool = vi.fn(async () => ({}));
-    await runUserAction({
-      action: { toolName: "revise_draft", chapter: 11, fixes },
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
-      projectDir,
-      fixModel,
-    });
-    expect(executeTool).not.toHaveBeenCalled();
-    return events;
-  };
-  const textOf = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
-    events.filter((e) => e.event === "text-delta").map((e) => String(e.data.text)).join("");
-  const resultOf = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
-    events.find((e) => e.event === "tool-result" && e.data.toolName === "revise_draft")!.data.output as Record<string, unknown>;
 
-  it("解析：要章号和每处原句 + 目标；空的 / 超量 / 缺字段都按非法处理", () => {
-    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: [{ targetText: " 甲 ", revisionGoal: " 乙 " }] })).toEqual({
+  it("核账卡「改这处 / 改掉这 N 处」：章号和每处原句 + 改法；空的 / 超量 / 缺字段都按非法处理", () => {
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 11, fixes: [{ targetText: " 甲 ", revisionGoal: " 乙 " }] }, ...stamp })).toEqual({
       kind: "action",
-      action: { toolName: "revise_draft", chapter: 11, fixes: [{ targetText: "甲", revisionGoal: "乙" }] },
+      action: { kind: "new", type: "draft.change", mode: "fix", params: { mode: "fix", chapter: 11, fixes: [{ targetText: "甲", revisionGoal: "乙" }] }, ...stamp },
     });
-    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: [] }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: [{ targetText: "甲" }] }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "revise_draft", fixes: [fix("甲")] }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: Array.from({ length: 13 }, () => fix("甲")) }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 11, fixes: [] }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 11, fixes: [{ targetText: "甲" }] }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "fix", params: { fixes: [fix("甲")] }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 11, fixes: Array.from({ length: 13 }, () => fix("甲")) }, ...stamp }).kind).toBe("invalid");
   });
 
-  it("几处一次交模型、按编号换；写回工作稿、可撤销，一句「改好了」，推荐再核一遍", async () => {
-    await withBook("# 第十一章\n\n他说那家店八几年还开着。老周点头。\n天黑了。\n", async (projectDir) => {
-      const fixModel = vi.fn(async (prompt: string) => {
-        expect(prompt).toContain("1. [1]：和第 10 章");
-        expect(prompt).toContain("2. [3]：和第 10 章");
-        return JSON.stringify({ edits: [{ id: 1, to: "他说那家店八几年就没了。" }, { id: 3, to: "天快黑了。" }] });
-      });
-      const events = await run(projectDir, [fix("八几年还开着"), fix("天黑了")], fixModel);
-      expect(fixModel).toHaveBeenCalledTimes(1);
-      expect(await readFile(defaultDraftPath(projectDir, 11), "utf-8")).toBe("# 第十一章\n\n他说那家店八几年就没了。老周点头。\n天快黑了。\n");
-      expect(textOf(events)).toBe("改好了 2 处（可撤销）。");
-      const output = resultOf(events);
-      expect(output).toMatchObject({ ok: true, applied: true, refreshScope: "full", chapter: 11, draftBody: "他说那家店八几年就没了。老周点头。\n天快黑了。" });
-      expect(typeof output.draftVersion).toBe("number");
-      expect(output.overview).toBeTruthy();
-      const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean; action?: unknown }[] };
-      expect(next.choices).toEqual([expect.objectContaining({ label: "再核一遍", recommended: true, action: expect.objectContaining({ kind: "new", mode: "continuity", params: { chapter: 11 } }) })]);
+  it("AI 味卡「改掉这句 / 一键全修」：句子必填，严重度缺了按中等", () => {
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "deai", params: { chapter: 3, violations: [{ id: "v1", text: "那一刻，他心中五味杂陈。", reason: "套路抒情" }] }, ...stamp })).toEqual({
+      kind: "action",
+      action: { kind: "new", type: "draft.change", mode: "deai", params: { mode: "deai", chapter: 3, violations: [{ id: "v1", text: "那一刻，他心中五味杂陈。", reason: "套路抒情", severity: "medium" }] }, ...stamp },
+    });
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "deai", params: { chapter: 3, violations: [{ id: "v1" }] }, ...stamp }).kind).toBe("invalid");
+  });
+
+  it("选中文字改写：原文照原样（不去空白），带 preview", () => {
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 2, edits: [{ targetText: "他走了。 ", revisionGoal: "更克制" }], preview: true }, ...stamp })).toEqual({
+      kind: "action",
+      action: { kind: "new", type: "draft.change", mode: "revise", params: { mode: "revise", chapter: 2, edits: [{ targetText: "他走了。 ", revisionGoal: "更克制" }], preview: true }, ...stamp },
     });
   });
 
-  it("没改成（原句找不到了）照实说原因，不问模型、稿子不动，给「让 AI 改」", async () => {
-    await withBook("老周点头。\n", async (projectDir) => {
-      const fixModel = vi.fn(async () => "{}");
-      const events = await run(projectDir, [fix("八几年还开着")], fixModel);
-      expect(fixModel).not.toHaveBeenCalled();
-      expect(await readFile(defaultDraftPath(projectDir, 11), "utf-8")).toBe("老周点头。\n");
-      expect(textOf(events)).toBe("这一处没改成：原句在稿里找不到了（可能已经改过）。");
-      expect(resultOf(events)).toMatchObject({ ok: false, applied: false });
-      expect(resultOf(events).draftBody).toBeUndefined();
-      const next = events.at(-1)!.data.output as { question: string; choices: { label: string; intent: string }[] };
-      expect(next.question).toBe("没改成，接下来？");
-      expect(next.choices.map((c) => c.label)).toEqual(["让 AI 改"]);
-      expect(next.choices[0]!.intent).toContain("「八几年还开着」");
+  it("「换上 / 再改一版」：接着做带按钮号和选法；缺了或形状不对按非法处理", () => {
+    const opId = "op-0123456789abcdef0123";
+    expect(parseUserAction({ kind: "resume", opId, answer: { actionId: "confirm:1", decision: "again" } })).toEqual({
+      kind: "action",
+      action: { kind: "resume", opId, answer: { actionId: "confirm:1", decision: "again" } },
     });
-  });
-
-  it("两条报的是同一句：只问一次、只改一遍，两处都算改了", async () => {
-    await withBook("甲乙丙。丁戊。\n", async (projectDir) => {
-      const fixModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 1, to: "甲乙丁。" }] }));
-      const events = await run(projectDir, [fix("甲乙"), fix("乙丙")], fixModel);
-      expect(fixModel).toHaveBeenCalledTimes(1);
-      expect(await readFile(defaultDraftPath(projectDir, 11), "utf-8")).toBe("甲乙丁。丁戊。\n");
-      expect(textOf(events)).toBe("改好了 2 处（可撤销）。");
-    });
-  });
-
-  it("一处成一处没给改法：两样都如实说，推荐让 AI 改", async () => {
-    await withBook("甲。乙。\n", async (projectDir) => {
-      const events = await run(projectDir, [fix("甲"), fix("乙")], async () => JSON.stringify({ edits: [{ id: 1, to: "改了甲。" }] }));
-      expect(textOf(events)).toBe("改好了 1 处（可撤销）。1 处没改成：AI 没给出这句的改法。");
-      const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean }[] };
-      expect(next.choices.map((c) => [c.label, c.recommended === true])).toEqual([["让 AI 改", true], ["再核一遍", false]]);
-    });
-  });
-
-  it("模型报错：照实说没改成，稿子不动", async () => {
-    await withBook("甲。\n", async (projectDir) => {
-      const events = await run(projectDir, [fix("甲")], async () => { throw new Error("服务商超时"); });
-      expect(await readFile(defaultDraftPath(projectDir, 11), "utf-8")).toBe("甲。\n");
-      expect(textOf(events)).toBe("这一处没改成：AI 没改成（服务商超时）。");
-    });
+    expect(parseUserAction({ kind: "resume", opId, answer: { actionId: "confirm:1" } }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "resume", opId, answer: { actionId: "确认", decision: "apply" } }).kind).toBe("invalid");
   });
 });
 

@@ -4,10 +4,9 @@
  * 每条 = 本章原句 + 哪里对不上 + 一行小按钮（「对照第 N 章」点开看前文原句、「改这处」「不是问题」）。
  * 对的是设定卡的条目多一个「改设定卡」：错的可能是卡（尤其 AI 补的），点了翻到设定本那张卡，作者自己改。
  * 「确定」的直接列出；「可能」的默认收起，作者想看再点开（复核把握低，免得一屏噪音）。
- * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」= 记下来（onDismiss 存盘），
- * 以后核账不再报；存失败如实提示「没记住」。可撤回。
- * 主按钮「改掉这 N 处」在卡上（R4.5）：N 随「不是问题」实时变，intent 由卡片现拼——逐条列要改的原句，
- * 末尾写明作者标过不是问题的几处别动（服务端下一步不再给笼统的「改掉确定的 N 处」）。
+ * 「改这处」= 交一次按核账改（draft.change fix，片 2C：服务端按编号整句改、改前存档可撤销，对话里出一轮）；
+ * 错在前文那章的「改第 N 章」照旧给 AI 发一句意图。「不是问题」= 记下来（onDismiss 存盘），以后核账不再报；
+ * 存失败如实提示「没记住」。可撤回。主按钮「改掉这 N 处」在卡上：N 随「不是问题」实时变，只交还列着的那几处。
  * 两章打架、和设定打架的（P12「前文一次定死」）：不再给「改这处」——改哪边是作者的决定，改了不记下来下回还会翻烧饼。
  * 这种条目给「以第 N 章为准」「以本章为准」（对设定的「以设定为准」，对定论的「以定论为准」）：出一张定论卡，
  * 查全书哪几句跟着改，作者确认后一次改齐、记进设定本「定论」。主按钮「改掉本章 N 处」只管前文就在本章的。
@@ -19,7 +18,7 @@ import { useMaybeMarks } from "./maybeMarks.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { continuityItemKey, quoteInPaper } from "../../../workspace/chapterProgress.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { newEditAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 
 type ContinuityCheck = ContinuityCheckData;
@@ -29,7 +28,7 @@ type Item = ContinuityCheck["sure"][number];
 const fixChapterOf = (chapter: number, item: Item): number =>
   item.fixChapter !== undefined && item.fixChapter > 0 && item.fixChapter !== chapter ? item.fixChapter : chapter;
 
-/** 单条「改这处」的那句话（本章原句 ↔ 前文原句 + 理由），单条按钮和批量 intent 共用同一句式。
+/** 错在前文那章的「改第 N 章」交给 AI 的那句话（本章原句 ↔ 前文原句 + 理由）。
  *  R7.3 对设定本的条目：另一边是设定原文；错在前文那章的，改的就是那章，别让作者把对的改成错的。 */
 function continuityItemSentence(chapter: number, item: Item): string {
   const reason = item.reason ? `（${item.reason}）` : "";
@@ -46,23 +45,7 @@ export function buildContinuityFixIntent(chapter: number, item: Item): string {
 }
 
 /**
- * 批量「改掉这 N 处」的 intent（R4.5）：逐条列要改的本章原句（句式同单条），末尾圈死范围——
- * 只改列出的这几处；作者标过「不是问题」的 dismissedCount 处（含「可能」档划掉的）明确别动，
- * 免得模型自己复查时把划掉的也顺手改了（验收 3.4）。
- */
-export function buildContinuityFixAllIntent(
-  chapter: number,
-  items: readonly Item[],
-  dismissedCount: number,
-): string {
-  const entries = items.map((item) => continuityItemSentence(chapter, item)).join("");
-  return dismissedCount > 0
-    ? `${entries}只改这几处；作者标过不是问题的 ${dismissedCount} 处别动。`
-    : `${entries}只改这几处，别的不动。`;
-}
-
-/**
- * 能由按钮直接改的条目（重构 P6，服务端逐处调 revise_draft，不经模型）：错在这一章的。
+ * 能由按钮直接改的条目（交按核账改的操作，片 2C）：错在这一章的。
  * 错在前文那章的（多半已定稿、没有工作稿）照旧交给 AI。原句是「A……B」拼的也能直接改（改稿定位认省略号）。
  */
 export function canFixDirectly(chapter: number, item: Item): boolean {
@@ -138,13 +121,13 @@ export function settleChoices(chapter: number, item: Item, siblings: readonly It
   return [{ label: `以第 ${item.earlierChapter} 章为准`, action: pick(there, here, alsoFor(there)) }, { label: hereLabel, action: pick(here, there) }];
 }
 
-/** 「改这处」的结构化动作：每处 = 本章原句 + 要和哪句对上。 */
+/** 「改这处」的结构化动作（按核账改，片 2C）：每处 = 本章原句 + 要和哪句对上。请求号点的时候给。 */
 export function continuityFixAction(chapter: number, items: readonly Item[]): AgentUserAction {
-  return {
-    toolName: "revise_draft",
+  return newEditAction({
+    mode: "fix",
     chapter,
     fixes: items.map((item) => ({ targetText: item.quote, revisionGoal: continuityFixGoal(chapter, item) })),
-  };
+  });
 }
 
 /** 每条默认只摆本章原句和理由（稿纸上也划了线）；要和哪句对上点「对照…」才展开，免得 N 条就是 4N 行。 */
@@ -241,10 +224,9 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   // 主按钮只管前文就在本章的；两章打架、对设定的要作者定哪边为准，各自点。
   const sureHere = sure.filter((item) => canFixDirectly(check.chapter, item) && !settleChoices(check.chapter, item) && !gone(item));
   const reviseAll = (): void => {
-    if (onFixAction) onFixAction(continuityFixAction(check.chapter, sureHere));
-    else onRevise?.(buildContinuityFixAllIntent(check.chapter, sureHere, dismissed.length));
+    onFixAction?.(continuityFixAction(check.chapter, sureHere));
   };
-  const canReviseAll = sureHere.length > 0 && (Boolean(onRevise) || Boolean(onFixAction));
+  const canReviseAll = sureHere.length > 0 && Boolean(onFixAction);
   // 点开「可能」那段，稿纸上才把这一章的「可能」划出来；收起就撤（默认不划，见 maybeMarks）。
   const toggleMaybe = (): void => {
     const next = !showMaybe;

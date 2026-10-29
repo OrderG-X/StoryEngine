@@ -12,8 +12,8 @@ describe("resetTransientUiState（切项目清残留临时态，防跨书串写�
     store.setDraftCandidates([{ chapter: 1, title: "A书候选稿", content: "A书正文" }] as never);
     store.setCommitPreviewReport({} as never);
     store.setDraftAIReview({} as never);
-    store.setActiveRevisionTask({} as never);
-    store.setActiveRevisionPreview({} as never);
+    store.setAiFlavorBatchPending("m1");
+    store.setRevisionHighlights(["改后那句"]);
     expect(useUiStore.getState().draftCandidates).not.toBeNull();
 
     useUiStore.getState().resetTransientUiState();
@@ -22,8 +22,8 @@ describe("resetTransientUiState（切项目清残留临时态，防跨书串写�
     expect(s.draftCandidates).toBeNull();
     expect(s.commitPreviewReport).toBeNull();
     expect(s.draftAIReview).toBeNull();
-    expect(s.activeRevisionTask).toBeNull();
-    expect(s.activeRevisionPreview).toBeNull();
+    expect(s.aiFlavorBatchPending).toBeNull();
+    expect(s.revisionHighlightTexts).toEqual([]);
   });
 });
 

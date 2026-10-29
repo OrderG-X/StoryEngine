@@ -8,7 +8,7 @@
  */
 import { fetchStateOverview } from "../api/client.js";
 import { followOperationEvents, listActiveOperations } from "../api/operationsClient.js";
-import type { OperationLiveData, OperationViewData } from "../api/agentChatClient.js";
+import { isDraftEditMode, type OperationLiveData, type OperationViewData } from "../api/agentChatClient.js";
 import { editDraft, refreshPaper } from "../drafts/draftSync.js";
 import { flowAfterOperation } from "../hooks/agentFlowStatus.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -20,6 +20,7 @@ import { cardOf } from "../utils/messageCards.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
 import type { ChapterMessage } from "../types.js";
 import { applyOverviewToWorkspace } from "./applyOverview.js";
+import { settleDraftEdit } from "./draftEditOutcome.js";
 import { applyDraftDelta, draftPhaseOfStep, EMPTY_DRAFT_STREAM, type DraftStreamState } from "./draftStream.js";
 import { ENDED_OPERATION_STATES, projectOperationEverywhere, projectOperationProgressEverywhere } from "./operationCards.js";
 
@@ -27,7 +28,8 @@ let current: AbortController | null = null;
 
 /** 这次操作挂在哪条消息上（见文件头）。 */
 export function ownerOfOperation(messages: readonly ChapterMessage[], view: Pick<OperationViewData, "opId" | "origin">): string | undefined {
-  const carrying = messages.find((message) => cardOf(message, "operation")?.op.opId === view.opId);
+  // 最近挂着它的那条（点过「接着做」「再改一版」的，新一轮那条才是 owner）。
+  const carrying = [...messages].reverse().find((message) => cardOf(message, "operation")?.op.opId === view.opId);
   if (carrying) return carrying.id;
   const asked = view.origin.messageId;
   if (view.origin.kind !== "chat" || !asked) return undefined;
@@ -38,7 +40,8 @@ export function ownerOfOperation(messages: readonly ChapterMessage[], view: Pick
 
 /** 卡上还没结束的那几次（关页时还在做、停着的）：结束了没有要问一下，不然卡一直说「在做」。 */
 function unsettledCards(messages: readonly ChapterMessage[]): readonly { readonly opId: string; readonly owner: string }[] {
-  return messages.flatMap((message) => {
+  // 从新往旧：同一次挂在几条上时最近那条当 owner。
+  return [...messages].reverse().flatMap((message) => {
     const op = cardOf(message, "operation")?.op;
     return op && !ENDED_OPERATION_STATES.has(op.state) ? [{ opId: op.opId, owner: message.id }] : [];
   });
@@ -66,7 +69,8 @@ export function reconnectOperations(projectPath: string): void {
       onOperation: (next) => {
         if (!stillHere()) return;
         projectOperationEverywhere(next, owner);
-        if (next.kind === "draft.change") draft.onOperation(next);
+        if (next.kind === "draft.change" && isDraftEditMode(next.mode)) settleFollowedEdit(projectPath, next, stillHere);
+        else if (next.kind === "draft.change") draft.onOperation(next);
       },
       onProgress: (text) => { if (stillHere()) projectOperationProgressEverywhere(opId, text); },
       onLive: (event) => { if (stillHere()) draft.onLive(event); },
@@ -82,6 +86,20 @@ export function reconnectOperations(projectPath: string): void {
       if (!stillHere()) return;
       for (const { opId, owner } of unsettledCards(useChatStore.getState().messages)) follow(opId, owner);
     });
+}
+
+/** 跟着的一次改稿做完了（片 2C）：按盘上重读稿纸和书的状态，高亮改后那几句、AI 味卡收起「改写中…」。 */
+function settleFollowedEdit(projectPath: string, view: OperationViewData, stillHere: () => boolean): void {
+  if (!ENDED_OPERATION_STATES.has(view.state)) return;
+  void refreshPaper({ ...(view.chapter !== undefined ? { chapter: view.chapter } : {}) }).then(() => {
+    if (stillHere()) settleDraftEdit(view);
+  });
+  void fetchStateOverview({ projectPath, maxTimelineEvents: 8 }).then((overview) => {
+    if (!stillHere()) return;
+    const workspace = useBookStore.getState().workspace;
+    const here = workspace.currentChapter?.chapterNumber === view.chapter;
+    applyOverviewToWorkspace(overview, here ? { flowStatus: flowAfterOperation(view, workspace.flowStatus) } : {});
+  }).catch(() => undefined);
 }
 
 /** 还在做的几种（停着的不算：停着就不流了）。 */

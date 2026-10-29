@@ -14,7 +14,7 @@ import type { ChapterPlan } from "../../book/chapter-plan.js";
 import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../../editorial/continuity/check-service.js";
 import type { BrainCallModel } from "../../editorial/index.js";
 import type { FixRecord } from "../../lib/fix-log.js";
-import { locateRevisionSpan, type RevisionModelCaller } from "../revision-service.js";
+import { locateRevisionSpan, type RevisionModelCaller } from "../draft-change/revise-text.js";
 import { fixByUnits } from "../unit-fix.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.js";

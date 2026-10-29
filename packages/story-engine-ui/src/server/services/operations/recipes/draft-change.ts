@@ -1,6 +1,7 @@
 /**
  * draft.change write / continue：写一章、接着往下写（写作版本 P2a 3.1、第七节）。收编原来的 generate_draft 和「写这一章」按钮：
- * 对话 AI、按钮都只交意图，这里按固定步骤跑完，最后一次换上工作稿。
+ * 对话 AI、按钮都只交意图，这里按固定步骤跑完，最后一次换上工作稿。改稿三种（revise / fix / deai）也是这个配方，步骤见
+ * services/draft-change/edit.ts。
  *
  * - 受理前：参数归一；导入的书通读记账没完不受理；要用的模型没配好不受理；这一章按这个模式写不了（接着写没正文 / 已定稿、
  *   有稿没点重写、前一章没定稿）如实挡下，不调模型。
@@ -32,7 +33,17 @@ import {
   callConfiguredFixModel,
 } from "../../draft-pipeline/production-call-models.js";
 import { resolveCandidateTemperatures } from "../../draft-service.js";
-import { DRAFT_CHANGE_KIND, readDraftChangeParams, versionCount, type DraftChangeMode, type DraftChangeParams } from "../../draft-change/params.js";
+import {
+  DRAFT_CHANGE_KIND,
+  isDraftEditMode,
+  readDraftChangeParams,
+  readDraftEditParams,
+  versionCount,
+  type DraftChangeMode,
+  type DraftChangeParams,
+  type DraftEditParams,
+} from "../../draft-change/params.js";
+import { editStepCallsModel, editTargetProblem, runDraftEdit } from "../../draft-change/edit.js";
 import { buildDraftChangeResult, rejectionMessage, type DraftApplied } from "../../draft-change/result.js";
 import {
   checkDraft,
@@ -52,14 +63,17 @@ import {
   writeVersion,
   type DraftVersion,
 } from "../../draft-change/steps.js";
-import type { RevisionModelCaller } from "../../revision-service.js";
-import { draftChangeStepBudget, draftChangeTasks, sumBudget } from "../budgets.js";
+import type { RevisionModelCaller } from "../../draft-change/revise-text.js";
+import { DRAFT_EDIT_TASKS, draftChangeStepBudget, draftChangeTasks, draftEditSends, sumBudget } from "../budgets.js";
 import type { OperationResult, Recipe, RecipeContext } from "../executor.js";
 
 export { DRAFT_CHANGE_KIND };
 
-/** 记录里存的参数：归一好的那份 + 模式（接着做时额度按模式算）。 */
+/** 记录里存的参数：归一好的那份 + 模式（接着做时额度按模式算）。改稿三种（revise / fix / deai）自己带模式。 */
 export type StoredDraftChange = DraftChangeParams & { readonly mode: DraftChangeMode };
+export type StoredDraftOperation = StoredDraftChange | DraftEditParams;
+
+const isStoredEdit = (params: StoredDraftOperation): params is DraftEditParams => isDraftEditMode(params.mode);
 
 export interface DraftChangeDeps {
   /** 章纲员（补笔记、拟纲、改纲）。 */
@@ -119,13 +133,30 @@ function draftStream(ctx: RecipeContext<unknown>, base: string | undefined) {
 const snapshotLabelOf = (mode: DraftChangeMode, chapter: number, hadText: boolean): string =>
   mode === "continue" ? `第${chapter}章接着写前快照` : hadText ? `第${chapter}章再次出稿前快照` : `出稿：第${chapter}章`;
 
-export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): Recipe<StoredDraftChange> {
+export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): Recipe<StoredDraftOperation> {
   return {
     kind: DRAFT_CHANGE_KIND,
     version: 1,
     lane: "foreground",
 
     async prepare(bookDir, input) {
+      if (isDraftEditMode(input.mode)) {
+        const edit = readDraftEditParams(input.mode, input.params);
+        if (!edit) return { ok: false, code: "bad_params", message: "要改哪一章、改哪几处没说清。" };
+        for (const task of DRAFT_EDIT_TASKS) {
+          const problem = deps.modelProblem(input.models, task);
+          if (problem) return { ok: false, code: "model_missing", message: problem };
+        }
+        const problem = await editTargetProblem(bookDir, edit.chapter);
+        if (problem) return { ok: false, ...problem };
+        return {
+          ok: true,
+          params: edit,
+          mode: edit.mode,
+          writeScope: { chapters: [edit.chapter] },
+          budget: draftEditSends(edit) + await frozenCompatAllowance(input.models, DRAFT_EDIT_TASKS),
+        };
+      }
       const params = readStoredDraftChange(input.mode, input.params);
       if (!params) return { ok: false, code: "bad_params", message: "要写哪一章没说清：请给章号。" };
       const { mode } = params;
@@ -149,6 +180,11 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
     },
 
     async run(ctx): Promise<OperationResult> {
+      if (isDraftEditMode(ctx.record.mode)) {
+        const edit = readDraftEditParams(ctx.record.mode, ctx.params);
+        if (!edit) throw coded("bad_params", "这次改稿的参数读不出来了，没法接着做。");
+        return runDraftEdit(ctx as RecipeContext<unknown>, edit, deps);
+      }
       const params = readStoredDraftChange(ctx.record.mode, ctx.params);
       if (!params) throw coded("bad_params", "这次出稿的参数读不出来了，没法接着做。");
       const { mode, chapter } = params;
@@ -347,11 +383,12 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
 
     stepBudget(stepId, params) {
       if (stepId === undefined) return 0;
+      if (isStoredEdit(params)) return editStepCallsModel(stepId) ? draftEditSends(params) : 0;
       return draftChangeStepBudget(params.mode, versionCount(params.mode, params))[stepId] ?? 0;
     },
 
     modelTasks(params) {
-      return draftChangeTasks(params.mode);
+      return isStoredEdit(params) ? DRAFT_EDIT_TASKS : draftChangeTasks(params.mode);
     },
   };
 }

@@ -1,10 +1,10 @@
 // @vitest-environment node
 // 对话里交的操作怎么收尾（写作版本 P2a 契约第三、四节）：run_check 只回受理回执；服务端订阅、把记录转进对话、按结构化结果出结论和下一步；
 // 作者断开只是不再转发；按钮交的新操作、「接着做」「不要了」走同一套；read_operation、每轮开头的「最近的操作」只读记录。
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolExecutionContext } from "@mastra/core/tools";
-import { readDraftState } from "@actalk/story-core";
+import { draftSave, parseDraftFile, readDraftState, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -290,6 +290,23 @@ describe("写稿按钮（draft.change）", () => {
     expect(live).toContain("draft-delta");
     expect(out.text()).toContain("第 1 章");
     expect((await readDraftState(book, 1)).version).not.toBeNull();
+  });
+
+  it("选中改写：改法摆出来停着等作者；「不要了」说这版不要了、稿子没动", async () => {
+    const before = (await readDraftState(book, 1)).version;
+    expect(await runCommand(book, draftSave, { chapter: 1, body: "他推开门。", baseVersion: before, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
+    registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ fixCallModel: async () => JSON.stringify({ beforeText: "他推开门。", afterText: "他轻轻推开门。", changeSummary: "放轻动作" }) })));
+    const signal = new AbortController().signal;
+    const out = collector();
+    const action: OperationAction = { kind: "new", type: "draft.change", mode: "revise", params: { mode: "revise", chapter: 1, edits: [{ targetText: "他推开门。", revisionGoal: "放轻动作" }], preview: true }, requestKey: "revise-1", issuedAt: new Date().toISOString() };
+    await runOperationAction({ action, projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber(), signal });
+    expect(out.operationStates().at(-1)).toBe("waiting_author");
+    expect(out.text()).toBe("改法在卡上：点「换上」才换进稿子。");
+    const opId = (out.events.find((item) => item.event === "operation")!.data as { operation: { opId: string } }).operation.opId;
+    const cancel = collector();
+    await runOperationAction({ action: { kind: "cancel", opId }, projectDir: book, sendEvent: cancel.sendEvent, scrubber: scrubber(), signal });
+    expect(cancel.text()).toBe("改稿·第 1 章：这版不要了，稿子没动。");
+    expect(parseDraftFile(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).body.trim()).toBe("他推开门。");
   });
 
   it("没受理（前一章没定稿）：照原因说，下一步给「先定稿第 1 章」「仍要先写第 2 章」，不给「再写一次」", async () => {

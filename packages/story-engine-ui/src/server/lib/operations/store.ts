@@ -70,6 +70,10 @@ export interface PendingAction {
   readonly actionId: string;
   readonly kind: string;
   readonly ticket?: string;
+  /** 作者能点的几个决定（resume 只认这几个）。 */
+  readonly decisions: readonly string[];
+  /** 卡上给作者看的（改前改后、清单……），按 kind 各自的形状。 */
+  readonly preview?: unknown;
   /** 第一次点的那个决定的哈希：同一个按钮换决定再来 = decision_conflict。 */
   readonly decisionHash?: string;
 }

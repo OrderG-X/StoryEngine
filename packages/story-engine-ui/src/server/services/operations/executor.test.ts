@@ -14,6 +14,7 @@ import { SETTLED_STATES, untilOperation } from "../../lib/operations/test-helper
 import {
   __resetRecipesForTests,
   cancelOperation,
+  OperationObsolete,
   reconcileOperations,
   recipeFor,
   registerRecipe,
@@ -247,6 +248,95 @@ describe("配方换过版本（Astra P2a 第 10 轮第 5 条）", () => {
     const opId = await pausedUnderV1();
     await expect(resumeOperation(book, opId)).resolves.toMatchObject({ ok: false, code: "obsolete" });
     expect(await readOperation(book, opId)).toMatchObject({ record: { state: "obsolete", failure: { code: "recipe_changed" } } });
+  });
+});
+
+describe("等作者点按钮（设计 6.6）", () => {
+  /** 改一版 → 等作者（换上 / 再改一版）→ 换上；再改一版就改下一版再等。chapters 给了就占那几章的写位。 */
+  function confirmRecipe(chapters: readonly number[] = [3]) {
+    const calls = { revise: 0, apply: 0 };
+    registerRecipe<{ readonly n: number }>({
+      kind: "test.confirm",
+      version: 1,
+      lane: "foreground",
+      async prepare(_bookDir, input) {
+        return { ok: true, params: input.params as { n: number }, writeScope: { chapters: [...chapters] }, budget: 2 };
+      },
+      async run(ctx) {
+        for (let round = 1; ; round += 1) {
+          const draft = await ctx.step(`revise:${round}`, { round }, async () => {
+            calls.revise += 1;
+            return `第 ${round} 版`;
+          });
+          const decision = await ctx.waitForAuthor({ actionId: `confirm:${round}`, kind: "revise_confirm", decisions: ["apply", "again"], preview: { after: draft } });
+          if (decision === "again") continue;
+          if (ctx.params.n < 0) throw new OperationObsolete("draft_moved", "稿子在这期间改过，没换上。");
+          await ctx.apply("apply", { draft }, async () => {
+            calls.apply += 1;
+          });
+          return { schema: "operation-result/1", summary: `换上了${draft}` };
+        }
+      },
+      stepBudget: () => 1,
+      modelTasks: () => [],
+    });
+    return calls;
+  }
+
+  const submitConfirm = async (key = "button:c1", n = 1): Promise<string> => {
+    const outcome = await submitOperation(book, { kind: "test.confirm", params: { n }, requestKey: key, issuedAt: new Date().toISOString(), origin: { kind: "button", messageId: key } });
+    if (!outcome.ok || !("record" in outcome)) throw new Error(JSON.stringify(outcome));
+    return outcome.record.opId;
+  };
+  const waiting = (opId: string) => untilOperation(book, opId, (record) => [...SETTLED_STATES, "waiting_author"].includes(record.state));
+
+  it("走到等作者：停在 waiting_author、记下按钮和要给作者看的、不占写位；点了「换上」从头接着跑、前面的步骤零调用", async () => {
+    const calls = confirmRecipe();
+    const opId = await submitConfirm();
+    const parked = await waiting(opId);
+    expect(parked).toMatchObject({ state: "waiting_author", runEpoch: 2, pendingActions: [{ actionId: "confirm:1", kind: "revise_confirm", decisions: ["apply", "again"], preview: { after: "第 1 版" } }] });
+    // 等作者时不占写位：同一章能另交一次。
+    const other = await submitConfirm("button:c2");
+    expect(await waiting(other)).toMatchObject({ state: "waiting_author" });
+    await cancelOperation(book, other);
+
+    await expect(resumeOperation(book, opId, { actionId: "confirm:1", decision: "apply" })).resolves.toMatchObject({ ok: true });
+    expect(await settled(opId)).toMatchObject({ state: "succeeded", result: { summary: "换上了第 1 版" } });
+    expect(calls).toEqual({ revise: 2, apply: 1 }); // 第 1 版只改了一次（另一次是被停掉的那个操作改的）
+  });
+
+  it("「再改一版」：改下一版、再等；同一个按钮再点同一个决定回放、点别的 decision_conflict；不在待办里的按钮 unknown_action", async () => {
+    confirmRecipe();
+    const opId = await submitConfirm();
+    await waiting(opId);
+    await resumeOperation(book, opId, { actionId: "confirm:1", decision: "again" });
+    const second = await untilOperation(book, opId, (record) => record.state === "waiting_author" && record.pendingActions.some((action) => action.actionId === "confirm:2"));
+    expect(second.pendingActions.map((action) => [action.actionId, action.decisionHash !== undefined])).toEqual([["confirm:1", true], ["confirm:2", false]]);
+    await expect(resumeOperation(book, opId, { actionId: "confirm:1", decision: "again" })).resolves.toMatchObject({ ok: true, replayed: true });
+    await expect(resumeOperation(book, opId, { actionId: "confirm:1", decision: "apply" })).resolves.toMatchObject({ ok: false, code: "decision_conflict" });
+    await expect(resumeOperation(book, opId, { actionId: "confirm:9", decision: "apply" })).resolves.toMatchObject({ ok: false, code: "unknown_action" });
+    await expect(resumeOperation(book, opId, { actionId: "confirm:2", decision: "discard" })).resolves.toMatchObject({ ok: false, code: "bad_decision" });
+    await expect(resumeOperation(book, opId)).resolves.toMatchObject({ ok: false, code: "unknown_action" });
+    await resumeOperation(book, opId, { actionId: "confirm:2", decision: "apply" });
+    expect(await settled(opId)).toMatchObject({ state: "succeeded", result: { summary: "换上了第 2 版" } });
+  });
+
+  it("点了以后这一章被别的占着：target_busy，决定不落、还在等；配方核不过底版抛 OperationObsolete → obsolete、说哪样变了", async () => {
+    confirmRecipe();
+    const opId = await submitConfirm("button:c1", -1);
+    await waiting(opId);
+    const hold = deferred();
+    twoSteps({ hold: hold.promise });
+    registerRecipe({ ...(recipeFor("test.two") as Recipe), prepare: async (_bookDir, input) => ({ ok: true, params: input.params, writeScope: { chapters: [3] }, budget: 4 }) });
+    const busy = await submit("chat:busy");
+    if (!busy.ok || !("record" in busy)) throw new Error("没受理");
+    await expect(resumeOperation(book, opId, { actionId: "confirm:1", decision: "apply" })).resolves.toMatchObject({ ok: false, code: "target_busy" });
+    expect(await readOperation(book, opId)).toMatchObject({ record: { state: "waiting_author", pendingActions: [{ actionId: "confirm:1" }] } });
+    expect((await readOperation(book, opId) as { record: OperationRecord }).record.pendingActions[0]!.decisionHash).toBeUndefined();
+    hold.resolve();
+    await settled(busy.record.opId);
+    await resumeOperation(book, opId, { actionId: "confirm:1", decision: "apply" });
+    expect(await settled(opId)).toMatchObject({ state: "obsolete", failure: { code: "draft_moved", message: "稿子在这期间改过，没换上。" } });
   });
 });
 

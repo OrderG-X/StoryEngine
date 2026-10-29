@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newDraftAction, newInspectAction } from "../api/agentChatClient.js";
+import { newDraftAction, newEditAction, newInspectAction } from "../api/agentChatClient.js";
 
 import {
   DIRECT_WRITE_FALLBACK_GOAL,
@@ -51,5 +51,13 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText({ toolName: "commit_apply", chapter: 5 })).toBe("确认定稿第 5 章");
     expect(userActionChoiceText({ toolName: "prune_snapshots" })).toBe("确认裁剪操作历史");
     expect(userActionChoiceText({ toolName: "prune_snapshots", keep: 50 })).toBe("确认裁剪操作历史（保留最近 50 条）");
+    // 改稿（片 2C）：按核账改、去 AI 味、改写；引的原文太长截短。改写停着等作者点的说点的哪个。
+    expect(userActionChoiceText(newEditAction({ mode: "fix", chapter: 5, fixes: [{ targetText: "他把钥匙放回柜台。", revisionGoal: "对上前文" }] }))).toBe("改第 5 章这一处：「他把钥匙放回柜台。」");
+    expect(userActionChoiceText(newEditAction({ mode: "fix", chapter: 5, fixes: [{ targetText: "a", revisionGoal: "b" }, { targetText: "c", revisionGoal: "d" }] }))).toBe("改掉第 5 章这 2 处");
+    expect(userActionChoiceText(newEditAction({ mode: "deai", chapter: 5, violations: [{ id: "v1", text: "那一刻，他\n明白了。" }] }))).toBe("改掉第 5 章这句的机器腔：「那一刻，他 明白了。」");
+    expect(userActionChoiceText(newEditAction({ mode: "deai", chapter: 5, violations: [{ id: "v1", text: "a" }, { id: "v2", text: "b" }, { id: "v3", text: "c" }] }))).toBe("改掉第 5 章这 3 句的机器腔");
+    expect(userActionChoiceText(newEditAction({ mode: "revise", chapter: 5, edits: [{ targetText: "长".repeat(50), revisionGoal: "润色" }], preview: true }))).toBe(`改写第 5 章这段：「${"长".repeat(40)}…」`);
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm:1", decision: "apply" } })).toBe("换上");
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm:1", decision: "again" } })).toBe("再改一版");
   });
 });

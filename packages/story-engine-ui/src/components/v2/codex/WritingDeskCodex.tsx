@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
-import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
 import type { NamePeekCard } from "./bibleIndex.js";
 import { ContinuityMarks } from "./ContinuityMarks.js";
@@ -429,9 +428,6 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
         />
       ) : null}
 
-      {/* 选区改写预览：覆盖稿纸区居中模态（相对 .codex-desk 绝对定位）。
-          activeRevisionTask 非空才渲染；行为（零差异/生成态）不变。 */}
-      <RevisionPreviewModal {...props} />
     </div>
   );
 }

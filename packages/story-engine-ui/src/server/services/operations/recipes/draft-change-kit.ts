@@ -8,7 +8,8 @@
 import type { BrainCallModel } from "../../../editorial/index.js";
 import type { WriterClient } from "../../../writing/fast-draft-writer.js";
 import { readOperation, type OperationRecord } from "../../../lib/operations/store.js";
-import { DRAFT_CHANGE_KIND, type DraftChangeMode } from "../../draft-change/params.js";
+import type { DraftEditBody } from "../../draft-change/edit.js";
+import { DRAFT_CHANGE_KIND, type DraftChangeMode, type DraftEditMode } from "../../draft-change/params.js";
 import type { DraftChangeBody } from "../../draft-change/result.js";
 import { __drainOperationsForTests, registerRecipe, submitOperation, type OperationResult, type SubmitOutcome } from "../executor.js";
 import { createDraftChangeRecipe, type DraftChangeDeps } from "./draft-change.js";
@@ -50,10 +51,10 @@ export function fakeDraftDeps(overrides: Partial<DraftChangeDeps> & { readonly w
 
 let keySeq = 0;
 
-/** 用这套假模型登记写稿配方，交一次（不等它跑）。 */
+/** 用这套假模型登记写稿配方，交一次（不等它跑）。改稿三种也走它。 */
 export function submitDraftChange(
   bookDir: string,
-  mode: DraftChangeMode,
+  mode: DraftChangeMode | DraftEditMode,
   params: Record<string, unknown>,
   deps: DraftChangeDeps = fakeDraftDeps(),
 ): Promise<SubmitOutcome> {
@@ -88,5 +89,19 @@ export async function runDraftChange(
   if (!outcome.ok || !("record" in outcome)) throw new Error(`没受理：${JSON.stringify(outcome)}`);
   const record = await settledDraftChange(bookDir, outcome.record.opId);
   const result = record.result as (OperationResult & { readonly body?: DraftChangeBody }) | undefined;
+  return { record, ...(result?.body ? { body: result.body } : {}), ...(result?.summary ? { summary: result.summary } : {}) };
+}
+
+/** 交一次改稿（revise / fix / deai）、等它停下：记录 + 结果体（没做成、在等作者的结果体是 undefined）。没受理就抛。 */
+export async function runDraftEdit(
+  bookDir: string,
+  mode: DraftEditMode,
+  params: Record<string, unknown>,
+  deps: DraftChangeDeps = fakeDraftDeps(),
+): Promise<{ readonly record: OperationRecord; readonly body?: DraftEditBody; readonly summary?: string }> {
+  const outcome = await submitDraftChange(bookDir, mode, params, deps);
+  if (!outcome.ok || !("record" in outcome)) throw new Error(`没受理：${JSON.stringify(outcome)}`);
+  const record = await settledDraftChange(bookDir, outcome.record.opId);
+  const result = record.result as (OperationResult & { readonly body?: DraftEditBody }) | undefined;
   return { record, ...(result?.body ? { body: result.body } : {}), ...(result?.summary ? { summary: result.summary } : {}) };
 }

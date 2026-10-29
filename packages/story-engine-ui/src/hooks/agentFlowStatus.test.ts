@@ -7,10 +7,6 @@ describe("agentFlowStatusForTool", () => {
     expect(agentFlowStatusForTool("generate_chapter_steering", {}, "idle")).toBe("steering_ready");
   });
 
-  it("改稿 → draft_ready", () => {
-    expect(agentFlowStatusForTool("revise_draft", {}, "quality_checked")).toBe("draft_ready");
-  });
-
   it("写稿做完了（操作）：换上了工作稿 → draft_ready（重写已定稿的章也是）；留成候选、没做成的不推", () => {
     const op = (applied: boolean | undefined, state: OperationViewData["state"] = "succeeded"): OperationViewData => ({
       opId: "op-0123456789abcdef0123", kind: "draft.change", mode: "write", chapter: 3, what: "写稿", state, stateText: "", allowed: [], summary: "", eventSeq: 1, origin: { kind: "chat" },

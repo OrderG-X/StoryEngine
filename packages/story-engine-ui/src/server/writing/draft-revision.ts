@@ -1,4 +1,3 @@
-import type { DraftAIReviewIssue, DraftAIRevisionSuggestion } from "./draft-ai-review.js";
 import type { StateOverview } from "../book/state-overview.js";
 import type { WritingContextPack } from "./writing-context-pack.js";
 import { renderSettingPack } from "./setting-pack.js";
@@ -36,18 +35,6 @@ export interface DraftRevisionPreview {
   readonly riskNotes: readonly string[];
   readonly preservedFacts: readonly string[];
   readonly warnings: readonly string[];
-  /**
-   * 两步改稿（写作版本 P1b 第 3 轮复核）：生成这份预览前记下的真相依据摘要（服务端填，不出自模型）。
-   * 「应用」时照它核：这之间前文、设定、作者裁定改过，就不换上、留成候选；没有它的预览不认。
-   */
-  readonly basis?: string;
-}
-
-export interface DraftRevisionApplyResult {
-  readonly applied: boolean;
-  readonly chapter: number;
-  readonly draftPath: string;
-  readonly updatedWordCount: number;
 }
 
 export interface BuildDraftRevisionPromptInput {
@@ -55,49 +42,6 @@ export interface BuildDraftRevisionPromptInput {
   readonly draftContent: string;
   readonly writingContextPack?: WritingContextPack;
   readonly stateOverview?: StateOverview;
-}
-
-export function createRevisionTaskFromIssue(input: {
-  readonly chapter: number;
-  readonly issue: DraftAIReviewIssue;
-  readonly draftContent: string;
-  readonly constraints?: readonly string[];
-}): DraftRevisionTask {
-  const targetText = findTargetText(input.draftContent, input.issue.evidence);
-  return {
-    id: `revision-${Date.now().toString(36)}-${input.issue.id}`,
-    sourceIssueId: input.issue.id,
-    chapter: input.chapter,
-    targetType: targetTypeFromIssueCategory(input.issue.category),
-    targetText,
-    ...(input.issue.affectedParagraphHint ? { targetRangeHint: input.issue.affectedParagraphHint } : {}),
-    problemSummary: input.issue.title,
-    revisionGoal: input.issue.suggestedFix,
-    constraints: input.constraints ?? [],
-    status: "pending",
-  };
-}
-
-export function createRevisionTaskFromSuggestion(input: {
-  readonly chapter: number;
-  readonly suggestion: DraftAIRevisionSuggestion;
-  readonly draftContent: string;
-  readonly constraints?: readonly string[];
-}): DraftRevisionTask {
-  const targetText = findTargetText(input.draftContent, input.suggestion.target);
-  return {
-    id: `revision-${Date.now().toString(36)}-${input.suggestion.id}`,
-    sourceSuggestionId: input.suggestion.id,
-    chapter: input.chapter,
-    // 改哪种段落不从意见字面猜（重构 P7「不猜」）；原句定位靠 targetRangeHint。
-    targetType: "paragraph",
-    targetText,
-    targetRangeHint: input.suggestion.target,
-    problemSummary: input.suggestion.reason,
-    revisionGoal: input.suggestion.suggestion,
-    constraints: input.constraints ?? [],
-    status: "pending",
-  };
 }
 
 export function buildDraftRevisionPrompt(input: BuildDraftRevisionPromptInput): string {
@@ -161,7 +105,7 @@ export function parseDraftRevisionPreview(raw: string, task: DraftRevisionTask):
   return normalizeDraftRevisionPreview(JSON.parse(json) as unknown, task);
 }
 
-export function normalizeDraftRevisionPreview(value: unknown, task: DraftRevisionTask): DraftRevisionPreview {
+function normalizeDraftRevisionPreview(value: unknown, task: DraftRevisionTask): DraftRevisionPreview {
   if (!isRecord(value)) {
     throw new Error("Draft revision preview root must be an object.");
   }
@@ -179,69 +123,6 @@ export function normalizeDraftRevisionPreview(value: unknown, task: DraftRevisio
     preservedFacts: readStringList(value.preservedFacts).slice(0, 8),
     warnings: readStringList(value.warnings).slice(0, 8),
   };
-}
-
-export function fallbackDraftRevisionPreview(task: DraftRevisionTask, reason: string): DraftRevisionPreview {
-  return {
-    taskId: task.id,
-    beforeText: task.targetText,
-    afterText: task.targetText,
-    changeSummary: "修订草案未能生成，已进入安全回退。",
-    rationale: "模型输出不可用，系统不会修改草稿。",
-    riskNotes: [reason],
-    preservedFacts: [],
-    warnings: ["未应用任何修改。"],
-  };
-}
-
-export function applyDraftRevisionToContent(input: {
-  readonly draftContent: string;
-  readonly beforeText: string;
-  readonly afterText: string;
-}): string {
-  const before = input.beforeText.trim();
-  if (!before) {
-    throw new Error("修订目标为空，无法应用。");
-  }
-  const firstIndex = input.draftContent.indexOf(before);
-  if (firstIndex < 0) {
-    throw new Error("未在当前草稿中找到原文片段，请重新选择目标段落。");
-  }
-  const secondIndex = input.draftContent.indexOf(before, firstIndex + before.length);
-  if (secondIndex >= 0) {
-    throw new Error("原文片段在草稿中出现多次，请选择更精确的目标段落。");
-  }
-  return `${input.draftContent.slice(0, firstIndex)}${input.afterText.trim()}${input.draftContent.slice(firstIndex + before.length)}`;
-}
-
-export function countDraftWords(content: string): number {
-  const chinese = content.match(/[\p{Script=Han}]/gu)?.length ?? 0;
-  const latin = content.replace(/[\p{Script=Han}]/gu, " ").match(/[A-Za-z0-9]+/gu)?.length ?? 0;
-  return chinese + latin;
-}
-
-function findTargetText(draftContent: string, hint: string): string {
-  const cleanedHint = hint.trim().replace(/^["“”'‘’]+|["“”'‘’]+$/gu, "");
-  if (cleanedHint && draftContent.includes(cleanedHint)) return cleanedHint;
-  const paragraphs = draftContent
-    .replace(/\r\n?/gu, "\n")
-    .split(/\n{2,}/u)
-    .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph && !/^#{1,6}\s+/u.test(paragraph)); // 章名行白名单：定位
-  if (cleanedHint) {
-    const keyword = cleanedHint.slice(0, Math.min(cleanedHint.length, 16));
-    const found = paragraphs.find((paragraph) => paragraph.includes(keyword));
-    if (found) return found;
-  }
-  return paragraphs[0] ?? "";
-}
-
-function targetTypeFromIssueCategory(category: DraftAIReviewIssue["category"]): DraftRevisionTargetType {
-  if (category === "dialogue") return "dialogue";
-  if (category === "reader_hook") return "ending";
-  if (category === "pacing") return "section";
-  if (category === "character" || category === "style" || category === "continuity") return "paragraph";
-  return "paragraph";
 }
 
 function extractJsonObject(raw: string): string | null {

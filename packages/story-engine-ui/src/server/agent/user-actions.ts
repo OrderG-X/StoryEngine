@@ -5,26 +5,19 @@
  * 事件协议与 agent 回合完全一致（tool-call / tool-result / text-delta），前端投影零分叉：
  * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
  */
-import { parseDraftFile } from "@actalk/story-core";
 import type { RequestContext } from "@mastra/core/di";
 
 import { isOperationId } from "../lib/operations/store.js";
-import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
-import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
-import { createRevisionModelChannel, type RevisionModelCaller } from "../services/revision-service.js";
-import { fixDraftByUnits, type DraftUnitFixResult } from "../services/unit-fix.js";
 import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 import type { InspectMode } from "../services/inspect-service.js";
-import { readDraftChangeParams, type DraftChangeMode, type DraftChangeParams } from "../services/draft-change/params.js";
+import { isDraftEditMode, readDraftChangeParams, readDraftEditParams, type DraftChangeMode, type DraftChangeParams, type DraftEditMode, type DraftEditParams } from "../services/draft-change/params.js";
 import {
-  checkChapterAction,
   humanizeToolNames,
   resolveNextDraftTarget,
-  sendNextSteps,
   writeNextChoice,
   type NextDraftTarget,
   type NextStepChoice,
@@ -50,7 +43,6 @@ export const USER_ACTION_TOOL_NAMES = [
   "prune_snapshots",
   "commit_preview",
   "manage_snapshots",
-  "revise_draft",
   "brainstorm_chapter",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
@@ -59,8 +51,8 @@ const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo", "
 
 /**
  * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
- * 「接着做」「不要了」接着一次停着的操作。检查（inspect.run）、写稿（draft.change：写这一章 / 重写 / 接着往下写）是操作，
- * 别的按钮随各自那一片迁过来。
+ * 「接着做」「不要了」接着一次停着的操作。检查（inspect.run）、写稿和改稿（draft.change：写这一章 / 重写 / 接着往下写 /
+ * 改这处 / 改掉这句 / 选中文字改写）是操作，别的按钮随各自那一片迁过来。
  */
 export type OperationAction =
   | {
@@ -79,7 +71,17 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
-  | { readonly kind: "resume"; readonly opId: string }
+  /** 改稿（片 2C）：核账卡「改这处 / 改掉这 N 处」= fix、AI 味卡「改掉这句 / 一键全修」= deai、选中文字改写 = revise（先给作者看）。 */
+  | {
+    readonly kind: "new";
+    readonly type: "draft.change";
+    readonly mode: DraftEditMode;
+    readonly params: DraftEditParams;
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」）带上是哪个按钮、点的哪个。 */
+  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string } }
   | { readonly kind: "cancel"; readonly opId: string };
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
@@ -102,11 +104,6 @@ export type UserAction =
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" }
   /**
-   * 核账条目上的「改这处」「改掉这 N 处」（重构 P6；P12 起按编号句子一次改齐）：服务端直接改、不经对话 AI——
-   * 模型曾读完稿就说「改好了」而没调改稿工具。改不成（原句没找到 / 出现多次）照实说，给「让 AI 改」。
-   */
-  | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly ReviseFix[] }
-  /**
    * 「给我几种走法」「再来几种」（重构 P6 头脑风暴）：只读，章纲员出几种走法、核账员核前文，结果进对话、作者在稿纸上挑。
    * idea = 作者在稿纸上方填的想法原话；avoid = 已经给过的走法名字（再来几种时别出一样的）。
    */
@@ -124,17 +121,8 @@ export type UserAction =
   /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
   | SettleUserAction;
 
-/** 核账「改这处」的一处：本章原句（逐字锚点）+ 要改成什么样。 */
-export interface ReviseFix {
-  readonly targetText: string;
-  readonly revisionGoal: string;
-}
-
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
-/** 「改掉这 N 处」一次最多改几处、每处原句 / 目标多长（防异常请求体）。 */
-const MAX_REVISE_FIXES = 12;
-const MAX_REVISE_TEXT = 800;
 /** 头脑风暴：作者想法多长、「再来几种」最多带几个已给过的走法名。 */
 const MAX_BRAINSTORM_IDEA = 500;
 const MAX_BRAINSTORM_AVOID = 12;
@@ -167,6 +155,13 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
   if (record.kind === "resume" || record.kind === "cancel") {
     const opId = typeof record.opId === "string" ? record.opId.trim() : "";
     if (!isOperationId(opId)) return { kind: "invalid", reason: "这次操作的号不对。" };
+    if (record.kind === "resume" && record.answer !== undefined) {
+      const answer = typeof record.answer === "object" && record.answer !== null ? record.answer as Record<string, unknown> : {};
+      const actionId = typeof answer.actionId === "string" && /^[A-Za-z0-9:_-]{1,64}$/u.test(answer.actionId) ? answer.actionId : undefined;
+      const decision = typeof answer.decision === "string" && /^[A-Za-z0-9_-]{1,32}$/u.test(answer.decision) ? answer.decision : undefined;
+      if (!actionId || !decision) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
+      return { kind: "action", action: { kind: "resume", opId, answer: { actionId, decision } } };
+    }
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
@@ -178,6 +173,11 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
   const issuedAt = typeof record.issuedAt === "string" && record.issuedAt.length <= 40 && Number.isFinite(Date.parse(record.issuedAt)) ? record.issuedAt : undefined;
   if (!requestKey || !issuedAt) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
   const stamp = { requestKey, issuedAt: new Date(Date.parse(issuedAt)).toISOString() };
+  if (record.type === "draft.change" && isDraftEditMode(record.mode)) {
+    const edit = readDraftEditParams(record.mode, params);
+    if (!edit) return { kind: "invalid", reason: "要改的地方不对。" };
+    return { kind: "action", action: { kind: "new", type: "draft.change", mode: edit.mode, params: edit, ...stamp } };
+  }
   if (record.type === "draft.change") {
     // 方向是作者在稿纸上挑的走法、按钮带来的原话：太长的截到 2000 字（和原来「写这一章」按钮同一口径）。
     const direction = typeof params.direction === "string" ? params.direction.trim().slice(0, MAX_DRAFT_DIRECTION) : undefined;
@@ -254,22 +254,6 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
       ? [...new Set(record.avoid.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 60)).filter(Boolean))].slice(0, MAX_BRAINSTORM_AVOID)
       : [];
     return { kind: "action", action: { toolName: "brainstorm_chapter", chapter, ...(idea ? { idea } : {}), ...(avoid.length > 0 ? { avoid } : {}) } };
-  }
-  if (toolName === "revise_draft") {
-    if (!Array.isArray(record.fixes) || record.fixes.length === 0 || record.fixes.length > MAX_REVISE_FIXES) {
-      return { kind: "invalid", reason: "要改的地方不对。" };
-    }
-    const fixes: ReviseFix[] = [];
-    for (const raw of record.fixes) {
-      const fix = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
-      const targetText = typeof fix.targetText === "string" ? fix.targetText.trim() : "";
-      const revisionGoal = typeof fix.revisionGoal === "string" ? fix.revisionGoal.trim() : "";
-      if (!targetText || !revisionGoal || targetText.length > MAX_REVISE_TEXT || revisionGoal.length > MAX_REVISE_TEXT) {
-        return { kind: "invalid", reason: "要改的地方不对。" };
-      }
-      fixes.push({ targetText, revisionGoal });
-    }
-    return { kind: "action", action: { toolName: "revise_draft", chapter, fixes } };
   }
   const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
     ? record.previewToken.trim()
@@ -354,8 +338,6 @@ export async function runUserAction(args: {
   readonly scrubError: (error: unknown) => string;
   /** 项目目录（编辑部 R4.6 建议项用：定稿后判占位主角卡要不要给改名建议）；缺省不给建议，行为不变。 */
   readonly projectDir?: string;
-  /** 「改这处」用的修订模型（测试注入）；缺省按 repair 任务的配置。 */
-  readonly fixModel?: RevisionModelCaller;
   /** 作者断开了（关页、网断）：交给执行器的操作照跑，只是不再转发。 */
   readonly signal?: AbortSignal;
 }): Promise<void> {
@@ -398,10 +380,6 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "settle_preview" || action.toolName === "settle_apply") {
     await runSettleAction({ ...args, action });
-    return;
-  }
-  if (action.toolName === "revise_draft") {
-    await runReviseFixesAction({ ...args, action });
     return;
   }
   if (action.toolName === "brainstorm_chapter") {
@@ -678,90 +656,6 @@ async function runBrainstormAction(args: Omit<Parameters<typeof runUserAction>[0
   emitText(typeof result?.summary === "string" && result.summary.trim()
     ? humanizeToolNames(result.summary.trim())
     : `第 ${action.chapter} 章的走法没想出来。`);
-}
-
-/**
- * 「改这处」「改掉这 N 处」按钮（P12 编号句子）：这一章要改的几处一次交修订模型、按编号整句换，
- * 回执照实说改了几处、哪几处没改成。结果按 revise_draft 的输出交给前端（稿纸换上新正文、可撤销）。
- */
-async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "revise_draft" }>;
-}): Promise<void> {
-  const { action } = args;
-  const stamp = Date.now();
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  const toolCallId = `user-action-revise_draft-${stamp}`;
-  const total = action.fixes.length;
-  args.sendEvent("tool-call", { toolCallId, toolName: "revise_draft", args: { chapter: action.chapter } });
-  let result: DraftUnitFixResult;
-  let overview: StateOverview;
-  try {
-    if (!args.projectDir) throw new Error("没找到这本书");
-    const callModel = args.fixModel ?? (await createRevisionModelChannel()).call;
-    result = await fixDraftByUnits({
-      projectDir: args.projectDir,
-      chapter: action.chapter,
-      fixes: action.fixes.map((fix) => ({ quote: fix.targetText, goal: fix.revisionGoal })),
-      callModel,
-    });
-    overview = await buildStateOverview({ projectDir: args.projectDir, chapter: action.chapter, maxTimelineEvents: 8 });
-  } catch (error) {
-    const message = humanizeToolNames(args.scrubError(error));
-    args.sendEvent("tool-error", { toolCallId, toolName: "revise_draft", error: message, retryable: true });
-    emitText(`${total === 1 ? "这一处" : `这 ${total} 处`}没改成：${message}。可以再点一次。`);
-    return;
-  }
-  // 改好了但没换上（改的途中稿子或前文变了）：如实说，AI 这版留在稿纸上等作者选。
-  const applied = result.kept ? 0 : result.applied.length;
-  const failed = result.kept ? [] : result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
-  const also = applied > 0 && result.alsoChanged > 0 ? `本章别处说同一件事的 ${result.alsoChanged} 句跟着改了。` : "";
-  const done = applied === 0 ? "" : `${total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`}${also}`;
-  const notDone = failed.length === 0
-    ? ""
-    : total === 1 ? `这一处没改成：${failed[0]!.why}。` : `${failed.length} 处没改成：${failed[0]!.why}。`;
-  const summary = result.kept ? result.kept.message : `${done}${notDone}`;
-  args.sendEvent("tool-result", {
-    toolCallId,
-    toolName: "revise_draft",
-    output: {
-      ok: applied > 0,
-      applied: applied > 0,
-      summary,
-      refreshScope: "full",
-      chapter: action.chapter,
-      overview,
-      ...(applied > 0 ? { draftBody: stripMarkdownEmphasis(parseDraftFile(result.text).body).trim() } : {}),
-      ...(result.draftVersion !== undefined ? { draftVersion: result.draftVersion } : {}),
-      ...(result.snapshotId ? { snapshotId: result.snapshotId } : {}),
-    },
-  });
-  emitText(summary);
-  const choices: NextStepChoice[] = [
-    ...(failed.length > 0 ? [{
-      label: "让 AI 改",
-      intent: `${failed.map(({ fix }) => `把第 ${action.chapter} 章里「${fix.targetText}」这处改掉：${fix.revisionGoal}。`).join("")}只改这几处，别的不动。`,
-      recommended: true,
-    }] : []),
-    ...(applied > 0 ? [{
-      label: "再核一遍",
-      intent: `重新核第 ${action.chapter} 章的账`,
-      ...(failed.length === 0 ? { recommended: true } : {}),
-      action: checkChapterAction(action.chapter),
-    }] : []),
-  ];
-  if (choices.length === 0) return;
-  const nextCallId = `user-action-next-${stamp}`;
-  args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
-  args.sendEvent("tool-result", {
-    toolCallId: nextCallId,
-    toolName: "suggest_next_steps",
-    output: { ok: true, question: applied > 0 ? "改好了，接下来？" : "没改成，接下来？", choices },
-  });
 }
 
 /** 「撤销上一步」按钮：同对话里的撤销（manage_snapshots op=undo，优先整回合回退），回执照实说。 */

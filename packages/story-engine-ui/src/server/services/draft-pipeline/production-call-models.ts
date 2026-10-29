@@ -7,7 +7,7 @@
  * 前后核对 2026-10-10 起和「核账」同一套（编辑部核账员，brain 的 callConfiguredBrainModel），不在这里。
  */
 import { canCallAgain, MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
-import { createRevisionModelChannel, type RevisionModelCaller } from "../revision-service.js";
+import { createRevisionModelChannel, type RevisionModelCaller } from "../draft-change/revise-text.js";
 import type { DeAiCallModel } from "../de-ai-flavor-batch.js";
 import type { ContinueCallModel } from "./continue-draft.js";
 

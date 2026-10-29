@@ -196,7 +196,8 @@ export async function finishOperationTurn(args: {
       emitText(`${what}${PAUSED_TEXT[record.pauseReason ?? "interrupted"] ?? "停下了"}：点卡上的「接着做」接着，或「不要了」。`);
       return;
     case "waiting_author":
-      emitText(`${what}在等你点卡上的按钮。`);
+      // 改稿先给作者看：改法在卡上。
+      emitText(record.kind === DRAFT_CHANGE_KIND && record.mode === "revise" ? "改法在卡上：点「换上」才换进稿子。" : `${what}在等你点卡上的按钮。`);
       return;
     default:
       return;
@@ -248,7 +249,7 @@ export async function runOperationAction(args: {
     }
     opId = receipt.opId;
   } else if (action.kind === "resume") {
-    const resumed = await resumeOperation(projectDir, action.opId);
+    const resumed = await resumeOperation(projectDir, action.opId, action.answer);
     if (!resumed.ok) {
       emitText(resumed.message);
       return;
@@ -262,7 +263,9 @@ export async function runOperationAction(args: {
     }
     args.sendEvent("operation", { type: "record", operation: operationView(cancelled.record) });
     const what = operationWhat(cancelled.record.kind, cancelled.record.mode, chapterOf(cancelled.record));
-    emitText(cancelled.cancelled ? `${what}停掉了，不再接着做。` : `${what}已经结束了，不用停。`);
+    // 改法摆着等作者点的（选中改写）：「不要了」就是这版不换，稿子没动。
+    const waited = cancelled.record.kind === DRAFT_CHANGE_KIND && cancelled.record.pendingActions.some((pending) => !pending.decisionHash);
+    emitText(!cancelled.cancelled ? `${what}已经结束了，不用停。` : waited ? `${what}：这版不要了，稿子没动。` : `${what}停掉了，不再接着做。`);
     return;
   }
   const record = await followOperation({ bookDir: projectDir, opId, sendEvent: args.sendEvent, signal: args.signal });

@@ -162,7 +162,6 @@ function lastAssistant() {
 function buildParams(overrides: Partial<UseChatParams>): UseChatParams {
   return {
     projectPath: PROJECT,
-    handleApplyRevisionPreview: async () => undefined,
     refreshWorkspaceFromOverview: () => undefined,
     ...overrides,
   };
@@ -385,6 +384,41 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     // 稿纸与盘一致：不会再回写一遍。
     expect(useDraftStore.getState().savedBody).toBe(realDraft);
     expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ opId: DRAFT_OP, state: "succeeded" });
+  });
+
+  it("改稿操作（片 2C）：不流正文、不进「正在生成」；停着等作者时卡上摆改法；换上了稿纸按盘上重读、高亮改后那句", async () => {
+    const pending = { actionId: "confirm:1", decisions: ["apply", "again"], revise: { round: 1, changes: [{ from: "第三章原有的工作稿。", to: "第三章改过的稿。" }], failed: [] } };
+    const editView = (overrides: Partial<OperationViewData>) => draftView({ mode: "revise", what: "改稿·第 3 章", ...overrides });
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(editView({}));
+      expect(useBookStore.getState().workspace.flowStatus).not.toBe("draft_generating");
+      handlers.onOperation?.(editView({ state: "waiting_author", stateText: "等你定", eventSeq: 4, pending }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("把这句改顺一点");
+    });
+    expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ state: "waiting_author", pending });
+    expect(useDraftStore.getState().body).toBe("第三章原有的工作稿。");
+
+    // 作者点「换上」：新一轮接着做，做完了按盘上重读。
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(editView({ eventSeq: 5 }));
+      writeDisk(3, { draft: "第三章改过的稿。", title: "第三章" });
+      handlers.onOperation?.(editView({ state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 9, draft: { chapter: 3, applied: true, changes: [{ from: "第三章原有的工作稿。", to: "第三章改过的稿。" }] } }));
+      handlers.onDone();
+    });
+    await act(async () => {
+      await result.current.handleSendUserAction({ kind: "resume", opId: DRAFT_OP, answer: { actionId: "confirm:1", decision: "apply" } });
+    });
+    expect(messages().filter((message) => message.role === "user").at(-1)?.content).toBe("换上");
+    expect(useDraftStore.getState()).toMatchObject({ body: "第三章改过的稿。", streaming: null });
+    expect(useUiStore.getState().revisionHighlightTexts).toEqual(["第三章改过的稿。"]);
+    // 等作者的改法、按钮、结论只挂在新一轮那条上（老的那条只留一行状态）。
+    const carrying = messages().filter((message) => cardOf(message, "operation")?.op.opId === DRAFT_OP);
+    expect(carrying.map((message) => cardOf(message, "operation")?.op.pending)).toEqual([undefined, undefined]);
+    expect(cardOf(carrying[0]!, "operation")?.op).toMatchObject({ state: "succeeded", allowed: [], summary: "" });
   });
 
   it("出稿流式的字只显示（稿纸只读），不进作者的稿子", async () => {

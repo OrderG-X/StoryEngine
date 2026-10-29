@@ -1,6 +1,7 @@
-import type { ChapterAgentCard, DraftReviewView, DraftRevisionPreview, QualityCardReport, ToolStep } from "../api/types.js";
+import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { SuggestedAction, ChapterWorkflowState } from "./workflow.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
+import type { PendingActionData } from "../api/agentChatClient.js";
 
 /** Async work is owned by the exact book, chapter, chat session and operation. */
 export interface WorkspaceOperationTarget {
@@ -9,10 +10,6 @@ export interface WorkspaceOperationTarget {
   readonly sessionId: string;
   readonly operationId: string;
 }
-
-export type WorkspaceRevisionPreview = DraftRevisionPreview & {
-  readonly originTarget: WorkspaceOperationTarget;
-};
 
 /** 一份候选稿（拆开的：正文 + 章名；没章名 = 选用时沿用作者眼前的）。 */
 export interface WorkspaceDraftCandidate {
@@ -144,6 +141,8 @@ export interface OperationCardData {
   readonly eventSeq: number;
   /** 结束时这一轮的话里已经说了结论（卡上不再重复）；后台做完、重开才收到的没有。 */
   readonly announced?: true;
+  /** 停着等作者点的（改写的改前改后 +「换上 / 再改一版」）：只挂在最近交它、点它的那条消息上。 */
+  readonly pending?: PendingActionData;
 }
 
 /** 定论卡：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */

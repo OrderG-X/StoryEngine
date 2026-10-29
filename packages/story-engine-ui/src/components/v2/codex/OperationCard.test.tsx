@@ -50,6 +50,40 @@ describe("OperationCard", () => {
   });
 });
 
+describe("OperationCard：改写停着等作者（片 2C）", () => {
+  const pending = {
+    actionId: "confirm:1",
+    decisions: ["apply", "again"],
+    revise: { round: 1, changes: [{ from: "他慢慢地走了过去。", to: "他走过去。" }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "删了拖沓的副词" },
+  };
+  const waiting = (overrides: Partial<OperationCardData> = {}) =>
+    op({ kind: "draft.change", mode: "revise", what: "改稿·第 3 章", state: "waiting_author", stateText: "等你定", pending, ...overrides });
+
+  it("改前划掉、改后照摆 + 没改成的一句；「换上」「再改一版」交回点的哪个，「不要了」停掉；这一轮在跑也给「不要了」", () => {
+    const onAction = vi.fn();
+    render(<OperationCard op={waiting()} inLiveTurn busy={false} onAction={onAction} />);
+    expect(screen.getByText("他慢慢地走了过去。")).toBeTruthy();
+    expect(screen.getByText("他走过去。")).toBeTruthy();
+    expect(screen.getByText("删了拖沓的副词")).toBeTruthy();
+    expect(screen.getByText("这一段没改成：稿里找不到")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "换上" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm:1", decision: "apply" } });
+    fireEvent.click(screen.getByRole("button", { name: "再改一版" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm:1", decision: "again" } });
+    fireEvent.click(screen.getByRole("button", { name: "不要了" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "cancel", opId: OP_ID });
+  });
+
+  it("最后一轮只给「换上」；忙的时候点不了；没有改法（不是 owner 那条）就照常一行", () => {
+    const { rerender } = render(<OperationCard op={waiting({ pending: { ...pending, decisions: ["apply"] } })} inLiveTurn={false} busy onAction={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "再改一版" })).toBeNull();
+    expect((screen.getByRole("button", { name: "换上" }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(<OperationCard op={waiting({ pending: undefined })} inLiveTurn={false} busy={false} onAction={vi.fn()} />);
+    expect(screen.getByText("改稿·第 3 章：等你定")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "换上" })).toBeNull();
+  });
+});
+
 describe("runningOperationCaption", () => {
   it("排着、在做才有字幕", () => {
     expect(runningOperationCaption(op({ state: "queued" }))).toBe("正在核账·第 3 章…");

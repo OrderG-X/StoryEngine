@@ -1,6 +1,6 @@
 /**
  * 操作卡跟着操作变（写作版本 P2a）：同一次操作可能挂在好几条消息上（交它的那一轮、点「接着做」「不要了」的那一轮），
- * 一次变了，所有挂着它的卡一起变；检查、写稿的结果卡只挂在这一轮的那条（owner）上。
+ * 一次变了，所有挂着它的卡一起变；检查、写稿的结果卡、等作者点的改法、按钮、结论只挂在最近那条（owner）上，老的只留一行状态。
  */
 import type { OperationViewData } from "../api/agentChatClient.js";
 import { projectAgentEvent } from "../hooks/agentEventProjection.js";
@@ -19,7 +19,9 @@ const carries = (message: ChapterMessage, opId: string): boolean => cardOf(messa
  * announced＝这一轮接着会把结论说出来（对话这一轮里收到的终态），owner 的卡上就不再重复。
  */
 export function projectOperationEverywhere(view: OperationViewData, ownerMessageId?: string, options: { readonly announced?: boolean } = {}): void {
-  const { inspect: _inspect, draft: _draft, ...bare } = view;
+  // 老的那几条只留一行记录：按钮、等作者点的改法、结论都只在 owner 上（点「再改一版」后不摆两份改法、两个「不要了」，结论不说两遍）。
+  const { inspect: _inspect, draft: _draft, pending: _pending, ...rest } = view;
+  const bare: OperationViewData = { ...rest, allowed: [], summary: "" };
   const store = useChatStore.getState();
   for (const message of store.messages) {
     if (message.id === ownerMessageId) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamAgentChat, type OperationViewData } from "./agentChatClient.js";
+import { readStoredOperationAction, streamAgentChat, type OperationViewData } from "./agentChatClient.js";
 
 /** 把若干 SSE 帧拼成一个文本，返回带 body(ReadableStream) 的 Response。 */
 function sseResponse(frames: readonly string[], init?: { ok?: boolean; status?: number }): Response {
@@ -374,6 +374,47 @@ describe("streamAgentChat", () => {
     expect(views[1]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"] });
     expect(views[2]?.draft).toBeUndefined();
     expect(views[3]?.draft).toBeUndefined();
+  });
+
+  it("改稿（片 2C）做完了 → draft 带改了的几处；停着等作者的带改法和能点的决定，点过的、认不出的不算", async () => {
+    const editView = (overrides: Record<string, unknown>) => opView("revise", null, { kind: "draft.change", what: "改稿·第 4 章", chapter: 4, ...overrides });
+    const preview = { round: 2, changes: [{ from: "旧句。", to: "新句。" }, { from: 3 }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "压一压语气" };
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: editView({
+        result: { schema: "operation-result/1", summary: "改好了", body: { kind: "draft.change", mode: "fix", ok: true, chapter: 4, snapshotId: "s-1", changes: [{ from: "旧。", to: "新。" }, "坏的"], failed: [] } },
+      }) }),
+      frame("operation", { type: "record", operation: editView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm:1", kind: "draft.revise.confirm", decisions: ["apply", "again"], preview: { round: 1, changes: [{ from: "a", to: "b" }], failed: [] }, decided: true },
+        { actionId: "other", kind: "something.else", decisions: ["x"], preview: {}, decided: false },
+        { actionId: "confirm:2", kind: "draft.revise.confirm", decisions: ["apply", "again", 7], preview, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: editView({ state: "running", result: undefined, pendingActions: [{ actionId: "confirm:3", kind: "draft.revise.confirm", decisions: ["apply"], preview, decided: false }] }) }),
+    ]);
+    expect(views[0]?.draft).toEqual({ chapter: 4, applied: true, snapshots: ["s-1"], changes: [{ from: "旧。", to: "新。" }] });
+    expect(views[1]?.pending).toEqual({
+      actionId: "confirm:2",
+      decisions: ["apply", "again"],
+      revise: { round: 2, changes: [{ from: "旧句。", to: "新句。" }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "压一压语气" },
+    });
+    // 不在等作者的不带（停着等作者才有按钮）。
+    expect(views[2]?.pending).toBeUndefined();
+  });
+
+  it("改稿按钮、等作者点的「接着做」防御解析（和服务端同一口径）：章号、原文、决定不对的不认", () => {
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 4, fixes: [{ targetText: "旧。", revisionGoal: "对上前文" }] }, ...stamp }))
+      .toEqual({ kind: "new", type: "draft.change", mode: "fix", params: { mode: "fix", chapter: 4, fixes: [{ targetText: "旧。", revisionGoal: "对上前文" }] }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 4, edits: [{ targetText: " 原样 ", revisionGoal: "润色" }], preview: true, style: "deai" }, ...stamp }))
+      .toMatchObject({ mode: "revise", params: { edits: [{ targetText: " 原样 ", revisionGoal: "润色" }], preview: true, style: "deai" } });
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "deai", params: { chapter: 4, violations: [{ id: "v1", text: "那一刻。", severity: "high" }] }, ...stamp }))
+      .toMatchObject({ mode: "deai", params: { violations: [{ id: "v1", text: "那一刻。", severity: "high" }] } });
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 4, fixes: [{ targetText: "旧。" }] }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 0, edits: [{ targetText: "a" }] }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "deai", params: { chapter: 4, violations: [] }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm:1", decision: "apply" } }))
+      .toEqual({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm:1", decision: "apply" } });
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm 1", decision: "apply" } })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: "apply" })).toBeUndefined();
   });
 
   it("步骤、正文流（live）→ onOperationLive；进度不进这里，形状不对的不认", async () => {

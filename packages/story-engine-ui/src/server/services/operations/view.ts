@@ -27,11 +27,20 @@ export interface OperationView {
   readonly summary: string;
   readonly result?: OperationResult;
   readonly failure?: { readonly code: string; readonly message: string; readonly retryable: boolean };
-  /** 等作者点的按钮（只带号和种类，决定的哈希不出去）。 */
-  readonly pendingActions: readonly { readonly actionId: string; readonly kind: string }[];
+  /** 等作者点的按钮（决定的哈希不出去，只说点过没有）：卡上照 preview 摆给作者看、按 decisions 出按钮。 */
+  readonly pendingActions: readonly PendingActionView[];
   readonly eventSeq: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface PendingActionView {
+  readonly actionId: string;
+  readonly kind: string;
+  readonly decisions: readonly string[];
+  readonly preview?: unknown;
+  /** 作者点过了（等着接着做或已经接着做了）。 */
+  readonly decided: boolean;
 }
 
 function resultOf(record: OperationRecord): OperationResult | undefined {
@@ -62,7 +71,13 @@ export function operationView(record: OperationRecord): OperationView {
     summary: scrubLocalAbsolutePaths(summaryLine(record)),
     ...(result ? { result } : {}),
     ...(record.failure ? { failure: { ...record.failure, message: scrubLocalAbsolutePaths(record.failure.message) } } : {}),
-    pendingActions: record.pendingActions.map(({ actionId, kind }) => ({ actionId, kind })),
+    pendingActions: record.pendingActions.map(({ actionId, kind, decisions, preview, decisionHash }) => ({
+      actionId,
+      kind,
+      decisions: Array.isArray(decisions) ? decisions : [],
+      ...(preview !== undefined ? { preview } : {}),
+      decided: decisionHash !== undefined,
+    })),
     eventSeq: record.eventSeq,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -71,7 +86,7 @@ export function operationView(record: OperationRecord): OperationView {
 
 const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "inspect.run": { continuity: "核账", quality: "硬伤检查", review: "内容审阅", flavor: "查 AI 味" },
-  "draft.change": { write: "写稿", continue: "接着写" },
+  "draft.change": { write: "写稿", continue: "接着写", revise: "改稿", fix: "按核账改", deai: "去 AI 味" },
 };
 const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",
@@ -97,7 +112,7 @@ export function operationStateText(record: OperationRecord): string {
   switch (record.state) {
     case "queued": return "排着";
     case "running": return "在做";
-    case "waiting_author": return "等作者点按钮";
+    case "waiting_author": return "等你定";
     case "paused": return PAUSE_TEXT[record.pauseReason ?? "interrupted"] ?? "停着";
     case "succeeded": return "做完了";
     case "failed": return "没做成";

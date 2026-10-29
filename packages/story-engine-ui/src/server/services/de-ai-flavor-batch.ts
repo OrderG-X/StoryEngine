@@ -12,7 +12,7 @@
  *   - 诚实：not_found / ambiguous / noop / overlap 一律跳过并计数，绝不谎报「全改了」（铁律④）。
  */
 import { z } from "zod";
-import { locateRevisionSpan as locateTargetSpan } from "./revision-service.js";
+import { locateRevisionSpan as locateTargetSpan } from "./draft-change/revise-text.js";
 import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
 
 export interface DeAiRewrite {

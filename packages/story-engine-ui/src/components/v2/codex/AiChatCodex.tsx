@@ -383,7 +383,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     if (!atBottomRef.current) return;
     const el = historyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, props.chatLoading, props.draftAIReview, props.activeRevisionTask, props.chatError, props.rightOpen]);
+  }, [messages, props.chatLoading, props.draftAIReview, props.chatError, props.rightOpen]);
 
   // 折叠态：整列只渲染一个极简竖条（点击展开）。codex.css 没有专用 class，用最小内联（codex 变量调色）。
   if (!props.rightOpen) {
@@ -584,7 +584,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onFixAiFlavorViolation={props.onFixAiFlavorViolation}
             onFixAllAiFlavorViolations={props.onFixAllAiFlavorViolations}
             pendingViolationId={props.aiFlavorPending?.messageId === message.id ? props.aiFlavorPending.violationId : null}
-            aiFlavorAwaitingApply={props.aiFlavorPending?.messageId === message.id && Boolean(props.activeRevisionPreview)}
             batchPendingForThisCard={props.aiFlavorBatchPending === message.id}
             onSendMessage={props.onSendMessage}
             onSendUserAction={props.onSendUserAction}
@@ -614,7 +613,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
 
         {/* 审稿卡不再在这里常驻渲染（旧实现一直钉底部吃视口）——已改为随对应 assistant 消息走，见 MessageBubbles。 */}
         {/* 体检卡不再在这里常驻渲染（旧实现一直钉底部）——已改为随对应 assistant 消息走，见 MessageBubbles。 */}
-        {/* 选区改写预览不再在聊天里渲染——已移到写作区下方独立弹窗（见 RevisionPreviewModal）。 */}
 
         {props.chatError ? <NoticeCard title="章节对话失败" text={props.chatError} danger /> : null}
       </div>
@@ -825,7 +823,6 @@ function MessageBubbles({
   onFixAiFlavorViolation,
   onFixAllAiFlavorViolations,
   pendingViolationId = null,
-  aiFlavorAwaitingApply = false,
   batchPendingForThisCard = false,
   onSendMessage,
   onSendUserAction,
@@ -849,7 +846,6 @@ function MessageBubbles({
   readonly onFixAllAiFlavorViolations?: (violations: readonly AiFlavorViolation[], messageId: string) => void;
   readonly pendingViolationId?: string | null;
   /** 那条 pending 的改写草案是否已生成、等用户去写作台应用（→ 卡上显「待应用」而非「改写中…」）。 */
-  readonly aiFlavorAwaitingApply?: boolean;
   readonly batchPendingForThisCard?: boolean;
   /** 点「审校问题」卡的「改这处」=给 agent 发一句改写意图（chat 驱动）。 */
   readonly onSendMessage?: (content: string) => void;
@@ -964,7 +960,6 @@ function MessageBubbles({
             report={card.report}
             fixedIds={card.fixedIds}
             pendingViolationId={pendingViolationId}
-            awaitingApply={aiFlavorAwaitingApply}
             batchPending={batchPendingForThisCard}
             onFix={onFixAiFlavorViolation ? (v) => onFixAiFlavorViolation(v, message.id) : undefined}
             onFixAll={onFixAllAiFlavorViolations ? (vs) => onFixAllAiFlavorViolations(vs, message.id) : undefined}
@@ -980,7 +975,7 @@ function MessageBubbles({
           />,
         );
       case "continuity":
-        // 核账卡：本章原句 ↔ 前文原句，确定的列出、可能的收起；「改这处」给 agent 发只改这一处的意图。
+        // 核账卡：本章原句 ↔ 前文原句，确定的列出、可能的收起；「改这处」交按核账改（错在前文那章的给 AI 发意图）。
         return (
           <ContinuityCheckCard
             key={card.type}
@@ -1309,7 +1304,6 @@ function shouldShowEmptyState(props: WritingWorkspaceLayoutProps, messages: read
   const onlyInjected = messages.every((message) => isInjectedWorkflowMessage(message));
   return onlyInjected
     && !props.draftAIReview
-    && !props.activeRevisionTask
     && !props.chatError
     && !props.chatLoading;
 }

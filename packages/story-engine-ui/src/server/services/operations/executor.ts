@@ -10,7 +10,7 @@
  * - **开书对账**（6.5）：本进程调度表里的不碰；其余 queued / running：有没处理的结果不明 → paused:attempt_unknown，
  *   后台配方登记了自动续 → 接着跑，其余 → paused:interrupted；配方版本对不上 → obsolete。
  */
-import { bookKey, opCommandKey, readBookEpoch, readCommandReceipt, withBookLock } from "@actalk/story-core";
+import { bookKey, canonicalJson, opCommandKey, readBookEpoch, readCommandReceipt, sha256, withBookLock } from "@actalk/story-core";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
 import { clearCandidateTombstones } from "../../lib/draft-candidates.js";
 import { clearFixLogKeys } from "../../lib/fix-log.js";
@@ -41,6 +41,7 @@ import {
   isScheduledHere,
   isTerminal,
   listOperations,
+  occupantOf,
   onOperationRecord,
   pruneOperations,
   readOperation,
@@ -50,6 +51,7 @@ import {
   type OperationOrigin,
   type OperationRecord,
   type OperationTombstone,
+  type PendingAction,
   type WriteScope,
 } from "../../lib/operations/store.js";
 import type { GateLane } from "../../lib/provider-gate.js";
@@ -94,8 +96,34 @@ export interface RecipeContext<P> {
    * 必须按 key（`opId:stepId`）幂等：键在就不再写。输出落盘了才算发布完。
    */
   publish<T>(id: string, input: unknown, fn: (key: string) => Promise<T>): Promise<T>;
+  /**
+   * 等作者点按钮（设计 6.6）：这个按钮的决定已经落了（检查点 `author:<actionId>`）就返回它；没落就记进 pendingActions、
+   * 换成 waiting_author（不占写位），停掉这次执行。作者点了（resume 带 actionId + 决定）从头再跑，走到这里拿到决定接着往下。
+   */
+  waitForAuthor(action: AuthorAction): Promise<string>;
   /** 一句进度（只推给订阅，不落盘）。 */
   progress(text: string): void;
+}
+
+/** 等作者的一个按钮。actionId 在这次操作里唯一（循环里带序号）。 */
+export interface AuthorAction {
+  readonly actionId: string;
+  readonly kind: string;
+  /** 作者能点的几个决定。 */
+  readonly decisions: readonly string[];
+  /** 卡上给作者看的（按 kind 各自的形状，要能存成 JSON）。 */
+  readonly preview?: unknown;
+}
+
+/** 作者点了的决定存在这一步的检查点里。 */
+export const authorStepId = (actionId: string): string => `author:${actionId}`;
+
+/** 配方核不过（作者看的那版、依据变了）：抛它，这次记成 obsolete、说哪样变了。 */
+export class OperationObsolete extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "OperationObsolete";
+  }
 }
 
 export interface Recipe<P = unknown> {
@@ -200,6 +228,13 @@ interface StartOptions {
  * 返回换完的记录（没换返回当前的）。
  */
 export async function startOperation(bookDir: string, opId: string, options: StartOptions = {}): Promise<OperationRecord | undefined> {
+  const claimed = await claimRun(bookDir, opId, options);
+  if (claimed.changed && claimed.record) launch(bookDir, claimed.record);
+  return claimed.record;
+}
+
+/** 换成 running（书锁 → 记录锁）；changed = 这一下是它换的、该由调用方开跑（在放掉书锁之后开跑）。 */
+async function claimRun(bookDir: string, opId: string, options: StartOptions): Promise<{ readonly record?: OperationRecord; readonly changed: boolean }> {
   let changed = false;
   const record = await changeOperation(bookDir, opId, (current) => {
     const runnable = current.state === "queued" || (options.resume !== undefined && (current.state === "paused" || current.state === "waiting_author"));
@@ -217,10 +252,12 @@ export async function startOperation(bookDir: string, opId: string, options: Sta
       settledUnknowns: [...new Set([...current.settledUnknowns, ...(options.resume?.settle ?? [])])],
     };
   });
-  if (!record || !changed) return record;
+  return { ...(record ? { record } : {}), changed: changed && record !== undefined };
+}
+
+function launch(bookDir: string, record: OperationRecord): void {
   // 不跟着交它的那一轮：作者断开、喊停那一轮都不算停这次操作（停操作走 cancelOperation）。
   track(outsideTurn(() => execute(bookDir, record)));
-  return record;
 }
 
 /** 在跑的（连开跑前换状态那一下、收尾那一步）；只给单测等它们跑完。 */
@@ -302,6 +339,32 @@ function contextFor(record: OperationRecord, operation: OperationContext): Recip
     publish<T>(id: string, input: unknown, fn: (key: string) => Promise<T>): Promise<T> {
       return runStep(id, input, () => withFence(operation, () => fn(`${opId}:${id}`)), "publish");
     },
+    async waitForAuthor(action: AuthorAction): Promise<string> {
+      const decided = await readCheckpoint(bookDir, opId, authorStepId(action.actionId));
+      const decision = (decided?.output as { readonly decision?: unknown } | null | undefined)?.decision;
+      if (typeof decision === "string" && action.decisions.includes(decision)) return decision;
+      if (operation.signal.aborted) throw stoppedError(operation);
+      // 先掐这次执行（之后的写过不了栅栏），再在书锁里换状态：记下按钮、换 waiting_author、runEpoch + 1。
+      abortExecution(bookDir, opId, { type: "wait" }, runEpoch);
+      await changeOperation(bookDir, opId, (current) => {
+        if (current.state !== "running" || current.runEpoch !== runEpoch) return undefined;
+        const pending: PendingAction = {
+          actionId: action.actionId,
+          kind: action.kind,
+          decisions: [...action.decisions],
+          ...(action.preview !== undefined ? { preview: action.preview } : {}),
+        };
+        // 停在等作者那一步：接着做时额度按它加（配方给「点了按钮之后最多还要再跑的」，比如再改一版）。
+        return {
+          ...current,
+          state: "waiting_author",
+          runEpoch: runEpoch + 1,
+          currentStep: authorStepId(action.actionId),
+          pendingActions: [...current.pendingActions.filter((item) => item.actionId !== action.actionId), pending],
+        };
+      });
+      throw stoppedError(operation);
+    },
     progress(text: string) {
       emitLive(bookDir, opId, { type: "progress", text, exec: currentExec });
     },
@@ -364,6 +427,7 @@ async function settleError(operation: OperationContext, error: unknown): Promise
     if (current.state !== "running" || current.runEpoch !== runEpoch) return undefined;
     const { currentStep: _step, ...rest } = current;
     if (code === "book_epoch_changed") return { ...rest, state: "obsolete", failure: EPOCH_CHANGED };
+    if (error instanceof OperationObsolete) return { ...rest, state: "obsolete", failure: { code: error.code, message: error.message, retryable: true } };
     // 停的那一方本该已经换过状态；还是 running 说明它没换成（比如书锁里换状态那一下出错了）：当进程没了，等作者接着做。
     if (stoppedByOthers) return { ...rest, state: "paused", pauseReason: "interrupted", runEpoch: runEpoch + 1 };
     const message = error instanceof Error && error.message.trim() ? error.message.trim().slice(0, 300) : "这次没做完（原因不明）。";
@@ -404,30 +468,82 @@ async function resumeAllowance(bookDir: string, record: OperationRecord, recipe:
 }
 
 export type ResumeOutcome =
-  | { readonly ok: true; readonly record: OperationRecord }
-  | { readonly ok: false; readonly code: "not_paused" | "unknown_operation" | "absent" | "obsolete"; readonly message: string };
+  | { readonly ok: true; readonly record: OperationRecord; readonly replayed?: true }
+  | {
+    readonly ok: false;
+    readonly code: "not_paused" | "unknown_operation" | "absent" | "obsolete" | "unknown_action" | "bad_decision" | "decision_conflict" | "target_busy";
+    readonly message: string;
+    readonly occupant?: OperationRecord;
+  };
+
+/** 作者点了等着的那个按钮：哪一个、点的哪个决定。 */
+export interface AuthorAnswer {
+  readonly actionId: string;
+  readonly decision: string;
+}
+
+const decisionHashOf = (decision: string): string => sha256(canonicalJson({ decision }));
 
 /**
- * 接着做（暂停之后作者点了）：这时还没处理的结果不明的 attempt 记成作者处理过，额度加上停下那一步的最坏值，从停下那一步整步重做。
+ * 接着做（暂停之后作者点了「接着做」、等作者时作者点了按钮）：这时还没处理的结果不明的 attempt 记成作者处理过，
+ * 额度加上停下那一步的最坏值，从停下那一步整步重做。全在书锁里：先重新认领写位（被排着 / 在跑的占着 → target_busy），
+ * 等作者的先核按钮和决定、把决定落进检查点，再换成 running。
+ * 等作者的按钮：不在待办里 unknown_action；这个按钮点过同一个决定 → 回放（不再跑）；点过别的 → decision_conflict。
  */
-export async function resumeOperation(bookDir: string, opId: string): Promise<ResumeOutcome> {
-  const stored = await readOperation(bookDir, opId);
-  if (stored.kind !== "record") return { ok: false, code: "absent", message: "找不到这次操作了。" };
-  const record = stored.record;
-  if (record.state !== "paused") return { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
-  const recipe = recipes.get(record.kind);
-  if (!recipe) return { ok: false, code: "unknown_operation", message: "这类操作还没有。" };
-  if (!recipeMatches(record)) {
-    const obsolete = await changeOperation(bookDir, opId, (current) => (current.state === "paused" && !recipeMatches(current) ? obsoleteByRecipe(current) : undefined));
-    return obsolete?.state === "obsolete"
-      ? { ok: false, code: "obsolete", message: OBSOLETE_RECIPE.message }
-      : { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
-  }
-  const settle = unsettledUnknowns(await listAttempts(bookDir, opId), record.settledUnknowns).map((attempt) => attempt.attemptId);
-  const started = await startOperation(bookDir, opId, { resume: { addBudget: await resumeAllowance(bookDir, record, recipe), settle } });
-  if (started?.state === "obsolete") return { ok: false, code: "obsolete", message: OBSOLETE_RECIPE.message };
-  if (!started || started.state !== "running") return { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
-  return { ok: true, record: started };
+export async function resumeOperation(bookDir: string, opId: string, answer?: AuthorAnswer): Promise<ResumeOutcome> {
+  const notPaused: ResumeOutcome = { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
+  let toLaunch: OperationRecord | undefined;
+  const outcome = await withBookLock(bookDir, async (): Promise<ResumeOutcome> => {
+    const stored = await readOperation(bookDir, opId);
+    if (stored.kind !== "record") return { ok: false, code: "absent", message: "找不到这次操作了。" };
+    const record = stored.record;
+    const pending = answer ? record.pendingActions.find((action) => action.actionId === answer.actionId) : undefined;
+    if (answer) {
+      if (!pending) return { ok: false, code: "unknown_action", message: "这个按钮已经不管用了（这次操作没在等它）。" };
+      if (!pending.decisions.includes(answer.decision)) return { ok: false, code: "bad_decision", message: "这个按钮没有这个选法。" };
+      if (pending.decisionHash !== undefined) {
+        return pending.decisionHash === decisionHashOf(answer.decision)
+          ? { ok: true, record, replayed: true }
+          : { ok: false, code: "decision_conflict", message: "这个按钮已经点过别的选法了，这次不算。" };
+      }
+      if (record.state !== "waiting_author") return notPaused;
+    } else if (record.state !== "paused") {
+      return record.state === "waiting_author" ? { ok: false, code: "unknown_action", message: "这次在等你点卡上的按钮。" } : notPaused;
+    }
+    const recipe = recipes.get(record.kind);
+    if (!recipe) return { ok: false, code: "unknown_operation", message: "这类操作还没有。" };
+    if (!recipeMatches(record)) {
+      const obsolete = await changeOperation(bookDir, opId, (current) => ((current.state === "paused" || current.state === "waiting_author") && !recipeMatches(current) ? obsoleteByRecipe(current) : undefined));
+      return obsolete?.state === "obsolete" ? { ok: false, code: "obsolete", message: OBSOLETE_RECIPE.message } : notPaused;
+    }
+    const occupant = occupantOf(await listOperations(bookDir), record.writeScope, opId);
+    if (occupant) return { ok: false, code: "target_busy", message: "这一章正有别的一次在写，先等它做完或停掉它。", occupant };
+    if (answer && pending) {
+      // 决定先落进检查点（配方从头跑到这里就拿到它），再记进待办（之后同一个按钮回放、换决定挡下）。
+      await writeCheckpoint(bookDir, opId, {
+        schema: "operation-step/1",
+        stepId: authorStepId(answer.actionId),
+        inputHash: inputHashOf({ actionId: answer.actionId }),
+        exec: `${record.runEpoch}:${authorStepId(answer.actionId)}`,
+        output: { decision: answer.decision },
+        finishedAt: new Date().toISOString(),
+      });
+      await changeOperation(bookDir, opId, (current) => (current.state !== "waiting_author" ? undefined : {
+        ...current,
+        pendingActions: current.pendingActions.map((action) => (action.actionId === answer.actionId ? { ...action, decisionHash: decisionHashOf(answer.decision) } : action)),
+      }));
+    }
+    const settle = unsettledUnknowns(await listAttempts(bookDir, opId), record.settledUnknowns).map((attempt) => attempt.attemptId);
+    const claimed = await claimRun(bookDir, opId, { resume: { addBudget: await resumeAllowance(bookDir, record, recipe), settle } });
+    const started = claimed.record;
+    if (started?.state === "obsolete") return { ok: false, code: "obsolete", message: OBSOLETE_RECIPE.message };
+    if (!started || started.state !== "running" || !claimed.changed) return notPaused;
+    toLaunch = started;
+    return { ok: true, record: started };
+  });
+  // 放掉书锁再开跑：执行里的写自己排书锁。
+  if (toLaunch) launch(bookDir, toLaunch);
+  return outcome;
 }
 
 /* ------------------------------------------------------------------ */

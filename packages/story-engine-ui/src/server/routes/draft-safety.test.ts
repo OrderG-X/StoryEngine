@@ -19,7 +19,8 @@ import { draftSha, pendingDraftFor, readDraftCandidate, readDraftRecovery, readS
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
-import { applyRevision, previewRevision, reviseDraftOneShot } from "../services/revision-service.js";
+import { resumeOperation } from "../services/operations/executor.js";
+import { fakeDraftDeps, runDraftEdit, settledDraftChange } from "../services/operations/recipes/draft-change-kit.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
 
 const hooks = vi.hoisted(() => ({
@@ -1298,31 +1299,23 @@ describe("稿纸上就是拆开的稿（第 15 轮复核）", () => {
 });
 
 describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
-  it("两步改稿：预览后作者改了设定，应用时不换上、留成候选（B2）", async () => {
+  it("改稿等作者看改法：看的时候作者改了设定，点「换上」不换、作废说清，不留候选（B2）", async () => {
     await save(1, "他推开门。");
     expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "海州" }], idempotencyKey: "origin-a" })).toMatchObject({ ok: true });
-    const preview = await previewRevision({
-      projectDir: book,
-      chapter: 1,
-      task: { id: "r-preview", chapter: 1, targetType: "paragraph", targetText: "他推开门。", problemSummary: "身份不明", revisionGoal: "点明籍贯", constraints: [], status: "pending" },
-      callModel: async (prompt) => {
+    const waiting = await runDraftEdit(book, "revise", { chapter: 1, edits: [{ targetText: "他推开门。", revisionGoal: "点明籍贯" }], preview: true }, fakeDraftDeps({
+      fixCallModel: async (prompt) => {
         expect(prompt).toContain("海州");
         return JSON.stringify({ beforeText: "他推开门。", afterText: "海州来的张三推开门。" });
       },
-    });
-    if (!preview.ok) throw new Error(JSON.stringify(preview));
+    }));
+    expect(waiting.record.state).toBe("waiting_author");
     expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }], idempotencyKey: "origin-b" })).toMatchObject({ ok: true });
-    const applied = await applyRevision({ projectDir: book, chapter: 1, preview: preview.preview, targetText: "他推开门。" });
-    expect(applied).toMatchObject({ ok: false, code: "draft_kept" });
+    expect(await resumeOperation(book, waiting.record.opId, { actionId: "confirm:1", decision: "apply" })).toMatchObject({ ok: true });
+    const done = await settledDraftChange(book, waiting.record.opId);
+    expect(done).toMatchObject({ state: "obsolete", failure: { code: "basis_moved" } });
+    expect(done.failure?.message).toContain("设定");
     expect((await readDraft(book, 1))?.body).toBe("他推开门。");
-    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "candidate", reason: "basis_moved", body: "海州来的张三推开门。" });
-  });
-
-  it("两步改稿：预览没记依据（升级前的旧预览）→ 不换，如实说要重新预览", async () => {
-    await save(1, "他推开门。");
-    const applied = await applyRevision({ projectDir: book, chapter: 1, preview: { beforeText: "他推开门。", afterText: "他推开了门。" } as never, targetText: "他推开门。" });
-    expect(applied).toMatchObject({ ok: false, code: "preview_stale" });
-    expect((await readDraft(book, 1))?.body).toBe("他推开门。");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
   });
 
   it("升级前崩溃留下的老格式定稿事务：先收拾再核依据，照没收拾的半截前文写的不换上（R9）", async () => {
@@ -1413,28 +1406,28 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
       if (from.includes("/staged/") && to === join(book, "store-control/revision.json")) { revisionSwapped.release(); await allowRest.promise; }
     };
     hooks.beforeRename = async (from, to) => {
-      if (from.includes("/staged/") && to.includes("/ledger/receipts/")) throw eio("设定已换、回执写盘失败");
+      // 只坏这一次（改稿换上时也写回执）。
+      if (from.includes("/staged/") && to.includes("/ledger/receipts/")) {
+        hooks.beforeRename = undefined;
+        throw eio("设定已换、回执写盘失败");
+      }
     };
     const failedWrite = runCommand(book, cardWrite, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }] }, { caller: "author", idempotencyKey: "failed-card-b" });
     let prompt = "";
     try {
       await revisionSwapped.promise;
-      const revising = reviseDraftOneShot({
-        projectDir: book,
-        chapter: 1,
-        targetText: "他推开门。",
-        revisionGoal: "点明籍贯",
-        callModel: async (input) => {
+      const revising = runDraftEdit(book, "revise", { chapter: 1, edits: [{ targetText: "他推开门。", revisionGoal: "点明籍贯" }] }, fakeDraftDeps({
+        fixCallModel: async (input) => {
           prompt = input;
           return JSON.stringify({ beforeText: "他推开门。", afterText: "海州来的张三推开门。" });
         },
-      });
+      }));
       // 写到一半时改稿取不到依据（等书锁），进不了模型。
       await new Promise((done) => setTimeout(done, 50));
       expect(prompt).toBe("");
       allowRest.release();
       expect(await failedWrite).toMatchObject({ ok: false });
-      expect(await revising).toMatchObject({ ok: true, applied: true });
+      expect(await revising).toMatchObject({ record: { state: "succeeded" }, body: { ok: true } });
       expect(prompt).toContain("海州");
       expect(prompt).not.toContain("京城");
       expect((await readDraft(book, 1))?.body).toBe("海州来的张三推开门。");
@@ -1462,21 +1455,17 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     let prompt = "";
     try {
       await atHead.promise;
-      const revising = reviseDraftOneShot({
-        projectDir: book,
-        chapter: 2,
-        targetText: "林远看着保险柜。",
-        revisionGoal: "补上账本里记的口令",
-        callModel: async (input) => {
+      const revising = runDraftEdit(book, "revise", { chapter: 2, edits: [{ targetText: "林远看着保险柜。", revisionGoal: "补上账本里记的口令" }] }, fakeDraftDeps({
+        fixCallModel: async (input) => {
           prompt = input;
           return JSON.stringify({ beforeText: "林远看着保险柜。", afterText: "林远输入白鹤，打开了保险柜。" });
         },
-      });
+      }));
       await new Promise((done) => setTimeout(done, 50));
       expect(prompt).toBe("");
       finishHead.release();
       expect(await writing).toMatchObject({ ok: true });
-      expect(await revising).toMatchObject({ ok: true, applied: true });
+      expect(await revising).toMatchObject({ record: { state: "succeeded" }, body: { ok: true } });
       expect(prompt).toContain("白鹤");
       expect(prompt).not.toContain("红松");
       expect(await pendingDraftFor(book, 2)).toBeUndefined();

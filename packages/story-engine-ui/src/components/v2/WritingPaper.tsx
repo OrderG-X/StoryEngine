@@ -245,7 +245,12 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       if (pointerSelectingRef.current) return; // 鼠标拖选过程中先不弹浮动条，等松手再弹
       refreshSelectionRef.current(instance);
     },
-    onBlur: ({ editor: instance }) => { setSnapPreview(instance, null); setSelection(null); },
+    onBlur: ({ editor: instance, event }) => {
+      // 焦点进了浮动条（「自己说」的输入框）不算离开：收了选区浮动条就跟着没了，作者没法打字。
+      if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".se-v2-selection-toolbar")) return;
+      setSnapPreview(instance, null);
+      setSelection(null);
+    },
   });
 
   // 锁 / 解锁不算作者改字：TipTap 的 setEditable 默认会发一次 update，onUpdate 会把编辑器里的字当作者打的回写——
@@ -495,6 +500,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
               onPick={handlePick}
               onPickCustom={handlePickCustom}
               onAsk={onAskAboutSelection ? () => { onAskAboutSelection(selection.text); setSelection(null); } : undefined}
+              onLeave={() => setSelection(null)}
             />
           ) : null}
         </div>

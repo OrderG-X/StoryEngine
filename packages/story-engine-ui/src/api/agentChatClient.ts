@@ -74,9 +74,39 @@ export interface DraftParamsData {
   readonly allowWriteAhead?: true;
 }
 
+/** 改稿（片 2C，和服务端 services/draft-change/params.ts 的 DraftEditParams 同形）：改写几段 / 按核账改 / 去 AI 味。 */
+export type DraftEditModeData = "revise" | "fix" | "deai";
+
+export type DraftEditParamsData =
+  | {
+    readonly mode: "revise";
+    readonly chapter: number;
+    readonly edits: readonly { readonly targetText: string; readonly revisionGoal?: string; readonly replacementText?: string }[];
+    readonly style?: "deai";
+    /** 改好先给作者看、点了「换上」才换（选中文字改写）。 */
+    readonly preview?: true;
+  }
+  | { readonly mode: "fix"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
+  | {
+    readonly mode: "deai";
+    readonly chapter: number;
+    readonly violations: readonly { readonly id: string; readonly text: string; readonly reason?: string; readonly severity?: string; readonly suggestedFix?: string }[];
+  };
+
+/** 一次最多改几处、一处原句最多多长（和服务端 params.ts 的 EDIT_MAX_* 一致；超了服务端整个不收）。 */
+export const EDIT_MAX_TEXT = 800;
+export const EDIT_MAX_FIXES = 12;
+export const EDIT_MAX_VIOLATIONS = 30;
+
+/** 改了的一处（改前 → 改后）。 */
+export interface EditChangeData {
+  readonly from: string;
+  readonly to: string;
+}
+
 /**
- * 操作按钮（写作版本 P2a，与服务端 agent/user-actions.ts 的 OperationAction 同形）：交一次新的检查、写稿（请求号在按钮出的时候给，
- * 连点两下只做一次）、停着的「接着做」、「不要了」。
+ * 操作按钮（写作版本 P2a，与服务端 agent/user-actions.ts 的 OperationAction 同形）：交一次新的检查、写稿、改稿（请求号在按钮出的时候给，
+ * 连点两下只做一次）、停着的「接着做」（等作者点的带上点的哪个）、「不要了」。
  */
 export type OperationActionData =
   | {
@@ -95,7 +125,15 @@ export type OperationActionData =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
-  | { readonly kind: "resume"; readonly opId: string }
+  | {
+    readonly kind: "new";
+    readonly type: "draft.change";
+    readonly mode: DraftEditModeData;
+    readonly params: DraftEditParamsData;
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string } }
   | { readonly kind: "cancel"; readonly opId: string };
 
 /** 一个新检查按钮（请求号这时候给）。 */
@@ -115,6 +153,19 @@ export function newDraftAction(mode: DraftModeData, params: DraftParamsData): Op
   return { kind: "new", type: "draft.change", mode, params, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
 }
 
+/** 一个新改稿按钮（请求号这时候给）。 */
+export function newEditAction(params: DraftEditParamsData): OperationActionData {
+  return { kind: "new", type: "draft.change", mode: params.mode, params, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+export const isDraftEditMode = (mode: unknown): mode is DraftEditModeData => mode === "revise" || mode === "fix" || mode === "deai";
+
+export type DraftEditActionData = Extract<OperationActionData, { readonly mode: DraftEditModeData }>;
+
+/** 是改稿按钮（不是写稿、检查）。 */
+export const isDraftEditAction = (action: AgentUserAction): action is DraftEditActionData =>
+  "kind" in action && action.kind === "new" && action.type === "draft.change" && isDraftEditMode(action.mode);
+
 /** 是操作按钮（不是按工具名的老按钮）。 */
 export function isOperationAction(action: AgentUserAction): action is OperationActionData {
   return "kind" in action;
@@ -127,7 +178,6 @@ export type AgentUserAction =
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   | { readonly toolName: "undo" }
-  | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly accept?: boolean }
   | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
@@ -368,6 +418,23 @@ export interface OperationViewData {
   readonly inspect?: InspectCardsData;
   /** 写稿做完了的那几样（写的哪章、换上了没有、另外几版）。 */
   readonly draft?: DraftOperationData;
+  /** 等作者点的（改写的改前改后 +「换上 / 再改一版」）；点过的不算。 */
+  readonly pending?: PendingActionData;
+}
+
+/** 改写的改法（等作者点「换上」，服务端 RevisePreview 的子集）。 */
+export interface RevisePreviewData {
+  readonly round: number;
+  readonly changes: readonly EditChangeData[];
+  readonly failed: readonly { readonly target: string; readonly why: string }[];
+  readonly brief?: string;
+}
+
+/** 等作者点的那个按钮：哪个、能点哪几个决定、卡上摆什么。 */
+export interface PendingActionData {
+  readonly actionId: string;
+  readonly decisions: readonly string[];
+  readonly revise: RevisePreviewData;
 }
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
@@ -380,6 +447,8 @@ export interface DraftOperationData {
   readonly snapshots?: readonly string[];
   /** 一次写几版时落选的几版全文（「另外几版」卡）。 */
   readonly versions?: DraftVersionsCardData;
+  /** 改稿改了的几处（稿纸上高亮改后那句）。 */
+  readonly changes?: readonly EditChangeData[];
 }
 
 /** 操作的实时事件（与服务端 lib/operations/live.ts 的 LiveEvent 同形）。 */
@@ -405,6 +474,41 @@ export function readOperationLive(value: unknown): OperationLiveData | undefined
   };
 }
 
+/** 改了的几处（防御解析：不是一对字的丢掉）；一处没有是 undefined。 */
+function editChanges(value: unknown): readonly EditChangeData[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const changes = value.flatMap((item): EditChangeData[] => (isRecord(item) && typeof item.from === "string" && typeof item.to === "string" ? [{ from: item.from, to: item.to }] : []));
+  return changes.length > 0 ? changes : undefined;
+}
+
+/** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）；点过的、认不出的不算。 */
+const REVISE_CONFIRM_KIND = "draft.revise.confirm";
+
+function readPendingAction(value: unknown): PendingActionData | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const item of value) {
+    if (!isRecord(item) || item.decided === true || item.kind !== REVISE_CONFIRM_KIND || typeof item.actionId !== "string") continue;
+    const decisions = Array.isArray(item.decisions) ? item.decisions.filter((decision): decision is string => typeof decision === "string") : [];
+    const preview = isRecord(item.preview) ? item.preview : undefined;
+    const changes = preview ? editChanges(preview.changes) : undefined;
+    if (!preview || !changes || decisions.length === 0) continue;
+    const failed = Array.isArray(preview.failed)
+      ? preview.failed.flatMap((entry) => (isRecord(entry) && typeof entry.target === "string" && typeof entry.why === "string" ? [{ target: entry.target, why: entry.why }] : []))
+      : [];
+    return {
+      actionId: item.actionId,
+      decisions,
+      revise: {
+        round: positiveInt(preview.round) ?? 1,
+        changes,
+        failed,
+        ...(typeof preview.brief === "string" && preview.brief.trim() ? { brief: preview.brief.trim() } : {}),
+      },
+    };
+  }
+  return undefined;
+}
+
 /** 写稿结果 → 界面要的那几样（不是写稿、没做完、形状不对是 undefined）。 */
 function readDraftOperation(body: unknown): DraftOperationData | undefined {
   if (!isRecord(body) || body.kind !== "draft.change") return undefined;
@@ -413,11 +517,13 @@ function readDraftOperation(body: unknown): DraftOperationData | undefined {
   const versions = readDraftVersions({ chapter, otherVersions: body.otherVersions });
   const snapshots = [body.planSnapshotId, body.ok === true ? body.snapshotId : undefined]
     .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const changes = editChanges(body.changes);
   return {
     chapter,
     applied: body.ok === true,
     ...(typeof body.draftTitle === "string" && body.draftTitle.trim() ? { title: body.draftTitle.trim() } : {}),
     ...(snapshots.length > 0 ? { snapshots } : {}),
+    ...(changes ? { changes } : {}),
     ...(versions ? { versions } : {}),
   };
 }
@@ -827,7 +933,7 @@ function readRewriteChoices(value: unknown): readonly RewriteChoiceData[] | unde
   const choices = value.flatMap((item): RewriteChoiceData[] => {
     if (!isRecord(item) || typeof item.label !== "string" || !item.label.trim()) return [];
     const action = isRecord(item.action) ? parseOperationActionData(item.action) : undefined;
-    return action?.kind === "new" && action.type === "draft.change" ? [{ label: item.label.trim(), mode: action.mode, action }] : [];
+    return action?.kind === "new" && action.type === "draft.change" && (action.mode === "write" || action.mode === "continue") ? [{ label: item.label.trim(), mode: action.mode, action }] : [];
   });
   return choices.length > 0 ? choices : undefined;
 }
@@ -859,6 +965,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const result = isRecord(value.result) ? value.result : undefined;
   const inspect = state === "succeeded" && value.kind === "inspect.run" && mode && result ? readInspectCards(mode, result.body) : undefined;
   const draft = state === "succeeded" && value.kind === "draft.change" && result ? readDraftOperation(result.body) : undefined;
+  const pending = state === "waiting_author" ? readPendingAction(value.pendingActions) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
     : [];
@@ -882,6 +989,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     },
     ...(inspect ? { inspect } : {}),
     ...(draft ? { draft } : {}),
+    ...(pending ? { pending } : {}),
   };
 }
 
@@ -962,12 +1070,22 @@ export function parseNextStepUserAction(value: unknown): AgentUserAction | undef
 /** 操作按钮（防御解析，和服务端 user-actions 的 parseOperationAction 同一口径）。 */
 function parseOperationActionData(value: Record<string, unknown>): OperationActionData | undefined {
   if (value.kind === "resume" || value.kind === "cancel") {
-    return typeof value.opId === "string" && /^op-[0-9a-f]{20}$/u.test(value.opId) ? { kind: value.kind, opId: value.opId } : undefined;
+    if (typeof value.opId !== "string" || !/^op-[0-9a-f]{20}$/u.test(value.opId)) return undefined;
+    if (value.kind === "cancel" || value.answer === undefined) return { kind: value.kind, opId: value.opId };
+    const answer = isRecord(value.answer) ? value.answer : {};
+    const { actionId, decision } = answer;
+    return typeof actionId === "string" && /^[A-Za-z0-9:_-]{1,64}$/u.test(actionId) && typeof decision === "string" && /^[A-Za-z0-9_-]{1,32}$/u.test(decision)
+      ? { kind: "resume", opId: value.opId, answer: { actionId, decision } }
+      : undefined;
   }
   if (value.kind !== "new") return undefined;
   if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
   if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
   const stamp = { requestKey: value.requestKey, issuedAt: value.issuedAt };
+  if (value.type === "draft.change" && isDraftEditMode(value.mode)) {
+    const params = readEditParams(value.mode, value.params);
+    return params ? { kind: "new", type: "draft.change", mode: params.mode, params, ...stamp } : undefined;
+  }
   if (value.type === "draft.change") {
     const mode = value.mode === "write" || value.mode === "continue" ? value.mode : undefined;
     const params = mode ? readDraftParams(mode, value.params) : undefined;
@@ -1024,6 +1142,50 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
     ...(writing && value.rewrite === true ? { rewrite: true as const } : {}),
     ...(value.allowWriteAhead === true ? { allowWriteAhead: true as const } : {}),
   };
+}
+
+/** 改稿参数（和服务端 readDraftEditParams 同一口径的子集：章号、要改的原文缺了不认；细的服务端执行前再校验）。 */
+function readEditParams(mode: DraftEditModeData, value: unknown): DraftEditParamsData | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = positiveInt(value.chapter);
+  if (chapter === undefined) return undefined;
+  const records = (list: unknown): readonly Record<string, unknown>[] | undefined =>
+    Array.isArray(list) && list.length > 0 && list.every(isRecord) ? list : undefined;
+  const textOf = (item: Record<string, unknown>, key: string): string | undefined => (typeof item[key] === "string" && (item[key] as string).trim() ? item[key] as string : undefined);
+  if (mode === "revise") {
+    const items = records(value.edits);
+    const edits = items?.map((item) => {
+      const targetText = textOf(item, "targetText");
+      const revisionGoal = textOf(item, "revisionGoal");
+      const replacementText = textOf(item, "replacementText");
+      return targetText ? { targetText, ...(revisionGoal ? { revisionGoal } : {}), ...(replacementText ? { replacementText } : {}) } : undefined;
+    });
+    if (!edits || edits.some((edit) => !edit)) return undefined;
+    return {
+      mode,
+      chapter,
+      edits: edits as NonNullable<(typeof edits)[number]>[],
+      ...(value.style === "deai" ? { style: "deai" as const } : {}),
+      ...(value.preview === true ? { preview: true as const } : {}),
+    };
+  }
+  if (mode === "fix") {
+    const fixes = records(value.fixes)?.map((item) => {
+      const targetText = textOf(item, "targetText");
+      const revisionGoal = textOf(item, "revisionGoal");
+      return targetText && revisionGoal ? { targetText, revisionGoal } : undefined;
+    });
+    return fixes && fixes.every(Boolean) ? { mode, chapter, fixes: fixes as NonNullable<(typeof fixes)[number]>[] } : undefined;
+  }
+  const violations = records(value.violations)?.map((item) => {
+    const id = textOf(item, "id");
+    const sentence = textOf(item, "text");
+    const reason = textOf(item, "reason");
+    const severity = textOf(item, "severity");
+    const suggestedFix = textOf(item, "suggestedFix");
+    return id && sentence ? { id, text: sentence, ...(reason ? { reason } : {}), ...(severity ? { severity } : {}), ...(suggestedFix ? { suggestedFix } : {}) } : undefined;
+  });
+  return violations && violations.every(Boolean) ? { mode, chapter, violations: violations as NonNullable<(typeof violations)[number]>[] } : undefined;
 }
 
 /** 存盘消息里的写稿按钮动作（读回时校验；服务端执行前还会再校验）。 */

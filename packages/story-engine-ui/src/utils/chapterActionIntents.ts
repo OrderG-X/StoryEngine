@@ -4,6 +4,7 @@
  * 重构 P4 起：按钮直接发结构化动作（utils/chapterButtons.ts），输入框的字一律交给 AI——
  * 不再拿「文字等于按钮文案」认回按钮动作（原 matchDeterministicChapterAction 和那一串按钮文案常量已删）。
  */
+import { isDraftEditAction, type DraftEditParamsData } from "../api/agentChatClient.js";
 
 // 「写这一章」按钮直写时的题材中立默认目标：用户没填方向、也没整理方案时，按现有资料/已写章节自然推进，
 // 直接出稿——绝不因「没方向」落到「方案整理失败」旧链路（Kimi/Qwen 两轮真机都中：点按钮→方案整理失败）。
@@ -39,10 +40,6 @@ export function userActionChoiceText(
       return action.label ? `确认改设定：${action.label}` : "确认改设定";
     case "undo":
       return "撤销上一步";
-    case "revise_draft":
-      return action.fixes.length === 1
-        ? `改第 ${action.chapter} 章这一处：「${action.fixes[0]!.targetText}」`
-        : `改掉第 ${action.chapter} 章这 ${action.fixes.length} 处`;
     case "brainstorm_chapter":
       return action.avoid?.length
         ? `第 ${action.chapter} 章再来几种走法${action.idea ? `：${action.idea}` : ""}`
@@ -57,11 +54,33 @@ export function userActionChoiceText(
   }
 }
 
+/** 等作者点的按钮点了哪个（改写的「换上 / 再改一版」）。 */
+const DECISION_TEXT: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
+
+/** 回显里引一句原文：太长的截短。 */
+const quoted = (text: string): string => {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  return flat.length > 40 ? `「${flat.slice(0, 40)}…」` : `「${flat}」`;
+};
+
+/** 改稿按钮（片 2C）的回显：按核账改、去 AI 味、改写。 */
+function editActionText(params: DraftEditParamsData): string {
+  const chapter = params.chapter;
+  if (params.mode === "fix") {
+    return params.fixes.length === 1 ? `改第 ${chapter} 章这一处：${quoted(params.fixes[0]!.targetText)}` : `改掉第 ${chapter} 章这 ${params.fixes.length} 处`;
+  }
+  if (params.mode === "deai") {
+    return params.violations.length === 1 ? `改掉第 ${chapter} 章这句的机器腔：${quoted(params.violations[0]!.text)}` : `改掉第 ${chapter} 章这 ${params.violations.length} 句的机器腔`;
+  }
+  return params.edits.length === 1 ? `改写第 ${chapter} 章这段：${quoted(params.edits[0]!.targetText)}` : `改写第 ${chapter} 章这 ${params.edits.length} 段`;
+}
+
 /** 操作按钮（写作版本 P2a）的回显：写稿、新检查按种类说；「接着做」「不要了」照按钮字。 */
 function operationActionText(action: import("../api/agentChatClient.js").OperationActionData, directionTitle?: string): string {
-  if (action.kind === "resume") return "接着做";
+  if (action.kind === "resume") return action.answer ? (DECISION_TEXT[action.answer.decision] ?? "接着做") : "接着做";
   if (action.kind === "cancel") return "不要了";
   const chapter = action.params.chapter;
+  if (isDraftEditAction(action)) return editActionText(action.params);
   if (action.type === "draft.change") {
     if (action.mode === "continue") return `第 ${chapter} 章接着往下写`;
     if (action.params.rewrite) return `重写第 ${chapter} 章`;

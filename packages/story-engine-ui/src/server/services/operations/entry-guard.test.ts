@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * 源码扫描（写作版本 P2a 设计第十一节）：检查类（核账 / 硬伤检查 / 内容审阅 / 查 AI 味）只有执行器一个入口，
- * 路由表、客户端、对话工具、按钮分发都不绕过它；老书上新核心只在登记的几处做（配方和专员里出现就报错）。
+ * 路由表、客户端、对话工具、按钮分发都不绕过它；改稿类（按核账改 / 去 AI 味 / 改写）同样（片 2C）；老书上新核心只在登记的几处做（配方和专员里出现就报错）。
  */
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -43,6 +43,24 @@ describe("检查类只有执行器一个入口", () => {
     const inspectPath = /["'`]\/api\/(?:draft\/(?:ai-review|quality|ai-flavor|continuity)|continuity-check|quality-check|ai-review)\b/u;
     expect(await filesMatching(join(SERVER, "routes"), inspectPath)).toEqual([]);
     expect(await filesMatching(join(SRC, "api"), inspectPath)).toEqual([]);
+  });
+});
+
+describe("改稿类只有执行器一个入口（片 2C）", () => {
+  it("改写、按核账改、去 AI 味只在 draft.change 的改稿里和出稿流水线里调", async () => {
+    expect(await filesMatching(SERVER, /\breviseDraftText\s*\(/u)).toEqual(["services/draft-change/edit.ts", "services/draft-change/revise-text.ts"]);
+    expect(await filesMatching(SERVER, /\bfixByUnits\s*\(/u)).toEqual(["services/draft-change/edit.ts", "services/draft-pipeline/quality-steps.ts", "services/unit-fix.ts"]);
+    expect(await filesMatching(SERVER, /\brunDeAiFlavorBatch\s*\(/u)).toEqual(["services/de-ai-flavor-batch.ts", "services/draft-change/edit.ts", "services/draft-service.ts"]);
+  });
+
+  it("对话工具、按钮分发不直接改稿：revise_draft 只交操作", async () => {
+    expect(await filesMatching(join(SERVER, "agent"), /\b(?:reviseDraftText|fixByUnits|runDeAiFlavorBatch|applyAiDraft)\b/u)).toEqual([]);
+  });
+
+  it("路由表、界面的客户端里没有改稿类的 HTTP 口", async () => {
+    const editPath = /["'`]\/api\/draft\/(?:revision|de-ai-flavor)\b/u;
+    expect(await filesMatching(join(SERVER, "routes"), editPath)).toEqual([]);
+    expect(await filesMatching(join(SRC, "api"), editPath)).toEqual([]);
   });
 });
 

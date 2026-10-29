@@ -16,12 +16,14 @@ import type { PauseReason } from "./store.js";
 export type StopReason =
   | { readonly type: "cancel" }
   | { readonly type: "pause"; readonly reason: PauseReason }
+  /** 停下等作者点按钮（waitForAuthor）。 */
+  | { readonly type: "wait" }
   | { readonly type: "policy"; readonly policy: PolicyStop };
 
 /** abort 的 reason 一律用它：失败分类只看结构（类型），不看文案。 */
 export class StopSignal extends Error {
   constructor(readonly stop: StopReason) {
-    super(stop.type === "cancel" ? "这次已经停掉了" : stop.type === "pause" ? `这次暂停了（${stop.reason}）` : `按策略停下（${stop.policy}）`);
+    super(stop.type === "cancel" ? "这次已经停掉了" : stop.type === "pause" ? `这次暂停了（${stop.reason}）` : stop.type === "wait" ? "停下等作者点按钮" : `按策略停下（${stop.policy}）`);
     this.name = "StopSignal";
   }
 }

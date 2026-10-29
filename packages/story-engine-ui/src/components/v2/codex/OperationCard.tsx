@@ -42,6 +42,7 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
       </div>
     );
   }
+  if (op.state === "waiting_author" && op.pending) return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   const running = RUNNING.has(op.state);
   const canResume = Boolean(onAction) && op.allowed.includes("resume");
   const canCancel = Boolean(onAction) && op.allowed.includes("cancel") && !inLiveTurn;
@@ -56,6 +57,54 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
           ) : null}
           {canCancel ? (
             <button type="button" className="chip" disabled={busy} onClick={() => onAction?.({ kind: "cancel", opId: op.opId })}>不要了</button>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** 点了「换上 / 再改一版」交回去的决定（和服务端改写的 decisions 同名）。 */
+const DECISION_LABELS: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
+
+/**
+ * 改写停着等作者（片 2C）：改前划掉、改后照摆，点「换上」才换进稿子；「再改一版」换个改法；「不要了」稿子不动。
+ * 这一轮在跑时也给「不要了」：等作者点的时候这一轮已经说完了。
+ */
+function ReviseChoice({ op, pending, busy, onAction }: {
+  readonly op: OperationCardData;
+  readonly pending: NonNullable<OperationCardData["pending"]>;
+  readonly busy: boolean;
+  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+}) {
+  const { revise } = pending;
+  return (
+    <div className="se-op-card se-op-revise" role="group" aria-label={op.what}>
+      {revise.brief ? <p className="se-op-brief">{revise.brief}</p> : null}
+      <ul className="se-op-changes">
+        {revise.changes.map((change, index) => (
+          <li key={index}>
+            <p className="se-op-from serif">{change.from}</p>
+            <p className="se-op-to serif">{change.to}</p>
+          </li>
+        ))}
+      </ul>
+      {revise.failed.length > 0 ? <p className="se-op-failed">{revise.failed.length === 1 ? `这一段没改成：${revise.failed[0]!.why}` : `${revise.failed.length} 段没改成：${revise.failed[0]!.why}`}</p> : null}
+      {onAction ? (
+        <span className="se-op-acts">
+          {pending.decisions.map((decision) => (DECISION_LABELS[decision] ? (
+            <button
+              key={decision}
+              type="button"
+              className={decision === "apply" ? "chip is-primary" : "chip"}
+              disabled={busy}
+              onClick={() => onAction({ kind: "resume", opId: op.opId, answer: { actionId: pending.actionId, decision } })}
+            >
+              {DECISION_LABELS[decision]}
+            </button>
+          ) : null))}
+          {op.allowed.includes("cancel") ? (
+            <button type="button" className="chip" disabled={busy} onClick={() => onAction({ kind: "cancel", opId: op.opId })}>不要了</button>
           ) : null}
         </span>
       ) : null}

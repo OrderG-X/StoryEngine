@@ -1,4 +1,4 @@
-import type { CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, ImportBookRequest, StateOverview } from "../api/types.js";
+import type { CreateBookResult, DraftAIReviewReport, ImportBookRequest, StateOverview } from "../api/types.js";
 import type { SuggestedAction, ThemeMode } from "./workflow.js";
 import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, AiFlavorViolation, WorkspaceDraftCandidate } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
@@ -39,25 +39,19 @@ export interface WritingWorkspaceLayoutProps {
   readonly lastFormalCommitApply?: LastFormalCommitApply | null;
   readonly isCurrentChapterAlreadyFormallyCommitted?: boolean;
   readonly draftAIReview?: DraftAIReviewReport | null;
-  /** 体检卡「改掉这句」：复用选区改写链路（key=deai + suggestedFix）→ 弹改写预览、可撤销。
-   *  messageId=这张卡所属的消息，用于改写应用成功后把该违规标「已改」。 */
+  /** AI 味卡「改掉这句」：交去 AI 味（只改这一句，直接改、可撤销）。messageId=这张卡所属的消息，改好了据它标「已改」。 */
   readonly onFixAiFlavorViolation?: (violation: AiFlavorViolation, messageId: string) => void;
-  /** 体检卡「一键全修」：把还没改的违规一次批量去 AI 味（走 de-ai-flavor 端点·倒序落盘·整批可撤销）。 */
+  /** AI 味卡「一键全修」：卡上还没改的几句一次交去 AI 味（换前存档、可撤销）。 */
   readonly onFixAllAiFlavorViolations?: (violations: readonly AiFlavorViolation[], messageId: string) => void;
   /** 体检卡当前在改的违规（来自 store.aiFlavorPending）：命中某条消息时该卡那条显示「改写中…」。 */
   readonly aiFlavorPending?: { readonly messageId: string; readonly violationId: string } | null;
   /** 一键全修进行中的卡片 messageId（来自 store.aiFlavorBatchPending）：命中时该卡顶部按钮转「全修中…」。 */
   readonly aiFlavorBatchPending?: string | null;
-  readonly activeRevisionTask?: DraftRevisionTask | null;
-  readonly activeRevisionPreview?: DraftRevisionPreview | null;
   readonly onSteeringDirectionChange: (value: string) => void;
-  readonly onGenerateRevisionPreview?: () => void;
-  readonly onApplyRevisionPreview?: () => void;
-  readonly onDismissRevisionTask?: () => void;
   readonly onDraftContentChange?: (content: string) => void;
-  /** 选区浮动操作条（阶段三块②）：选中正文 + 模板键 → 复用 draft-revision 改写选中段、可撤销。 */
+  /** 选区浮动操作条（阶段三块②）：选中正文 + 模板键 → 交改写（对话里出改前改后，点「换上」才换、可撤销）。 */
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;
-  /** 「✎ 自己说」：选中正文 + 用户自定义改写要求 → 走 custom 模板改写选中段、可撤销。 */
+  /** 「✎ 自己说」：选中正文 + 作者自己的要求 → 同上。 */
   readonly onSelectionRewriteCustom?: (selectionText: string, instruction: string) => Promise<void>;
   /** 抽卡（阶段三块③）：再来一版生成 2–3 个临时候选并排选。 */
   readonly onReroll?: () => void;

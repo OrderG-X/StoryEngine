@@ -39,7 +39,7 @@ export interface AgentToolResultOutput {
    * 前端据此把时间线步骤置 failed，**不被 agent 文本可能的「已完成」幻觉盖过**（结构性防谎报），
    * 并据此决定是否挂「撤销到此」/染「影响范围」徽标（ok===false 的回合不挂、不染）。
    * 所有写类工具都已带 ok（foundation_write=applied、commit_apply=committed、
-   * revise_draft=改写是否通过、change_draft / run_check=交没交上）；读类工具无此字段（undefined）→ 视为完成、不受影响。
+   * change_draft / revise_draft / run_check=交没交上）；读类工具无此字段（undefined）→ 视为完成、不受影响。
    */
   readonly ok?: boolean;
   /**
@@ -167,7 +167,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   brainstorm_chapter: { stepLabel: "想走法", card: null },
   change_draft: { stepLabel: "写稿", card: null },
   generate_draft: { stepLabel: "生成正文", card: null }, // P2a 前的出稿工具（老会话回放仍显示原名）
-  revise_draft: { stepLabel: "修改工作稿", card: null },
+  revise_draft: { stepLabel: "改稿", card: null },
   // 检查（写作版本 P2a）：交一次检查（核账 / 硬伤检查 / 内容审阅 / 查 AI 味）、查上次那次检查
   run_check: { stepLabel: "检查", card: null },
   read_operation: { stepLabel: "查上次的检查", card: null },
@@ -391,6 +391,7 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     ...(same && current.progress && LIVE_OPERATION_STATES.has(view.state) ? { progress: current.progress } : {}),
     eventSeq: view.eventSeq,
     ...(announced || (same && current.announced) ? { announced: true as const } : {}),
+    ...(view.pending ? { pending: view.pending } : {}),
   };
   const next = withDraftEffects(withCard(message, { type: "operation", op }), view);
   if (same && current.state === "succeeded") return next;

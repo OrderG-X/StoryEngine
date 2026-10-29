@@ -11,7 +11,8 @@ import { MODEL_CALL_MAX_SENDS, type ModelTaskProfileKey } from "../../lib/llm-cl
 import { WRITER_MAX_CALLS } from "../../writing/fast-draft-writer.js";
 import { CONTINUE_MAX_ROUNDS } from "../draft-pipeline/continue-draft.js";
 import { CONTINUE_CALL_MAX_SENDS } from "../draft-pipeline/production-call-models.js";
-import type { DraftChangeMode } from "../draft-change/params.js";
+import type { DraftChangeMode, DraftEditParams } from "../draft-change/params.js";
+import { REVISE_MAX_CALLS } from "../draft-change/revise-text.js";
 import type { InspectMode } from "../inspect-service.js";
 import { UNIT_FIX_MAX_CALLS } from "../unit-fix.js";
 
@@ -97,3 +98,21 @@ export function draftChangeTasks(mode: DraftChangeMode): readonly ModelTaskProfi
     ? ["fastDraft", "chapterSteering", "qualityCheck", "repair", "triage"]
     : ["fastDraft", "qualityCheck", "repair", "triage"];
 }
+
+/**
+ * draft.change 改稿（片 2C）改的那一步最多发几次：按核账改一批最多两次、去机器腔一次；改一段 = 要模型改写的段数 × 每段最多几次
+ * （作者给了确切新文本的不调模型）。revise 受理时只算第一版，「再改一版」接着做时按等作者那一步另加一版。
+ */
+export function draftEditSends(params: DraftEditParams): number {
+  switch (params.mode) {
+    case "fix":
+      return UNIT_FIX_MAX_CALLS * MODEL_CALL_MAX_SENDS;
+    case "deai":
+      return SINGLE_CALL_SENDS;
+    case "revise":
+      return params.edits.filter((edit) => !edit.replacementText).length * REVISE_MAX_CALLS * MODEL_CALL_MAX_SENDS;
+  }
+}
+
+/** draft.change 改稿用到的模型任务：改句、去机器腔都走 repair 槽。 */
+export const DRAFT_EDIT_TASKS: readonly ModelTaskProfileKey[] = ["repair"];

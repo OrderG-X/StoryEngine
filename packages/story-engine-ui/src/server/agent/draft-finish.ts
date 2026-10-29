@@ -6,13 +6,15 @@
  *   作者要写完就出定稿预览的接着出预览，否则给下一步。
  * - 写好了没换上（写的途中稿子或前文改过）：照结论说，AI 这版在稿纸上等作者选，不再写一遍。
  * - 没写成 / 没受理：照原因说，按原因给下一步（再写一次、改成从头写、先定稿前一章、重写 / 接着写这一章）。
+ * - 改稿（revise / fix / deai，片 2C）：一句结论（改了几处、哪几处没改成为什么）；按核账改的给「再核一遍」，没改成的给「让 AI 改」。
  * 只按操作记录里的结构化结果出，不看模型说了什么。
  */
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import type { OperationRecord } from "../lib/operations/store.js";
 import { isChapterCommitted } from "../lib/working-draft-text.js";
-import type { DraftChangeMode, DraftChangeParams } from "../services/draft-change/params.js";
-import { readDraftChangeParams } from "../services/draft-change/params.js";
+import type { DraftEditBody } from "../services/draft-change/edit.js";
+import type { DraftChangeMode, DraftChangeParams, DraftFixParams } from "../services/draft-change/params.js";
+import { isDraftEditMode, readDraftChangeParams, readDraftEditParams } from "../services/draft-change/params.js";
 import { draftBrief, type DraftChangeBody } from "../services/draft-change/result.js";
 import { cachedContinuityCheck } from "../services/inspect-service.js";
 import type { OperationResult } from "../services/operations/executor.js";
@@ -205,6 +207,10 @@ async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenP
  * 一次写稿操作停下来以后的那一句和下一步（finishOperationTurn 交过来的：做完了、没做成）。停着、停掉的那几种由调用方说。
  */
 export async function finishDraftOperation(record: OperationRecord, args: DraftFinishArgs): Promise<void> {
+  if (isDraftEditMode(record.mode)) {
+    finishDraftEdit(record, args);
+    return;
+  }
   const emit = emitter(args);
   const read = readDraftChangeParams(record.mode, record.params);
   const chapter = read?.params.chapter ?? record.origin.chapter;
@@ -224,4 +230,45 @@ export async function finishDraftOperation(record: OperationRecord, args: DraftF
   if (!read) return;
   const choices = await draftRetryChoices(args.projectDir, record.failure?.code, read.mode, read.params, record.failure?.retryable !== false);
   sendNextSteps(args.sendEvent, `第 ${read.params.chapter} 章没写成，接下来？`, choices);
+}
+
+/** 按核账改没改成的那几处：交给对话 AI 改（作者点了才发，带原句和改法）。 */
+function askAiToFix(chapter: number, fixes: DraftFixParams["fixes"]): NextStepChoice {
+  return {
+    label: "让 AI 改",
+    intent: `${fixes.map((fix) => `把第 ${chapter} 章里「${fix.targetText}」这处改掉：${fix.revisionGoal}。`).join("")}只改这几处，别的不动。`,
+    recommended: true,
+  };
+}
+
+/**
+ * 一次改稿停下来以后（做完了、没做成、作废了）：照结论说；按核账改的给下一步。
+ * 一处都没改成（not_changed）结论里已经说了为什么，不再套「没做成」。
+ */
+function finishDraftEdit(record: OperationRecord, args: DraftFinishArgs): void {
+  const emit = emitter(args);
+  const params = readDraftEditParams(record.mode, record.params);
+  const chapter = params?.chapter ?? record.origin.chapter;
+  const what = operationWhat(record.kind, record.mode, chapter);
+  if (record.state === "succeeded") {
+    const result = record.result as Partial<OperationResult> | undefined;
+    const body = result?.body as Partial<DraftEditBody> | undefined;
+    emit(typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : `${what}做完了。`);
+    // 没换上：AI 这版在稿纸上等作者选，不给别的。
+    if (params?.mode !== "fix" || body?.ok !== true) return;
+    const failedTargets = new Set((body.failed ?? []).map((item) => item.target));
+    const failed = params.fixes.filter((fix) => failedTargets.has(fix.targetText));
+    sendNextSteps(args.sendEvent, "改好了，接下来？", [
+      ...(failed.length > 0 ? [askAiToFix(params.chapter, failed)] : []),
+      { label: "再核一遍", intent: `重新核第 ${params.chapter} 章的账`, ...(failed.length === 0 ? { recommended: true } : {}), action: checkChapterAction(params.chapter) },
+    ]);
+    return;
+  }
+  const message = record.failure?.message ?? "原因没记下来";
+  if (record.state === "obsolete") {
+    emit(message);
+    return;
+  }
+  emit(record.failure?.code === "not_changed" ? `${message}稿子没动。` : `${what}没做成：${message}稿子没动。`);
+  if (params?.mode === "fix" && record.failure?.code === "not_changed") sendNextSteps(args.sendEvent, "没改成，接下来？", [askAiToFix(params.chapter, params.fixes)]);
 }

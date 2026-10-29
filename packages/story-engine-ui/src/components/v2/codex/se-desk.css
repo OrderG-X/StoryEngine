@@ -410,6 +410,4 @@
   .se-bs.is-picked .se-bs-steps{margin-top:8px;}
   .se-bs-note{margin:6px 0 0;font-size:12px;color:var(--faint);}
 
-  /* 修改预览里的「留意」是提醒不是报错：正文色 + 左侧提醒橙细线，不再整段红字 */
-  .revision-preview-modal .rpm-risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
 }

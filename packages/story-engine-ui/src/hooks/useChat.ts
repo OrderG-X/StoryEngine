@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
-import { isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
+import { isDraftEditMode, isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
 import { cancelOperationRequest } from "../api/operationsClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
@@ -16,6 +16,7 @@ import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
 import { openCommitSheet, reusableCommitPreviewId } from "../workspace/commitSheet.js";
+import { settleDraftEdit } from "../workspace/draftEditOutcome.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
 import { directionGoal, pickedDirection, pickedDirectionGoal } from "../utils/brainstormCard.js";
@@ -80,7 +81,6 @@ async function settleWithin(promises: readonly Promise<unknown>[], ms: number): 
 
 export interface UseChatParams {
   projectPath: string | null;
-  handleApplyRevisionPreview: () => Promise<void>;
   /**
    * 资料类刷新：仅按 StateOverview 重建资料/侧栏面板，保留当前章节/草稿/消息。
    * agent 的 foundation_write 结果（refreshScope:"foundation"）调它；可不传。
@@ -92,7 +92,7 @@ export interface UseChatResult {
   handleSendMessage: (message: string) => Promise<void>;
   handleSuggestedAction: (action: SuggestedAction) => void;
   /** 「下一步」选项的结构化动作直达（R4.7）：点击直接发 body.action，不经模型。 */
-  handleSendUserAction: (action: AgentUserAction) => Promise<void>;
+  handleSendUserAction: (action: AgentUserAction, options?: { readonly echo?: string }) => Promise<void>;
   handleChapterButton: (button: ChapterButton) => void;
   /** 块级「撤销到此」：把该回合 git 改动整块回退 + 截断该回合及其后对话 + 重拉 overview 刷工作台。 */
   undoToTurn: (message: ChapterMessage) => Promise<void>;
@@ -128,7 +128,6 @@ export function authorMessage(content: string): { readonly message: ChapterMessa
 export function useChat(params: UseChatParams): UseChatResult {
   const {
     projectPath,
-    handleApplyRevisionPreview,
     refreshWorkspaceFromOverview,
   } = params;
 
@@ -259,7 +258,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       const track = (promise: Promise<unknown>): void => {
         pendingPaperSyncs.push(promise.catch(() => undefined));
       };
-      // 这一轮已经写好的稿（出稿 / 改稿的结果收到了）：之后再出错，「重试这一步」会把整句话重发、整章重写，不给。
+      // 这一轮已经写好的稿（写稿 / 改稿换上了）：之后再出错，「重试这一步」会把整句话重发、再写再改一遍，不给。
       let finishedWrite: "draft" | "revise" | null = null;
       // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
       const appendErrorMessage = (message: string, retryable: boolean, reason?: AiErrorReason) => {
@@ -295,7 +294,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             : {}),
         });
       };
-      // 本轮是否出现过章节写类动作（写稿操作、revise_draft、commit_apply）——出错 / 停止收尾时
+      // 本轮是否出现过章节写类动作（写稿、改稿操作、commit_apply）——出错 / 停止收尾时
       // 据此重读一次盘上的稿纸和状态（回执可能丢了，盘上其实已写）。纯读 / 问答回合不浪费这次 IO。
       let sawChapterWriteToolCall = false;
       // 定稿在飞：记下发起时盘上那份定稿，收尾时据它判断「其实已经定稿、只是回执丢了」。
@@ -489,6 +488,37 @@ export function useChat(params: UseChatParams): UseChatResult {
         }
         apply();
       };
+      // 这一轮跟着的那次改稿操作（片 2C：按核账改 / 去 AI 味 / 改写）：不流正文，做完了才按盘上重读稿纸。
+      let editOpId: string | null = null;
+      let editSettled = false;
+      const beginEdit = (view: OperationViewData): void => {
+        editOpId = view.opId;
+        sawChapterWriteToolCall = true;
+        // 改完的正文就在眼前（AI 味卡、核账卡是在右栏点的，作者可能停在设定本）。
+        useNavigationStore.getState().requestCenterView("desk");
+      };
+      // 改稿停下来了（做完、没成、停掉、过时了）：按盘上重读稿纸和书的状态，换上了的高亮改后那几句；停着等作者的不算。
+      const finishEdit = (view: OperationViewData): void => {
+        if (view.opId !== editOpId) return;
+        editOpId = null;
+        editSettled = true;
+        const applied = view.state === "succeeded" && view.draft?.applied === true;
+        if (applied) finishedWrite = "revise";
+        const apply = (): void => {
+          if (!projectPath) return;
+          track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 }).then((overview) => {
+            if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview);
+          }).catch(() => undefined));
+          track(refreshPaper().then(() => {
+            if (ownsCurrentWorkspace()) settleDraftEdit(view);
+          }));
+        };
+        if (paperSwitch) {
+          track(paperSwitch.then(() => { if (!turnFinished && ownsCurrentWorkspace()) apply(); }));
+          return;
+        }
+        apply();
+      };
       // M3：本轮的中止器——「停止」按钮 abort 它即可干净停掉这条流（streamAgentChat 据此不报错收尾）。
       const abortController = new AbortController();
       agentAbortRef.current = abortController;
@@ -521,7 +551,10 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               projectOperationEverywhere(view, assistantMsgId, { announced: ENDED_OPERATION_STATES.has(view.state) });
               liveOperationRef.current = view.allowed.includes("cancel") && view.state !== "paused" ? { projectPath, opId: view.opId } : null;
-              if (view.kind === "draft.change") {
+              if (view.kind === "draft.change" && isDraftEditMode(view.mode)) {
+                if (editOpId === null && !editSettled) beginEdit(view);
+                if (ENDED_OPERATION_STATES.has(view.state)) finishEdit(view);
+              } else if (view.kind === "draft.change") {
                 if (draftOpId === null) beginDraftStream(view);
                 if (!LIVE_STATES.has(view.state)) finishDraftStream(view);
               }
@@ -553,13 +586,8 @@ export function useChat(params: UseChatParams): UseChatResult {
             onToolCall: ({ toolName, toolCallId }) => {
               if (!ownsCurrentWorkspace()) return;
               project({ type: "tool-call", toolCallId: stepIdFor(toolName, toolCallId), toolName, startedAt: Date.now() });
-              if (toolName === "revise_draft" || toolName === "commit_apply") {
+              if (toolName === "commit_apply") {
                 sawChapterWriteToolCall = true;
-              }
-              if (toolName === "revise_draft") {
-                // 用户让 AI 改稿：也把中间区切到写作台，改完的正文就在眼前。revise 不流式。
-                useNavigationStore.getState().requestCenterView("desk");
-              } else if (toolName === "commit_apply") {
                 commitAttempt = { committedBefore: useDraftStore.getState().committed?.body ?? null };
               }
             },
@@ -573,7 +601,6 @@ export function useChat(params: UseChatParams): UseChatResult {
                 endedAt: Date.now(),
                 output: info,
               });
-              if (info.toolName === "revise_draft" && info.ok !== false && !info.toolValidationFailure) finishedWrite = "revise";
               const apply = (): void => {
                 // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）：按这时的当前章判。
                 const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
@@ -1015,7 +1042,8 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 服务端执行对应工具、结果照常进对话——不再发一句意图给模型白跑一轮（一次 3～5 万输入）。
   // 与「确认定稿」「确认裁剪」同一通道；对话里照留一句「你：…」回显（userActionChoiceText）。
   const handleSendUserAction = useCallback(
-    async (action: AgentUserAction): Promise<void> => {
+    /** echo＝对话里「你：…」那句换成调用方给的（选中文字改写说清是润色还是扩写）。 */
+    async (action: AgentUserAction, options: { readonly echo?: string } = {}): Promise<void> => {
       if (!projectPath) {
         setChatError("请先打开真实本地项目。");
         return;
@@ -1027,10 +1055,10 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
-      const draftAction = isOperationAction(action) && action.kind === "new" && action.type === "draft.change" ? action : undefined;
+      const draftAction = isOperationAction(action) && action.kind === "new" && action.type === "draft.change" && (action.mode === "write" || action.mode === "continue") ? action : undefined;
       const picked = draftAction ? pickedDirection(liveChat.messages, draftAction.params.chapter) : undefined;
       const goal = draftAction?.params.direction;
-      const text = userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
+      const text = options.echo ?? userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       const echo = authorMessage(text);
       appendMessage(echo.message);
@@ -1121,9 +1149,6 @@ export function useChat(params: UseChatParams): UseChatResult {
         case "revision-preview":
           void handleSendMessage("按我的方向给这一章改一版，先出预览。");
           return;
-        case "revision-apply":
-          void handleApplyRevisionPreview();
-          return;
         case "commit-preview":
           handleChapterButton("commit_preview");
           return;
@@ -1204,7 +1229,6 @@ export function useChat(params: UseChatParams): UseChatResult {
       handleConfirmCommit,
       handleConfirmPrune,
       handleSendUserAction,
-      handleApplyRevisionPreview,
       appendMessage,
       consumeSuggestedAction,
       runAgentDispatch,

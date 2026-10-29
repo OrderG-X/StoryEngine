@@ -51,7 +51,6 @@ import {
 } from "../draft-service.js";
 import type { ContinueCallModel } from "../draft-pipeline/continue-draft.js";
 import { checkDraft, extendToFloor, fixSureIssues, recheckDraft, type ExtendOutcome, type FixOutcome } from "../draft-pipeline/quality-steps.js";
-import type { RevisionModelCaller } from "../revision-service.js";
 import type { DraftChangeMode, DraftChangeParams } from "./params.js";
 
 /** 带失败码的错：操作记成 failed，码进 failure.code，原因进 failure.message。 */

@@ -613,7 +613,7 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     generate_alias_table: "补全别名表",
     generate_chapter_steering: "拟章纲",
     generate_draft: "生成正文",
-    revise_draft: "修改工作稿",
+    revise_draft: "改稿",
     quality_check: "硬伤检查",
     ai_review: "内容审阅",
     check_ai_flavor: "检查机器腔",
@@ -652,7 +652,7 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     const revise = project([
       { type: "tool-call", toolCallId: "r1", toolName: "revise_draft", startedAt: 1 },
     ]);
-    expect(revise.toolSteps![0].label).toBe("修改工作稿");
+    expect(revise.toolSteps![0].label).toBe("改稿");
   });
 
   it("card 仅保留 read_state_overview / foundation_write；其余工具 card:null（不强造误导卡）", () => {
