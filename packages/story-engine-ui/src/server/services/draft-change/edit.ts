@@ -356,7 +356,7 @@ export async function runDraftEdit(ctx: RecipeContext<unknown>, params: DraftEdi
       });
       if (!params.preview || outcome.changes.length === 0) break;
       const preview: RevisePreview = { round, changes: outcome.changes, failed: outcome.failed, ...(outcome.brief ? { brief: outcome.brief } : {}) };
-      const decision = await ctx.waitForAuthor({
+      const { decision } = await ctx.waitForAuthor({
         actionId: `confirm:${round}`,
         kind: REVISE_CONFIRM_KIND,
         decisions: round >= REVISE_MAX_ROUNDS ? ["apply"] : ["apply", "again"],

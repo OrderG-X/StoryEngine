@@ -53,8 +53,6 @@ const AUTHOR_CONFIRM_ACTION_IDS: ReadonlySet<string> = new Set([
   "ledger-confirm",
   "rewrite-confirm",
   "continue-confirm",
-  "foundation-confirm",
-  "foundation-accept",
 ]);
 
 /**

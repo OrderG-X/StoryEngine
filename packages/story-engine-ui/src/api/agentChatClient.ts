@@ -140,7 +140,9 @@ export type OperationActionData =
   | CandidateActionData<"draft.discard">
   /** 想走法（片 2D：稿纸上方「给我几种走法」「再来几种」）。 */
   | { readonly kind: "new"; readonly type: "plan.propose"; readonly params: PlanParamsData; readonly requestKey: string; readonly issuedAt: string }
-  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string } }
+  /** 「认下」（片 3）：那次改设定里 AI 刚写进去的那几处算作者写的。accept = 那次改设定的操作号。 */
+  | { readonly kind: "new"; readonly type: "settings.change"; readonly params: { readonly accept: string }; readonly requestKey: string; readonly issuedAt: string }
+  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
   | { readonly kind: "cancel"; readonly opId: string };
 
 /** 换上 / 不要 AI 稿（和服务端 services/draft-change/params.ts 的 CandidateDecisionParams 同形）。 */
@@ -226,7 +228,6 @@ export type AgentUserAction =
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   | { readonly toolName: "undo" }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly accept?: boolean }
   /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
   | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
   /** 设定本定论页「查前文」：拿这条定论查全书。 */
@@ -400,8 +401,6 @@ export interface AgentToolResult {
   readonly ledgerConfirmAction?: LedgerConfirmTarget;
   /** change_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「接着往下写」「重写这一章」（服务端出的按钮动作）。 */
   readonly rewriteChoices?: readonly RewriteChoiceData[];
-  /** foundation_write 专属（重构 P4）：删角色 / 覆盖已确立设定是作者档，等作者点「确认改设定」。 */
-  readonly foundationConfirmAction?: FoundationConfirmTarget;
 }
 
 /** 「接着往下写」「重写这一章」按钮：服务端出的写稿动作（点几次都是这一次）。 */
@@ -409,13 +408,6 @@ export interface RewriteChoiceData {
   readonly label: string;
   readonly mode: DraftModeData;
   readonly action: OperationActionData;
-}
-
-/** 「确认改设定」按钮带回的东西（被拦下的那次资料写入，服务端执行前再校验）。 */
-export interface FoundationConfirmTarget extends ProposalBasis {
-  readonly key: string;
-  readonly input: Readonly<Record<string, unknown>>;
-  readonly label?: string;
 }
 
 /** 「确认改账」按钮带回服务端的东西（manage_ledger 提的裁定草案，服务端执行前再校验）。 */
@@ -466,8 +458,14 @@ export interface OperationViewData {
   readonly draft?: DraftOperationData;
   /** 想走法做完了的几种走法（走法卡、稿纸上方给作者挑）。 */
   readonly plan?: BrainstormCardData;
-  /** 等作者点的（改写的改前改后 +「换上 / 再改一版」）；点过的不算。 */
+  /** 改设定做完了（设定本跟着重读、这一轮记下存档点）。 */
+  readonly settings?: SettingsChangeData;
+  /** 等作者点的（改写的改前改后 +「换上 / 再改一版」、改设定的「确认改设定」）；点过的不算。 */
   readonly pending?: PendingActionData;
+}
+
+export interface SettingsChangeData {
+  readonly snapshotId?: string;
 }
 
 /** 改写的改法（等作者点「换上」，服务端 RevisePreview 的子集）。 */
@@ -479,11 +477,16 @@ export interface RevisePreviewData {
 }
 
 /** 等作者点的那个按钮：哪个、能点哪几个决定、卡上摆什么。 */
-export interface PendingActionData {
-  readonly actionId: string;
-  readonly decisions: readonly string[];
-  readonly revise: RevisePreviewData;
+/** 改设定等作者点「确认改设定」的那几处（服务端 SettingsConfirmPreview 的子集，只有名字）。 */
+export interface SettingsConfirmData {
+  readonly lines: readonly string[];
+  readonly notDone: readonly string[];
 }
+
+/** 等作者点的那个按钮：改写的「换上 / 再改一版」、改设定的「确认改设定」。 */
+export type PendingActionData =
+  | { readonly kind: "revise"; readonly actionId: string; readonly decisions: readonly string[]; readonly revise: RevisePreviewData }
+  | { readonly kind: "settings"; readonly actionId: string; readonly decisions: readonly string[]; readonly settings: SettingsConfirmData };
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
 export interface DraftOperationData {
@@ -529,21 +532,30 @@ function editChanges(value: unknown): readonly EditChangeData[] | undefined {
   return changes.length > 0 ? changes : undefined;
 }
 
-/** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）；点过的、认不出的不算。 */
+/** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）、改设定等作者点「确认改设定」（SETTINGS_CONFIRM_KIND）；点过的、认不出的不算。 */
 const REVISE_CONFIRM_KIND = "draft.revise.confirm";
+const SETTINGS_CONFIRM_KIND = "settings_confirm";
 
 function readPendingAction(value: unknown): PendingActionData | undefined {
   if (!Array.isArray(value)) return undefined;
   for (const item of value) {
-    if (!isRecord(item) || item.decided === true || item.kind !== REVISE_CONFIRM_KIND || typeof item.actionId !== "string") continue;
+    if (!isRecord(item) || item.decided === true || typeof item.actionId !== "string") continue;
     const decisions = Array.isArray(item.decisions) ? item.decisions.filter((decision): decision is string => typeof decision === "string") : [];
     const preview = isRecord(item.preview) ? item.preview : undefined;
+    if (item.kind === SETTINGS_CONFIRM_KIND) {
+      // 一次最多改 60 步（核心 MAX_OPS_PER_CHANGE），卡上一条不漏。
+      const lines = preview ? textList(preview.lines, 60) : undefined;
+      if (!lines || decisions.length === 0) continue;
+      return { kind: "settings", actionId: item.actionId, decisions, settings: { lines, notDone: textList(preview!.notDone, 60) ?? [] } };
+    }
+    if (item.kind !== REVISE_CONFIRM_KIND) continue;
     const changes = preview ? editChanges(preview.changes) : undefined;
     if (!preview || !changes || decisions.length === 0) continue;
     const failed = Array.isArray(preview.failed)
       ? preview.failed.flatMap((entry) => (isRecord(entry) && typeof entry.target === "string" && typeof entry.why === "string" ? [{ target: entry.target, why: entry.why }] : []))
       : [];
     return {
+      kind: "revise",
       actionId: item.actionId,
       decisions,
       revise: {
@@ -831,26 +843,6 @@ export async function streamAgentChat(
             ...(parsed.toolName === "change_draft" && readRewriteChoices(output.rewriteChoices)
               ? { rewriteChoices: readRewriteChoices(output.rewriteChoices)! }
               : {}),
-            ...(parsed.toolName === "foundation_write" && output.needsConfirmation === true && isFoundationConfirm(output.foundationConfirm)
-              ? {
-                  foundationConfirmAction: {
-                    key: output.foundationConfirm.key,
-                    input: output.foundationConfirm.input,
-                    ...(typeof output.foundationConfirm.label === "string" && output.foundationConfirm.label ? { label: output.foundationConfirm.label } : {}),
-                    ...proposalBasisOf(output.foundationConfirm),
-                  },
-                }
-              : {}),
-            ...(parsed.toolName === "foundation_write" && isFoundationConfirm(output.foundationAccept)
-              ? {
-                  foundationAcceptAction: {
-                    key: output.foundationAccept.key,
-                    input: output.foundationAccept.input,
-                    ...(typeof output.foundationAccept.label === "string" && output.foundationAccept.label ? { label: output.foundationAccept.label } : {}),
-                    ...proposalBasisOf(output.foundationAccept),
-                  },
-                }
-              : {}),
             overview: output.overview as StateOverview | undefined,
             refreshScope: output.refreshScope as "full" | "foundation" | undefined,
             snapshotId: typeof output.snapshotId === "string" ? output.snapshotId : undefined,
@@ -987,10 +979,6 @@ function readRewriteChoices(value: unknown): readonly RewriteChoiceData[] | unde
   return choices.length > 0 ? choices : undefined;
 }
 
-function isFoundationConfirm(value: unknown): value is { readonly key: string; readonly input: Record<string, unknown>; readonly label?: unknown } {
-  return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && isRecord(value.input);
-}
-
 function isCommitConfirmAction(value: unknown): value is { readonly chapter: number; readonly previewToken?: unknown } {
   return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
 }
@@ -1015,6 +1003,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const inspect = state === "succeeded" && value.kind === "inspect.run" && mode && result ? readInspectCards(mode, result.body) : undefined;
   const draft = state === "succeeded" && (value.kind === "draft.change" || value.kind === "draft.adopt") && result ? readDraftOperation(result.body) : undefined;
   const plan = state === "succeeded" && value.kind === "plan.propose" && result ? readBrainstormData(result.body) : undefined;
+  const settings = state === "succeeded" && value.kind === "settings.change" && result ? readSettingsChange(result.body) : undefined;
   const pending = state === "waiting_author" ? readPendingAction(value.pendingActions) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
@@ -1041,8 +1030,15 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     ...(inspect ? { inspect } : {}),
     ...(draft ? { draft } : {}),
     ...(plan ? { plan } : {}),
+    ...(settings ? { settings } : {}),
     ...(pending ? { pending } : {}),
   };
+}
+
+/** 改设定做完了：打的存档点（这一轮的「撤销到此」从它退）。 */
+function readSettingsChange(body: unknown): SettingsChangeData | undefined {
+  if (!isRecord(body) || body.kind !== "settings.change") return undefined;
+  return typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {};
 }
 
 /**
@@ -1126,8 +1122,9 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
     if (value.kind === "cancel" || value.answer === undefined) return { kind: value.kind, opId: value.opId };
     const answer = isRecord(value.answer) ? value.answer : {};
     const { actionId, decision } = answer;
+    const excluded = Array.isArray(answer.excluded) ? answer.excluded.filter((key): key is string => typeof key === "string" && /^[A-Za-z0-9:_-]{1,40}$/u.test(key)) : [];
     return typeof actionId === "string" && /^[A-Za-z0-9:_-]{1,64}$/u.test(actionId) && typeof decision === "string" && /^[A-Za-z0-9_-]{1,32}$/u.test(decision)
-      ? { kind: "resume", opId: value.opId, answer: { actionId, decision } }
+      ? { kind: "resume", opId: value.opId, answer: { actionId, decision, ...(excluded.length > 0 ? { excluded } : {}) } }
       : undefined;
   }
   if (value.kind !== "new") return undefined;
@@ -1137,6 +1134,10 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
   if (value.type === "plan.propose") {
     const params = readPlanParams(value.params);
     return params ? { kind: "new", type: "plan.propose", params, ...stamp } : undefined;
+  }
+  if (value.type === "settings.change") {
+    const accept = isRecord(value.params) ? value.params.accept : undefined;
+    return typeof accept === "string" && /^op-[0-9a-f]{20}$/u.test(accept) ? { kind: "new", type: "settings.change", params: { accept }, ...stamp } : undefined;
   }
   if (value.type === "draft.change" && isDraftEditMode(value.mode)) {
     const params = readEditParams(value.mode, value.params);
@@ -1163,9 +1164,9 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
 
 const positiveInt = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
 const nonEmptyText = (value: unknown, max: number): string | undefined => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined);
-const textList = (value: unknown): readonly string[] | undefined => {
+const textList = (value: unknown, max = 20): readonly string[] | undefined => {
   if (!Array.isArray(value)) return undefined;
-  const items = value.flatMap((item) => { const text = nonEmptyText(item, 500); return text ? [text] : []; }).slice(0, 20);
+  const items = value.flatMap((item) => { const text = nonEmptyText(item, 500); return text ? [text] : []; }).slice(0, max);
   return items.length > 0 ? items : undefined;
 };
 

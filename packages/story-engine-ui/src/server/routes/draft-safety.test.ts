@@ -1276,7 +1276,7 @@ describe("稿纸上就是拆开的稿（第 15 轮复核）", () => {
 describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
   it("改稿等作者看改法：看的时候作者改了设定，点「换上」不换、作废说清，不留候选（B2）", async () => {
     await save(1, "他推开门。");
-    expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "海州" }], idempotencyKey: "origin-a" })).toMatchObject({ ok: true });
+    expect(await writeCards(book, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "海州" }], idempotencyKey: "origin-a" })).toMatchObject({ ok: true });
     const waiting = await runDraftEdit(book, "revise", { chapter: 1, edits: [{ targetText: "他推开门。", revisionGoal: "点明籍贯" }], preview: true }, fakeDraftDeps({
       fixCallModel: async (prompt) => {
         expect(prompt).toContain("海州");
@@ -1284,7 +1284,7 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
       },
     }));
     expect(waiting.record.state).toBe("waiting_author");
-    expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }], idempotencyKey: "origin-b" })).toMatchObject({ ok: true });
+    expect(await writeCards(book, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }], idempotencyKey: "origin-b" })).toMatchObject({ ok: true });
     expect(await resumeOperation(book, waiting.record.opId, { actionId: "confirm:1", decision: "apply" })).toMatchObject({ ok: true });
     const done = await settledDraftChange(book, waiting.record.opId);
     expect(done).toMatchObject({ state: "obsolete", failure: { code: "basis_moved" } });

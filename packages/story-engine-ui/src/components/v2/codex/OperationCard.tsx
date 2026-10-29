@@ -42,7 +42,8 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
       </div>
     );
   }
-  if (op.state === "waiting_author" && op.pending) return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
+  if (op.state === "waiting_author" && op.pending?.kind === "revise") return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
+  if (op.state === "waiting_author" && op.pending?.kind === "settings") return <SettingsConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   const running = RUNNING.has(op.state);
   const canResume = Boolean(onAction) && op.allowed.includes("resume");
   const canCancel = Boolean(onAction) && op.allowed.includes("cancel") && !inLiveTurn;
@@ -73,7 +74,7 @@ const DECISION_LABELS: Readonly<Record<string, string>> = { apply: "换上", aga
  */
 function ReviseChoice({ op, pending, busy, onAction }: {
   readonly op: OperationCardData;
-  readonly pending: NonNullable<OperationCardData["pending"]>;
+  readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "revise" }>;
   readonly busy: boolean;
   readonly onAction?: ((action: AgentUserAction) => void) | undefined;
 }) {
@@ -103,6 +104,43 @@ function ReviseChoice({ op, pending, busy, onAction }: {
               {DECISION_LABELS[decision]}
             </button>
           ) : null))}
+          {op.allowed.includes("cancel") ? (
+            <button type="button" className="chip" disabled={busy} onClick={() => onAction({ kind: "cancel", opId: op.opId })}>不要了</button>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 改设定碰到了作者写的（片 3）：整批摆出来，点「确认改设定」按作者写的改齐；「不要了」一个字不改。
+ */
+function SettingsConfirm({ op, pending, busy, onAction }: {
+  readonly op: OperationCardData;
+  readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "settings" }>;
+  readonly busy: boolean;
+  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+}) {
+  const { lines, notDone } = pending.settings;
+  return (
+    <div className="se-op-card se-op-settings" role="group" aria-label={op.what}>
+      <ul className="se-op-lines">
+        {lines.map((line, index) => <li key={index}>{line}</li>)}
+      </ul>
+      {notDone.length > 0 ? <p className="se-op-failed">没改成：{notDone.join("；")}</p> : null}
+      {onAction ? (
+        <span className="se-op-acts">
+          {pending.decisions.includes("apply") ? (
+            <button
+              type="button"
+              className="chip is-primary"
+              disabled={busy}
+              onClick={() => onAction({ kind: "resume", opId: op.opId, answer: { actionId: pending.actionId, decision: "apply" } })}
+            >
+              确认改设定
+            </button>
+          ) : null}
           {op.allowed.includes("cancel") ? (
             <button type="button" className="chip" disabled={busy} onClick={() => onAction({ kind: "cancel", opId: op.opId })}>不要了</button>
           ) : null}

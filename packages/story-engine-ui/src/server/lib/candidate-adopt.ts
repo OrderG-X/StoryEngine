@@ -17,6 +17,7 @@ import { readTruthBasisToCompare } from "../book/truth-basis.js";
 import { draftSha, readDraftCandidate, settleDraftCandidate, type DraftCandidate } from "./draft-candidates.js";
 import { currentOperation, OperationObsolete, OperationStopped } from "./operations/context.js";
 import { checkFence } from "./operations/fence.js";
+import { FENCE_CODES } from "./operations/command.js";
 import { scrubLocalAbsolutePaths } from "./local-path-scrubber.js";
 import { runWithLazySnapshot } from "./snapshot.js";
 import { chapterWordsNow, publishChapterWordsLocked } from "./word-stats.js";
@@ -65,7 +66,6 @@ export interface AdoptOutcome {
   readonly warnings?: readonly string[];
 }
 
-const FENCE_CODES: ReadonlySet<string> = new Set(["operation_stopped", "book_gone", "book_epoch_changed"]);
 
 const errorText = (error: unknown): string => scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
 

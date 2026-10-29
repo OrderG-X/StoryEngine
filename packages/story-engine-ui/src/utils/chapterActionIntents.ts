@@ -35,9 +35,6 @@ export function userActionChoiceText(
       return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
     case "ledger_decision":
       return action.label ? `确认改账：${action.label}` : "确认改账";
-    case "foundation_decision":
-      if (action.accept) return action.label ? `认下${action.label}` : "认下 AI 刚写的设定";
-      return action.label ? `确认改设定：${action.label}` : "确认改设定";
     case "undo":
       return "撤销上一步";
     case "settle_preview":
@@ -50,7 +47,8 @@ export function userActionChoiceText(
   }
 }
 
-/** 等作者点的按钮点了哪个（改写的「换上 / 再改一版」）。 */
+/** 等作者点的按钮点了哪个：先按按钮认（改设定的「确认改设定」），再按选法认（改写的「换上 / 再改一版」）。 */
+const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定" };
 const DECISION_TEXT: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
 
 /** 回显里引一句原文：太长的截短。 */
@@ -73,8 +71,9 @@ function editActionText(params: DraftEditParamsData): string {
 
 /** 操作按钮（写作版本 P2a）的回显：写稿、新检查按种类说；「接着做」「不要了」照按钮字。 */
 function operationActionText(action: import("../api/agentChatClient.js").OperationActionData, directionTitle?: string): string {
-  if (action.kind === "resume") return action.answer ? (DECISION_TEXT[action.answer.decision] ?? "接着做") : "接着做";
+  if (action.kind === "resume") return action.answer ? (ACTION_TEXT[action.answer.actionId] ?? DECISION_TEXT[action.answer.decision] ?? "接着做") : "接着做";
   if (action.kind === "cancel") return "不要了";
+  if (action.type === "settings.change") return "认下 AI 刚写的设定";
   const chapter = action.params.chapter;
   if (isDraftEditAction(action)) return editActionText(action.params);
   if (action.type === "draft.adopt") return `第 ${chapter} 章换成 AI 写好的那版`;

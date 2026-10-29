@@ -64,7 +64,7 @@ describe("applyAiDraft", () => {
   it("写的途中前文或设定改过 → 不换、留成候选（basis_moved），工作稿没动", async () => {
     await authorSaves(1, "作者原来的稿。");
     const begun = await start();
-    expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "林远", label: "籍贯", value: "海州" }], idempotencyKey: `card-ui:${randomUUID()}` }))
+    expect(await writeCards(book, { ops: [{ op: "field.set", card: "林远", label: "籍贯", value: "海州" }], idempotencyKey: `card-ui:${randomUUID()}` }))
       .toMatchObject({ ok: true });
     const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "照旧设定写的一版。", ...begun, source: "draft" });
     expect(outcome).toMatchObject({ applied: false, reason: "basis_moved" });

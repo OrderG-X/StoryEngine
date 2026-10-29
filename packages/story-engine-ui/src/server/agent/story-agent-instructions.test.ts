@@ -24,8 +24,8 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
     invalidateStoryAgent();
     expect(tools).toEqual([
       "change_draft",
+      "change_settings",
       "commit_preview",
-      "foundation_write",
       "manage_ledger",
       "manage_snapshots",
       "plan_chapter",
@@ -42,7 +42,7 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
       "web_search",
     ]);
     const instructions = buildInstructions();
-    for (const gone of ["brainstorm_chapter", "enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft"]) {
+    for (const gone of ["brainstorm_chapter", "enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft", "foundation_write"]) {
       expect(instructions).not.toContain(gone);
     }
     expect(instructions).toContain("run_check");
@@ -71,7 +71,7 @@ describe("story agent instructions（确认口径唯一）", () => {
   it("不再注入底层能力清单；工具怎么选写在对照里", () => {
     expect(instructions).not.toContain("foundationAgent");
     expect(instructions).toContain("read_state_overview");
-    expect(instructions).toContain("foundation_write");
+    expect(instructions).toContain("change_settings");
     expect(instructions.length).toBeLessThan(10_000);
   });
 
@@ -92,7 +92,7 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("执行类请求必须工具先行");
     expect(instructions).toContain("写正文 / 接着写=change_draft");
     expect(instructions).toContain("改稿=revise_draft");
-    expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write");
+    expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=change_settings");
     expect(instructions).toContain("定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮");
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
@@ -177,10 +177,10 @@ describe("buildInstructions 开书引导（仅空书时主动轻引导）", () =
     expect(instructions).toMatch(/故事资料基本为空|像一本新书/);
   });
 
-  it("开书引导复用现成工具（foundation_write/plan_chapter）", () => {
+  it("开书引导复用现成工具（change_settings/plan_chapter）", () => {
     const guidanceStart = instructions.indexOf("开书引导");
     const guidance = instructions.slice(guidanceStart);
-    expect(guidance).toContain("foundation_write");
+    expect(guidance).toContain("change_settings");
     expect(guidance).toContain("plan_chapter");
   });
 

@@ -10,6 +10,7 @@ import { hasWorkingDraftText } from "../lib/working-draft-text.js";
 import type { DraftChangeMode, DraftChangeParams } from "../services/draft-change/params.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
+import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
 import type { OperationAction, UserAction } from "./user-actions.js";
 
 export interface NextStepChoice {
@@ -44,6 +45,11 @@ export function newDraftAction(mode: DraftChangeMode, params: DraftChangeParams)
 /** 想走法（「再想一次」）：和 newOperationAction 一样出的时候就给号。 */
 export function newPlanAction(params: PlanProposeParams): OperationAction {
   return { kind: "new", type: PLAN_PROPOSE_KIND, params, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 「认下」：那次改设定里 AI 刚写进去的那几处算作者写的（新的一次操作，参数带那次的号）。 */
+export function settingsAcceptAction(fromOpId: string): OperationAction {
+  return { kind: "new", type: SETTINGS_CHANGE_KIND, params: { accept: fromOpId }, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
 }
 
 /** 「核账」「再核一遍」：交一次核账。fresh＝正文没改也重新核。 */

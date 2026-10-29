@@ -80,11 +80,12 @@ describe("projectAgentEvent", () => {
     expect(message.agentCards![0].status).toBe("completed");
   });
 
-  it("maps foundation_write to the foundationAgent agentName", () => {
-    const message = project([
-      { type: "tool-call", toolCallId: "call-2", toolName: "foundation_write", startedAt: 1 },
-    ]);
-    expect(message.agentCards![0].agentName).toBe("foundationAgent");
+  it("改设定（change_settings，老会话里的 foundation_write）只出步骤「改设定本」，不再出卡（结论在操作卡上）", () => {
+    for (const toolName of ["change_settings", "foundation_write"]) {
+      const message = project([{ type: "tool-call", toolCallId: "call-2", toolName, startedAt: 1 }]);
+      expect(message.toolSteps![0].label).toBe("改设定本");
+      expect(message.agentCards ?? []).toEqual([]);
+    }
   });
 
   it("interleaves text and tool steps for a read-then-write run", () => {
@@ -110,16 +111,13 @@ describe("projectAgentEvent", () => {
     expect(message.content).toBe("已经帮你记好了。");
     expect(message.toolSteps!.map((s) => s.id)).toEqual(["c1", "c2"]);
     expect(message.toolSteps!.every((s) => s.status === "completed")).toBe(true);
-    expect(message.agentCards!.map((c) => c.agentName)).toEqual([
-      "stateOverviewReader",
-      "foundationAgent",
-    ]);
+    expect(message.agentCards!.map((c) => c.agentName)).toEqual(["stateOverviewReader"]);
   });
 
   it("marks the matching toolStep failed and the card failed on tool-error", () => {
     const message = project([
-      { type: "tool-call", toolCallId: "c1", toolName: "foundation_write", startedAt: 10 },
-      { type: "tool-error", toolCallId: "c1", toolName: "foundation_write", endedAt: 20, error: "落盘失败" },
+      { type: "tool-call", toolCallId: "c1", toolName: "read_state_overview", startedAt: 10 },
+      { type: "tool-error", toolCallId: "c1", toolName: "read_state_overview", endedAt: 20, error: "读盘失败" },
     ]);
     expect(message.toolSteps![0].status).toBe("failed");
     expect(message.toolSteps![0].endedAt).toBe(20);
@@ -254,23 +252,6 @@ describe("projectAgentEvent", () => {
     });
     expect(msg.turnSnapshots).toEqual([{ toolName: "foundation_write", snapshotId: "b".repeat(40) }]);
     expect(msg.affectedScopes).toEqual(["foundation"]);
-  });
-
-  it("foundation_write 带认下 → 挂「认下」按钮（带那几步认下）；有「确认改设定」时只挂确认", () => {
-    const target = { key: "card-a", input: { ops: [{ op: "field.accept", card: "苏晴" }] }, label: "刚写的这几处" };
-    let msg = emptyAssistantMessage("m4");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "f2", toolName: "foundation_write", startedAt: 1 });
-    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "f2", toolName: "foundation_write", endedAt: 2, output: { ok: true, foundationAcceptAction: target } });
-    expect(msg.suggestedActions?.map((action) => [action.id, action.label])).toEqual([["foundation-accept", "认下"]]);
-    expect(msg.suggestedActions?.[0]?.foundationTarget).toEqual(target);
-
-    let both = emptyAssistantMessage("m5");
-    both = projectAgentEvent(both, { type: "tool-call", toolCallId: "f3", toolName: "foundation_write", startedAt: 1 });
-    both = projectAgentEvent(both, {
-      type: "tool-result", toolCallId: "f3", toolName: "foundation_write", endedAt: 2,
-      output: { ok: true, foundationConfirmAction: { key: "card-b", input: { ops: [] }, label: "改名" }, foundationAcceptAction: target },
-    });
-    expect(both.suggestedActions?.map((action) => action.id)).toEqual(["foundation-confirm"]);
   });
 
   it("generate_draft 出稿（refreshScope:full、无 snapshotId=草稿待保存）→ affectedScopes 含 full 徽标在、但无撤销点", () => {
@@ -655,10 +636,11 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     expect(revise.toolSteps![0].label).toBe("改稿");
   });
 
-  it("card 仅保留 read_state_overview / foundation_write；其余工具 card:null（不强造误导卡）", () => {
+  it("card 仅保留 read_state_overview；其余工具 card:null（不强造误导卡）", () => {
     expect(presentationFor("read_state_overview").card).not.toBeNull();
-    expect(presentationFor("foundation_write").card).not.toBeNull();
     for (const toolName of [
+      "foundation_write",
+      "change_settings",
       "read_foundation",
       "generate_chapter_steering",
       "generate_draft",
@@ -819,22 +801,6 @@ describe("作者档按钮投影（重构 P4：「重写这一章」「确认改�
       expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", operationAction: rewriteAction }),
     ]);
   });
-
-  it("foundation_write 作者档 → 挂「确认改设定」按钮（带被拦下的写入原样）", () => {
-    const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
-    const message = project([
-      {
-        type: "tool-result",
-        toolCallId: "f1",
-        toolName: "foundation_write",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, foundationConfirmAction: { key: "fw-1", input, label: "删条目 顾明" }, summary: "删除角色「顾明」要你点…" },
-      },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "foundation-confirm", label: "确认改设定", foundationTarget: { key: "fw-1", input, label: "删条目 顾明" } }),
-    ]);
-  });
 });
 
 describe("操作投影（写作版本 P2a：检查交给执行器做）", () => {
@@ -948,9 +914,9 @@ describe("settleUnfinishedAgentTurn（A-5 「停止」收尾结算）", () => {
     expect(settled.agentCards![0].status).toBe("completed");
   });
 
-  it("running 的 agentCard（foundation_write 在飞）→ stopped", () => {
+  it("running 的 agentCard（read_state_overview 在飞）→ stopped", () => {
     const message = project([
-      { type: "tool-call", toolCallId: "f1", toolName: "foundation_write", startedAt: 10 },
+      { type: "tool-call", toolCallId: "f1", toolName: "read_state_overview", startedAt: 10 },
     ]);
     const settled = settleUnfinishedAgentTurn(message, 20);
     expect(settled.toolSteps![0].status).toBe("stopped");

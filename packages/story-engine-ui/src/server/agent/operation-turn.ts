@@ -12,12 +12,13 @@ import { rereadBlocker } from "../editorial/reread-state.js";
 import { cancelOperation, resumeOperation, submitOperation, subscribeOperation, type OperationEvent, type OperationResult } from "../services/operations/executor.js";
 import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
+import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { DRAFT_ADOPT_KIND, DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
 import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
-import { checkChapterAction, humanizeToolNames, newOperationAction, newPlanAction, resolveNextDraftTarget, sendNextSteps, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { checkChapterAction, humanizeToolNames, newOperationAction, newPlanAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
 
@@ -182,6 +183,9 @@ export async function finishOperationTurn(args: {
           { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, action: { toolName: "commit_preview", chapter } },
         ]);
       }
+      // AI 刚写进设定本的（作者口述让 AI 记的）：给「认下」，点了算作者写的。
+      const accept = record.kind === SETTINGS_CHANGE_KIND ? (result?.body as Partial<SettingsChangeBody> | undefined)?.accept : undefined;
+      if (accept) sendNextSteps(args.sendEvent, "接下来？", [{ label: "认下", intent: `认下${accept.label}`, action: settingsAcceptAction(record.opId) }]);
       return;
     }
     case "failed":
@@ -210,16 +214,20 @@ export async function finishOperationTurn(args: {
       return;
     case "waiting_author":
       // 改稿先给作者看：改法在卡上。
-      emitText(record.kind === DRAFT_CHANGE_KIND && record.mode === "revise" ? "改法在卡上：点「换上」才换进稿子。" : `${what}在等你点卡上的按钮。`);
+      emitText(record.kind === DRAFT_CHANGE_KIND && record.mode === "revise"
+        ? "改法在卡上：点「换上」才换进稿子。"
+        : record.kind === SETTINGS_CHANGE_KIND
+          ? "这次要改的碰到了你写的，在卡上：点「确认改设定」才改。"
+          : `${what}在等你点卡上的按钮。`);
       return;
     default:
       return;
   }
 }
 
-/** 按钮交的新操作的章号（旧代码里按钮都按章）。 */
-function chapterOfAction(action: Extract<OperationAction, { readonly kind: "new" }>): number {
-  return action.params.chapter;
+/** 按钮交的新操作的章号（「认下」这类不按章的没有）。 */
+function chapterOfAction(action: Extract<OperationAction, { readonly kind: "new" }>): number | undefined {
+  return "chapter" in action.params ? action.params.chapter : undefined;
 }
 
 /**
@@ -251,9 +259,9 @@ export async function runOperationAction(args: {
       params: action.params,
       requestKey: action.requestKey,
       issuedAt: action.issuedAt,
-      origin: { kind: "button", messageId: action.requestKey, chapter },
+      origin: { kind: "button", messageId: action.requestKey, ...(chapter !== undefined ? { chapter } : {}) },
     });
-    const receipt = receiptOf(outcome, "button", { kind: action.type, ...(mode !== undefined ? { mode } : {}), chapter });
+    const receipt = receiptOf(outcome, "button", { kind: action.type, ...(mode !== undefined ? { mode } : {}), ...(chapter !== undefined ? { chapter } : {}) });
     if (!receipt.accepted || !receipt.opId) {
       emitText(receipt.summary);
       // 写稿没受理（有稿、前一章没定稿、没得接……）：按原因给下一步；别的原因（在忙、按过了）不给「再写一次」。

@@ -53,6 +53,7 @@ describe("OperationCard", () => {
 
 describe("OperationCard：改写停着等作者（片 2C）", () => {
   const pending = {
+    kind: "revise" as const,
     actionId: "confirm:1",
     decisions: ["apply", "again"],
     revise: { round: 1, changes: [{ from: "他慢慢地走了过去。", to: "他走过去。" }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "删了拖沓的副词" },
@@ -82,6 +83,33 @@ describe("OperationCard：改写停着等作者（片 2C）", () => {
     rerender(<OperationCard op={waiting({ pending: undefined })} inLiveTurn={false} busy={false} onAction={vi.fn()} />);
     expect(screen.getByText("改稿·第 3 章：等你定")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "换上" })).toBeNull();
+  });
+});
+
+describe("OperationCard：改设定碰了作者写的，等作者点（片 3）", () => {
+  const waiting = (overrides: Partial<OperationCardData> = {}) => op({
+    kind: "settings.change",
+    mode: "ai",
+    what: "改设定",
+    state: "waiting_author",
+    stateText: "等你定",
+    allowed: ["cancel"],
+    pending: { kind: "settings", actionId: "confirm-settings", decisions: ["apply"], settings: { lines: ["「林远」的「身份」改了", "建了物品卡「蓝色账册」"], notDone: ["没有叫「不存在的人」的卡"] } },
+    ...overrides,
+  });
+
+  it("整批每一处照摆 + 没改成的一句；「确认改设定」交回 apply，「不要了」停掉；忙的时候点不了", () => {
+    const onAction = vi.fn();
+    const { rerender } = render(<OperationCard op={waiting()} inLiveTurn={false} busy={false} onAction={onAction} />);
+    expect(screen.getByText("「林远」的「身份」改了")).toBeTruthy();
+    expect(screen.getByText("建了物品卡「蓝色账册」")).toBeTruthy();
+    expect(screen.getByText("没改成：没有叫「不存在的人」的卡")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认改设定" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-settings", decision: "apply" } });
+    fireEvent.click(screen.getByRole("button", { name: "不要了" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "cancel", opId: OP_ID });
+    rerender(<OperationCard op={waiting()} inLiveTurn={false} busy onAction={onAction} />);
+    expect((screen.getByRole("button", { name: "确认改设定" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

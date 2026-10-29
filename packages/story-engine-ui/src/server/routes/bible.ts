@@ -51,7 +51,7 @@ export function registerBibleRoutes(middlewares: MiddlewareStack): void {
         writeJson(res, 400, { ok: false, error: "没改设定：要改的内容格式不对。" });
         return;
       }
-      const outcome = await writeCards(projectDir, { by: "author", ops: ops.data, idempotencyKey: `card-ui:${requestId}` });
+      const outcome = await writeCards(projectDir, { ops: ops.data, idempotencyKey: `card-ui:${requestId}` });
       if (!outcome.ok) {
         writeJson(res, 409, { ok: false, code: outcome.code, error: outcome.message });
         return;

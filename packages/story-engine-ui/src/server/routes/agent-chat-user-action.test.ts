@@ -2,7 +2,8 @@
 //
 // agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：用户点「确认定稿」按钮 → body.action →
 // 服务端直接执行 commit_apply，不经模型（agent.stream 一次都不调）。真项目 + 真预览票据 + 真落盘。
-// 「确认改设定」（P9 起走核心 card.write）、定稿回执里的「还没建卡的人」也在这里走真链。
+// 「确认改设定」（写作版本 P2a：改设定是一次操作，按钮接着那次）、定稿回执里的「还没建卡的人」也在这里走真链。
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -26,7 +27,9 @@ vi.mock("../editorial/index.js", async (importOriginal) => ({
 
 import { buildCommitPreviewToolOutput } from "../agent/tools/commit-preview.js";
 import { runManageLedger } from "../agent/tools/manage-ledger.js";
-import { foundationWriteLogic } from "../agent/tools/foundation-write.js";
+import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
+import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, submitOperation } from "../services/operations/executor.js";
+import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
 import { registerAgentChatRoutes } from "./agent-chat.js";
 
@@ -63,6 +66,9 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
   });
 
   afterEach(async () => {
+    await __drainOperationsForTests();
+    __resetRecipesForTests();
+    __resetOperationStoreForTests();
     storyAgentMocks.getStoryAgent.mockReset();
     await Promise.all([...rootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
     rootDirs.clear();
@@ -156,7 +162,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     expect(undone.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("current");
   });
 
-  it("「确认改设定」：AI 改作者写的 / 删作者建的卡只出按钮 → 作者点了按作者身份 card.write、带存档点；点两次只做一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
+  it("「确认改设定」：AI 改作者写的 / 删作者建的卡整批等作者 → 作者点了按作者身份 card.write、带存档点；点两次只做一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
     await authorWrite(projectDir, [
       { op: "field.set", card: "林远", label: "身份", value: "审计员" },
@@ -164,62 +170,60 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     ]);
     const card = async (name: string) => (await readCards(projectDir))?.cards.find((item) => item.name === name);
 
-    const proposal = await foundationWriteLogic({
-      projectDir,
-      ops: [
-        { op: "field.set", card: "林远", label: "身份", value: "记者" },
-        { op: "card.delete", card: "顾明" },
-      ],
+    registerRecipe(settingsChangeRecipe);
+    const proposal = await submitOperation(projectDir, {
+      kind: SETTINGS_CHANGE_KIND,
+      params: { ops: [{ op: "field.set", card: "林远", label: "身份", value: "记者" }, { op: "card.delete", card: "顾明" }] },
+      requestKey: randomUUID(),
+      issuedAt: new Date().toISOString(),
+      origin: { kind: "chat", messageId: randomUUID() },
     });
-    expect(proposal).toMatchObject({ ok: true, needsConfirmation: true, applied: [] });
-    expect(proposal.foundationConfirm?.input).toEqual({
-      ops: [{ op: "field.set", card: "林远", label: "身份", value: "记者" }, { op: "card.delete", card: "顾明" }],
-    });
+    if (!proposal.ok || !("record" in proposal)) throw new Error("没受理");
+    await __drainOperationsForTests();
+    const opId = proposal.record.opId;
+    expect((await readOperation(projectDir, opId))).toMatchObject({ kind: "record", record: { state: "waiting_author" } });
     expect(await card("顾明")).toBeDefined();
     expect((await card("林远"))?.fields.find((field) => field.label === "身份")?.value).toBe("审计员");
 
-    const action = { toolName: "foundation_decision", ...proposal.foundationConfirm };
-    const snapshotIds: unknown[] = [];
+    const action = { kind: "resume", opId, answer: { actionId: "confirm-settings", decision: "apply" } };
+    const snapshots: number[] = [];
     for (let click = 0; click < 2; click += 1) {
       const { handlerPromise, res } = callAgentChatRoute({ projectPath: projectDir, messages: [{ role: "user", content: "确认改设定" }], action });
       await handlerPromise;
       const events = parseSse(res.written.join(""));
-      const result = events.find((e) => e.event === "tool-result" && e.data.toolName === "foundation_write");
-      expect(result?.data.output).toMatchObject({ ok: true, refreshScope: "foundation" });
-      snapshotIds.push((result?.data.output as { snapshotId?: unknown } | undefined)?.snapshotId);
       const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
-      expect(text).toContain(click === 0 ? "改好了：「林远」的「身份」改了；删了人物卡「顾明」。" : "已经做过了");
+      expect(text).toContain("改好了：「林远」的「身份」改了；删了人物卡「顾明」（可撤销）。");
       expect(text).not.toMatch(/k-\d/u);
+      snapshots.push((await listSnapshots(projectDir)).length);
     }
-    expect(typeof snapshotIds[0]).toBe("string");
-    expect(snapshotIds[1]).toBeUndefined();
+    expect(snapshots[1]).toBe(snapshots[0]);
     expect(await card("顾明")).toBeUndefined();
     expect((await card("林远"))?.fields.find((field) => field.label === "身份")).toMatchObject({ value: "记者", by: "author" });
     // 作者身份走的 card.write：存档点标签带命令名（操作历史归「设定」类）。
-    const snapshot = (await listSnapshots(projectDir)).find((entry) => entry.id === snapshotIds[0]);
+    const stored = await readOperation(projectDir, opId);
+    const snapshotId = stored.kind === "record" ? (stored.record.result as { body?: { snapshotId?: string } } | undefined)?.body?.snapshotId : undefined;
+    const snapshot = (await listSnapshots(projectDir)).find((entry) => entry.id === snapshotId);
     expect(snapshot?.label.startsWith("core:card.write:")).toBe(true);
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
 
-    await restoreSnapshot(projectDir, snapshotIds[0] as string);
+    await restoreSnapshot(projectDir, snapshotId as string);
     expect(await card("顾明")).toBeDefined();
     expect((await card("林远"))?.fields.find((field) => field.label === "身份")?.value).toBe("审计员");
   });
 
-  it("「确认改设定」按钮带的内容不对 → 如实说没改、不写盘", { timeout: 30_000 }, async () => {
+  it("「认下」按钮指的那次改设定不存在 → 如实说按钮旧了、不写盘", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
+    registerRecipe(settingsChangeRecipe);
     const before = await readFile(join(projectDir, "ledger", "cards.json"), "utf-8");
     const { handlerPromise, res } = callAgentChatRoute({
       projectPath: projectDir,
-      messages: [{ role: "user", content: "确认改设定" }],
-      action: { toolName: "foundation_decision", key: "card-x", input: { ops: [{ op: "card.explode", card: "林远" }] } },
+      messages: [{ role: "user", content: "认下" }],
+      action: { kind: "new", type: SETTINGS_CHANGE_KIND, params: { accept: "op-0123456789abcdef0123" }, requestKey: randomUUID(), issuedAt: new Date().toISOString() },
     });
     await handlerPromise;
-    const events = parseSse(res.written.join(""));
-    const result = events.find((e) => e.event === "tool-result" && e.data.toolName === "foundation_write");
-    expect(result?.data.output).toMatchObject({ ok: false });
-    const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
-    expect(text).toContain("没改设定");
+    const text = parseSse(res.written.join("")).filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
+    expect(text).toContain("这个「认下」按钮旧了");
     expect(await readFile(join(projectDir, "ledger", "cards.json"), "utf-8")).toBe(before);
   });
 
@@ -229,7 +233,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     const { handlerPromise, res } = callAgentChatRoute({
       projectPath: projectDir,
       messages: [{ role: "user", content: "写第 1 章" }],
-      action: { toolName: "foundation_write", chapter: 1 },
+      action: { toolName: "foundation_decision", chapter: 1 },
     });
     await handlerPromise;
 

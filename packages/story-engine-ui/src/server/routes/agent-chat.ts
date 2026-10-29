@@ -623,7 +623,7 @@ async function handleAgentChat(
       for (const notice of actionNotices) sendEvent("status", { message: notice });
       sendEvent("usage", actionUsage);
       const action = parsedAction.action;
-      const actionChapter = "kind" in action ? (action.kind === "new" ? action.params.chapter : currentChapter) : "chapter" in action ? action.chapter : currentChapter;
+      const actionChapter = "kind" in action ? (action.kind === "new" && "chapter" in action.params ? action.params.chapter : currentChapter) : "chapter" in action ? action.chapter : currentChapter;
       await appendTurnMetrics(projectDir, actionChapter, {
         kind: "action",
         label: "kind" in action ? (action.kind === "new" ? ("mode" in action ? `${action.type}:${action.mode}` : action.type) : `operation:${action.kind}`) : action.toolName,

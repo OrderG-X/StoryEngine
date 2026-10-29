@@ -418,12 +418,32 @@ describe("streamAgentChat", () => {
     ]);
     expect(views[0]?.draft).toEqual({ chapter: 4, applied: true, snapshots: ["s-1"], changes: [{ from: "旧。", to: "新。" }] });
     expect(views[1]?.pending).toEqual({
+      kind: "revise",
       actionId: "confirm:2",
       decisions: ["apply", "again"],
       revise: { round: 2, changes: [{ from: "旧句。", to: "新句。" }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "压一压语气" },
     });
     // 不在等作者的不带（停着等作者才有按钮）。
     expect(views[2]?.pending).toBeUndefined();
+  });
+
+  it("改设定（片 3）：停着等作者的带那几处和没改成的；做完了带存档点；「认下」按钮存下来读回来，号不对的不认", async () => {
+    const settingsView = (overrides: Record<string, unknown>) => opView("ai", null, { kind: "settings.change", what: "改设定", chapter: undefined, ...overrides });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: settingsView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: ["「林远」的「身份」改了", 3], notDone: ["没有叫「甲」的卡"] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: settingsView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: [] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: settingsView({ result: { schema: "operation-result/1", summary: "改好了", body: { kind: "settings.change", applied: ["x"], notDone: [], snapshotId: "s-9" } } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({ kind: "settings", actionId: "confirm-settings", decisions: ["apply"], settings: { lines: ["「林远」的「身份」改了"], notDone: ["没有叫「甲」的卡"] } });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]?.settings).toEqual({ snapshotId: "s-9" });
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "settings.change", params: { accept: OP_ID }, ...stamp })).toEqual({ kind: "new", type: "settings.change", params: { accept: OP_ID }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "settings.change", params: { accept: "op-1" }, ...stamp })).toBeUndefined();
   });
 
   it("改稿按钮、等作者点的「接着做」防御解析（和服务端同一口径）：章号、原文、决定不对的不认", () => {
@@ -782,9 +802,8 @@ describe("streamAgentChat", () => {
     expect(received[1]?.commitConfirmAction).toBeUndefined();
   });
 
-  it("改账 / 改设定 / 认下按钮带的依据摘要原样透传（作者点按钮时服务端拿它核）", async () => {
+  it("改账按钮带的依据摘要原样透传（作者点按钮时服务端拿它核）", async () => {
     const basis = "a".repeat(64);
-    const from = "b".repeat(64);
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([
         frame("tool-result", {
@@ -792,21 +811,15 @@ describe("streamAgentChat", () => {
           toolName: "manage_ledger",
           output: { ok: false, needsConfirmation: true, ledgerConfirm: { key: "ledger:x", decisions: [{ type: "fact.retract", fact: "f1" }], basis }, summary: "…" },
         }),
-        frame("tool-result", {
-          toolCallId: "f1",
-          toolName: "foundation_write",
-          output: { ok: true, needsConfirmation: true, foundationConfirm: { key: "card-1", input: { ops: [] }, label: "改", basis, basisFrom: from }, summary: "…" },
-        }),
         frame("done", {}),
       ]),
     ));
-    const received: { ledgerConfirmAction?: unknown; foundationConfirmAction?: unknown }[] = [];
+    const received: { ledgerConfirmAction?: unknown }[] = [];
     await streamAgentChat(
       { projectPath: "/tmp/p", messages: [{ role: "user", content: "改" }] },
       { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
     );
     expect(received[0]?.ledgerConfirmAction).toMatchObject({ key: "ledger:x", basis });
-    expect(received[1]?.foundationConfirmAction).toMatchObject({ key: "card-1", basis, basisFrom: from });
   });
 
   it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {

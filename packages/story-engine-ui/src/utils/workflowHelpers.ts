@@ -108,20 +108,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: ["model_call", "draft_write"],
       requiresConfirmation: false,
     },
-    "foundation-confirm": {
-      id: "foundation-confirm",
-      label: "确认改设定",
-      description: "按 AI 提的改动改资料（改前自动存档，可在操作历史撤销）。",
-      permission: "project_config_write",
-      requiresConfirmation: false,
-    },
-    "foundation-accept": {
-      id: "foundation-accept",
-      label: "认下",
-      description: "AI 刚写进设定本的这几处算成你写的，之后 AI 再改要你点头（可在操作历史撤销）。",
-      permission: "project_config_write",
-      requiresConfirmation: false,
-    },
     "continue-next": {
       id: "continue-next",
       label: "继续下一章",
@@ -171,10 +157,6 @@ function joinLabels(previous: string | undefined, next: string | undefined): str
   return next ? `${previous}；${next}` : previous;
 }
 
-function cardOpsOf(input: Readonly<Record<string, unknown>>): readonly unknown[] | undefined {
-  return Array.isArray(input.ops) ? input.ops : undefined;
-}
-
 /** 两个提议并成一个时的依据：后一个接得上前一个（中间只有它自己那批写）才用后一个的，否则留前一个的。 */
 function chainBasis(previous: ProposalBasis, next: ProposalBasis): ProposalBasis {
   const from = previous.basisFrom ?? previous.basis;
@@ -203,23 +185,6 @@ function mergeAuthorButtons(previous: SuggestedAction, next: SuggestedAction): S
       },
     };
   }
-  const cardsBefore = previous.foundationTarget;
-  const cardsNext = next.foundationTarget;
-  const opsBefore = cardsBefore ? cardOpsOf(cardsBefore.input) : undefined;
-  const opsNext = cardsNext ? cardOpsOf(cardsNext.input) : undefined;
-  if (cardsBefore && cardsNext && opsBefore && opsNext) {
-    if (cardsBefore.key.split(KEY_JOIN).includes(cardsNext.key)) return previous;
-    const label = joinLabels(cardsBefore.label, cardsNext.label);
-    return {
-      ...next,
-      foundationTarget: {
-        key: `${cardsBefore.key}${KEY_JOIN}${cardsNext.key}`,
-        input: { ops: [...opsBefore, ...opsNext] },
-        ...(label ? { label } : {}),
-        ...chainBasis(cardsBefore, cardsNext),
-      },
-    };
-  }
   return next;
 }
 
@@ -243,20 +208,3 @@ export function draftChoiceAction(choice: { readonly label: string; readonly mod
   };
 }
 
-/** 「认下」按钮：作者口述让 AI 记进设定本的，点了就算作者写的（核心 field.accept 等，作者档）。 */
-export function foundationAcceptAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis): SuggestedAction {
-  return {
-    ...suggestedAction("foundation-accept"),
-    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}), ...basisFields(target) },
-  };
-}
-
-/** 「确认改设定」按钮：删角色、覆盖已确立设定是作者档，作者点了才由服务端执行（重构 P4）。 */
-export function foundationConfirmAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis): SuggestedAction {
-  const base = suggestedAction("foundation-confirm");
-  return {
-    ...base,
-    ...(target.label ? { description: `${target.label}（改前自动存档，可在操作历史撤销）。` } : {}),
-    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}), ...basisFields(target) },
-  };
-}

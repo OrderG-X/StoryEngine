@@ -386,7 +386,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   });
 
   it("改稿操作（片 2C）：不流正文、不进「正在生成」；停着等作者时卡上摆改法；换上了稿纸按盘上重读、高亮改后那句", async () => {
-    const pending = { actionId: "confirm:1", decisions: ["apply", "again"], revise: { round: 1, changes: [{ from: "第三章原有的工作稿。", to: "第三章改过的稿。" }], failed: [] } };
+    const pending = { kind: "revise" as const, actionId: "confirm:1", decisions: ["apply", "again"], revise: { round: 1, changes: [{ from: "第三章原有的工作稿。", to: "第三章改过的稿。" }], failed: [] } };
     const editView = (overrides: Partial<OperationViewData>) => draftView({ mode: "revise", what: "改稿·第 3 章", ...overrides });
     scriptAgentStream((handlers) => {
       handlers.onOperation?.(editView({}));
@@ -1134,9 +1134,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   it("tool-error settles the running toolStep + card to failed (no longer stuck running) and appends a retryable error", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "foundation_write", toolCallId: "c1" });
+      handlers.onToolCall({ toolName: "read_state_overview", toolCallId: "c1" });
       handlers.onToolError({
-        toolName: "foundation_write",
+        toolName: "read_state_overview",
         toolCallId: "c1",
         message: "落盘失败",
         retryable: true,

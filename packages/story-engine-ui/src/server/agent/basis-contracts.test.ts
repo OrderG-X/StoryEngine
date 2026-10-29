@@ -37,9 +37,10 @@ import { moveBookToTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { writeCards } from "../lib/card-write.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
-import { applyFoundationDecision } from "./foundation-decisions.js";
+import { __resetOperationStoreForTests } from "../lib/operations/store.js";
+import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../services/operations/executor.js";
+import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import { applyLedgerDecisions, planLedgerChange } from "./ledger-decisions.js";
-import { foundationWriteLogic } from "./tools/foundation-write.js";
 
 /** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
 const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
@@ -178,19 +179,32 @@ describe("依据安全契约", () => {
     const write = async (value: string, key: string) => ok(await runCommand(book, cardWrite, { ops: [{ op: "story.set", label: "地点", value }] }, author(key)));
     await write("北京", "initial");
     const ops = [{ op: "story.set", label: "地点", value: "上海" }];
-    const first = await foundationWriteLogic({ projectDir: book, ops });
-    if (!first.foundationConfirm) throw new Error("没出确认按钮");
-    ok(await applyFoundationDecision(book, first.foundationConfirm));
-    await write("广州", "author-later");
-    const second = await foundationWriteLogic({ projectDir: book, ops });
-    if (!second.foundationConfirm) throw new Error("没出确认按钮");
-    expect(second.foundationConfirm.key).not.toBe(first.foundationConfirm.key);
-    ok(await applyFoundationDecision(book, second.foundationConfirm));
-    expect((await readCards(book))?.story.fields.find((field) => field.label === "地点")?.value).toBe("上海");
+    __resetOperationStoreForTests();
+    registerRecipe(settingsChangeRecipe);
+    // 对话 AI 提一次改设定（碰了作者写的 → 等作者点「确认改设定」），作者点了。
+    const proposeAndConfirm = async (): Promise<string> => {
+      const outcome = ok(await submitOperation(book, {
+        kind: SETTINGS_CHANGE_KIND, params: { ops }, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString(), origin: { kind: "chat", messageId: crypto.randomUUID() },
+      }));
+      if (!("record" in outcome)) throw new Error("没受理");
+      await __drainOperationsForTests();
+      ok(await resumeOperation(book, outcome.record.opId, { actionId: "confirm-settings", decision: "apply" }));
+      await __drainOperationsForTests();
+      return outcome.record.opId;
+    };
+    try {
+      const first = await proposeAndConfirm();
+      await write("广州", "author-later");
+      const second = await proposeAndConfirm();
+      expect(second).not.toBe(first);
+      expect((await readCards(book))?.story.fields.find((field) => field.label === "地点")?.value).toBe("上海");
+    } finally {
+      __resetRecipesForTests();
+    }
   });
 
   it("R6 作者一次没改动的请求也留回执：迟到重发不盖掉后来的改动", async () => {
-    const write = (value: string, key: string) => writeCards(book, { by: "author", ops: [{ op: "story.set", label: "地点", value }], idempotencyKey: key });
+    const write = (value: string, key: string) => writeCards(book, { ops: [{ op: "story.set", label: "地点", value }], idempotencyKey: key });
     ok(await write("北京", "seed-city"));
     expect(ok(await write("北京", "retry-same-request")).lines).toEqual([]);
     ok(await write("广州", "new-request"));

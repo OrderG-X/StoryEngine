@@ -16,7 +16,6 @@
  *
  * 工具 → agent 名映射（与后端工具 id 对齐，命中 agentDisplayLabel 的 byAgentName）：
  *   read_state_overview → stateOverviewReader（显示「资料助手」）
- *   foundation_write    → foundationAgent（显示「资料助手」）
  * 未知工具仍 push 一个带可读标签的 toolStep（保证不静默、不崩），但不强造一张可能误导的卡。
  */
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
@@ -29,7 +28,7 @@ const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, draftChoiceAction, foundationAcceptAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, draftChoiceAction, ledgerConfirmAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -85,10 +84,6 @@ export interface AgentToolResultOutput {
   readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
   /** change_draft 专属：有稿的章 AI 不覆盖，挂「接着往下写」「重写这一章」按钮（服务端出的写稿动作）。 */
   readonly rewriteChoices?: readonly RewriteChoiceData[];
-  /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
-  readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
-  /** foundation_write 专属：AI 刚写进去的那几处，挂「认下」按钮。 */
-  readonly foundationAcceptAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
 }
 
 export type AgentProjectionEvent =
@@ -128,7 +123,7 @@ interface ToolPresentation {
  * 时间线里「调用工具 · XX」一律说中文，不让任何工具回退到生硬的「执行 generate_worldbuilding」之类英文（与整套中文 UI 对不齐）。
  * 新增工具务必在这里补一行中文标签；漏了才会落到 presentationFor 的英文兜底。
  *
- * card 只给 read_state_overview / foundation_write 两个保留——它们的 agentName 命中
+ * card 只给 read_state_overview 保留——它的 agentName 命中
  * agentTimelineModel.agentDisplayLabel 的 byAgentName，能正确渲染成「资料助手」卡；
  * 其余工具 card:null（只出可读步骤、不强造一张可能误导的卡）。
  */
@@ -142,11 +137,9 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   read_timeline: { stepLabel: "看时间线", card: null },
   read_foundation: { stepLabel: "查设定本", card: null },
   read_draft: { stepLabel: "读稿", card: null },
-  // 写资料
-  foundation_write: {
-    stepLabel: "改设定本",
-    card: { kind: "foundation", agentName: "foundationAgent", title: "改设定本" },
-  },
+  // 写资料：交一次改设定（写作版本 P2a 片 3）；foundation_write 是之前的工具（老会话回放仍显示原名）
+  change_settings: { stepLabel: "改设定本", card: null },
+  foundation_write: { stepLabel: "改设定本", card: null },
   // 做厚资料簇
   generate_worldbuilding: { stepLabel: "补全世界观", card: null },
   generate_asset_enrichment: { stepLabel: "补全道具与资源", card: null },
@@ -337,16 +330,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => !ids.has(a.id)), ...buttons],
         };
       }
-      // 删角色 / 覆盖已确立设定：挂「确认改设定」按钮（作者档，点了才由服务端执行）。
-      if (event.toolName === "foundation_write" && (event.output?.foundationConfirmAction || event.output?.foundationAcceptAction)) {
-        const button = event.output.foundationConfirmAction
-          ? foundationConfirmAction(event.output.foundationConfirmAction)
-          : foundationAcceptAction(event.output.foundationAcceptAction!);
-        return {
-          ...withEffects,
-          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
-        };
-      }
       // 定论卡（P12）：定论 + 前文要改的几句，作者划掉不改的、点「确认」一次改齐。
       if ((event.toolName === "settle_preview" || event.toolName === "settle_fact") && event.output?.settle && event.output?.ok !== false) {
         return withCard(withEffects, { type: "settle", settle: event.output.settle });
@@ -392,7 +375,7 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     ...(announced || (same && current.announced) ? { announced: true as const } : {}),
     ...(view.pending ? { pending: view.pending } : {}),
   };
-  const next = withDraftEffects(withCard(message, { type: "operation", op }), view);
+  const next = withSettingsEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view);
   if (same && current.state === "succeeded") return next;
   // 一次写几版时落选的几版（「另外几版」卡）：作者点开挑一版换进工作稿。
   const cards = [
@@ -416,6 +399,19 @@ function withDraftEffects(message: ChapterMessage, view: OperationViewData): Cha
   let next = added.length > 0 ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), ...added] } : message;
   const scopes = next.affectedScopes ?? [];
   if (draft.applied && !scopes.includes("full")) next = { ...next, affectedScopes: [...scopes, "full"] };
+  return next;
+}
+
+/** 改设定做完：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」。同一个存档点只记一次。 */
+function withSettingsEffects(message: ChapterMessage, view: OperationViewData): ChapterMessage {
+  const settings = view.settings;
+  if (!settings) return message;
+  const known = new Set((message.turnSnapshots ?? []).map((entry) => entry.snapshotId));
+  let next = settings.snapshotId && !known.has(settings.snapshotId)
+    ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), { toolName: "change_settings", snapshotId: settings.snapshotId }] }
+    : message;
+  const scopes = next.affectedScopes ?? [];
+  if (!scopes.includes("foundation")) next = { ...next, affectedScopes: [...scopes, "foundation"] };
   return next;
 }
 

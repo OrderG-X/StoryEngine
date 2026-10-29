@@ -27,6 +27,7 @@ import { keepOperationCandidateLocked, saveDraftCandidate, settleDraftCandidate,
 import { publishFixLogLocked, type FixRecord } from "./fix-log.js";
 import { currentOperation, OperationStopped, type OperationContext } from "./operations/context.js";
 import { checkFence } from "./operations/fence.js";
+import { FENCE_CODES } from "./operations/command.js";
 import { scrubLocalAbsolutePaths } from "./local-path-scrubber.js";
 import { runWithLazySnapshot } from "./snapshot.js";
 import { chapterWordsNow, publishChapterWordsLocked, recordChapterWords } from "./word-stats.js";
@@ -207,8 +208,6 @@ export async function oneAiWriterPerChapter<T>(projectDir: string, chapter: numb
   }
 }
 
-/** 栅栏不过的失败码（checkFence 给的）：这次停了，不留候选、不当成「没换上」。 */
-const FENCE_CODES: ReadonlySet<string> = new Set(["operation_stopped", "book_gone", "book_epoch_changed"]);
 
 async function applyInOperation(projectDir: string, input: AiDraftInput, operation: OperationContext): Promise<AiDraftOutcome> {
   if (resolve(operation.bookDir) !== resolve(projectDir)) throw new OperationStopped("cross_book_write", "这次操作只写它自己那本书，别的书没有写。");

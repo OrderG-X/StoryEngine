@@ -6,7 +6,7 @@
  * 前端凭这个 id 即可一键撤销本次写入。无确认弹窗——先做，可反悔。
  *
  * 用法：写类工具不要直接 createTool，而是用本函数包装：
- *   export const foundationWriteTool = writeTool({ id, description, inputSchema, outputSchema, run });
+ *   export const xxxTool = writeTool({ id, description, inputSchema, outputSchema, run });
  * 其中 `run({ input, projectDir, snapshotId, context })` 是真正的落盘逻辑，
  * 拿到的是「已建好快照」的 projectDir 与 snapshotId。
  *

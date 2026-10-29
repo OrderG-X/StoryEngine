@@ -27,15 +27,15 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: Array.from({ length: 21 }, () => decisions[0]) }).kind).toBe("invalid");
   });
 
-  it("「确认改设定」：带标识和写入对象才收；缺标识 / 写入不是对象都按非法处理", () => {
-    const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
-    expect(parseUserAction({ toolName: "foundation_decision", key: " fw-1 ", input, label: "删条目 顾明" })).toEqual({
+  it("「认下」（改设定那次的操作号）才收；号不对、缺号按非法；老的「确认改设定」按钮（foundation_decision）不再认", () => {
+    const stamp = { requestKey: "k-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(parseUserAction({ kind: "new", type: "settings.change", params: { accept: "op-0123456789abcdef0123" }, ...stamp })).toEqual({
       kind: "action",
-      action: { toolName: "foundation_decision", key: "fw-1", input, label: "删条目 顾明" },
+      action: { kind: "new", type: "settings.change", params: { accept: "op-0123456789abcdef0123" }, ...stamp },
     });
-    expect(parseUserAction({ toolName: "foundation_decision", input }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "foundation_decision", key: "k", input: [input] }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "foundation_decision", key: "k", input: "删掉" }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "settings.change", params: { accept: "op-1" }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "settings.change", params: { ops: [{ op: "card.delete", card: "顾明" }] }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "foundation_decision", key: "fw-1", input: { ops: [] } }).kind).toBe("invalid");
   });
 
   it("缺省 → none（普通对话）", () => {

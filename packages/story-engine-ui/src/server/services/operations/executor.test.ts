@@ -268,7 +268,7 @@ describe("等作者点按钮（设计 6.6）", () => {
             calls.revise += 1;
             return `第 ${round} 版`;
           });
-          const decision = await ctx.waitForAuthor({ actionId: `confirm:${round}`, kind: "revise_confirm", decisions: ["apply", "again"], preview: { after: draft } });
+          const { decision } = await ctx.waitForAuthor({ actionId: `confirm:${round}`, kind: "revise_confirm", decisions: ["apply", "again"], preview: { after: draft } });
           if (decision === "again") continue;
           if (ctx.params.n < 0) throw new OperationObsolete("draft_moved", "稿子在这期间改过，没换上。");
           await ctx.apply("apply", { draft }, async () => {
@@ -319,6 +319,35 @@ describe("等作者点按钮（设计 6.6）", () => {
     await expect(resumeOperation(book, opId)).resolves.toMatchObject({ ok: false, code: "unknown_action" });
     await resumeOperation(book, opId, { actionId: "confirm:2", decision: "apply" });
     expect(await settled(opId)).toMatchObject({ state: "succeeded", result: { summary: "换上了第 2 版" } });
+  });
+
+  it("划掉几处（定论卡那种）：只认卡上有的键，配方拿到排好的划法；同一个按钮换划法 decision_conflict、同一划法回放", async () => {
+    const seen: (readonly string[])[] = [];
+    registerRecipe<Record<string, never>>({
+      kind: "test.strike",
+      version: 1,
+      lane: "foreground",
+      async prepare(_bookDir, input) {
+        return { ok: true, params: input.params as Record<string, never>, writeScope: { chapters: [] }, budget: 0 };
+      },
+      async run(ctx) {
+        const { decision, excluded } = await ctx.waitForAuthor({ actionId: "confirm", kind: "settle_confirm", decisions: ["apply"], preview: { edits: 3 }, excludable: ["e1", "e2", "e3"] });
+        seen.push(excluded);
+        return { schema: "operation-result/1", summary: `${decision}：划掉 ${excluded.join("、") || "没有"}` };
+      },
+      stepBudget: () => 0,
+      modelTasks: () => [],
+    });
+    const outcome = await submitOperation(book, { kind: "test.strike", params: {}, requestKey: "button:s1", issuedAt: new Date().toISOString(), origin: { kind: "button", messageId: "s1" } });
+    if (!outcome.ok || !("record" in outcome)) throw new Error(JSON.stringify(outcome));
+    const opId = outcome.record.opId;
+    expect(await waiting(opId)).toMatchObject({ pendingActions: [{ actionId: "confirm", excludable: ["e1", "e2", "e3"] }] });
+    await expect(resumeOperation(book, opId, { actionId: "confirm", decision: "apply", excluded: ["e9"] })).resolves.toMatchObject({ ok: false, code: "bad_decision" });
+    await expect(resumeOperation(book, opId, { actionId: "confirm", decision: "apply", excluded: ["e3", "e1", "e3"] })).resolves.toMatchObject({ ok: true });
+    expect(await settled(opId)).toMatchObject({ state: "succeeded", result: { summary: "apply：划掉 e1、e3" } });
+    expect(seen).toEqual([["e1", "e3"]]);
+    await expect(resumeOperation(book, opId, { actionId: "confirm", decision: "apply", excluded: ["e1", "e3"] })).resolves.toMatchObject({ ok: true, replayed: true });
+    await expect(resumeOperation(book, opId, { actionId: "confirm", decision: "apply" })).resolves.toMatchObject({ ok: false, code: "decision_conflict" });
   });
 
   it("点了以后这一章被别的占着：target_busy，决定不落、还在等；配方核不过底版抛 OperationObsolete → obsolete、说哪样变了", async () => {

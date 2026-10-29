@@ -4,7 +4,7 @@
  * 进度、结果、下一步都由服务端出，模型不再多说一轮。没受理（参数不对、前提不满足）回 ok:false + code + 一句原因，模型照常往下走。
  *
  * run_check（收编核账、硬伤检查、内容审阅、查 AI 味）、change_draft（收编出稿、接着写，在 change-draft.ts）、revise_draft（改稿，在 revise-draft.ts）、
- * plan_chapter（想走法，在 plan-chapter.ts）；
+ * plan_chapter（想走法，在 plan-chapter.ts）、change_settings（改设定，在 change-settings.ts）；
  * 别的提交工具随各自那一片加。
  */
 import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
@@ -22,7 +22,7 @@ import {
 } from "../request-context.js";
 
 /** 提交操作的对话工具名（turn-flow 按它们判「这一步交了操作」）。 */
-export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft", "revise_draft", "plan_chapter"]);
+export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft", "revise_draft", "plan_chapter", "change_settings"]);
 
 /** 受理回执（给模型看、也给界面认「这一步交出去了」）。 */
 export interface SubmitReceipt {
@@ -60,7 +60,8 @@ export function receiptOf(
   const { record, existing } = outcome;
   const chapter = (record.params as { readonly chapter?: unknown } | null)?.chapter;
   const what = operationWhat(record.kind, record.mode, typeof chapter === "number" ? chapter : record.origin.chapter);
-  const same = record.kind === wanted.kind && record.mode === wanted.mode && chapter === wanted.chapter;
+  // 没指定做法的（改设定这类由配方定做法）只比种类和章。
+  const same = record.kind === wanted.kind && (wanted.mode === undefined || record.mode === wanted.mode) && chapter === wanted.chapter;
   return {
     ok: true,
     accepted: true,

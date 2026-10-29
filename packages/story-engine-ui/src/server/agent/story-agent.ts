@@ -18,7 +18,7 @@ import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
 import { readTimelineTool } from "./tools/read-timeline.js";
 import { readFoundationTool } from "./tools/read-foundation.js";
 import { readDraftTool } from "./tools/read-draft.js";
-import { foundationWriteTool } from "./tools/foundation-write.js";
+import { changeSettingsTool } from "./tools/change-settings.js";
 import { commitPreviewTool } from "./tools/commit-preview.js";
 import { manageLedgerTool } from "./tools/manage-ledger.js";
 import { planChapterTool } from "./tools/plan-chapter.js";
@@ -44,7 +44,7 @@ export function buildInstructions(): string {
     "你是中文长篇小说的写作助手。作者自己写正文，你帮着管账（人物、东西、伏笔、时间、前后对不对），也能按作者要求起草、改写、补资料。",
     "作者的主流程（写这一章、核账、定稿、改这处）大多是界面按钮直接执行的；对话里你负责问答、商量剧情、按需起草/改写、改资料和账本。",
     "",
-    "执行类请求必须工具先行：写正文 / 接着写=change_draft，改稿=revise_draft，写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write，" +
+    "执行类请求必须工具先行：写正文 / 接着写=change_draft，改稿=revise_draft，写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=change_settings，" +
       "定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮，" +
       "检查一章=run_check（mode：核账 continuity＝前后对不对、有没有吃书，硬伤检查 quality，内容审阅 review，查 AI 味 flavor），" +
       "改账=manage_ledger（事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；它只出「确认改账」按钮，作者点了才改），" +
@@ -113,7 +113,7 @@ export function buildInstructions(): string {
     "",
     "开书引导（仅当设定本基本为空、像一本新书时）：",
     "- 温和地引导用户先说主角和大概的世界（年代、基调、规则），想到哪说到哪，只在关键缺口才追问（没有主角时问名字/想要什么/怕什么，世界太模糊时问年代/基本规矩）。",
-    "- 边聊边用 foundation_write 写进设定本（主角 card.create 带 protagonist:true；世界的事写故事设定 story.set 或其他设定卡），自动存档、可撤销。",
+    "- 边聊边用 change_settings 写进设定本（主角 card.create 带 protagonist:true；世界的事写故事设定 story.set 或其他设定卡），自动存档、可撤销。",
     "- 聊到第一章可用 plan_chapter 出几种走法，给第一章方向前不必把已建的设定逐条复述一遍。已有真实设定的书不用走开书引导。",
     "- 用平实的中文，不用 emoji，简洁直接。",
   ].join("\n");
@@ -182,7 +182,7 @@ function storyAgentTools() {
     read_timeline: readTimelineTool,
     read_foundation: readFoundationTool,
     read_draft: readDraftTool,
-    foundation_write: foundationWriteTool,
+    change_settings: changeSettingsTool,
     // 写作版本 P2a：想走法是提交工具（plan.propose，收编原 brainstorm_chapter）：章纲员出几种走法、核账员核前文。
     plan_chapter: planChapterTool,
     // 写作版本 P2a：写一章、接着往下写是提交工具（draft.change），服务端按固定配方跑（受理了这一轮就停）。
@@ -195,7 +195,7 @@ function storyAgentTools() {
     // commit_apply 不给对话 AI（2026-10-10）：定稿只能由作者点「确认定稿」按钮（结构化动作直达，不经模型）。
     suggest_next_steps: suggestNextStepsTool,
     // 2026-10-12 编辑部 R3b 瘦身：硬事实+线索合成 manage_ledger（重构 P3 起只提裁定草案、作者点「确认改账」才记）；
-    // 文风样本并入 foundation_write（重构 P9 起是设定卡 exemplar.add / exemplar.remove）；撤销+裁剪合成 manage_snapshots（按 op 转给原工具，
+    // 文风样本并入 change_settings（重构 P9 起是设定卡 exemplar.add / exemplar.remove）；撤销+裁剪合成 manage_snapshots（按 op 转给原工具，
     // 「确认裁剪」按钮仍直达原 prune_snapshots）。原名保留在原文件，界面步骤名/撤销标签/老会话回放不受影响。
     manage_ledger: manageLedgerTool,
     manage_snapshots: manageSnapshotsTool,

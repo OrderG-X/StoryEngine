@@ -8,13 +8,13 @@
 import type { RequestContext } from "@mastra/core/di";
 
 import { isOperationId } from "../lib/operations/store.js";
-import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
+import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
 import {
   isCandidateDecisionKind,
   isDraftEditMode,
@@ -59,7 +59,7 @@ export const USER_ACTION_TOOL_NAMES = [
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 /** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」；P12：定论预览 / 改齐）。 */
-const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo", "settle_preview", "settle_apply"] as const;
+const DIRECT_ACTION_NAMES = ["ledger_decision", "undo", "settle_preview", "settle_apply"] as const;
 
 /**
  * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
@@ -108,8 +108,16 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
-  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」）带上是哪个按钮、点的哪个。 */
-  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string } }
+  /** 「认下」（片 3）：那次改设定里 AI 刚写进去的那几处算作者写的。accept = 那次改设定的操作号。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof SETTINGS_CHANGE_KIND;
+    readonly params: { readonly accept: string };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」）带上是哪个按钮、点的哪个、划掉了哪几处。 */
+  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
   | { readonly kind: "cancel"; readonly opId: string };
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
@@ -136,11 +144,6 @@ export type UserAction =
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string; readonly basis?: string }
-  /**
-   * 「确认改设定」按钮（重构 P4）：foundation_write 被拦下的那次写入（删角色 / 覆盖已确立设定）原样带回，
-   * 服务端按入参 schema 校验后带作者确认执行（点两次只做一次 = key）。
-   */
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly basis?: string }
   /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
   | SettleUserAction;
 
@@ -180,21 +183,32 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
       const actionId = typeof answer.actionId === "string" && /^[A-Za-z0-9:_-]{1,64}$/u.test(answer.actionId) ? answer.actionId : undefined;
       const decision = typeof answer.decision === "string" && /^[A-Za-z0-9_-]{1,32}$/u.test(answer.decision) ? answer.decision : undefined;
       if (!actionId || !decision) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
-      return { kind: "action", action: { kind: "resume", opId, answer: { actionId, decision } } };
+      // 划掉的几处（定论卡上每句的键）：只收形状对的，是不是卡上有的由执行器对着待办核。
+      const excluded = answer.excluded === undefined ? [] : Array.isArray(answer.excluded) ? answer.excluded : undefined;
+      if (!excluded || excluded.length > MAX_EXCLUDED || excluded.some((key) => typeof key !== "string" || !/^[A-Za-z0-9:_-]{1,40}$/u.test(key))) {
+        return { kind: "invalid", reason: "划掉的那几处不对，请刷新后再点。" };
+      }
+      return { kind: "action", action: { kind: "resume", opId, answer: { actionId, decision, ...(excluded.length > 0 ? { excluded: excluded as string[] } : {}) } } };
     }
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
-  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && !isCandidateDecisionKind(record.type)) {
+  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && !isCandidateDecisionKind(record.type)) {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
   const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
-  const chapter = params.chapter;
-  if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
   const requestKey = readRequestKey(record.requestKey);
   const issuedAt = typeof record.issuedAt === "string" && record.issuedAt.length <= 40 && Number.isFinite(Date.parse(record.issuedAt)) ? record.issuedAt : undefined;
   if (!requestKey || !issuedAt) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
   const stamp = { requestKey, issuedAt: new Date(Date.parse(issuedAt)).toISOString() };
+  if (record.type === SETTINGS_CHANGE_KIND) {
+    // 按钮只有「认下」这一种（改设定本身是对话 AI 交的；作者自己改走设定本）。
+    const accept = typeof params.accept === "string" && isOperationId(params.accept) ? params.accept : undefined;
+    if (!accept) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
+    return { kind: "action", action: { kind: "new", type: SETTINGS_CHANGE_KIND, params: { accept }, ...stamp } };
+  }
+  const chapter = params.chapter;
+  if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
   if (isCandidateDecisionKind(record.type)) {
     const decision = readCandidateDecisionParams(record.type, params);
     if (!decision) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
@@ -249,17 +263,6 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     }
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}), ...basisOf(record) } };
-  }
-  if (toolName === "foundation_decision") {
-    const key = typeof record.key === "string" ? record.key.trim() : "";
-    if (!key || key.length > MAX_ACTION_KEY_LENGTH) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
-    const input = record.input;
-    if (typeof input !== "object" || input === null || Array.isArray(input)) return { kind: "invalid", reason: "改设定内容不对。" };
-    const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
-    return {
-      kind: "action",
-      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}), ...basisOf(record) },
-    };
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
   if (toolName === "settle_preview" || toolName === "settle_apply") {
@@ -395,10 +398,6 @@ export async function runUserAction(args: {
     await runLedgerDecisionAction({ ...args, action });
     return;
   }
-  if (action.toolName === "foundation_decision") {
-    await runFoundationDecisionAction({ ...args, action });
-    return;
-  }
   if (action.toolName === "undo") {
     await runUndoAction(args);
     return;
@@ -453,7 +452,7 @@ export async function runUserAction(args: {
 
   const nextSteps = commitApplyNextSteps(action.chapter, result, await resolveNextDraftTarget(args.projectDir, action.chapter));
   // 定稿成功后，设定本里还没标主角、账里有视角人物 → 多给一个「把『X』设为主角」。只是建议：作者点了
-  // 才把 intent 发给模型，由模型走 foundation_write 设（可撤销）；建议判不了/判挂了按无建议处理。
+  // 才把 intent 发给模型，由模型走 change_settings 设（可撤销）；建议判不了/判挂了按无建议处理。
   const renameSuggestion = result?.committed === true && args.projectDir
     ? await buildProtagonistRenameSuggestion(args.projectDir).catch(() => undefined)
     : undefined;
@@ -599,48 +598,6 @@ async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserActio
     toolName: "manage_ledger",
     // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改账。
     output: { ok: outcome.ok, op: "confirm", summary: outcome.summary, refreshScope: "full", ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}) },
-  });
-  emitText(outcome.summary);
-}
-
-/** 「确认改设定」：作者点了按钮，带作者确认执行那次资料写入（改前存档、点两次只做一次），回执照实说。 */
-async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "foundation_decision" }>;
-}): Promise<void> {
-  const { action } = args;
-  const toolCallId = `user-action-foundation_write-${Date.now()}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: "foundation_write", args: { op: "confirm" } });
-  if (!args.projectDir) {
-    const message = "没改设定：没拿到书的位置，请重新打开这本书再点。";
-    args.sendEvent("tool-result", { toolCallId, toolName: "foundation_write", output: { ok: false, summary: message } });
-    emitText(message);
-    return;
-  }
-  let outcome: Awaited<ReturnType<typeof applyFoundationDecision>>;
-  try {
-    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input, ...(action.basis ? { basis: action.basis } : {}) });
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "foundation_write", error: message, retryable: true });
-    emitText(`没改设定：${message}。可以再点一次「确认改设定」重试。`);
-    return;
-  }
-  args.sendEvent("tool-result", {
-    toolCallId,
-    toolName: "foundation_write",
-    // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改设定。
-    output: {
-      ok: outcome.ok,
-      summary: outcome.summary,
-      refreshScope: "foundation",
-      ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}),
-    },
   });
   emitText(outcome.summary);
 }
