@@ -27,7 +27,7 @@ afterEach(async () => {
 async function running(key = "chat:m1:1", chapter = 1): Promise<{ readonly context: OperationContext; readonly record: OperationRecord }> {
   const accepted = await acceptOperation(book, {
     requestKey: key, issuedAt: new Date().toISOString(), kind: "draft.change", mode: "write", params: {}, recipeVersion: 1,
-    origin: { kind: "chat", messageId: key }, writeScope: { chapters: [chapter] },
+    origin: { kind: "chat", messageId: key }, writeScope: { chapters: [chapter] }, budget: { limit: 10 },
   }, { bookEpoch: () => readBookEpoch(book) });
   if (!accepted.ok || !("record" in accepted)) throw new Error(JSON.stringify(accepted));
   const record = await changeOperation(book, accepted.record.opId, (current) => ({ ...current, state: "running", runEpoch: 1 }));

@@ -40,6 +40,7 @@ const request = (over: Partial<OperationRequest> = {}): OperationRequest => ({
   recipeVersion: 1,
   origin: { kind: "chat", messageId: "m1", chapter: 3 },
   writeScope: { chapters: [3] },
+  budget: { limit: 10 },
   ...over,
 });
 

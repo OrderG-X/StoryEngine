@@ -73,6 +73,11 @@ export interface PendingAction {
   readonly decisionHash?: string;
 }
 
+/** 额度（设计 4.5）：这次最多发几次可能计费的请求。受理时按配方算式给，接着做时加上那一步的最坏值。 */
+export interface OperationBudget {
+  readonly limit: number;
+}
+
 export interface OperationFailure {
   readonly code: string;
   readonly message: string;
@@ -93,6 +98,7 @@ export interface OperationRecord {
   /** 受理时书的纪元（核心 readBookEpoch）：换了 = 书被整本恢复 / 搬回过，这次不能再写。 */
   readonly bookEpoch: string;
   readonly writeScope: WriteScope;
+  readonly budget: OperationBudget;
   readonly state: OperationState;
   readonly pauseReason?: PauseReason;
   /** 每次跑起来、取消、暂停都 +1：旧 worker 的写过不了栅栏。 */
@@ -159,6 +165,7 @@ function isRecord(value: unknown): value is OperationRecord {
     typeof record.eventSeq === "number" &&
     typeof record.bookEpoch === "string" &&
     Array.isArray(record.writeScope?.chapters) &&
+    typeof record.budget?.limit === "number" &&
     Array.isArray(record.pendingActions) &&
     Array.isArray(record.settledUnknowns)
   );
@@ -264,7 +271,13 @@ export async function updateOperationLocked(
   const written: OperationRecord = { ...next, opId: current.opId, requestKey: current.requestKey, writeScope: current.writeScope, eventSeq: current.eventSeq + 1, updatedAt: now.toISOString() };
   await writeRecordFile(bookDir, written);
   syncScheduler(bookDir, written);
-  for (const listener of listeners.get(listenerKey(bookDir, opId)) ?? []) listener(written);
+  for (const listener of listeners.get(listenerKey(bookDir, opId)) ?? []) {
+    try {
+      listener(written);
+    } catch (error) {
+      console.warn("[operations] 记录变化的订阅方出错（不影响操作）", error);
+    }
+  }
   return written;
 }
 
@@ -346,6 +359,7 @@ export interface OperationRequest {
   readonly recipeVersion: number;
   readonly origin: OperationOrigin;
   readonly writeScope: WriteScope;
+  readonly budget: OperationBudget;
 }
 
 export type AcceptOutcome =
@@ -403,6 +417,7 @@ export async function acceptOperation(
       origin: request.origin,
       bookEpoch: await context.bookEpoch(),
       writeScope: { chapters: [...new Set(request.writeScope.chapters)].sort((a, b) => a - b) },
+      budget: { limit: Math.max(0, Math.floor(request.budget.limit)) },
       state: "queued",
       runEpoch: 0,
       bootId: BOOT_ID,

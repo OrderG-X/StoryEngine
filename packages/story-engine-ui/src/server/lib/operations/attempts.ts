@@ -106,6 +106,20 @@ export function unsettledUnknowns(attempts: readonly ModelAttempt[], settled: re
   return attempts.filter((attempt) => !settled.includes(attempt.attemptId) && (attempt.state === "sending" || attempt.class === "unknown"));
 }
 
+/** 上一个进程发出去、没结算的（开书对账时）：记成结果不明（进程没了），只改这一个文件。 */
+export async function settleAbandonedAttempt(bookDir: string, opId: string, attemptId: string, now: Date = new Date()): Promise<void> {
+  const path = attemptPath(bookDir, opId, attemptId);
+  let attempt: ModelAttempt;
+  try {
+    attempt = JSON.parse(await readFile(path, "utf-8")) as ModelAttempt;
+  } catch {
+    return;
+  }
+  if (attempt.state !== "sending") return;
+  const settled: ModelAttempt = { ...attempt, state: "settled", class: "unknown", billing: "unknown", counted: true, note: "process_exit", endedAt: now.toISOString() };
+  await writeFileAtomic(path, `${JSON.stringify(settled, null, 2)}\n`);
+}
+
 export interface SendTicket {
   readonly attemptId: string;
   /** 结算这一次（只结一次，再调不动）。判出 unknown 的结完走暂停入口。 */
@@ -120,9 +134,9 @@ export class BudgetExceededError extends OperationStopped {
 }
 
 /**
- * 发一次请求之前（闸在排队、退避之后、真正 fetch 之前调）。limit 是这次操作此刻的额度上限（executor 按算式给，接着做时加）。
+ * 发一次请求之前（闸在排队、退避之后、真正 fetch 之前调）。额度上限读记录里的 budget（executor 按算式给，接着做时加）。
  */
-export async function beforeSend(context: OperationContext, target: AttemptTarget, limit: number, now: () => Date = () => new Date()): Promise<SendTicket> {
+export async function beforeSend(context: OperationContext, target: AttemptTarget, now: () => Date = () => new Date()): Promise<SendTicket> {
   const { bookDir, opId, runEpoch } = context;
   const verdict = await withRecordLock(bookDir, opId, async (): Promise<{ readonly ok: true; readonly attempt: ModelAttempt } | { readonly ok: false; readonly error: OperationStopped }> => {
     if (context.signal.aborted) return { ok: false, error: stoppedError(context) };
@@ -131,6 +145,7 @@ export async function beforeSend(context: OperationContext, target: AttemptTarge
       return { ok: false, error: new OperationStopped("operation_stopped", "这次已经停掉了，没有再发请求。") };
     }
     const used = usedBudget(await listAttempts(bookDir, opId));
+    const limit = stored.record.budget.limit;
     if (used + 1 > limit) return { ok: false, error: new BudgetExceededError(used, limit) };
     const attempt: ModelAttempt = {
       schema: MODEL_ATTEMPT_SCHEMA,
