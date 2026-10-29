@@ -5,8 +5,10 @@
  * 一大半调用直接「没跑成」（考卷查全从约 36% 掉到 4%）。此前调模型的三条路都没有 429 处理。
  *
  * 做法（不认任何一家的错误文案，只看 HTTP 状态码）：
- * - 按服务商地址（origin）各一道闸，限同时在飞的请求数。许可一直占到响应体读完（流式也算），
- *   不是拿到响应头就放。
+ * - 按额度组各一道闸（写作版本 P2a：模型 profile 上的 `quotaGroup`，默认 = 服务商地址的 origin；同一套餐的不同密钥、
+ *   不同入口由作者填成同一组），限同时在飞的请求数。许可一直占到响应体读完（流式也算），不是拿到响应头就放。
+ * - 两道（写作版本 P2a）：前台（对话、按钮、对话 AI）和后台（补读、通读记账）。两边都排着队时后台至少 1 位（上限 ≥ 2）、
+ *   前台至少 min(2, 上限 − 1) 位，上限是 1 就轮流；只有一边排队可以借满；在飞的不强杀。
  * - 并发上限自适应：开局宽（initialLimit），撞 429 就减半（最少 1），连续成功够多再慢慢 +1。
  *   不同服务商、不同套餐的上限不用人配。
  * - 429 / 503 退避重试：有 Retry-After 就照它等，否则指数退避加抖动，封顶 maxDelayMs；
@@ -26,11 +28,17 @@ export interface ProviderGateOptions {
   readonly log?: (message: string) => void;
 }
 
+export type GateLane = "foreground" | "background";
+
 export interface GatedFetchOptions {
   /** 排队、退避期间约每 5 秒调一次，供调用方给空闲计时器续命。 */
   readonly onWait?: () => void;
   /** 拿到许可、请求真发出去之前调（每次重试都调）：调用方从这时起算「模型多久没出字」。 */
   readonly onSend?: () => void;
+  /** 额度组（缺省 = 请求地址的 origin）。 */
+  readonly quotaGroup?: string;
+  /** 走哪一道（缺省前台）。 */
+  readonly lane?: GateLane;
 }
 
 const RETRYABLE_STATUS = new Set([429, 503]);
@@ -54,49 +62,65 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+const LANES: readonly GateLane[] = ["foreground", "background"];
+
 class AdaptiveGate {
   limit: number;
-  private active = 0;
+  private readonly active: Record<GateLane, number> = { foreground: 0, background: 0 };
   private successes = 0;
-  private readonly waiters: Array<() => void> = [];
+  private readonly waiters: Record<GateLane, Array<() => void>> = { foreground: [], background: [] };
+  /** 上限是 1、两边都排队时轮流：上一个放进去的是哪一道。 */
+  private lastGranted: GateLane = "background";
 
   constructor(initialLimit: number, private readonly maxLimit: number) {
     this.limit = initialLimit;
   }
 
+  private get inFlight(): number {
+    return this.active.foreground + this.active.background;
+  }
+
   /** 拿一个许可；返回只能调一次的释放函数。 */
-  acquire(signal?: AbortSignal): Promise<() => void> {
+  acquire(lane: GateLane, signal?: AbortSignal): Promise<() => void> {
     return new Promise((resolve, reject) => {
       const grant = () => {
-        this.active += 1;
+        this.active[lane] += 1;
+        this.lastGranted = lane;
         let released = false;
         resolve(() => {
           if (released) return;
           released = true;
-          this.active -= 1;
+          this.active[lane] -= 1;
           this.drain();
         });
-      };
-      if (this.active < this.limit) {
-        grant();
-        return;
-      }
-      const waiter = () => {
-        signal?.removeEventListener("abort", onAbort);
-        grant();
-      };
-      const onAbort = () => {
-        const index = this.waiters.indexOf(waiter);
-        if (index >= 0) this.waiters.splice(index, 1);
-        reject(signal?.reason ?? new Error("aborted"));
       };
       if (signal?.aborted) {
         reject(signal.reason ?? new Error("aborted"));
         return;
       }
+      const queue = this.waiters[lane];
+      const waiter = () => {
+        signal?.removeEventListener("abort", onAbort);
+        grant();
+      };
+      const onAbort = () => {
+        const index = queue.indexOf(waiter);
+        if (index >= 0) queue.splice(index, 1);
+        reject(signal?.reason ?? new Error("aborted"));
+      };
       signal?.addEventListener("abort", onAbort, { once: true });
-      this.waiters.push(waiter);
+      queue.push(waiter);
+      this.drain();
     });
+  }
+
+  /** 两边都排队时下一个该放哪一道（见文件头）；只有一边排队就放那边。 */
+  private nextLane(): GateLane | undefined {
+    const waiting = LANES.filter((lane) => this.waiters[lane].length > 0);
+    if (waiting.length < 2) return waiting[0];
+    if (this.limit === 1) return this.lastGranted === "foreground" ? "background" : "foreground";
+    // 后台先保住 1 位，其余都给前台（前台因此至少有 上限 − 1 ≥ min(2, 上限 − 1) 位）。
+    return this.active.background < 1 ? "background" : "foreground";
   }
 
   rateLimited(): void {
@@ -114,8 +138,10 @@ class AdaptiveGate {
   }
 
   private drain(): void {
-    while (this.active < this.limit && this.waiters.length > 0) {
-      this.waiters.shift()?.();
+    while (this.inFlight < this.limit) {
+      const lane = this.nextLane();
+      if (!lane) return;
+      this.waiters[lane].shift()?.();
     }
   }
 }
@@ -187,11 +213,11 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
     opts: GatedFetchOptions & { readonly baseFetch?: typeof fetch } = {},
   ): Promise<Response> {
     const baseFetch = opts.baseFetch ?? fetch;
-    const origin = originOf(input);
+    const origin = opts.quotaGroup?.trim() || originOf(input);
     const gate = gateFor(origin);
     const signal = init?.signal ?? undefined;
     for (let attempt = 0; ; attempt += 1) {
-      const release = await withPulse(gate.acquire(signal), opts.onWait);
+      const release = await withPulse(gate.acquire(opts.lane ?? "foreground", signal), opts.onWait);
       let response: Response;
       try {
         opts.onSend?.();
@@ -215,11 +241,11 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
   }
 
   /** 包成 fetch 形状（给 AI SDK 的 fetch 注入点用）。 */
-  function wrap(baseFetch: typeof fetch = fetch): typeof fetch {
-    return (input, init) => gatedFetch(input, init, { baseFetch });
+  function wrap(baseFetch: typeof fetch = fetch, route: Pick<GatedFetchOptions, "quotaGroup" | "lane"> = {}): typeof fetch {
+    return (input, init) => gatedFetch(input, init, { baseFetch, ...route });
   }
 
-  return { fetch: gatedFetch, wrap, limitFor: (origin: string) => gates.get(origin)?.limit };
+  return { fetch: gatedFetch, wrap, limitFor: (group: string) => gates.get(group)?.limit };
 }
 
 /** 进程内共用一道闸：对话 AI、编辑部、出稿都打同一个服务商时，按同一个上限排队。 */

@@ -144,4 +144,78 @@ describe("provider-gate", () => {
     const next = await gate.fetch(URL_A, undefined, { baseFetch: async () => new Response("next") });
     expect(await next.text()).toBe("next");
   });
+
+  it("同一额度组的两个地址共用一道闸（换入口、换密钥计数不清零）", async () => {
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 1, maxLimit: 1 });
+    const held = streamingResponse(["x"]);
+    const first = await gate.fetch(URL_A, undefined, { quotaGroup: "套餐甲", baseFetch: async () => held.response });
+    const order: string[] = [];
+    const other = gate.fetch("https://other.example.org/v1/chat/completions", undefined, {
+      quotaGroup: "套餐甲",
+      baseFetch: async () => { order.push("other"); return new Response("y"); },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(order).toEqual([]);
+    held.finish();
+    await first.text();
+    expect(await (await other).text()).toBe("y");
+    expect(gate.limitFor("套餐甲")).toBe(1);
+  });
+
+  it("两道都排队：后台至少放 1 位，其余给前台；只有一边排队可以借满", async () => {
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 3, maxLimit: 3 });
+    const holders = [streamingResponse(["a"]), streamingResponse(["b"]), streamingResponse(["c"])];
+    // 后台先借满三位。
+    const held = await Promise.all(holders.map((holder) => gate.fetch(URL_A, undefined, { lane: "background", baseFetch: async () => holder.response })));
+    const started: string[] = [];
+    const queued = [
+      gate.fetch(URL_A, undefined, { lane: "background", baseFetch: async () => { started.push("bg"); return new Response("bg"); } }),
+      gate.fetch(URL_A, undefined, { lane: "foreground", baseFetch: async () => { started.push("fg1"); return new Response("fg1"); } }),
+      gate.fetch(URL_A, undefined, { lane: "foreground", baseFetch: async () => { started.push("fg2"); return new Response("fg2"); } }),
+    ];
+    // 放掉两位：后台还占着一位，两位都给前台。
+    holders[0]!.finish();
+    holders[1]!.finish();
+    await held[0]!.text();
+    await held[1]!.text();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(started).toEqual(["fg1", "fg2"]);
+    holders[2]!.finish();
+    await held[2]!.text();
+    await Promise.all(queued.map(async (pending) => (await pending).text()));
+    expect(started).toEqual(["fg1", "fg2", "bg"]);
+  });
+
+  it("前台占满时后台排队，前台放一位先给后台（后台至少 1 位）", async () => {
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 2, maxLimit: 2 });
+    const holders = [streamingResponse(["a"]), streamingResponse(["b"])];
+    const held = await Promise.all(holders.map((holder) => gate.fetch(URL_A, undefined, { baseFetch: async () => holder.response })));
+    const started: string[] = [];
+    const fg = gate.fetch(URL_A, undefined, { baseFetch: async () => { started.push("fg"); return new Response("fg"); } });
+    const bg = gate.fetch(URL_A, undefined, { lane: "background", baseFetch: async () => { started.push("bg"); return new Response("bg"); } });
+    holders[0]!.finish();
+    await held[0]!.text();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(started).toEqual(["bg"]);
+    holders[1]!.finish();
+    await held[1]!.text();
+    await (await fg).text();
+    await (await bg).text();
+    expect(started).toEqual(["bg", "fg"]);
+  });
+
+  it("上限 1、两道都排队：轮流放", async () => {
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 1, maxLimit: 1 });
+    const first = streamingResponse(["a"]);
+    const r1 = await gate.fetch(URL_A, undefined, { baseFetch: async () => first.response });
+    const started: string[] = [];
+    const make = (lane: "foreground" | "background", name: string) =>
+      gate.fetch(URL_A, undefined, { lane, baseFetch: async () => { started.push(name); return new Response(name); } }).then((response) => response.text());
+    const all = [make("foreground", "fg1"), make("foreground", "fg2"), make("background", "bg1"), make("background", "bg2")];
+    first.finish();
+    await r1.text();
+    await Promise.all(all);
+    expect(started).toEqual(["bg1", "fg1", "bg2", "fg2"]);
+  });
 });
+
