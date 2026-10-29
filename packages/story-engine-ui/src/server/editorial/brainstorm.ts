@@ -8,6 +8,8 @@
  */
 import { projectBook, type ThreadView } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
+import { canCallAgain } from "../lib/llm-client.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readEarlierChapters, type EarlierText } from "./continuity/check-chapter.js";
@@ -321,15 +323,20 @@ export async function brainstormChapter(input: {
 
   let options: BrainstormOption[] | undefined;
   let lastError = "";
+  let tries = 0;
   for (let attempt = 0; attempt <= RETRIES && !options; attempt += 1) {
+    tries += 1;
     try {
       const text = await withStep("章纲员想走法", () => input.callPlanner([...plannerWindow.messages, { role: "user", content: task }], { json: true }));
       options = parseBrainstorm(text, threads);
     } catch (error) {
+      rethrowIfStopped(error);
       lastError = error instanceof Error ? error.message : String(error);
+      // 被拒、结果不明、跑飞：再发也一样，不再试（写作版本 P2a 4.2）。解析不了的照常重试一次。
+      if (!canCallAgain(error)) break;
     }
   }
-  if (!options) return { ok: false, reason: `章纲员没想出能用的走法（已自动重试一次）：${lastError || "模型没有返回可用内容"}` };
+  if (!options) return { ok: false, reason: `章纲员没想出能用的走法${tries > 1 ? "（已自动重试一次）" : ""}：${lastError || "模型没有返回可用内容"}` };
 
   const coldNotes = plannerWindow.cold ? [coldText("章纲员", plannerWindow.cold, upTo)] : [];
   let checked = false;

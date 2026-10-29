@@ -2,6 +2,7 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { normalizeChapterPlan } from "../book/chapter-plan.js";
 import {
@@ -404,9 +405,23 @@ describe("核账员的模型调用", () => {
     expect(llmMocks.streamChatModelToText.mock.calls[1]![0]).not.toHaveProperty("responseFormat");
   });
 
-  it("模型返回空内容 → 抛错，不当成没问题", async () => {
-    llmMocks.streamChatModelToText.mockReset().mockResolvedValue({ content: "  ", thinking: "" });
+  it("模型返回空内容（产物不能用）→ 马上补发一份；两份都空就抛错，不当成没问题", async () => {
+    llmMocks.streamChatModelToText.mockReset().mockRejectedValue(new ModelCallError("模型返回了空内容。", "unusable", undefined, "empty"));
     await expect(callConfiguredBrainModel([{ role: "user", content: "问" }], { json: true })).rejects.toThrow("空内容");
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);
+  });
+
+  it("结果不明、被拒的不补发（可能已经在算、已经计费，写作版本 P2a 4.2）", async () => {
+    for (const error of [new ModelCallError("模型请求失败：503", "unknown", 503), new ModelCallError("模型请求失败：422", "rejected", 422)]) {
+      llmMocks.streamChatModelToText.mockReset().mockRejectedValue(error);
+      await expect(callConfiguredBrainModel([{ role: "user", content: "问" }], { json: true })).rejects.toBe(error);
+      expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("每一份带自己的 signal（对冲赢了掐输家用）", async () => {
+    await callConfiguredBrainModel([{ role: "user", content: "问" }], { json: true });
+    expect(llmMocks.streamChatModelToText.mock.calls[0]![0].signal).toBeInstanceOf(AbortSignal);
   });
 });
 

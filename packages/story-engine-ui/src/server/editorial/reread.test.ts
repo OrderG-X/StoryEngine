@@ -2,6 +2,7 @@
 import { rm } from "node:fs/promises";
 import { bookImportText, projectBook, readChapterLedger, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { readReadersCatchUpStatus, runInReaderCatchUpQueue } from "./catch-up.js";
 import { maybeStartReadersCatchUp } from "./index.js";
@@ -32,20 +33,22 @@ const LEDGERS: Record<number, unknown> = {
 };
 
 /** 假记账员：要 JSON 的是交账单（看是哪一章），其余是写笔记。 */
-function fakeKeeper(options: { readonly failChapter?: number; readonly failTimes?: number } = {}): BrainCallModel & { calls: number } {
+function fakeKeeper(options: { readonly failChapter?: number; readonly failTimes?: number; readonly error?: () => Error } = {}): BrainCallModel & { calls: number; ledgerCalls: number } {
   let failed = 0;
   const call = (async (messages, callOptions) => {
     call.calls += 1;
     if (!callOptions.json) return "笔记：老周＝周守义。";
+    call.ledgerCalls += 1;
     const task = messages.at(-1)?.content ?? "";
     const chapter = [1, 2, 3].find((n) => task.includes(`【第 ${n} 章 正文`)) ?? 0;
     if (chapter === options.failChapter && failed < (options.failTimes ?? Infinity)) {
       failed += 1;
-      throw new Error("服务商 502");
+      throw options.error?.() ?? new Error("服务商 502");
     }
     return JSON.stringify(LEDGERS[chapter] ?? {});
-  }) as BrainCallModel & { calls: number };
+  }) as BrainCallModel & { calls: number; ledgerCalls: number };
   call.calls = 0;
+  call.ledgerCalls = 0;
   return call;
 }
 
@@ -97,6 +100,22 @@ describe("通读记账", () => {
     await runReread(book, { callModel: good });
     expect(await readRereadState(book)).toMatchObject({ status: "done", done: 3 });
     expect((await readChapterLedger(book, 1))?.origin).toBe("reread");
+  });
+
+  it("被拒（422）这类再发也一样的：这章只发一次就停下，不试满三次（写作版本 P2a 4.2，Astra 第 6 轮第 3 条）", async () => {
+    await beginReread(book, 3);
+    const rejected = fakeKeeper({ failChapter: 2, error: () => new ModelCallError("模型请求失败：422", "rejected", 422) });
+    await runReread(book, { callModel: rejected });
+    expect(rejected.ledgerCalls).toBe(2); // 第 1 章一次 + 第 2 章一次
+    expect(await readRereadState(book)).toMatchObject({ status: "stopped", done: 1 });
+  });
+
+  it("产物不能用（空回复）可以再试：照旧最多试满三次", async () => {
+    await beginReread(book, 3);
+    const empty = fakeKeeper({ failChapter: 2, error: () => new ModelCallError("模型什么也没回", "unusable", undefined, "empty") });
+    await runReread(book, { callModel: empty });
+    expect(empty.ledgerCalls).toBe(1 + REREAD_ATTEMPTS);
+    expect(await readRereadState(book)).toMatchObject({ status: "stopped", done: 1 });
   });
 
   it("偶尔失败一两次照记（一章最多试几次）", async () => {

@@ -204,10 +204,10 @@ function passagesMessage(passages: readonly { readonly chapter: number; readonly
 /**
  * 核账员 / 跟读用的模型调用（qualityCheck 槽）：关思考、低随机性、流式。
  * 不传 max_tokens，不设总时长上限（超时铁律）：只有「光想不写」超过 maxThinkingMs 和输出超过 maxContentChars 两道闸，
- * 外面套对冲（一次调用迟迟不回就并行再发一份，谁先回来用谁）。空内容抛错，不当成没问题。
+ * 外面套对冲（一次调用迟迟不回就并行再发一份，谁先回来用谁、掐掉另一份）。空内容由调用层按「产物不能用」抛，不当成没问题。
  */
 export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
-  const once = async () => {
+  const once = async (signal: AbortSignal) => {
     const resolved = await resolveConfiguredChatModel("qualityCheck");
     const { content } = await streamChatModelToText({
       configured: { ...resolved, thinking: false },
@@ -216,8 +216,8 @@ export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
       ...(options.json ? { responseFormat: { type: "json_object" as const } } : {}),
       maxThinkingMs: 180_000,
       maxContentChars: 60_000,
+      signal,
     });
-    if (!content.trim()) throw new Error("模型返回了空内容");
     return content;
   };
   return hedged(once, 120_000);

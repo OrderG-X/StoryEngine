@@ -16,8 +16,13 @@
  *   重试 maxRetries 次后把最后那个响应原样交回调用方，由调用方照常如实报错。
  * - 排队和退避期间每隔几秒调一次 onWait：调用方拿它给自己的空闲计时器续命，
  *   免得「排队等许可」被误判成「连接静默」。
+ * - 在操作里（写作版本 P2a 4.2）：每次物理发送（含 429 重发）拿到许可之后、真发之前过 beforeSend 落 attempt；
+ *   没拿到响应（fetch 抛错）、429 退避的那次闸自己结算，拿到响应的那次把票交给调用方（onTicket），读完按结果结算。
+ *   操作里的模型调用不带记账就不发（不让哪条路悄悄绕过额度）。
  */
 
+import { beforeSend, type AttemptTarget, type SendTicket } from "./operations/attempts.js";
+import { classifyThrown } from "./operations/classify.js";
 import { currentOperation } from "./operations/context.js";
 
 export interface ProviderGateOptions {
@@ -29,6 +34,8 @@ export interface ProviderGateOptions {
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   readonly random?: () => number;
   readonly log?: (message: string) => void;
+  /** 发之前落 attempt（缺省是操作的 beforeSend；单测换成假的，不用真建操作）。 */
+  readonly beforeSend?: typeof beforeSend;
 }
 
 export type GateLane = "foreground" | "background";
@@ -42,6 +49,8 @@ export interface GatedFetchOptions {
   readonly quotaGroup?: string;
   /** 走哪一道（缺省：在操作里按操作的道，不在操作里 = 前台）。 */
   readonly lane?: GateLane;
+  /** 在操作里发：记账的对象，和拿到响应时接票的回调（调用方读完响应结算）。不在操作里不用。 */
+  readonly attempt?: { readonly target: AttemptTarget; readonly onTicket: (ticket: SendTicket) => void };
 }
 
 const RETRYABLE_STATUS = new Set([429]);
@@ -187,6 +196,7 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
   const sleep = options.sleep ?? defaultSleep;
   const random = options.random ?? Math.random;
   const log = options.log ?? ((message: string) => console.warn(message));
+  const recordSend = options.beforeSend ?? beforeSend;
   const gates = new Map<string, AdaptiveGate>();
 
   const gateFor = (origin: string): AdaptiveGate => {
@@ -219,23 +229,47 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
     const origin = opts.quotaGroup?.trim() || originOf(input);
     const gate = gateFor(origin);
     const signal = init?.signal ?? undefined;
+    const operation = currentOperation();
+    if (operation && !opts.attempt) throw new Error("操作里的模型调用没带记账，没有发（provider-gate）。");
+    /** 闸自己结的那几次（没拿到响应、429 退避）：结算出错只记一笔，不盖住原来的错。 */
+    const settle = async (ticket: SendTicket | undefined, outcome: Parameters<SendTicket["settle"]>[0]): Promise<void> => {
+      await ticket?.settle(outcome).catch((error: unknown) => log(`[provider-gate] 调用记账没写上：${error instanceof Error ? error.message : String(error)}`));
+    };
     for (let attempt = 0; ; attempt += 1) {
-      const release = await withPulse(gate.acquire(opts.lane ?? currentOperation()?.lane ?? "foreground", signal), opts.onWait);
+      const release = await withPulse(gate.acquire(opts.lane ?? operation?.lane ?? "foreground", signal), opts.onWait);
+      let ticket: SendTicket | undefined;
+      if (operation && opts.attempt) {
+        try {
+          ticket = await recordSend(operation, opts.attempt.target);
+        } catch (error) {
+          release();
+          throw error;
+        }
+      }
+      // 拿许可、落 attempt 的期间被停了：没调 fetch，记没发出去。
+      if (signal?.aborted) {
+        release();
+        await settle(ticket, { class: "not_sent", note: "aborted_before_send" });
+        throw signal.reason ?? new Error("aborted");
+      }
       let response: Response;
       try {
         opts.onSend?.();
         response = await baseFetch(input, init);
       } catch (error) {
         release();
+        await settle(ticket, { class: classifyThrown(error, signal), note: error instanceof Error ? error.name : "fetch_failed" });
         throw error;
       }
       if (!RETRYABLE_STATUS.has(response.status) || attempt >= maxRetries) {
         if (response.ok) gate.succeeded();
+        if (ticket) opts.attempt!.onTicket(ticket);
         return holdUntilBodyDone(response, release);
       }
       if (response.status === 429) gate.rateLimited();
       await response.body?.cancel().catch(() => undefined);
       release();
+      await settle(ticket, { class: "rejected", status: response.status });
       const backoff = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt) * (0.75 + random() * 0.5);
       const delay = Math.min(maxDelayMs, retryAfterMs(response) ?? backoff);
       log(`[provider-gate] ${origin} 返回 ${response.status}，并发上限降到 ${gate.limit}，${Math.round(delay / 1000)} 秒后第 ${attempt + 1} 次重试`);

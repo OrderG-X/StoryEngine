@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProviderGate } from "./provider-gate.js";
-import { runInOperation, type OperationContext } from "./operations/context.js";
+import type { AttemptOutcome, SendTicket } from "./operations/attempts.js";
+import { runInOperation, StopSignal, type OperationContext } from "./operations/context.js";
 
 const URL_A = "https://api.example.com/v1/chat/completions";
 const noSleep = async () => undefined;
@@ -16,6 +17,20 @@ function streamingResponse(chunks: string[], status = 200): { response: Response
   });
   return { response: new Response(body, { status }), finish: () => controller?.close() };
 }
+
+/** 假的落 attempt：记下每次发送和它怎么结的（不建真操作）。 */
+function recorder() {
+  const settled: (AttemptOutcome | "open")[] = [];
+  const beforeSend = async (): Promise<SendTicket> => {
+    const index = settled.push("open") - 1;
+    return { attemptId: `a${index}`, settle: async (outcome) => { settled[index] = outcome; } };
+  };
+  return { settled, beforeSend };
+}
+const TARGET = { provider: "p", model: "m", quotaGroup: "https://api.example.com" };
+const operation = (signal = new AbortController().signal, lane: "foreground" | "background" = "foreground"): OperationContext => ({
+  bookDir: "/书", opId: "op", runEpoch: 1, bookEpoch: "e", signal, lane,
+});
 
 describe("provider-gate", () => {
   it("503 不在闸里重发：原样交回，只发一次", async () => {
@@ -220,15 +235,15 @@ describe("provider-gate", () => {
   });
 
   it("没指定道：在后台操作里就走后台道", async () => {
-    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 2, maxLimit: 2 });
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 2, maxLimit: 2, beforeSend: recorder().beforeSend });
     const holders = [streamingResponse(["a"]), streamingResponse(["b"])];
     const held = await Promise.all(holders.map((holder) => gate.fetch(URL_A, undefined, { baseFetch: async () => holder.response })));
     const started: string[] = [];
     const fg = gate.fetch(URL_A, undefined, { baseFetch: async () => { started.push("fg"); return new Response("fg"); } });
-    const backfill: OperationContext = {
-      bookDir: "/书", opId: "op", runEpoch: 1, bookEpoch: "e", signal: new AbortController().signal, lane: "background",
-    };
-    const bg = runInOperation(backfill, () => gate.fetch(URL_A, undefined, { baseFetch: async () => { started.push("bg"); return new Response("bg"); } }));
+    const bg = runInOperation(operation(undefined, "background"), () => gate.fetch(URL_A, undefined, {
+      attempt: { target: TARGET, onTicket: () => undefined },
+      baseFetch: async () => { started.push("bg"); return new Response("bg"); },
+    }));
     holders[0]!.finish();
     await held[0]!.text();
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -254,3 +269,57 @@ describe("provider-gate", () => {
   });
 });
 
+describe("provider-gate 在操作里记账（写作版本 P2a 4.2）", () => {
+  it("操作里的调用不带记账：不发", async () => {
+    let sends = 0;
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, beforeSend: recorder().beforeSend });
+    await expect(runInOperation(operation(), () => gate.fetch(URL_A, undefined, { baseFetch: async () => { sends += 1; return new Response("x"); } })))
+      .rejects.toThrow("没带记账");
+    expect(sends).toBe(0);
+  });
+
+  it("每次物理发送都先落 attempt；429 那次闸自己结成被拒，拿到响应的那次把票交给调用方", async () => {
+    const statuses = [429, 200];
+    const { settled, beforeSend } = recorder();
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, beforeSend });
+    const tickets: SendTicket[] = [];
+    const response = await runInOperation(operation(), () => gate.fetch(URL_A, undefined, {
+      attempt: { target: TARGET, onTicket: (ticket) => tickets.push(ticket) },
+      baseFetch: async () => new Response("ok", { status: statuses.shift()! }),
+    }));
+    await response.text();
+    expect(settled).toEqual([{ class: "rejected", status: 429 }, "open"]);
+    expect(tickets.map((ticket) => ticket.attemptId)).toEqual(["a1"]);
+  });
+
+  it("连不上（DNS）记没发出去；连上之后断的记结果不明", async () => {
+    const { settled, beforeSend } = recorder();
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, beforeSend });
+    const fail = (code: string) => runInOperation(operation(), () => gate.fetch(URL_A, undefined, {
+      attempt: { target: TARGET, onTicket: () => undefined },
+      baseFetch: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(code), { code }) }); },
+    }));
+    await expect(fail("ENOTFOUND")).rejects.toThrow("fetch failed");
+    await expect(fail("ECONNRESET")).rejects.toThrow("fetch failed");
+    expect(settled.map((outcome) => (outcome === "open" ? outcome : outcome.class))).toEqual(["not_sent", "unknown"]);
+  });
+
+  it("排队时被停了：不调 fetch，记没发出去", async () => {
+    const { settled, beforeSend } = recorder();
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, beforeSend, initialLimit: 1, maxLimit: 1 });
+    const holder = streamingResponse(["a"]);
+    const held = await gate.fetch(URL_A, undefined, { baseFetch: async () => holder.response });
+    const controller = new AbortController();
+    let sends = 0;
+    const queued = runInOperation(operation(controller.signal), () => gate.fetch(URL_A, { signal: controller.signal }, {
+      attempt: { target: TARGET, onTicket: () => undefined },
+      baseFetch: async () => { sends += 1; return new Response("x"); },
+    }));
+    controller.abort(new StopSignal({ type: "cancel" }));
+    await expect(queued).rejects.toBeInstanceOf(StopSignal);
+    holder.finish();
+    await held.text();
+    expect(sends).toBe(0);
+    expect(settled).toEqual([]);
+  });
+});

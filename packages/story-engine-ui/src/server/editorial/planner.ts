@@ -7,7 +7,8 @@
  * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
 import { normalizeChapterPlan, PLAN_BEAT_MAX, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
+import { canCallAgain, resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
 import {
@@ -88,7 +89,6 @@ export const callConfiguredPlannerModel: BrainCallModel = async (messages, optio
       ...(options.json ? { responseFormat: { type: "json_object" as const } } : {}),
       ...(thinking ? { maxThinkingMs: PLAN_MAX_THINKING_MS } : {}),
     });
-    if (!content.trim()) throw new Error("章纲员模型返回了空内容");
     return content;
   };
   const thinking = options.json ? configured.thinking : false;
@@ -172,7 +172,9 @@ export async function planChapterByPlanner(input: {
   const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
   let lastError = "";
   let skeleton: { readonly plan: ChapterPlan; readonly dayOffset: number | undefined } | undefined;
+  let tries = 0;
   for (let attempt = 0; attempt <= PLAN_RETRIES; attempt += 1) {
+    tries += 1;
     try {
       const raw = parsePlanJson(await withStep("章纲员", () => input.callModel(
         [...window, { role: "user", content: plannerTask(input.chapter, materials, input.direction) }],
@@ -196,11 +198,14 @@ export async function planChapterByPlanner(input: {
       }
       return { ok: true, plan: await finalizePlan(input.projectDir, plan, dayOffset, materials), ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
     } catch (error) {
+      rethrowIfStopped(error);
       lastError = error instanceof Error ? error.message : String(error);
+      // 模型调用结果不明、被拒、被我们掐的不再拟一次（写作版本 P2a 4.2）；回复解析不了这类照常重拟。
+      if (!canCallAgain(error)) break;
     }
   }
   if (skeleton) return { ok: true, plan: await finalizePlan(input.projectDir, skeleton.plan, skeleton.dayOffset, materials), ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
-  return { ok: false, reason: `章纲没拟成（已自动重试一次）：${lastError || "模型没有返回可用内容"}` };
+  return { ok: false, reason: `章纲没拟成${tries > 1 ? "（已自动重试一次）" : ""}：${lastError || "模型没有返回可用内容"}` };
 }
 
 /** 「改了作者方向」的声明要核原话：said 真在作者方向里才留（模型声明 + 原句核实），抄不出原话的丢掉。 */

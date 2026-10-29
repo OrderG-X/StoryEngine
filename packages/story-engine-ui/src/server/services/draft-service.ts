@@ -93,7 +93,7 @@ import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget, 
 import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
 import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
-import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
+import { runDeAiFlavorBatch, type DeAiCallModel, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft, resolveChapterPlanForReroll } from "../editorial/plan-chapter.js";
 import type { LastDraftConflict } from "../writing/context-gateway.js";
 import { withStep } from "../lib/token-meter.js";
@@ -344,7 +344,7 @@ export async function runAutoDeAiRound(input: {
   readonly targets: readonly AiFlavorViolation[];
   readonly rules: readonly AiFlavorRule[];
   readonly antiRules: readonly string[];
-  readonly callModel: (prompt: string) => Promise<string>;
+  readonly callModel: DeAiCallModel;
 }): Promise<{ readonly info: GenerateDraftAutoDeAiInfo; readonly draftBody?: string }> {
   const notRun = (error?: string): { readonly info: GenerateDraftAutoDeAiInfo } => ({
     info: {
@@ -820,7 +820,7 @@ export interface GenerateDraftInput {
   /** 自动去味开关（默认 true）；false=检出 high/medium 也只标注、不改写。 */
   readonly autoDeAi?: boolean;
   /** 自动去味的改写模型调用（工具 execute 注入 repair 任务槽；测试注入 mock）。缺失=只标注不改写。 */
-  readonly deAiCallModel?: (prompt: string) => Promise<string>;
+  readonly deAiCallModel?: DeAiCallModel;
   /** 多候选采样数（只认 2/3，其余一律当 1=一次成稿现状）。 */
   readonly candidates?: number;
   /** candidates>1 时按序注入的候选 writer（工具 execute 用 temperature 错开构建；测试注入 mock）。缺位的序号回退 writerClient。 */

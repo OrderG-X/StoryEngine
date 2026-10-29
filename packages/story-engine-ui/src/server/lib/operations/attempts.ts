@@ -2,7 +2,8 @@
  * 模型调用的记账（写作版本 P2a 设计第四节，契约 `model-attempt/1`）：每次物理发送（含闸里 429 重发、备用、对冲）一份
  * `attempts/<attemptId>.json`。只做三件事：记账、判「结果不明」、溯源；**不拿来复用**（恢复只认步骤检查点）。
  *
- * - beforeSend：短拿记录锁，核本次执行没被停、记录还是 running 且是这一次、额度够，落 attempt（sending）才放行。
+ * - beforeSend：这一步出过不能再发的失败就不放（StepHaltedError）；短拿记录锁，核本次执行没被停、记录还是 running 且是这一次、额度够，
+ *   落 attempt（sending）才放行。
  *   额度不够 → 放掉记录锁之后走暂停入口（paused:budget）、抛 OperationStopped。拿着记录锁不等书锁。
  * - 结算：只改这一个 attempt 文件（类别、计费、用量），不发请求、不写别的、不动 runEpoch，取消、终态之后照样能结。
  *   已经结算过的不再改。判出 unknown 的：结算完（记录锁外）走暂停入口（paused:attempt_unknown）。
@@ -12,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { StepHaltedError } from "../ai-errors.js";
 import { writeFileAtomic } from "../project-io.js";
 import { OperationStopped, type OperationContext } from "./context.js";
 import { pauseOperation, stoppedError } from "./fence.js";
@@ -40,7 +42,7 @@ export interface ModelAttempt extends AttemptTarget {
   readonly class?: AttemptClass;
   /** HTTP 状态码（拿到了的话）。 */
   readonly status?: number;
-  /** 计费：known = 服务端给了结果（用量已知或明确答复了）；unknown = 发出去了、结果不明；none = 没发出去。 */
+  /** 计费：known = 拿到了完整的结果（用量已知）；unknown = 发出去了、算没算说不准，按全额估（含 429 以外的 4xx）；none = 没花（没发出去、429）。 */
   readonly billing?: "known" | "unknown" | "none";
   /** 占不占额度。 */
   readonly counted?: boolean;
@@ -68,9 +70,14 @@ export function countsTowardBudget(outcome: AttemptOutcome): boolean {
   return true;
 }
 
-function billingOf(outcome: AttemptOutcome): "known" | "unknown" | "none" {
+/**
+ * 计费（设计 4.2 表的「计费」列）：完整失败响应只说明这次响应结束了，说明不了上游没在算——429 以外的 4xx 按全额估；
+ * 429 按限流的标准含义记没花。
+ */
+export function billingOf(outcome: AttemptOutcome): "known" | "unknown" | "none" {
   if (outcome.class === "not_sent") return "none";
-  if (outcome.class === "ok" || outcome.class === "unusable" || outcome.class === "rejected") return "known";
+  if (outcome.class === "rejected") return outcome.status === 429 ? "none" : "unknown";
+  if (outcome.class === "ok" || outcome.class === "unusable") return "known";
   return "unknown";
 }
 
@@ -138,6 +145,8 @@ export class BudgetExceededError extends OperationStopped {
  */
 export async function beforeSend(context: OperationContext, target: AttemptTarget, now: () => Date = () => new Date()): Promise<SendTicket> {
   const { bookDir, opId, runEpoch } = context;
+  // 这一步里已经有一次被拒 / 结果不明 / 跑飞：不再发（设计 4.2 兜底，上层哪个循环 catch 了再调也到这儿为止）。
+  if (context.step?.halt.failure) throw new StepHaltedError(context.step.halt.failure);
   const verdict = await withRecordLock(bookDir, opId, async (): Promise<{ readonly ok: true; readonly attempt: ModelAttempt } | { readonly ok: false; readonly error: OperationStopped }> => {
     if (context.signal.aborted) return { ok: false, error: stoppedError(context) };
     const stored = await readOperation(bookDir, opId);

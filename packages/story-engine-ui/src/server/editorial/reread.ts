@@ -4,7 +4,7 @@
  * 导入已写的书后，每章只有一份空账单。记账员从第 1 章起一章一章读、一章一章记：
  *   读真相 → 投影（算到上一章）→ 记账员交账单（前文笔记必须补齐，不走冷窗口）→ 核原句、分流
  *   → 去掉「会改前文不会变的事实」那几条（定稿时这种默认不写、要作者勾，通读没人勾，就不写）→ 「通读记账」命令。
- * 一章最多试 REREAD_ATTEMPTS 次，还不成就停下、如实记原因，等作者点「接着记」。
+ * 一章最多试 REREAD_ATTEMPTS 次，还不成就停下、如实记原因，等作者点「接着记」；调用被拒、结果不明这类不能再发的，一次就停。
  * 记账员读的是哪一版书（依据）跟着命令走：读完之后书上有任何写（作者确认了定论、改了设定、撤销……），这章这遍的账不记，
  * 照新的样子重读重记（写作版本 P1a 复核：不然旧正文的梗概会挂到新正文上）。这种重来不算一次失败，最多 BASIS_RETRIES 回。
  *
@@ -30,6 +30,7 @@ import { runInReaderCatchUpQueue } from "./catch-up.js";
 import { callConfiguredBrainModel } from "./checker.js";
 import { touchesHardFact } from "./commit-flow.js";
 import { runLedgerKeeper } from "./ledger-keeper.js";
+import { canCallAgain } from "../lib/llm-client.js";
 import type { BrainCallModel } from "./reader-window.js";
 import { readRereadState, REREAD_STATE_SCHEMA, writeRereadState, type RereadState } from "./reread-state.js";
 
@@ -72,8 +73,8 @@ export async function beginReread(projectDir: string, total: number, now: Date =
 
 type ChapterOutcome =
   | { readonly ok: true; readonly recorded: number; readonly skipped: number }
-  /** bookChanged：记的途中书变了（不是记账员的错），照新的重记。 */
-  | { readonly ok: false; readonly reason: string; readonly bookChanged?: true };
+  /** bookChanged：记的途中书变了（不是记账员的错），照新的重记。cause：调模型的原错（带类别），不能再发的就不再试这章。 */
+  | { readonly ok: false; readonly reason: string; readonly bookChanged?: true; readonly cause?: unknown };
 
 function oneLine(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
@@ -89,7 +90,7 @@ async function rereadChapter(projectDir: string, chapter: number, run: string, c
   if (snapshot.basis.texts[String(chapter)] !== sha256(text)) return { ok: false, reason: "记的途中这章正文改过", bookChanged: true };
   const before = project(snapshot, { upTo: chapter - 1 });
   const keeper = await runLedgerKeeper({ projectDir, chapter, draft: text, before, callModel, maxCatchUp: Number.MAX_SAFE_INTEGER });
-  if (!keeper.ok) return { ok: false, reason: keeper.reason };
+  if (!keeper.ok) return { ok: false, reason: keeper.reason, ...(keeper.cause !== undefined ? { cause: keeper.cause } : {}) };
   const checked = checkEntries(keeper.parsed.entries, text, before);
   const plan = classifyForReview(checked.accepted, before, { chapter });
   const optIn = new Set(plan.review.filter((item) => touchesHardFact(item, before)).map((item) => item.index));
@@ -131,8 +132,10 @@ async function rereadLoop(projectDir: string, options: RereadOptions): Promise<R
       try {
         outcome = await rereadChapter(projectDir, chapter, state.run, callModel);
       } catch (error) {
-        outcome = { ok: false, reason: oneLine(error) };
+        outcome = { ok: false, reason: oneLine(error), cause: error };
       }
+      // 被拒、结果不明、停了这类再发也一样（写作版本 P2a 4.2）：这章不再试，停下等作者。
+      if (!outcome.ok && outcome.cause !== undefined && !canCallAgain(outcome.cause)) break;
       // 书变了不算记账员失败：照新的重来，不占次数（一直在变就算一次，免得停不下来）。
       if (!outcome.ok && outcome.bookChanged && changedRetries < BASIS_RETRIES) {
         changedRetries += 1;

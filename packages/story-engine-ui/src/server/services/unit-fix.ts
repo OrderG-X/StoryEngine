@@ -13,6 +13,7 @@ import { appendFixLog } from "../editorial/continuity/check-memory.js";
 import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
 import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
 import { readTruthBasisForWork } from "../book/truth-basis.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 
 export interface UnitFix {
   /** 核账引的原句。 */
@@ -168,6 +169,7 @@ export async function fixByUnits(input: {
     edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
     if (!edits) edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
   } catch (error) {
+    rethrowIfStopped(error);
     for (const target of targets) for (const fix of target.fixes) failed.push({ fix, why: `AI 没改成（${errorText(error)}）` });
     return unchanged();
   }

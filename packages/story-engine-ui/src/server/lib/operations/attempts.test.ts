@@ -32,7 +32,7 @@ async function running(key = "chat:m1:1", limit = 5): Promise<OperationContext> 
   if (!accepted.ok || !("record" in accepted)) throw new Error(JSON.stringify(accepted));
   const record = await changeOperation(book, accepted.record.opId, (current) => ({ ...current, state: "running", runEpoch: 1 }));
   const execution = registerExecution(book, accepted.record.opId, 1);
-  return { bookDir: book, opId: accepted.record.opId, runEpoch: 1, bookEpoch: record!.bookEpoch, signal: execution.signal, lane: "foreground", step: { id: "check", exec: "1:check:1" } };
+  return { bookDir: book, opId: accepted.record.opId, runEpoch: 1, bookEpoch: record!.bookEpoch, signal: execution.signal, lane: "foreground", step: { id: "check", exec: "1:check:1", halt: {} } };
 }
 
 describe("发之前", () => {

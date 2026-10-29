@@ -74,6 +74,7 @@ export type {
 } from "../../services/draft-service.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import type { DeAiCallModel } from "../../services/de-ai-flavor-batch.js";
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from "../../writing/writer-client.js";
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, readPickedDirectionFromContext, isUserConfirmedTool } from "../request-context.js";
@@ -623,17 +624,17 @@ export const generateDraftTool = createTool({
  * 绝不抛错：模型槽解析失败时返回一个「调用即抛该错误」的 callModel——出稿本身已成功，
  * 不能让去味槽的配置问题把 ok:true 的出稿拖成工具报错；闭环会如实报「改写模型没跑成、原稿未动」。
  */
-async function buildRepairDeAiCallModel(): Promise<(prompt: string) => Promise<string>> {
+async function buildRepairDeAiCallModel(): Promise<DeAiCallModel> {
   try {
     const configured = await resolveConfiguredChatModel("repair");
-    return async (prompt: string): Promise<string> => {
+    return async (prompt, { maxContentChars }) => {
       const { content } = await streamChatModelToText({
         configured,
         messages: [{ role: "user", content: prompt }],
         temperature: configured.profile.temperature ?? 0.4,
         responseFormat: { type: "json_object" },
+        maxContentChars,
       });
-      if (!content) throw new Error("改写模型返回了空内容。");
       return content;
     };
   } catch (error) {
@@ -659,7 +660,6 @@ function buildTriageBeatAdjudicationCallModel(): (prompt: string) => Promise<str
       temperature: configured.profile.temperature ?? 0.2,
       responseFormat: { type: "json_object" },
     });
-    if (!content) throw new Error("复核模型返回了空内容。");
     return content;
   };
 }

@@ -14,7 +14,10 @@ import { recordUsage } from "./usage-ledger.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
 import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
-import { ModelHttpError, ModelSetupError } from "./ai-errors.js";
+import { ModelCallError, ModelSetupError, StepHaltedError, UpstreamSilentError, type UnusableReason } from "./ai-errors.js";
+import type { AttemptOutcome, AttemptTarget, SendTicket } from "./operations/attempts.js";
+import { classifyThrown } from "./operations/classify.js";
+import { currentOperation, haltStep, OperationStopped, StopSignal, stopOf } from "./operations/context.js";
 import { TASK_LABELS } from "../../components/ModelSettingsDialogTypes.js";
 
 // 旁路文件损坏只警告一次（resolveConfiguredChatModel 每次请求都读，避免刷屏）；恢复正常后重置，再坏再警告。
@@ -416,6 +419,8 @@ export function globalModelCapabilitiesPath(): string {
 
 export interface ModelCapabilityEntry {
   readonly alwaysOnThinking?: boolean;
+  /** 不认 `stream_options`（末帧带用量）：发了就 400（写作版本 P2a 4.5：学到就落盘，每个模型只被拒一次）。 */
+  readonly noStreamOptions?: boolean;
   /** ISO 时间戳，纯诊断用。 */
   readonly learnedAt?: string;
 }
@@ -445,9 +450,12 @@ async function readModelCapabilities(): Promise<{ readonly models: Record<string
     if (!isRecord(parsed) || !isRecord(parsed.models)) return { models: {}, corrupt: true };
     const models: Record<string, ModelCapabilityEntry> = {};
     for (const [key, value] of Object.entries(parsed.models)) {
-      if (isRecord(value) && value.alwaysOnThinking === true) {
-        models[key] = { alwaysOnThinking: true, ...(typeof value.learnedAt === "string" ? { learnedAt: value.learnedAt } : {}) };
-      }
+      if (!isRecord(value) || (value.alwaysOnThinking !== true && value.noStreamOptions !== true)) continue;
+      models[key] = {
+        ...(value.alwaysOnThinking === true ? { alwaysOnThinking: true } : {}),
+        ...(value.noStreamOptions === true ? { noStreamOptions: true } : {}),
+        ...(typeof value.learnedAt === "string" ? { learnedAt: value.learnedAt } : {}),
+      };
     }
     return { models, corrupt: false };
   } catch {
@@ -469,27 +477,49 @@ function warnIfModelCapabilitiesCorrupt(corrupt: boolean): void {
   }
 }
 
+/**
+ * 进程里学到的「不认」（`能力键|alwaysOnThinking` / `能力键|noStreamOptions`）：学到那一刻先记这里、再落盘，
+ * 落盘失败也只是重启后又不知道，这个进程不会再发被拒的那项（写作版本 P2a 4.5）。
+ */
+const learnedInProcess = new Set<string>();
+
 /** 查「该模型是否已确认不可关思考」。读失败/坏 JSON 只当无记忆，绝不因此挡住请求。 */
 export async function isAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<boolean> {
+  if (learnedInProcess.has(`${modelCapabilityKey(baseUrl, modelId)}|alwaysOnThinking`)) return true;
   const { models, corrupt } = await readModelCapabilities();
   warnIfModelCapabilitiesCorrupt(corrupt);
   return models[modelCapabilityKey(baseUrl, modelId)]?.alwaysOnThinking === true;
+}
+
+/** 查「该模型（这个网关上）已确认不认 stream_options」。 */
+async function isNoStreamOptionsModel(baseUrl: string, modelId: string): Promise<boolean> {
+  if (learnedInProcess.has(`${modelCapabilityKey(baseUrl, modelId)}|noStreamOptions`)) return true;
+  const { models, corrupt } = await readModelCapabilities();
+  warnIfModelCapabilitiesCorrupt(corrupt);
+  return models[modelCapabilityKey(baseUrl, modelId)]?.noStreamOptions === true;
 }
 
 // 并发学习串行化：多个任务同时踩中新 always-on 模型时排队读-改-写，避免相互覆盖丢记录。
 let capabilityLearnChain: Promise<void> = Promise.resolve();
 
 /**
- * 学习：重试成功确认「不可关思考」→ 合并落盘（原子写；非密钥，0600 不必）。
+ * 学习：被拒那一次就确认「不可关思考」→ 合并落盘（原子写；非密钥，0600 不必）。
  * 坏 JSON 时**跳过写入**——绝不拿「空库」盖掉损坏文件（对齐 model-secrets/task-assignments 的坏文件保护）。
  * 落盘失败不挡请求（下轮再付一次学费重学即可）。
  */
 export async function learnAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<void> {
-  capabilityLearnChain = capabilityLearnChain.then(() => persistAlwaysOnThinkingModel(baseUrl, modelId));
+  return learnCapability(baseUrl, modelId, { alwaysOnThinking: true });
+}
+
+function learnCapability(baseUrl: string, modelId: string, learned: Pick<ModelCapabilityEntry, "alwaysOnThinking" | "noStreamOptions">): Promise<void> {
+  const key = modelCapabilityKey(baseUrl, modelId);
+  if (learned.alwaysOnThinking) learnedInProcess.add(`${key}|alwaysOnThinking`);
+  if (learned.noStreamOptions) learnedInProcess.add(`${key}|noStreamOptions`);
+  capabilityLearnChain = capabilityLearnChain.then(() => persistCapability(baseUrl, modelId, learned));
   return capabilityLearnChain;
 }
 
-async function persistAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<void> {
+async function persistCapability(baseUrl: string, modelId: string, learned: Pick<ModelCapabilityEntry, "alwaysOnThinking" | "noStreamOptions">): Promise<void> {
   try {
     const { models, corrupt } = await readModelCapabilities();
     if (corrupt) {
@@ -497,8 +527,9 @@ async function persistAlwaysOnThinkingModel(baseUrl: string, modelId: string): P
       return;
     }
     const key = modelCapabilityKey(baseUrl, modelId);
-    if (models[key]?.alwaysOnThinking === true) return;
-    models[key] = { alwaysOnThinking: true, learnedAt: new Date().toISOString() };
+    const known = models[key];
+    if ((!learned.alwaysOnThinking || known?.alwaysOnThinking) && (!learned.noStreamOptions || known?.noStreamOptions)) return;
+    models[key] = { ...known, ...learned, learnedAt: new Date().toISOString() };
     await mkdir(globalStoryEngineDir(), { recursive: true });
     await writeFileAtomic(globalModelCapabilitiesPath(), `${JSON.stringify({ version: 1, models }, null, 2)}\n`);
   } catch (error) {
@@ -568,8 +599,132 @@ function warnAlwaysOnThinkingRetry(modelId: string, baseUrl: string, errorText: 
   } catch { /* 裸 host 原样 */ }
   console.warn(
     `[model-capabilities] 模型「${modelId}」@${host} 拒绝关闭思考（400：${errorText.slice(0, 200)}）。` +
-      "已省略思考参数重试一次（让模型用自身默认）；重试成功即记住该模型，之后直接跳过 disabled 注入。",
+      "已记住该模型、省略思考参数重试一次（让模型用自身默认），之后直接跳过 disabled 注入。",
   );
+}
+
+// ---------------------------------------------------------------------------
+// 兼容能力：每个模型每项只被拒一次（写作版本 P2a 4.5）
+// ---------------------------------------------------------------------------
+//
+// 两项：末帧带用量（stream_options）、能关思考。不认的那一项学到先记进进程、再落盘（model-capabilities，重启不丢）；
+// 认的只记在进程里（重启后头一笔重新探）。同一模型这次要用的能力里还有不知道的，同时只放一笔去探：别的在进闸之前等，
+// 探的那笔拿到 2xx、或被兼容 400 拒了并按去掉那项的重发拿到结局才放开；探的那笔别的结局（取消、暂停、连不上、5xx）
+// 什么都不学也放开。放开后等着的各自按最新学到的重组请求体，还有不知道的再同步抢探的位子（只一笔接着探）。
+// 所以一个进程里每个模型每项最多被拒一次；跨重启由额度兜（unlearnedCapabilityCount）。
+
+type Capability = "stream_options" | "thinking_off";
+
+/** 进程里确认过认的能力（`能力键|能力`）。 */
+const workingCapabilities = new Set<string>();
+/** 正在探的（能力键 → 探完时 resolve）。 */
+const capabilityProbes = new Map<string, Promise<void>>();
+
+/** 这次请求体要用到的能力。 */
+function capabilitiesUsed(body: Readonly<Record<string, unknown>>): readonly Capability[] {
+  return [...("stream_options" in body ? ["stream_options" as const] : []), ...(bodyRequestsThinkingOff(body) ? ["thinking_off" as const] : [])];
+}
+
+/** 拿到 2xx：这次用到的能力都认。 */
+function rememberWorkingCapabilities(key: string, body: Readonly<Record<string, unknown>>): void {
+  for (const capability of capabilitiesUsed(body)) workingCapabilities.add(`${key}|${capability}`);
+}
+
+/**
+ * 发之前定请求体：`build` 按落了盘的学到的组（不认的项已经去掉）。还有不知道认不认的项，就排进这个模型的探测——
+ * 没人在探就自己探（带回探完要调的放行函数），有人在探就等它（每 5 秒续一下空闲计时）、再按最新学到的重组一遍。
+ * 都知道了不带放行函数。
+ */
+async function bodyAfterProbe(
+  key: string,
+  build: () => Promise<Record<string, unknown>>,
+  signal: AbortSignal,
+  onWait: () => void,
+): Promise<{ readonly body: Record<string, unknown>; readonly release?: () => void }> {
+  for (;;) {
+    const body = await build();
+    if (!hasUnknownCapability(key, body)) return { body };
+    const running = capabilityProbes.get(key);
+    if (!running) {
+      let finish!: () => void;
+      const probe = new Promise<void>((resolve) => { finish = resolve; });
+      capabilityProbes.set(key, probe);
+      return {
+        body,
+        release: () => {
+          if (capabilityProbes.get(key) === probe) capabilityProbes.delete(key);
+          finish();
+        },
+      };
+    }
+    signal.throwIfAborted();
+    const pulse = setInterval(onWait, 5000);
+    (pulse as unknown as { unref?: () => void }).unref?.();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        void running.finally(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        });
+      });
+    } finally {
+      clearInterval(pulse);
+    }
+  }
+}
+
+/** 这一笔的请求体里还有不知道认不认的能力（不认的已经由 build 去掉了，剩下的没确认认就是不知道）。 */
+function hasUnknownCapability(key: string, body: Readonly<Record<string, unknown>>): boolean {
+  return capabilitiesUsed(body).some((capability) => !workingCapabilities.has(`${key}|${capability}`));
+}
+
+/**
+ * 额度里给兼容改参留几次（设计 4.5：受理时按这次冻结的模型算；接着做时再按当时没学全的算一次）：
+ * 这个模型两项能力里还没学到的项数（学到不认的、确认认的都不算）。能关思考只在方言能发思考开关时算。
+ */
+export async function unlearnedCapabilityCount(configured: Pick<ResolvedChatModel, "provider" | "profile" | "thinkingDialect">): Promise<number> {
+  const key = modelCapabilityKey(configured.provider.baseUrl, configured.profile.model);
+  const streamKnown = workingCapabilities.has(`${key}|stream_options`) || (await isNoStreamOptionsModel(configured.provider.baseUrl, configured.profile.model));
+  const thinkingKnown = configured.thinkingDialect === "none"
+    || workingCapabilities.has(`${key}|thinking_off`)
+    || (await isAlwaysOnThinkingModel(configured.provider.baseUrl, configured.profile.model));
+  return (streamKnown ? 0 : 1) + (thinkingKnown ? 0 : 1);
+}
+
+/**
+ * 400 是不是这次能力还不知道的那一项被拒了，是就学（落盘）并给出去掉它的请求体；不是返回 undefined（如实失败，不再发）。
+ * 只认两种：去掉 stream_options（报错里提到它）、关不了思考（isThinkingCannotBeDisabledError）。已确认认的那项不算。
+ */
+async function compatRetryBody(
+  key: string,
+  configured: ResolvedChatModel,
+  body: Readonly<Record<string, unknown>>,
+  errorText: string,
+): Promise<Record<string, unknown> | undefined> {
+  const { baseUrl } = configured.provider;
+  const model = configured.profile.model;
+  // 不猜白名单：报错分类
+  if ("stream_options" in body && !workingCapabilities.has(`${key}|stream_options`) && /stream_options|include_usage/iu.test(errorText)) {
+    await learnCapability(baseUrl, model, { noStreamOptions: true });
+    const next = { ...body };
+    delete next.stream_options;
+    return next;
+  }
+  if (bodyRequestsThinkingOff(body) && !workingCapabilities.has(`${key}|thinking_off`) && isThinkingCannotBeDisabledError(400, errorText)) {
+    warnAlwaysOnThinkingRetry(model, baseUrl, errorText);
+    await learnAlwaysOnThinkingModel(baseUrl, model);
+    return omitThinkingParams(body);
+  }
+  return undefined;
+}
+
+/** 只供单测：清掉进程里认过的能力和在探的。 */
+export function __resetCapabilityMemoryForTests(): void {
+  learnedInProcess.clear();
+  workingCapabilities.clear();
+  capabilityProbes.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -593,19 +748,14 @@ export async function callOpenAICompatibleChatModel(input: {
   readonly temperature?: number;
   readonly responseFormat?: { readonly type: "json_object" };
 }): Promise<{ readonly content: string }> {
-  const { content, thinking } = await streamChatModelToText({
+  // 正文为空 / 只有思考由 streamChatModelToText 按「产物不能用」抛（写作版本 P2a 4.2），这里拿到的一定有字。
+  const { content } = await streamChatModelToText({
     configured: input.configured,
     messages: input.messages,
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.responseFormat ? { responseFormat: input.responseFormat } : {}),
   });
-  const trimmed = content.trim();
-  if (trimmed) return { content: trimmed };
-  // 绝不静默返回空串：推理模型把输出全花在思考链上、正文还没开始，是最常见真因。
-  if (thinking.length > 0) {
-    throw new Error("模型把输出全用在思考链上、正文(content)为空。本网关不设 max_tokens 上限（用模型自身上限），别调 max_tokens；多为提示词过长或模型异常，可重试或换更快/更稳的模型。");
-  }
-  throw new Error("模型返回了空内容。");
+  return { content: content.trim() };
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +821,24 @@ export function describeTruncatedFinish(finishReason: string, contentLength: num
   return `模型输出被截断（finish_reason=${finishReason}），${got}不能当成完整结果使用。本网关不设 max_tokens 上限，截断多为模型自身上限或网关限制，可重试或换更稳的模型。`;
 }
 
+/** 读完一次流式响应的样子（写作版本 P2a 4.2：定类只看这些结构，不看文案）。 */
+export interface ParsedStream {
+  readonly content: string;
+  readonly thinking: string;
+  readonly finishReason?: string;
+  readonly usage?: unknown;
+  /** 见到了结束标记（`[DONE]` 或非空 finish_reason）。没见到 = 流没收尾就断了，结果不明。 */
+  readonly sawEnd: boolean;
+  /** 解析不了的数据帧数：不当保活跳过（真保活是注释行和空行），有一帧就说明正文可能丢了字。 */
+  readonly badFrames: number;
+  /** 流里的错误帧（头一条的文案）：只拿来告诉作者，定类看有没有。 */
+  readonly errorText?: string;
+}
+
+/**
+ * 读一次流式响应。不在读的途中抛「模型返回错误」：错误帧、坏帧、截断都记下来读到底，由调用方按 4.2 的表定类
+ * （丢了字的正文只进 attempt 溯源，不交给调用方）。读的途中连接断了、被掐了照常抛（调用方按 abort reason 定类）。
+ */
 export async function streamOpenAICompatibleResponse(
   response: globalThis.Response,
   onDelta: (delta: string) => void,
@@ -678,27 +846,20 @@ export async function streamOpenAICompatibleResponse(
   // 每收到一块原始字节就回调（含 keepalive / 仅 role 的首块）——用于空闲超时「有字节就续命」，
   // 比只盯 content/thinking delta 更准：思考阶段 content 为空但 reasoning 在流，连接其实活着。
   onActivity?: () => void,
-): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string; readonly usage?: unknown }> {
-  if (!response.body) {
-    const parsed = await response.json() as StreamFrame;
-    const errorText = describeStreamErrorFrame(parsed);
-    if (errorText) throw new Error(`模型返回错误：${errorText}`);
-    const content = parsed.choices?.[0]?.message?.content ?? "";
-    if (content) onDelta(content);
-    return { content, thinking: "", finishReason: parsed.choices?.[0]?.finish_reason ?? undefined, usage: parsed.usage };
-  }
-
-  const decoder = new TextDecoder();
-  const reader = response.body.getReader();
-  let buffer = "";
+): Promise<ParsedStream> {
   let content = "";
   let thinking = "";
   let finishReason: string | undefined;
   let usage: unknown;
+  let badFrames = 0;
+  let errorText: string | undefined;
 
   const consumeFrame = (parsed: StreamFrame): void => {
-    const errorText = describeStreamErrorFrame(parsed);
-    if (errorText) throw new Error(`模型返回错误：${errorText}`);
+    const frameError = describeStreamErrorFrame(parsed);
+    if (frameError) {
+      errorText ??= frameError;
+      return;
+    }
     if (parsed.usage) usage = parsed.usage;
     const choice = parsed.choices?.[0];
     const delta = choice?.delta;
@@ -707,18 +868,57 @@ export async function streamOpenAICompatibleResponse(
       content += textDelta;
       onDelta(textDelta);
     }
-    // Extract thinking/reasoning tokens from providers that support it
     const thinkDelta = delta?.reasoning_content ?? delta?.thinking ?? "";
-    if (thinkDelta && onThinkingDelta) {
+    if (thinkDelta) {
       thinking += thinkDelta;
-      onThinkingDelta(thinkDelta);
+      onThinkingDelta?.(thinkDelta);
     }
     // 记下最后一帧的 finish_reason（非 null/空才算）：以前整段丢掉，length/content_filter 的半截正文被当完整结果。
     if (typeof choice?.finish_reason === "string" && choice.finish_reason.trim()) {
       finishReason = choice.finish_reason;
     }
   };
+  const result = (sawDone: boolean): ParsedStream => ({
+    content,
+    thinking,
+    ...(finishReason !== undefined ? { finishReason } : {}),
+    ...(usage !== undefined ? { usage } : {}),
+    sawEnd: sawDone || finishReason !== undefined,
+    badFrames,
+    ...(errorText !== undefined ? { errorText } : {}),
+  });
+  /** 一行 `data:`；返回 true = 见到了 [DONE]。 */
+  const consumeLine = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return false;
+    const data = trimmed.slice("data:".length).trim();
+    if (!data) return false;
+    if (data === "[DONE]") return true;
+    let parsed: StreamFrame;
+    try {
+      parsed = JSON.parse(data) as StreamFrame;
+    } catch {
+      badFrames += 1;
+      return false;
+    }
+    consumeFrame(parsed);
+    return false;
+  };
 
+  if (!response.body) {
+    // 没有流（整段 JSON）：读完了才有结果；整段解析不了算一帧坏的。
+    const text = await response.text();
+    try {
+      consumeFrame(JSON.parse(text) as StreamFrame);
+    } catch {
+      badFrames += 1;
+    }
+    return result(true);
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = "";
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -728,42 +928,18 @@ export async function streamOpenAICompatibleResponse(
       const lines = buffer.split(/\r?\n/u);
       buffer = lines.pop() ?? "";
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice("data:".length).trim();
-        if (!data) continue;
-        if (data === "[DONE]") {
+        if (consumeLine(line)) {
           await reader.cancel().catch(() => undefined);
-          return { content, thinking, finishReason, usage };
+          return result(true);
         }
-        let parsed: StreamFrame | undefined;
-        try {
-          parsed = JSON.parse(data) as StreamFrame;
-        } catch {
-          // Ignore provider keepalive or non-JSON stream fragments.
-          continue;
-        }
-        consumeFrame(parsed); // error 帧在这里抛，不再被上面的 JSON 容错吞掉
       }
     }
   } catch (error) {
     await reader.cancel().catch(() => undefined);
     throw error;
   }
-  // 流结束但没见 [DONE]：残留在 buffer 里的最后一行（不带换行收尾的网关）也要看一眼，别漏掉末帧的 error/finish_reason。
-  const tail = buffer.trim();
-  if (tail.startsWith("data:")) {
-    const data = tail.slice("data:".length).trim();
-    if (data && data !== "[DONE]") {
-      try {
-        consumeFrame(JSON.parse(data) as StreamFrame);
-      } catch (error) {
-        if (error instanceof Error && error.message.startsWith("模型返回错误：")) throw error;
-      }
-    }
-  }
-
-  return { content, thinking, finishReason, usage };
+  // 流结束：残留在 buffer 里的最后一行（不带换行收尾的网关）也要看一眼，别漏掉末帧的 error/finish_reason。
+  return result(consumeLine(buffer + decoder.decode()));
 }
 
 // ---------------------------------------------------------------------------
@@ -824,12 +1000,14 @@ export type StreamChatInput = {
    * 治的是模型原地打转一直吐：评测里偶发单次调用 14 分钟不收尾，空闲超时管不住（一直有字节在续命）。
    */
   readonly maxContentChars?: number;
+  /**
+   * 调用方自己掐这一次（对冲掐输家）：abort reason 用 StopSignal（`hedge_loser`），失败分类按它记。
+   * 在操作里不用传操作的 signal：取消、暂停自己会掐在途请求。
+   */
+  readonly signal?: AbortSignal;
 };
 
 export type StreamChatResult = { readonly content: string; readonly thinking: string; readonly finishReason?: string };
-
-/** 这次失败还没出一个正文字、也不是「光想不写 / 原地打转」：可以换备用模型再试。 */
-const fallbackableErrors = new WeakSet<object>();
 
 function modelLabel(configured: ResolvedChatModel): string {
   return `${configured.provider.label || configured.provider.id} · ${configured.profile.model}`;
@@ -841,43 +1019,128 @@ export function fallbackNotice(primary: ResolvedChatModel, fallback: ResolvedCha
 }
 
 /**
+ * 能不能换备用（写作版本 P2a 4.2 登记的例外，契约第八节）：主模型没发出去，或明确拒了这次调用的身份（401 / 403 / 404）。
+ * 5xx、断流、空闲超时都是「发出去了、结果不明」，不换（可能已经在算）；思考超长、跑飞是我们自己掐的，也不换。
+ */
+export function canFallBack(error: unknown): boolean {
+  if (!(error instanceof ModelCallError)) return false;
+  if (error.attemptClass === "not_sent") return true;
+  return error.attemptClass === "rejected" && (error.statusCode === 401 || error.statusCode === 403 || error.statusCode === 404);
+}
+
+/**
+ * 能不能整次再调一回（对冲第一份失败后补发那类结构重试）：只有产物不能用（见了结束标记、结果没法用）、没发出去的可以；
+ * 结果不明、被拒、被停、我们自己掐的都不再发（设计 4.2：没登记的一律不再发）。不是模型调用的错（解析、校验）不在这里管。
+ */
+export function canCallAgain(error: unknown): boolean {
+  if (error instanceof StopSignal || error instanceof OperationStopped) return false;
+  if (!(error instanceof ModelCallError)) return true;
+  return error.attemptClass === "unusable" || error.attemptClass === "not_sent";
+}
+
+/**
  * 流式调模型、聚合成文本（审稿 / 质检 / 出稿 / 核账 … 所有内部调用的唯一出口）。
  *
- * 备用模型（P10）：主模型这次没连上（请求失败、报错、一直没响应），且还没出一个正文字，就换设置里的备用模型
- * 再试一次，思考开关跟着这次调用走；成了在本轮对话里留一句「这次用了备用」。已经出了正文（编辑器里已经在走字）、
- * 「光想不写」、原地打转都不换——那不是连不上。备用也没成就把两边原因一起如实报。
+ * 备用模型（P10，写作版本 P2a 收窄）：只在 canFallBack 的那几种失败时换设置里的备用模型再试一次，思考开关跟着这次调用走；
+ * 成了在本轮对话里留一句「这次用了备用」。备用也没成就把两边原因一起如实报。
  */
 export async function streamChatModelToText(input: StreamChatInput): Promise<StreamChatResult> {
+  try {
+    return await streamWithFallback(input);
+  } catch (error) {
+    // 登记的改参、备用都走完了还是这几种：这一步不再发，上层 catch 了再调也到 beforeSend 为止。
+    if (haltsStep(error)) haltStep(error);
+    throw error;
+  }
+}
+
+async function streamWithFallback(input: StreamChatInput): Promise<StreamChatResult> {
   try {
     return await streamChatModelOnce(input);
   } catch (error) {
     const fallback = input.configured.fallback;
-    if (!fallback || !(error instanceof Error) || !fallbackableErrors.has(error)) throw error;
-    const primaryReason = error.message;
+    if (!fallback || !canFallBack(error)) throw error;
+    const primaryReason = (error as Error).message;
     console.warn(`[model] 主模型 ${modelLabel(input.configured)} 没连上，换备用 ${modelLabel(fallback)} 再试：${primaryReason.slice(0, 200)}`);
     try {
       const result = await streamChatModelOnce({ ...input, configured: { ...fallback, thinking: input.configured.thinking } });
       recordTurnNotice(fallbackNotice(input.configured, fallback));
       return result;
     } catch (fallbackError) {
-      const fallbackReason = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-      throw new Error(`${primaryReason}（备用模型 ${modelLabel(fallback)} 也没成：${fallbackReason}）`);
+      if (!(fallbackError instanceof ModelCallError)) throw fallbackError;
+      throw new ModelCallError(
+        `${primaryReason}（备用模型 ${modelLabel(fallback)} 也没成：${fallbackError.message}）`,
+        fallbackError.attemptClass,
+        fallbackError.statusCode,
+        fallbackError.unusable,
+        { cause: fallbackError },
+      );
     }
   }
+}
+
+/** 记账用的这次调用对象（额度组缺省 = 服务商地址的 origin，和闸同一口径）。 */
+function attemptTargetOf(configured: ResolvedChatModel): AttemptTarget {
+  let origin = configured.provider.baseUrl;
+  try {
+    origin = new URL(configured.provider.baseUrl).origin;
+  } catch { /* 非法地址：整串兜底 */ }
+  return {
+    ...(configured.task ? { task: configured.task } : {}),
+    provider: configured.provider.id,
+    model: configured.profile.model,
+    quotaGroup: configured.provider.quotaGroup?.trim() || origin,
+  };
+}
+
+/** 见了结束标记、产物却不能用的是哪一种（没有就是能用）。 */
+function unusableOf(parsed: ParsedStream): { readonly reason: UnusableReason; readonly message: string } | undefined {
+  if (parsed.errorText !== undefined) return { reason: "error_frame", message: `模型返回错误：${parsed.errorText}` };
+  if (parsed.badFrames > 0) return { reason: "bad_frames", message: `模型的回复里有 ${parsed.badFrames} 段读不懂，这次的结果不完整、不能用，请重试。` };
+  if (isTruncatedFinishReason(parsed.finishReason)) return { reason: "truncated", message: describeTruncatedFinish(parsed.finishReason as string, parsed.content.length) };
+  if (parsed.content.trim()) return undefined;
+  // 绝不静默返回空串：推理模型把输出全花在思考链上、正文还没开始，是最常见真因。
+  if (parsed.thinking.trim()) {
+    return {
+      reason: "thinking_only",
+      message: "模型把输出全用在思考链上、正文(content)为空。本网关不设 max_tokens 上限（用模型自身上限），别调 max_tokens；多为提示词过长或模型异常，可重试或换更快/更稳的模型。",
+    };
+  }
+  return { reason: "empty", message: "模型返回了空内容。" };
+}
+
+/** 拿到了非 2xx：读完响应体才算「完整的失败响应」（4xx → rejected）；3xx、5xx 一律结果不明；体没读完按怎么断的定。 */
+async function readFailedResponse(response: Response, signal: AbortSignal): Promise<{ readonly attemptClass: AttemptOutcome["class"]; readonly text: string }> {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    return { attemptClass: classifyThrown(error, signal, true), text: "" };
+  }
+  return { attemptClass: response.status >= 400 && response.status < 500 ? "rejected" : "unknown", text };
 }
 
 /**
  * 流式调 OpenAI 兼容模型并把全文聚合成字符串。**不设总时长上限**：只要还有字节（正文或思考 token）
  * 在流，空闲计时器就被续命；只有彻底静默超过 `idleTimeoutMs` 才判定连接已死并抛错。
- * 用于审稿/质检这类「内容多、生成久」的只读重活——它们曾因 60s/25s 的 AbortController 死表被误杀。
  * 一律不传 max_tokens（见 callOpenAICompatibleChatModel 注释）；`thinking:enabled` 思考链全程保留。
+ *
+ * 失败分类（写作版本 P2a 4.2）：发送不跟跳转；每次物理发送在操作里由闸落 attempt，拿到响应的那次在这里按读的结果结算；
+ * 抛的一律是 ModelCallError（带类别），操作被取消 / 暂停时原样抛那个 StopSignal。自动再发只有登记的兼容改参（每项一次）。
  */
 async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatResult> {
   const idleTimeoutMs = input.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
   const idle = createIdleAbort(idleTimeoutMs);
-  let thinkingTooLong = false;
+  // 我们按策略掐的（光想不写、原地打转）：abort reason 说清是哪条，失败分类只看它。
+  const policy = new AbortController();
+  const operation = currentOperation();
+  const signal = AbortSignal.any([
+    idle.controller.signal,
+    policy.signal,
+    ...(input.signal ? [input.signal] : []),
+    ...(operation ? [operation.signal] : []),
+  ]);
   let contentChars = 0;
-  let runaway = false;
   // 「光想不写」从请求真发出去算：在限流闸里排队、429 退避的时间不算（2026-10-28：一章核账 13 遍并发、闸只放几个，
   // 排着队的几遍被当成「思考超过 180 秒」掐掉）。每次真发（含退避后重发）重新起算。
   let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -885,134 +1148,177 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
   const startThinkingTimer = () => {
     if (!input.maxThinkingMs) return;
     stopThinkingTimer();
-    thinkingTimer = setTimeout(() => { thinkingTooLong = true; idle.controller.abort(); }, input.maxThinkingMs);
+    thinkingTimer = setTimeout(() => policy.abort(new StopSignal({ type: "policy", policy: "thinking_too_long" })), input.maxThinkingMs);
     (thinkingTimer as unknown as { unref?: () => void }).unref?.();
   };
   let gotBytes = false; // 是否收过任何字节——区分「从头零响应」与「流到一半断流」，错误文案才诚实（治审查 #5）
+  // 这一刻拿到了响应、还没结算的那次发送（只在操作里有）。
+  let ticket: SendTicket | undefined;
+  const settle = async (outcome: AttemptOutcome): Promise<void> => {
+    const current = ticket;
+    ticket = undefined;
+    await current?.settle(outcome).catch((error: unknown) => {
+      console.warn(`[model] 调用记账没写上：${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+  let releaseProbe: (() => void) | undefined;
   try {
-    const baseUrl = input.configured.provider.baseUrl.replace(/\/+$/u, "");
+    const { configured } = input;
+    const baseUrl = configured.provider.baseUrl.replace(/\/+$/u, "");
+    const capabilityKey = modelCapabilityKey(configured.provider.baseUrl, configured.profile.model);
     const headers = {
       "content-type": "application/json",
       ...(await buildProviderRequestHeaders({
-        baseUrl: input.configured.provider.baseUrl,
-        apiKey: input.configured.apiKey,
-        customHeaders: input.configured.customHeaders,
+        baseUrl: configured.provider.baseUrl,
+        apiKey: configured.apiKey,
+        customHeaders: configured.customHeaders,
       })),
     };
-    const body: Record<string, unknown> = {
-      model: input.configured.profile.model,
+    const build = async (): Promise<Record<string, unknown>> => ({
+      model: configured.profile.model,
       messages: input.messages,
-      temperature: input.temperature ?? input.configured.profile.temperature ?? 0.7,
+      temperature: input.temperature ?? configured.profile.temperature ?? 0.7,
       ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
       // 思考链方言（模型无关·R7）：按 model id 翻成该模型认的开关。**这是流式路**——Qwen 可正常开关思考。见 thinkingRequestParams。
       // always-on 自适应：已学到「不可关思考」的模型要关思考时整键省略（再发 disabled 必 400，不再付学费）。
       ...(await thinkingParamsForRequest({
-        baseUrl: input.configured.provider.baseUrl,
-        modelId: input.configured.profile.model,
-        dialect: input.configured.thinkingDialect,
-        thinking: input.configured.thinking,
+        baseUrl: configured.provider.baseUrl,
+        modelId: configured.profile.model,
+        dialect: configured.thinkingDialect,
+        thinking: configured.thinking,
         stream: true,
       })),
       stream: true,
-      // 末帧带真实用量（记进本轮 token 计量，见 token-meter）。不认这个参数的网关会 400，下面去掉重发一次。
-      stream_options: { include_usage: true },
-    };
-    const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
+      // 末帧带真实用量（记进本轮 token 计量，见 token-meter）。学到不认就不发。
+      ...((await isNoStreamOptionsModel(configured.provider.baseUrl, configured.profile.model)) ? {} : { stream_options: { include_usage: true } }),
+    });
+    const target = attemptTargetOf(configured);
+    const send = (requestBody: Record<string, unknown>): Promise<Response> =>
       // 限流闸：排队 / 429 退避期间给空闲计时器续命，排队不算「连接静默」（provider-gate.ts）。
       providerGate.fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody),
-        signal: idle.controller.signal,
+        signal,
+        redirect: "manual",
       }, {
         onWait: idle.kick,
         onSend: startThinkingTimer,
-        ...(input.configured.provider.quotaGroup ? { quotaGroup: input.configured.provider.quotaGroup } : {}),
+        ...(configured.provider.quotaGroup ? { quotaGroup: configured.provider.quotaGroup } : {}),
+        attempt: { target, onTicket: (sent) => { ticket = sent; } },
       });
-    let response = await postChat(body);
-    if (!response.ok && response.status === 400) {
-      const firstErrorText = await response.clone().text().catch(() => "");
-      if (/stream_options|include_usage/iu.test(firstErrorText)) {
-        delete body.stream_options;
-        response = await postChat(body);
+
+    const prepared = await bodyAfterProbe(capabilityKey, build, signal, idle.kick);
+    releaseProbe = prepared.release;
+    let body = prepared.body;
+    let response = await send(body);
+    // 非 2xx：读完响应体结算；只有这次能力还不知道的那一项被拒（400）才学了改参再发一次，每项一次。
+    for (let retries = 0; !response.ok; retries += 1) {
+      const failure = await readFailedResponse(response, signal);
+      await settle({ class: failure.attemptClass, status: response.status, note: failure.text.slice(0, 200) });
+      const retryBody = failure.attemptClass === "rejected" && response.status === 400 && retries < 2
+        ? await compatRetryBody(capabilityKey, configured, body, failure.text)
+        : undefined;
+      if (!retryBody) {
+        throw new ModelCallError(`模型请求失败：${response.status} ${failure.text.slice(0, 300)}`, failure.attemptClass, response.status);
       }
+      body = retryBody;
+      response = await send(body);
     }
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      // always-on 思考自适应：只认「cannot be disabled」这一个 400，省略思考参数重试一次（让模型用自身默认）；
-      // 其他 400/5xx 原样抛，绝不吞错。
-      if (bodyRequestsThinkingOff(body) && isThinkingCannotBeDisabledError(response.status, errorText)) {
-        warnAlwaysOnThinkingRetry(input.configured.profile.model, input.configured.provider.baseUrl, errorText);
-        response = await postChat(omitThinkingParams(body));
-        if (response.ok) {
-          await learnAlwaysOnThinkingModel(input.configured.provider.baseUrl, input.configured.profile.model);
-        } else {
-          const retryErrorText = await response.text().catch(() => "");
-          throw new ModelHttpError(`模型请求失败：${response.status} ${retryErrorText.slice(0, 300)}`, response.status);
-        }
-      } else {
-        throw new ModelHttpError(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`, response.status);
-      }
-    }
-    const { content, thinking, finishReason, usage } = await streamOpenAICompatibleResponse(
+    rememberWorkingCapabilities(capabilityKey, body);
+    releaseProbe?.();
+    releaseProbe = undefined;
+
+    const parsed = await streamOpenAICompatibleResponse(
       response,
       // 正文 delta：传了 onDelta 就逐字外发（出稿流式），否则只聚合；一出正文就停「光想不写」计时。
       (delta) => {
         if (delta) stopThinkingTimer();
         contentChars += delta.length;
-        if (input.maxContentChars && contentChars > input.maxContentChars && !runaway) {
-          runaway = true;
-          idle.controller.abort();
+        if (input.maxContentChars && contentChars > input.maxContentChars && !policy.signal.aborted) {
+          policy.abort(new StopSignal({ type: "policy", policy: "runaway" }));
         }
         input.onDelta?.(delta);
       },
       () => undefined,
       () => { gotBytes = true; idle.kick(); }, // 收到任何字节就续命，并记下「收过字节」
     );
-    // 末帧 finish_reason 说「没收尾」（length / content_filter …）→ 半截正文不能当完整结果：诚实抛错，
-    // 调用方按 ok=false 如实回报，绝不把截断稿当成功。认不出的非 stop 值只原样带回，不赌陌生网关的枚举。
-    const sample = sampleFromOpenAIUsage(usage);
+    // 读的途中按策略掐了（正文跑飞、光想不写）但流已经读完：照掐的算，不拿读到的这些交差。
+    if (policy.signal.aborted) throw policy.signal.reason;
+    // 没见结束标记：流没收尾就断了（上游可能还在算、可能已经计费），结果不明，半截正文不交出去。
+    if (!parsed.sawEnd) {
+      await settle({ class: "unknown", note: "no_end_marker" });
+      throw new ModelCallError(
+        parsed.errorText !== undefined
+          ? `模型返回错误：${parsed.errorText}`
+          : `模型的回复没收尾就断了（${parsed.content.length > 0 ? `已收到 ${parsed.content.length} 字` : "正文一个字都没收到"}），这次的结果不能用，请重试。`,
+        "unknown",
+      );
+    }
+    const sample = sampleFromOpenAIUsage(parsed.usage);
     recordPipelineUsage(sample);
     void recordUsage({
-      ...(input.configured.task ? { task: input.configured.task } : {}),
-      provider: input.configured.provider.id,
-      ...(input.configured.provider.label ? { providerLabel: input.configured.provider.label } : {}),
-      model: input.configured.profile.model,
+      ...(configured.task ? { task: configured.task } : {}),
+      provider: configured.provider.id,
+      ...(configured.provider.label ? { providerLabel: configured.provider.label } : {}),
+      model: configured.profile.model,
       sample,
     });
-    if (isTruncatedFinishReason(finishReason)) {
-      throw new Error(describeTruncatedFinish(finishReason as string, content.length));
+    // 产物不能用（错误帧、坏帧、被截断、正文为空）：诚实抛错，调用方按 ok=false 如实回报，绝不把半截稿当成功。
+    const unusable = unusableOf(parsed);
+    if (unusable) {
+      await settle({ class: "unusable", usage: parsed.usage, note: unusable.reason });
+      throw new ModelCallError(unusable.message, "unusable", undefined, unusable.reason);
     }
-    return { content, thinking, finishReason };
+    await settle({ class: "ok", usage: parsed.usage });
+    return { content: parsed.content, thinking: parsed.thinking, ...(parsed.finishReason !== undefined ? { finishReason: parsed.finishReason } : {}) };
   } catch (error) {
-    if (thinkingTooLong) {
-      throw new ThinkingTooLongError(input.maxThinkingMs ?? 0);
+    if (error instanceof ModelCallError) throw error;
+    // 读响应体时断了的那次还没结（发出去之前就没成的，闸已经结了 / 没落 attempt）。
+    const attemptClass = classifyThrown(error, signal, ticket !== undefined);
+    if (ticket) await settle({ class: attemptClass, note: error instanceof Error ? error.name : "stream_failed" });
+    const stop = stopOf(signal.aborted ? signal.reason : undefined);
+    if (stop?.type === "policy" && stop.policy === "thinking_too_long") throw new ThinkingTooLongError(input.maxThinkingMs ?? 0);
+    if (stop?.type === "policy" && stop.policy === "runaway") throw new RunawayError(input.maxContentChars ?? 0);
+    if (stop?.type === "policy") throw new ModelCallError("这一份被对冲的另一份先回来了，已停下。", "policy_abort");
+    // 操作被取消 / 暂停：原样抛（降级的 catch 用 rethrowIfStopped 认它）。
+    if (stop) throw signal.reason;
+    if (idle.controller.signal.aborted) {
+      const message = gotBytes
+        ? `模型生成中途静默超过 ${Math.round(idleTimeoutMs / 1000)}s（已收到部分输出后上游断流，长内容生成时常见），请重试。`
+        : `模型连接静默超过 ${Math.round(idleTimeoutMs / 1000)}s（一直没有任何响应），判定连接已死，请重试。`;
+      throw new ModelCallError(message, "unknown", undefined, undefined, { cause: new UpstreamSilentError(message) });
     }
-    if (runaway) {
-      throw new Error(`模型输出超过 ${input.maxContentChars} 字还没收尾（多半在原地打转），已停下，请重试。`);
-    }
-    const failure = idle.controller.signal.aborted
-      ? new Error(
-        gotBytes
-          ? `模型生成中途静默超过 ${Math.round(idleTimeoutMs / 1000)}s（已收到部分输出后上游断流，长内容生成时常见），请重试。`
-          : `模型连接静默超过 ${Math.round(idleTimeoutMs / 1000)}s（一直没有任何响应），判定连接已死，请重试。`,
-      )
-      : error instanceof Error ? error : new Error(String(error));
-    // 还没出一个正文字：换备用模型再试是安全的（编辑器里什么都没走，见 streamChatModelToText）。
-    if (contentChars === 0) fallbackableErrors.add(failure);
-    throw failure;
+    // 操作里 beforeSend 不放行（额度到了、已经停了）：原样抛。
+    if (!(error instanceof Error) || error instanceof OperationStopped) throw error;
+    throw new ModelCallError(error.message, attemptClass, undefined, undefined, { cause: error });
   } finally {
+    releaseProbe?.();
     stopThinkingTimer();
     idle.dispose();
   }
 }
 
-/** 「光想不写」超过上限（见 streamChatModelToText 的 maxThinkingMs）：调用方应改用关思考重试。 */
-export class ThinkingTooLongError extends Error {
+/** 「光想不写」超过上限（见 streamChatModelToText 的 maxThinkingMs）：调用方应改用关思考重试。我们自己掐的（policy_abort）。 */
+export class ThinkingTooLongError extends ModelCallError {
+  override readonly name = "ThinkingTooLongError";
   constructor(readonly maxThinkingMs: number) {
-    super(`模型思考超过 ${Math.round(maxThinkingMs / 1000)} 秒还没开始输出，已停下（可改用不思考重试）`);
-    this.name = "ThinkingTooLongError";
+    super(`模型思考超过 ${Math.round(maxThinkingMs / 1000)} 秒还没开始输出，已停下（可改用不思考重试）`, "policy_abort");
   }
+}
+
+/** 正文超过这次调用的上限还没收尾（多半在原地打转）：我们自己掐的（policy_abort），不再发。 */
+export class RunawayError extends ModelCallError {
+  override readonly name = "RunawayError";
+  constructor(readonly maxContentChars: number) {
+    super(`模型输出超过 ${maxContentChars} 字还没收尾（多半在原地打转），已停下，请重试。`, "policy_abort");
+  }
+}
+
+/** 这一步里出了这种失败就不再发（设计 4.2 兜底）：被拒、结果不明、跑飞。思考超长（登记了关思考重来）、对冲输家不算。 */
+function haltsStep(error: unknown): error is ModelCallError {
+  if (!(error instanceof ModelCallError) || error instanceof StepHaltedError) return false;
+  return error.attemptClass === "rejected" || error.attemptClass === "unknown" || error instanceof RunawayError;
 }
 
 // ---------------------------------------------------------------------------

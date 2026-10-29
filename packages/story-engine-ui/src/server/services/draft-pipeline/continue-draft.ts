@@ -5,6 +5,7 @@
  * 插进去的句子读起来像注水，还带进新矛盾（门槛划痕、手背上的疤）。根因：对话出稿只标注不补写，
  * 补写只能靠改稿工具逐句插。改成：出稿时发现不够，就让写手从最后一段起接着往下写（最后一段一起重写，
  * 避免「已经收尾又续上一段」），把章纲里写得太简略的要点写充分，自然收尾。最多两轮，仍不够如实标注。
+ * 一轮的调用被拒、结果不明这类不能再发的失败就停（canCallAgain），不进下一轮。
  *
  * 模型无关：续写结果只取正文（剥标题/解释）；比原来还短、空、像 JSON → 视为没续成，原稿不动。
  */
@@ -13,6 +14,8 @@ import { stripTrailingSegmentMarkers } from "../../writing/fast-draft-writer.js"
 import { cutAtWriterEndMark, WRITER_END_MARK } from "../../writing/prompt-cache-diagnostics.js";
 import { chinesePunctuation } from "../../../lib/dialogue-quotes.js";
 import { type ChapterPlan } from "../../book/chapter-plan.js";
+import { canCallAgain } from "../../lib/llm-client.js";
+import { rethrowIfStopped } from "../../lib/operations/context.js";
 
 export type ContinueCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
@@ -108,7 +111,10 @@ export async function continueDraftToLength(input: ContinueDraftInput): Promise<
         ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
       })));
     } catch (error) {
+      rethrowIfStopped(error);
       failures.push(`第 ${attempt + 1} 轮续写没成：${error instanceof Error ? error.message : String(error)}`);
+      // 被拒、结果不明、跑飞：下一轮正文没变、还是同一个请求，不再发（写作版本 P2a 4.2）。
+      if (!canCallAgain(error)) break;
       continue;
     }
     const candidate = prefix ? `${prefix}\n\n${continuation}` : continuation;

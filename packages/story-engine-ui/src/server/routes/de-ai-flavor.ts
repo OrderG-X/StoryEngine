@@ -22,7 +22,7 @@ import {
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
 import { readAntiRules, withAntiRulesNote } from "../writing/ai-flavor/anti-rules.js";
-import { runDeAiFlavorBatch } from "../services/de-ai-flavor-batch.js";
+import { runDeAiFlavorBatch, type DeAiCallModel } from "../services/de-ai-flavor-batch.js";
 import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
 import { readTruthBasisForWork } from "../book/truth-basis.js";
 
@@ -83,15 +83,15 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     const antiRules = await readAntiRules(projectDir);
 
     const configured = await resolveConfiguredChatModel("repair");
-    const callModel = async (prompt: string): Promise<string> => {
-      // 超时铁律：流式 + 空闲超时、不传 max_tokens。改写要 JSON。
+    const callModel: DeAiCallModel = async (prompt, { maxContentChars }) => {
+      // 超时铁律：流式 + 空闲超时、不传 max_tokens。改写要 JSON；回复超过协议允许的最长就按跑飞掐掉。
       const { content } = await streamChatModelToText({
         configured,
         messages: [{ role: "user", content: prompt }],
         temperature: configured.profile.temperature ?? 0.4,
         responseFormat: { type: "json_object" },
+        maxContentChars,
       });
-      if (!content) throw new Error("改写模型返回了空内容。");
       return content;
     };
 

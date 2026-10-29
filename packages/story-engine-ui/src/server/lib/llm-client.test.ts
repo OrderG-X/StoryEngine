@@ -21,7 +21,10 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, ThinkingTooLongError } from "./llm-client.js";
+import { __resetCapabilityMemoryForTests, buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, ThinkingTooLongError, unlearnedCapabilityCount } from "./llm-client.js";
+
+// 进程里学到的兼容能力每条用例清掉（写作版本 P2a 4.5：「不认」先进内存再落盘），用例之间不串。
+beforeEach(() => __resetCapabilityMemoryForTests());
 
 const { loadModelSettingsV0 } = storyEngineMocks;
 
@@ -156,20 +159,46 @@ describe("streamOpenAICompatibleResponse onActivity（每收到一块字节就�
     expect(out.finishReason).toBeUndefined();
   });
 
-  it("流中途的 error 帧（OpenAI 形 {error:{message}}）→ 抛「模型返回错误：…」，不再当 keepalive 吞掉", async () => {
-    const response = sseResponse([
+  it("流中途的 error 帧（OpenAI 形 {error:{message}}）→ 读到底、记下错误，不再当 keepalive 吞掉；调用方按产物不能用报「模型返回错误：…」", async () => {
+    const frames = () => sseResponse([
       `data: ${JSON.stringify({ choices: [{ delta: { content: "半截" } }] })}\n\n`,
       `data: ${JSON.stringify({ error: { message: "upstream overloaded", type: "server_error", code: 503 } })}\n\n`,
       "data: [DONE]\n\n",
     ]);
-    await expect(streamOpenAICompatibleResponse(response, () => undefined)).rejects.toThrow("模型返回错误：upstream overloaded");
+    expect(await streamOpenAICompatibleResponse(frames(), () => undefined)).toMatchObject({ content: "半截", errorText: "upstream overloaded", sawEnd: true, badFrames: 0 });
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(frames());
+    await expect(streamChatModelToText({ configured: { provider: { id: "p", baseUrl: "https://x.invalid/v1" }, profile: { model: "m" }, apiKey: "k", thinking: false, thinkingDialect: "none" } as never, messages: [] }))
+      .rejects.toMatchObject({ message: "模型返回错误：upstream overloaded", attemptClass: "unusable", unusable: "error_frame" });
+    spy.mockRestore();
   });
 
-  it("error 帧为字符串 / 只有 code 没有 message → 仍抛错且文案不为空", async () => {
-    await expect(streamOpenAICompatibleResponse(sseResponse([`data: ${JSON.stringify({ error: "rate limited" })}\n\n`]), () => undefined))
-      .rejects.toThrow("模型返回错误：rate limited");
-    await expect(streamOpenAICompatibleResponse(sseResponse([`data: ${JSON.stringify({ error: { code: 429 } })}\n\n`]), () => undefined))
-      .rejects.toThrow("模型返回错误：429");
+  it("error 帧为字符串 / 只有 code 没有 message → 文案不为空", async () => {
+    expect(await streamOpenAICompatibleResponse(sseResponse([`data: ${JSON.stringify({ error: "rate limited" })}\n\n`]), () => undefined))
+      .toMatchObject({ errorText: "rate limited" });
+    expect(await streamOpenAICompatibleResponse(sseResponse([`data: ${JSON.stringify({ error: { code: 429 } })}\n\n`]), () => undefined))
+      .toMatchObject({ errorText: "429" });
+  });
+
+  it("解析不了的数据帧不当保活跳过：记坏帧数，正文丢了字就不交出去（产物不能用）", async () => {
+    const frames = () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "甲" } }] })}\n\n`,
+      "data: {坏的\n\n",
+      ": 这是保活注释\n\n",
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "丙" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    expect(await streamOpenAICompatibleResponse(frames(), () => undefined)).toMatchObject({ content: "甲丙", badFrames: 1, sawEnd: true });
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(frames());
+    await expect(streamChatModelToText({ configured: { provider: { id: "p", baseUrl: "https://x.invalid/v1" }, profile: { model: "m" }, apiKey: "k", thinking: false, thinkingDialect: "none" } as never, messages: [] }))
+      .rejects.toMatchObject({ attemptClass: "unusable", unusable: "bad_frames" });
+    spy.mockRestore();
+  });
+
+  it("没见结束标记就断了：结果不明，半截正文不交出去", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: "写了一半" } }] })}\n\n`]));
+    await expect(streamChatModelToText({ configured: { provider: { id: "p", baseUrl: "https://x.invalid/v1" }, profile: { model: "m" }, apiKey: "k", thinking: false, thinkingDialect: "none" } as never, messages: [] }))
+      .rejects.toMatchObject({ attemptClass: "unknown" });
+    spy.mockRestore();
   });
 
   it("末帧 finish_reason 被记录（stop / length），中间帧的 null 不覆盖", async () => {
@@ -486,7 +515,7 @@ describe("streamChatModelToText 思考透传（审稿/质检主路径，补覆�
   });
 
   it("glm 方言 + thinking=true → body.thinking.type==='enabled'", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\n`, "data: [DONE]\n\n"]));
     await streamChatModelToText({ configured: streamConfigured(true), messages: [] });
     const body = JSON.parse((spy.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.thinking).toEqual({ type: "enabled" });
@@ -495,7 +524,7 @@ describe("streamChatModelToText 思考透传（审稿/质检主路径，补覆�
 
   it("qwen 方言（流式）→ enable_thinking 跟随开关（流式可正常开思考）", async () => {
     for (const want of [true, false]) {
-      const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+      const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\n`, "data: [DONE]\n\n"]));
       await streamChatModelToText({ configured: streamConfigured(want, "qwen"), messages: [] });
       const body = JSON.parse((spy.mock.calls[0]?.[1] as RequestInit).body as string);
       expect(body.enable_thinking).toBe(want);
@@ -505,7 +534,7 @@ describe("streamChatModelToText 思考透传（审稿/质检主路径，补覆�
   });
 
   it("none 方言（认不出的模型）→ 整键不发（流式路径同口径，换任何模型不因它报错）", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\n`, "data: [DONE]\n\n"]));
     await streamChatModelToText({ configured: streamConfigured(true, "none"), messages: [] });
     const body = JSON.parse((spy.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.thinking).toBeUndefined();
@@ -746,7 +775,7 @@ describe("chat 出站请求带头（opencode MissingSessionID 修复·真机验�
   it("流式 streamChatModelToText：opencode 主机同样带 session+UA（审稿/质检主路径）", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\ndata: [DONE]\n\n`));
         controller.close();
       },
     });
@@ -979,7 +1008,7 @@ describe("always-on 思考自适应（流式 streamChatModelToText）", () => {
 
   it("已学 always-on → 首发即不发 disabled（流式路同样豁免学费）", async () => {
     await learnAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash");
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\n`, "data: [DONE]\n\n"]));
 
     await streamChatModelToText({ configured: glmConfigured(false), messages: [] });
 
@@ -988,7 +1017,7 @@ describe("always-on 思考自适应（流式 streamChatModelToText）", () => {
     expect(sentBody(spy, 0).enable_thinking).toBeUndefined();
   });
 
-  it("重试仍失败（500）→ 抛重试后的「模型请求失败：500」，不学习", async () => {
+  it("重试仍失败（500）→ 抛重试后的「模型请求失败：500」；被拒那项照样记住（是被拒那一刻学到的，下次不再发）", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const spy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(cannotDisabled400())
@@ -997,7 +1026,7 @@ describe("always-on 思考自适应（流式 streamChatModelToText）", () => {
     await expect(streamChatModelToText({ configured: glmConfigured(false), messages: [] }))
       .rejects.toThrow(/模型请求失败：500/);
     expect(spy).toHaveBeenCalledTimes(2);
-    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(true);
   });
 });
 
@@ -1054,5 +1083,165 @@ describe("streamChatModelToText 备用模型（P10）", () => {
     await expect(streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [], maxContentChars: 2 })).rejects.toThrow("原地打转");
     expect(spy.mock.calls.every(([url]) => String(url).startsWith("https://a.invalid"))).toBe(true);
     spy.mockRestore();
+  });
+});
+
+describe("失败分类和能力探测（写作版本 P2a 4.2、4.5）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-probe-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function sse(chunks: readonly string[]): globalThis.Response {
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(encoder.encode(c));
+        controller.close();
+      },
+    }), { status: 200 });
+  }
+  const ok = () => sse([`data: ${JSON.stringify({ choices: [{ delta: { content: "好" } }] })}\n\n`, "data: [DONE]\n\n"]);
+  function model(id: string, extra: Record<string, unknown> = {}) {
+    return {
+      provider: { id, label: id.toUpperCase(), baseUrl: `https://${id}.invalid/v1`, apiKeyStatus: "not_required" },
+      profile: { id, provider: id, model: `${id}-model` },
+      apiKey: "",
+      thinking: false,
+      thinkingDialect: "glm",
+      ...extra,
+    } as unknown as Parameters<typeof streamChatModelToText>[0]["configured"];
+  }
+  const bodyOf = (init: RequestInit | undefined): Record<string, unknown> => JSON.parse(String(init?.body)) as Record<string, unknown>;
+  const noStreamOptions400 = () => new Response(JSON.stringify({ error: { message: "unknown field stream_options" } }), { status: 400 });
+  /** 一直不回、直到被掐（signal abort）的 fetch。 */
+  const hanging = (init: RequestInit | undefined) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  });
+
+  it("503：只 fetch 一次、不换备用、记结果不明（闸不再自己重发 503）", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("忙", { status: 503 }));
+    const error = await streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ attemptClass: "unknown", statusCode: 503 });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("DNS 失败（ENOTFOUND）= 没发出去 → 换备用", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      if (String(url).includes("a.invalid")) throw new TypeError("fetch failed", { cause: Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }) });
+      return ok();
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect((await streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] })).content).toBe("好");
+  });
+
+  it("不跟跳转：redirect manual；3xx 记结果不明、不再发", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 302, headers: { location: "https://elsewhere.invalid" } }));
+    const error = await streamChatModelToText({ configured: model("a"), messages: [] }).catch((caught: unknown) => caught);
+    expect((spy.mock.calls[0]![1] as RequestInit).redirect).toBe("manual");
+    expect(error).toMatchObject({ attemptClass: "unknown" });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("四笔并发撞同一项不认：只有一笔被拒（探的那笔学了自己再发），等着的照学到的发", async () => {
+    let rejected = 0;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      if ("stream_options" in bodyOf(init)) {
+        rejected += 1;
+        return noStreamOptions400();
+      }
+      return ok();
+    });
+    const results = await Promise.all(Array.from({ length: 4 }, () => streamChatModelToText({ configured: model("a"), messages: [] })));
+    expect(results.map((result) => result.content)).toEqual(["好", "好", "好", "好"]);
+    expect(rejected).toBe(1);
+    expect(spy).toHaveBeenCalledTimes(5);
+  });
+
+  it("探的那笔被取消：放开，等着的里只有一笔接着探（同一时刻带不知道那项的只有一笔在发）", async () => {
+    let unknownInFlight = 0;
+    let maxUnknownInFlight = 0;
+    let first = true;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const probing = "stream_options" in bodyOf(init);
+      if (probing) unknownInFlight += 1;
+      maxUnknownInFlight = Math.max(maxUnknownInFlight, unknownInFlight);
+      try {
+        if (first) {
+          first = false;
+          return await hanging(init);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return probing ? noStreamOptions400() : ok();
+      } finally {
+        if (probing) unknownInFlight -= 1;
+      }
+    });
+    const cancel = new AbortController();
+    const prober = streamChatModelToText({ configured: model("a"), messages: [], signal: cancel.signal }).catch((caught: unknown) => caught);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const waiters = Promise.all([0, 1].map(() => streamChatModelToText({ configured: model("a"), messages: [] })));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    cancel.abort(new Error("作者停了"));
+    await prober;
+    expect((await waiters).map((result) => result.content)).toEqual(["好", "好"]);
+    expect(maxUnknownInFlight).toBe(1);
+  });
+
+  it("等着的按自己的 signal 退出：不 fetch、不死等", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => hanging(init));
+    const probeStop = new AbortController();
+    const prober = streamChatModelToText({ configured: model("a"), messages: [], signal: probeStop.signal }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const waiterStop = new AbortController();
+    const waiter = streamChatModelToText({ configured: model("a"), messages: [], signal: waiterStop.signal }).catch((caught: unknown) => caught);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    waiterStop.abort(new Error("等的那笔停了"));
+    expect(await waiter).toBeTruthy();
+    expect(spy).toHaveBeenCalledTimes(1);
+    probeStop.abort(new Error("收尾"));
+    await prober;
+  });
+
+  it("学到的落盘失败：进程里照样记着，不再被拒第二次", async () => {
+    const blocker = join(dir, "not-a-dir");
+    await writeFile(blocker, "x", "utf-8");
+    process.env.SE_DATA_DIR = join(blocker, "data");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let rejected = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      if ("stream_options" in bodyOf(init)) {
+        rejected += 1;
+        return noStreamOptions400();
+      }
+      return ok();
+    });
+    await streamChatModelToText({ configured: model("a"), messages: [] });
+    await streamChatModelToText({ configured: model("a"), messages: [] });
+    expect(rejected).toBe(1);
+    await expect(stat(join(blocker, "data", "model-capabilities.json"))).rejects.toThrow();
+  });
+
+  it("「能关思考」只认真发了关闭参数的 2xx：开着思考成功不算认，之后关思考那笔还是探的", async () => {
+    let probes = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = bodyOf(init);
+      if ((body.thinking as { type?: string } | undefined)?.type === "disabled") probes += 1;
+      return ok();
+    });
+    // 先确认 stream_options 认（开思考这笔只带它）。
+    await streamChatModelToText({ configured: model("a", { thinking: true }), messages: [] });
+    expect(await unlearnedCapabilityCount(model("a"))).toBe(1);
+    await streamChatModelToText({ configured: model("a"), messages: [] });
+    expect(probes).toBe(1);
+    expect(await unlearnedCapabilityCount(model("a"))).toBe(0);
   });
 });

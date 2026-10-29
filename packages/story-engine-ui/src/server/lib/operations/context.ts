@@ -7,6 +7,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bookKey } from "@actalk/story-core";
+import type { ModelCallError } from "../ai-errors.js";
 import type { GateLane } from "../provider-gate.js";
 import type { PauseReason } from "./store.js";
 
@@ -47,7 +48,12 @@ export interface OperationContext {
   readonly signal: AbortSignal;
   readonly lane: GateLane;
   /** 这一刻在跑的步骤和执行号（`runEpoch:stepId:第几次`，整步重做换新的）。 */
-  readonly step?: { readonly id: string; readonly exec: string };
+  readonly step?: { readonly id: string; readonly exec: string; readonly halt: StepHalt };
+}
+
+/** 这一步（这一次执行）里出过不能再发的失败：记下第一次的，之后这一步的 beforeSend 不放（设计 4.2 兜底）。 */
+export interface StepHalt {
+  failure?: ModelCallError;
 }
 
 const storage = new AsyncLocalStorage<OperationContext>();
@@ -64,7 +70,13 @@ export function runInOperation<T>(context: OperationContext, fn: () => T): T {
 export function runInStep<T>(stepId: string, exec: string, fn: () => T): T {
   const context = storage.getStore();
   if (!context) throw new Error("不在操作里，不能进步骤");
-  return storage.run({ ...context, step: { id: stepId, exec } }, fn);
+  return storage.run({ ...context, step: { id: stepId, exec, halt: {} } }, fn);
+}
+
+/** 记下这一步出过不能再发的失败（只记第一次）。不在步骤里就不记。 */
+export function haltStep(error: ModelCallError): void {
+  const step = storage.getStore()?.step;
+  if (step && !step.halt.failure) step.halt.failure = error;
 }
 
 /** 在后台道跑（拿着前台要等的锁时临时提到前台用的另一面，见设计第五节依赖提权）。 */

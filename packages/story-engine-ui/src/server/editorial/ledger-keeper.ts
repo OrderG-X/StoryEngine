@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chapterTextPath, checkEntries, numberedText, quoteFromText, quoteInText, readCards, splitUnits, type BookProjection, type EntryInput, type TextUnit } from "@actalk/story-core";
 import { positiveIntLike } from "../lib/lenient-args.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
@@ -133,7 +134,12 @@ export type KeeperOutcome =
       readonly omittedFacts: number;
       readonly quoteRepair?: QuoteRepair;
     })
-  | (KeeperCommon & { readonly ok: false; readonly reason: string });
+  | (KeeperCommon & {
+      readonly ok: false;
+      readonly reason: string;
+      /** 调模型那步的原错（带类别）：上层按它判还能不能再记一遍（canCallAgain），别只看 reason。 */
+      readonly cause?: unknown;
+    });
 
 function oneLine(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
@@ -225,7 +231,8 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
       waitingAs: "记账",
     }));
   } catch (error) {
-    return { ok: false, reason: `记账员读前文没成：${oneLine(error)}` };
+    rethrowIfStopped(error);
+    return { ok: false, reason: `记账员读前文没成：${oneLine(error)}`, cause: error };
   }
   const extra = { ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   const cards = await readCards(input.projectDir).catch(() => undefined);
@@ -235,7 +242,8 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   try {
     text = await withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
   } catch (error) {
-    return { ok: false, reason: `记账员没交上账单：${oneLine(error)}`, ...extra };
+    rethrowIfStopped(error);
+    return { ok: false, reason: `记账员没交上账单：${oneLine(error)}`, cause: error, ...extra };
   }
   input.onRawOutput?.(text);
   const parsed = parseKeeperOutput(text, context);
@@ -312,6 +320,7 @@ async function repairQuotes(
     const ask = buildQuoteRepairTask(broken.map((item) => item.entry), numberedText(units), dayChange ? { days: dayChange, ...(parsed.dayChangeQuote ? { wrote: parsed.dayChangeQuote } : {}) } : undefined);
     reply = await withStep("记账员补摘原句", () => input.callModel([...conversation, { role: "user", content: ask }], { json: true }));
   } catch (error) {
+    rethrowIfStopped(error);
     return { parsed, repair: { asked, fixed: 0, failed: oneLine(error) } };
   }
   input.onRawOutput?.(reply);
