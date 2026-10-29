@@ -4,7 +4,7 @@
  * 以前按钮发一句固定中文，前端再拿「输入框文字 === 按钮文案」认回动作（matchDeterministicChapterAction）——
  * 作者自己打出同样的字也会被当成按钮。现在按钮带的是动作本身；输入框的字一律交给 AI。
  */
-import { newInspectAction, type AgentUserAction } from "../api/agentChatClient.js";
+import { newDraftAction, newInspectAction, type AgentUserAction } from "../api/agentChatClient.js";
 import type { ChapterNavItem } from "../types.js";
 
 export type ChapterButton =
@@ -40,11 +40,11 @@ export function chapterButtonAction(
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return undefined;
   switch (button) {
     case "write": {
-      const chapterGoal = input.direction?.trim();
-      return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) };
+      const direction = input.direction?.trim();
+      return newDraftAction("write", { chapter, ...(direction ? { direction } : {}) });
     }
     case "write_next":
-      return { toolName: "generate_draft", chapter: nextUncommittedChapter(chapter, input.chapters) };
+      return newDraftAction("write", { chapter: nextUncommittedChapter(chapter, input.chapters) });
     case "continuity":
     case "review":
     case "quality":

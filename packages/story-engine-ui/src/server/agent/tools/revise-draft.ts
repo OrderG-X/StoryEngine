@@ -8,7 +8,7 @@
  * 安全/诚实（铁律，全部由 service 的守卫承接，本路文案口径不变）：
  * - 原文须唯一命中：缺失/出现多次 → 诚实回报 applied:false，绝不写坏草稿、绝不谎称改了。
  * - 模型输出格式不全（缺 afterText）→ 解析抛错 → 诚实拒，applied:false。
- * 存档点：换上前、同一把书锁里打（AI 写稿唯一通道 ai-draft-write，同 generate_draft），真改了稿 output 带 snapshotId；
+ * 存档点：换上前、同一把书锁里打（AI 写稿唯一通道 ai-draft-write，同写稿操作 draft.change），真改了稿 output 带 snapshotId；
  *   写的途中作者改过稿就不换、留成候选（写作版本 P1b）。涉及草稿 → refreshScope:"full"。
  * - 题材中立：description / summary 用中性词。
  */
@@ -149,7 +149,7 @@ async function toToolOutput(
     ok: true,
     applied: true,
     preview: outcome.preview,
-    // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与 generate_draft 的 draftBody 同构。
+    // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与写稿操作结果的 draftBody 同构。
     draftBody: stripMarkdownEmphasis(parseDraftFile(outcome.updatedContent).body).trim(),
     overview,
     summary: outcome.mode === "exact"

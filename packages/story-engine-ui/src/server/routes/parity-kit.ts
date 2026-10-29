@@ -172,7 +172,7 @@ export async function driveToolExecute(
 ): Promise<Record<string, unknown>> {
   const execute = tool.execute;
   if (!execute) throw new Error("tool has no execute");
-  const requestContext = buildProjectRequestContext(opts.projectDir, opts.currentChapter, undefined, opts.authorWords);
+  const requestContext = buildProjectRequestContext(opts.projectDir, opts.currentChapter, opts.authorWords);
   if (opts.userConfirmedTool) markUserConfirmedTool(requestContext, opts.userConfirmedTool);
   const context = { requestContext } as unknown as ToolExecutionContext;
   return (await execute(input, context)) as Record<string, unknown>;

@@ -53,8 +53,29 @@ export interface StreamAgentChatRequest {
 export type InspectModeData = "continuity" | "quality" | "review" | "flavor";
 export const INSPECT_MODES: readonly InspectModeData[] = ["continuity", "quality", "review", "flavor"];
 
+/** 写稿的两种（服务端 draft.change 的 mode）：写这一章 / 接着往下写。 */
+export type DraftModeData = "write" | "continue";
+
+/** 写稿参数（与服务端 services/draft-change/params.ts 的 DraftChangeParams 同形）。 */
+export interface DraftParamsData {
+  readonly chapter: number;
+  readonly direction?: string;
+  readonly mustHitBeats?: readonly string[];
+  readonly length?: number;
+  readonly selectedCharacters?: readonly string[];
+  readonly selectedHookIds?: readonly string[];
+  readonly maxTimelineEvents?: number;
+  readonly contextTokenBudget?: number;
+  readonly candidates?: 2 | 3;
+  readonly autoDeAi?: false;
+  readonly thenPreview?: true;
+  /** 作者点了「重写这一章」（这章有稿、已定稿也整章重写）。 */
+  readonly rewrite?: true;
+  readonly allowWriteAhead?: true;
+}
+
 /**
- * 操作按钮（写作版本 P2a，与服务端 agent/user-actions.ts 的 OperationAction 同形）：交一次新的检查（请求号在按钮出的时候给，
+ * 操作按钮（写作版本 P2a，与服务端 agent/user-actions.ts 的 OperationAction 同形）：交一次新的检查、写稿（请求号在按钮出的时候给，
  * 连点两下只做一次）、停着的「接着做」、「不要了」。
  */
 export type OperationActionData =
@@ -63,6 +84,14 @@ export type OperationActionData =
     readonly type: "inspect.run";
     readonly mode: InspectModeData;
     readonly params: { readonly chapter: number; readonly fresh?: true };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  | {
+    readonly kind: "new";
+    readonly type: "draft.change";
+    readonly mode: DraftModeData;
+    readonly params: DraftParamsData;
     readonly requestKey: string;
     readonly issuedAt: string;
   }
@@ -81,6 +110,11 @@ export function newInspectAction(mode: InspectModeData, chapter: number, options
   };
 }
 
+/** 一个新写稿按钮（写这一章 / 重写 / 接着往下写；请求号这时候给）。 */
+export function newDraftAction(mode: DraftModeData, params: DraftParamsData): OperationActionData {
+  return { kind: "new", type: "draft.change", mode, params, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+}
+
 /** 是操作按钮（不是按工具名的老按钮）。 */
 export function isOperationAction(action: AgentUserAction): action is OperationActionData {
   return "kind" in action;
@@ -92,7 +126,6 @@ export type AgentUserAction =
   | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number; readonly dayEndOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
-  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
   | { readonly toolName: "undo" }
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
@@ -220,7 +253,7 @@ export interface AgentToolResult {
   /** 工具边界没让它执行（这一轮已经出了稿，先等作者看稿）：投影层置「已停止」，不当失败。 */
   readonly skipped?: boolean;
   readonly summary?: string;
-  /** 改草稿类工具（generate_draft/revise_draft）返回的「当前章完整草稿正文（去 Markdown 标题）」。
+  /** 改草稿类工具（revise_draft）返回的「当前章完整草稿正文（去 Markdown 标题）」。
    *  前端据此把真正文载入工作区——否则只能用不含正文的 overview 刷新，草稿被占位覆盖、autosave 抹掉真正文。 */
   readonly draftBody?: string;
   readonly draftTitle?: string;
@@ -240,8 +273,6 @@ export interface AgentToolResult {
   readonly commitReport?: unknown;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
-  /** generate_draft 专属：一次写几版时落选的几版全文（「另外几版」卡）。 */
-  readonly draftVersions?: DraftVersionsCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
   /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
@@ -273,18 +304,17 @@ export interface AgentToolResult {
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** manage_ledger 专属：改账是作者裁定，模型只提了草案，等作者点「确认改账」按钮。 */
   readonly ledgerConfirmAction?: LedgerConfirmTarget;
-  /** generate_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「重写这一章」。 */
-  readonly rewriteConfirmAction?: RewriteConfirmTarget;
+  /** change_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「接着往下写」「重写这一章」（服务端出的按钮动作）。 */
+  readonly rewriteChoices?: readonly RewriteChoiceData[];
   /** foundation_write 专属（重构 P4）：删角色 / 覆盖已确立设定是作者档，等作者点「确认改设定」。 */
   readonly foundationConfirmAction?: FoundationConfirmTarget;
 }
 
-/** 「重写这一章」按钮带回的东西。 */
-export interface RewriteConfirmTarget {
-  readonly chapter: number;
-  readonly chapterGoal?: string;
-  /** 工作稿还没定稿：卡上另给「接着往下写」。 */
-  readonly canContinue?: boolean;
+/** 「接着往下写」「重写这一章」按钮：服务端出的写稿动作（点几次都是这一次）。 */
+export interface RewriteChoiceData {
+  readonly label: string;
+  readonly mode: DraftModeData;
+  readonly action: OperationActionData;
 }
 
 /** 「确认改设定」按钮带回的东西（被拦下的那次资料写入，服务端执行前再校验）。 */
@@ -336,6 +366,60 @@ export interface OperationViewData {
   readonly origin: { readonly kind: string; readonly messageId?: string };
   /** 检查做完了的结果卡。 */
   readonly inspect?: InspectCardsData;
+  /** 写稿做完了的那几样（写的哪章、换上了没有、另外几版）。 */
+  readonly draft?: DraftOperationData;
+}
+
+/** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
+export interface DraftOperationData {
+  readonly chapter: number;
+  /** 换上了工作稿（没换上：写的途中稿子或前文改过，AI 这版留成候选在稿纸上等作者选）。 */
+  readonly applied: boolean;
+  readonly title?: string;
+  /** 这次写稿打的存档点，先后照写的先后（新拟的章纲存盘前、换上工作稿前）：这一轮的「撤销到此」、对话里说「撤销上一步」从第一个退。 */
+  readonly snapshots?: readonly string[];
+  /** 一次写几版时落选的几版全文（「另外几版」卡）。 */
+  readonly versions?: DraftVersionsCardData;
+}
+
+/** 操作的实时事件（与服务端 lib/operations/live.ts 的 LiveEvent 同形）。 */
+export type OperationLiveData =
+  /** 一步开始（含整步重做）：exec 换了，之前流出来的正文作废。 */
+  | { readonly type: "step"; readonly step: string; readonly exec: string }
+  | { readonly type: "progress"; readonly text: string }
+  /** 正文流：同一个 exec 里 streamSeq 递增；replace＝新写的这段整段换成 text；base＝接着写时本来写好的那段。 */
+  | { readonly type: "draft-delta"; readonly exec: string; readonly streamSeq: number; readonly text: string; readonly replace?: true; readonly base?: true };
+
+export function readOperationLive(value: unknown): OperationLiveData | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.type === "progress") return typeof value.text === "string" ? { type: "progress", text: value.text } : undefined;
+  if (value.type === "step") return typeof value.step === "string" && typeof value.exec === "string" ? { type: "step", step: value.step, exec: value.exec } : undefined;
+  if (value.type !== "draft-delta" || typeof value.exec !== "string" || typeof value.text !== "string" || typeof value.streamSeq !== "number") return undefined;
+  return {
+    type: "draft-delta",
+    exec: value.exec,
+    streamSeq: value.streamSeq,
+    text: value.text,
+    ...(value.replace === true ? { replace: true as const } : {}),
+    ...(value.base === true ? { base: true as const } : {}),
+  };
+}
+
+/** 写稿结果 → 界面要的那几样（不是写稿、没做完、形状不对是 undefined）。 */
+function readDraftOperation(body: unknown): DraftOperationData | undefined {
+  if (!isRecord(body) || body.kind !== "draft.change") return undefined;
+  const chapter = positiveInt(body.chapter);
+  if (chapter === undefined) return undefined;
+  const versions = readDraftVersions({ chapter, otherVersions: body.otherVersions });
+  const snapshots = [body.planSnapshotId, body.ok === true ? body.snapshotId : undefined]
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  return {
+    chapter,
+    applied: body.ok === true,
+    ...(typeof body.draftTitle === "string" && body.draftTitle.trim() ? { title: body.draftTitle.trim() } : {}),
+    ...(snapshots.length > 0 ? { snapshots } : {}),
+    ...(versions ? { versions } : {}),
+  };
 }
 
 export interface AgentToolError {
@@ -351,17 +435,14 @@ export interface AgentChatHandlers {
   readonly onStatus?: (message: string) => void;
   /** 思考链增量（仅思考模式下有）。累加成消息的「思考过程」。 */
   readonly onReasoningDelta?: (text: string) => void;
-  /** 出稿正文增量（generate_draft 流式）：逐字进编辑器。带本次章号，前端只往当前章追。 */
-  /** replace=true：text 是这次写的全部（换掉已经流出来的），否则接在后面；base=true：接着写时本来写好的那段（原样显示）。 */
-  readonly onDraftDelta?: (info: { readonly chapter: number; readonly text: string; readonly replace?: boolean; readonly base?: boolean }) => void;
-  /** AI 出稿进行到哪一步（plan 拟章纲 / write 写正文）。 */
-  readonly onDraftPhase?: (info: { readonly chapter: number; readonly phase: "plan" | "write" | "check" }) => void;
   readonly onToolCall: (info: { readonly toolCallId?: string; readonly toolName: string }) => void;
   readonly onToolResult: (info: AgentToolResult) => void;
   /** 这一轮交上的操作（写作版本 P2a）：每次记录变了发一份（先一份当前的）。 */
   readonly onOperation?: (operation: OperationViewData) => void;
   /** 操作的一句进度（「核账员在读第 3 章」）。 */
   readonly onOperationProgress?: (info: { readonly opId: string; readonly text: string }) => void;
+  /** 操作的步骤开始、正文流（写稿时正文逐字进稿纸）。 */
+  readonly onOperationLive?: (info: { readonly opId: string; readonly event: Exclude<OperationLiveData, { readonly type: "progress" }> }) => void;
   /** 工具内部抛错：携带 toolCallId/toolName，让上层把对应步骤/卡片收尾为 failed，再 append 错误。 */
   readonly onToolError: (info: AgentToolError) => void;
   readonly onError: (message: string, retryable: boolean, reason?: AiErrorReason) => void;
@@ -482,20 +563,6 @@ export async function streamAgentChat(
         case "reasoning-delta":
           if (typeof parsed.text === "string") handlers.onReasoningDelta?.(parsed.text);
           return;
-        case "draft-delta":
-          if ((parsed.phase === "plan" || parsed.phase === "write" || parsed.phase === "check") && typeof parsed.chapter === "number") {
-            handlers.onDraftPhase?.({ chapter: parsed.chapter, phase: parsed.phase });
-            return;
-          }
-          if (typeof parsed.text === "string" && typeof parsed.chapter === "number") {
-            handlers.onDraftDelta?.({
-              chapter: parsed.chapter,
-              text: parsed.text,
-              ...(parsed.replace === true ? { replace: true } : {}),
-              ...(parsed.base === true ? { base: true } : {}),
-            });
-          }
-          return;
         case "tool-call":
           if (typeof parsed.toolName === "string") {
             handlers.onToolCall({
@@ -544,10 +611,6 @@ export async function streamAgentChat(
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
               ? { brainstorm: readBrainstormData(output)! }
-              : {}),
-            // generate_draft 专属：一次写几版时落选的几版全文 → 「另外几版」卡，作者挑一版换进工作稿。没写成不建卡。
-            ...(parsed.toolName === "generate_draft" && output.ok !== false && readDraftVersions(output)
-              ? { draftVersions: readDraftVersions(output)! }
               : {}),
             // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
             ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)
@@ -610,16 +673,8 @@ export async function streamAgentChat(
                   },
                 }
               : {}),
-            ...(parsed.toolName === "generate_draft" && output.needsConfirmation === true && isRewriteConfirm(output.rewriteConfirm)
-              ? {
-                  rewriteConfirmAction: {
-                    chapter: output.rewriteConfirm.chapter,
-                    ...(typeof output.rewriteConfirm.chapterGoal === "string" && output.rewriteConfirm.chapterGoal.trim()
-                      ? { chapterGoal: output.rewriteConfirm.chapterGoal.trim() }
-                      : {}),
-                    ...(output.rewriteConfirm.canContinue === true ? { canContinue: true } : {}),
-                  },
-                }
+            ...(parsed.toolName === "change_draft" && readRewriteChoices(output.rewriteChoices)
+              ? { rewriteChoices: readRewriteChoices(output.rewriteChoices)! }
               : {}),
             ...(parsed.toolName === "foundation_write" && output.needsConfirmation === true && isFoundationConfirm(output.foundationConfirm)
               ? {
@@ -650,10 +705,10 @@ export async function streamAgentChat(
         }
         case "operation": {
           if (parsed.type === "live") {
-            const live = isRecord(parsed.event) ? parsed.event : undefined;
-            if (typeof parsed.opId === "string" && live?.type === "progress" && typeof live.text === "string") {
-              handlers.onOperationProgress?.({ opId: parsed.opId, text: live.text });
-            }
+            const live = readOperationLive(parsed.event);
+            if (typeof parsed.opId !== "string" || !live) return;
+            if (live.type === "progress") handlers.onOperationProgress?.({ opId: parsed.opId, text: live.text });
+            else handlers.onOperationLive?.({ opId: parsed.opId, event: live });
             return;
           }
           const operation = readOperationView(parsed.operation);
@@ -766,8 +821,15 @@ function isLedgerConfirm(value: unknown): value is { readonly key: string; reado
   return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && Array.isArray(value.decisions) && value.decisions.length > 0;
 }
 
-function isRewriteConfirm(value: unknown): value is { readonly chapter: number; readonly chapterGoal?: unknown; readonly canContinue?: unknown } {
-  return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
+/** change_draft 回执里的「接着往下写」「重写这一章」（防御解析：动作对不上写稿的丢掉）。 */
+function readRewriteChoices(value: unknown): readonly RewriteChoiceData[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices = value.flatMap((item): RewriteChoiceData[] => {
+    if (!isRecord(item) || typeof item.label !== "string" || !item.label.trim()) return [];
+    const action = isRecord(item.action) ? parseOperationActionData(item.action) : undefined;
+    return action?.kind === "new" && action.type === "draft.change" ? [{ label: item.label.trim(), mode: action.mode, action }] : [];
+  });
+  return choices.length > 0 ? choices : undefined;
 }
 
 function isFoundationConfirm(value: unknown): value is { readonly key: string; readonly input: Record<string, unknown>; readonly label?: unknown } {
@@ -796,6 +858,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const mode = typeof value.mode === "string" ? value.mode : undefined;
   const result = isRecord(value.result) ? value.result : undefined;
   const inspect = state === "succeeded" && value.kind === "inspect.run" && mode && result ? readInspectCards(mode, result.body) : undefined;
+  const draft = state === "succeeded" && value.kind === "draft.change" && result ? readDraftOperation(result.body) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
     : [];
@@ -818,6 +881,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
       ...(typeof origin.messageId === "string" && origin.messageId ? { messageId: origin.messageId } : {}),
     },
     ...(inspect ? { inspect } : {}),
+    ...(draft ? { draft } : {}),
   };
 }
 
@@ -879,9 +943,9 @@ function isNextStepPrompt(value: Record<string, unknown>): boolean {
 
 /**
  * 「下一步」选项里允许直达的结构化动作白名单（R4.7）：只有下一步级的动作能藏在选项里被点击直达——
- * 定稿预览（只读）、检查（新操作，只读）、接着做 / 不要了、出稿（写工作稿、可撤销）。commit_apply / prune_snapshots 这类
+ * 定稿预览（只读）、检查（新操作，只读）、写稿（新操作，写工作稿、可撤销）、接着做 / 不要了。commit_apply / prune_snapshots 这类
  * 授权写盘动作**不在**白名单：定稿要走定稿预览卡的「确认定稿」、裁剪要走「确认裁剪」，各带各的授权语义。
- * 按工具名的老检查按钮（check_continuity / ai_review / quality_check，P2a 前存下的）不认：那几个工具已经没了，选项照留、点了交给 AI。
+ * 按工具名的老检查、出稿按钮（check_continuity / ai_review / quality_check / generate_draft，P2a 前存下的）不认：那几个工具已经没了，选项照留、点了交给 AI。
  */
 export function parseNextStepUserAction(value: unknown): AgentUserAction | undefined {
   if (!isRecord(value)) return undefined;
@@ -892,12 +956,6 @@ export function parseNextStepUserAction(value: unknown): AgentUserAction | undef
   if (chapter === undefined) return undefined;
   // 下面的逐个相等判断就是白名单本身：别的工具名（含 commit_apply / prune_snapshots）一律 undefined。
   if (value.toolName === "commit_preview") return { toolName: "commit_preview", chapter };
-  if (value.toolName === "generate_draft") {
-    const chapterGoal = typeof value.chapterGoal === "string" && value.chapterGoal.trim()
-      ? value.chapterGoal.trim().slice(0, 2000)
-      : undefined;
-    return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(value.continueDraft === true ? { continueDraft: true } : {}) };
-  }
   return undefined;
 }
 
@@ -906,21 +964,71 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
   if (value.kind === "resume" || value.kind === "cancel") {
     return typeof value.opId === "string" && /^op-[0-9a-f]{20}$/u.test(value.opId) ? { kind: value.kind, opId: value.opId } : undefined;
   }
-  if (value.kind !== "new" || value.type !== "inspect.run") return undefined;
+  if (value.kind !== "new") return undefined;
+  if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
+  if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
+  const stamp = { requestKey: value.requestKey, issuedAt: value.issuedAt };
+  if (value.type === "draft.change") {
+    const mode = value.mode === "write" || value.mode === "continue" ? value.mode : undefined;
+    const params = mode ? readDraftParams(mode, value.params) : undefined;
+    return mode && params ? { kind: "new", type: "draft.change", mode, params, ...stamp } : undefined;
+  }
+  if (value.type !== "inspect.run") return undefined;
   const mode = INSPECT_MODES.find((item) => item === value.mode);
   const params = isRecord(value.params) ? value.params : {};
   const chapter = params.chapter;
   if (!mode || typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return undefined;
-  if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
-  if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
   return {
     kind: "new",
     type: "inspect.run",
     mode,
     params: { chapter, ...(mode === "continuity" && params.fresh === true ? { fresh: true as const } : {}) },
-    requestKey: value.requestKey,
-    issuedAt: value.issuedAt,
+    ...stamp,
   };
+}
+
+const positiveInt = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
+const nonEmptyText = (value: unknown, max: number): string | undefined => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined);
+const textList = (value: unknown): readonly string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.flatMap((item) => { const text = nonEmptyText(item, 500); return text ? [text] : []; }).slice(0, 20);
+  return items.length > 0 ? items : undefined;
+};
+
+/** 写稿参数（和服务端 readDraftChangeParams 同一口径）：章号不对是 undefined，多的字段丢掉；接着写不带多版、重写。 */
+function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = positiveInt(value.chapter);
+  if (chapter === undefined) return undefined;
+  const writing = mode === "write";
+  const direction = nonEmptyText(value.direction, 2000);
+  const mustHitBeats = textList(value.mustHitBeats);
+  const length = positiveInt(value.length);
+  const selectedCharacters = textList(value.selectedCharacters);
+  const selectedHookIds = textList(value.selectedHookIds);
+  const maxTimelineEvents = positiveInt(value.maxTimelineEvents);
+  const contextTokenBudget = positiveInt(value.contextTokenBudget);
+  const candidates = writing && (value.candidates === 2 || value.candidates === 3) ? value.candidates : undefined;
+  return {
+    chapter,
+    ...(direction ? { direction } : {}),
+    ...(mustHitBeats ? { mustHitBeats } : {}),
+    ...(length !== undefined ? { length } : {}),
+    ...(selectedCharacters ? { selectedCharacters } : {}),
+    ...(selectedHookIds ? { selectedHookIds } : {}),
+    ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
+    ...(contextTokenBudget !== undefined ? { contextTokenBudget } : {}),
+    ...(candidates !== undefined ? { candidates } : {}),
+    ...(value.autoDeAi === false ? { autoDeAi: false as const } : {}),
+    ...(value.thenPreview === true ? { thenPreview: true as const } : {}),
+    ...(writing && value.rewrite === true ? { rewrite: true as const } : {}),
+    ...(value.allowWriteAhead === true ? { allowWriteAhead: true as const } : {}),
+  };
+}
+
+/** 存盘消息里的写稿按钮动作（读回时校验；服务端执行前还会再校验）。 */
+export function readStoredOperationAction(value: unknown): OperationActionData | undefined {
+  return isRecord(value) ? parseOperationActionData(value) : undefined;
 }
 
 /** suggest_next_steps 输出 → 「下一步」卡数据（choices 的 action 字段经白名单防御解析，坏的丢掉、选项保留）。 */

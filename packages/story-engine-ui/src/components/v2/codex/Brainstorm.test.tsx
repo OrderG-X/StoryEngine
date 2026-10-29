@@ -69,7 +69,7 @@ describe("头脑风暴面板（稿纸上方，重构 P6 草图 ⑤）", () => {
     expect(within(plan).getByText("乙 · 夜里上楼")).toBeTruthy();
     expect(within(plan).getByText("钟楼有响动")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "让 AI 照这个起草" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "generate_draft", chapter: 12, chapterGoal: "夜里上楼：1. 钟楼有响动 2. 钟箱门被人动过\n作者要走法时说：让老周开口" });
+    expect(onAction).toHaveBeenCalledWith({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 12, direction: "夜里上楼：1. 钟楼有响动 2. 钟箱门被人动过\n作者要走法时说：让老周开口" }, requestKey: expect.any(String), issuedAt: expect.any(String) });
     fireEvent.click(screen.getByRole("button", { name: "换一种" }));
     expect(useChatStore.getState().messages[1]!.cards).toEqual([{ type: "directions", brainstorm: DATA }]);
     expect(screen.getByRole("article", { name: "甲 · 老周开口" })).toBeTruthy();

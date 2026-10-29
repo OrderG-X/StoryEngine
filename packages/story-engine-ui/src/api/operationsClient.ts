@@ -2,7 +2,7 @@
  * 操作（写作版本 P2a）的 HTTP 口：开书 / 重连时找在做的、订阅一次操作、停掉。对话里交的操作随对话 SSE 走（agentChatClient），
  * 这里管对话那条流断了以后（关过页、重开书）接着看。
  */
-import { readOperationView, type OperationViewData } from "./agentChatClient.js";
+import { readOperationLive, readOperationView, type OperationLiveData, type OperationViewData } from "./agentChatClient.js";
 
 const BASE = "/api/operations";
 
@@ -44,12 +44,16 @@ export async function cancelOperationRequest(projectPath: string, opId: string):
 
 /**
  * 订阅一次操作：先一份当前的，再跟着变，到结束为止（停着的一直挂着，等「接着做」）。连接断了、读不出就返回（调用方当没再变）。
- * 进度那一句给 onProgress。
+ * 进度那一句给 onProgress；步骤开始、正文流（写稿时）给 onLive（订阅时先补发到现在流出来的那份）。
  */
 export async function followOperationEvents(
   projectPath: string,
   opId: string,
-  handlers: { readonly onOperation: (operation: OperationViewData) => void; readonly onProgress?: (text: string) => void },
+  handlers: {
+    readonly onOperation: (operation: OperationViewData) => void;
+    readonly onProgress?: (text: string) => void;
+    readonly onLive?: (event: Exclude<OperationLiveData, { readonly type: "progress" }>) => void;
+  },
   signal: AbortSignal,
 ): Promise<void> {
   const params = new URLSearchParams({ project: projectPath });
@@ -78,8 +82,9 @@ export async function followOperationEvents(
       return;
     }
     if (name === "live") {
-      const live = parsed as { readonly type?: unknown; readonly text?: unknown };
-      if (live.type === "progress" && typeof live.text === "string") handlers.onProgress?.(live.text);
+      const live = readOperationLive(parsed);
+      if (live?.type === "progress") handlers.onProgress?.(live.text);
+      else if (live) handlers.onLive?.(live);
       return;
     }
     const view = readOperationView(parsed);

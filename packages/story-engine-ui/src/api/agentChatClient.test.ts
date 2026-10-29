@@ -361,6 +361,66 @@ describe("streamAgentChat", () => {
     expect(views[4]).toMatchObject({ state: "failed", failure: { message: "模型没回", retryable: true } });
   });
 
+  it("写稿做完了 → draft（章、换没换上、章名、存档点按先后、落选几版）；没做完、不是写稿的不带", async () => {
+    const draftView = (body: unknown, overrides: Record<string, unknown> = {}) => opView("write", body, { kind: "draft.change", what: "写稿·第 38 章", chapter: 38, ...overrides });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38, draftTitle: " 雨夜 ", planSnapshotId: "s-plan", snapshotId: "s-draft", otherVersions: [{ index: 1, body: "另一版。" }] }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: false, chapter: 38, planSnapshotId: "s-plan", snapshotId: "s-stale", kept: { candidateId: "c1", reason: "draft_moved" } }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38 }, { state: "running" }) }),
+      frame("operation", { type: "record", operation: opView("continuity", { kind: "draft.change", ok: true, chapter: 8 }) }),
+    ]);
+    expect(views[0]?.draft).toEqual({ chapter: 38, applied: true, title: "雨夜", snapshots: ["s-plan", "s-draft"], versions: { chapter: 38, versions: [{ index: 1, body: "另一版。" }] } });
+    // 没换上：稿的存档点不算（没写），章纲存过的照算。
+    expect(views[1]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"] });
+    expect(views[2]?.draft).toBeUndefined();
+    expect(views[3]?.draft).toBeUndefined();
+  });
+
+  it("步骤、正文流（live）→ onOperationLive；进度不进这里，形状不对的不认", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "step", step: "write:0", exec: "1:write:0" } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "draft-delta", exec: "1:write:0", streamSeq: 1, text: "雨下了", replace: true, base: false } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "draft-delta", exec: "1:write:0", streamSeq: "2", text: "号不是数" } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "progress", text: "在写" } }),
+      frame("done", {}),
+    ])));
+    const live: unknown[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写" }] },
+      {
+        onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: () => undefined, onToolError: () => undefined,
+        onError: () => undefined, onDone: () => undefined,
+        onOperationLive: (item) => { live.push(item); },
+      },
+    );
+    expect(live).toEqual([
+      { opId: OP_ID, event: { type: "step", step: "write:0", exec: "1:write:0" } },
+      { opId: OP_ID, event: { type: "draft-delta", exec: "1:write:0", streamSeq: 1, text: "雨下了", replace: true } },
+    ]);
+  });
+
+  it("change_draft 有稿时的按钮（rewriteChoices）防御解析：动作不对的那个丢掉；别的工具不认", async () => {
+    const action = { kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, rewrite: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" };
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      frame("tool-result", { toolCallId: "c1", toolName: "change_draft", output: { ok: false, code: "chapter_has_text", chapter: 3, rewriteChoices: [
+        { label: "重写第 3 章", intent: "重写", action },
+        { label: "坏的", intent: "x", action: { kind: "new", type: "draft.change", mode: "write", params: {} } },
+      ] } }),
+      frame("tool-result", { toolCallId: "r1", toolName: "revise_draft", output: { ok: false, rewriteChoices: [{ label: "重写第 3 章", intent: "重写", action }] } }),
+      frame("done", {}),
+    ])));
+    const received: { rewriteChoices?: unknown }[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写第 3 章" }] },
+      {
+        onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: (info) => { received.push(info); }, onToolError: () => undefined,
+        onError: () => undefined, onDone: () => undefined,
+      },
+    );
+    expect(received[0]?.rewriteChoices).toEqual([{ label: "重写第 3 章", mode: "write", action }]);
+    expect(received[1]?.rewriteChoices).toBeUndefined();
+  });
+
   it("进度（live）→ onOperationProgress；形状不对的不认", async () => {
     const { progress } = await collectOperations([
       frame("operation", { type: "live", opId: OP_ID, event: { type: "progress", text: "核账员在读第 3 章" } }),
@@ -431,30 +491,6 @@ describe("streamAgentChat", () => {
     );
 
     expect(received?.commitReport).toBeUndefined();
-  });
-
-  it("generate_draft 的 otherVersions（落选几版全文）→ draftVersions，「另外几版」卡用；别的工具不认", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "g1", toolName: "generate_draft", output: { ok: true, chapter: 38, otherVersions: [{ index: 1, body: "另一版。" }] } }),
-        frame("tool-result", { toolCallId: "r1", toolName: "revise_draft", output: { ok: true, chapter: 38, otherVersions: [{ index: 1, body: "另一版。" }] } }),
-        frame("done", {}),
-      ]),
-    ));
-    const received: { draftVersions?: unknown }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写两版" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received.push(info); },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-    expect(received[0]?.draftVersions).toEqual({ chapter: 38, versions: [{ index: 1, body: "另一版。" }] });
-    expect(received[1]?.draftVersions).toBeUndefined();
   });
 
   it("定论（P12）：settle_preview / settle_fact 的卡防御解析后透传；没查成不建卡；settle_apply 成功带票号", async () => {

@@ -51,7 +51,7 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     }
     const body = await readJsonBody(req);
     // 重构 P4：这条路只剩抽卡候选（persist:false：生成一版、不写盘）。落盘出稿只走对话通道
-    // （「写这一章」按钮发结构化动作 / AI 调 generate_draft），有章纲、核账、作者档护栏，不再有第二条路。
+    // （「写这一章」按钮发结构化动作 / AI 调 change_draft，都交写稿操作 draft.change），有章纲、核账、作者档护栏，不再有第二条路。
     if (body.persist !== false) {
       writeJson(res, 410, { ok: false, error: "这条出稿路已经撤了：请点「AI 写这一章」或在对话里让 AI 写。" });
       return;

@@ -16,11 +16,6 @@ export const REQUEST_CONTEXT_PROJECT_DIR_KEY = "projectDir";
  */
 export const REQUEST_CONTEXT_CURRENT_CHAPTER_KEY = "currentChapter";
 /**
- * 出稿流式增量回调（每段正文 delta）。路由层注入一个把 delta 转成 SSE 事件的 sink，
- * generate_draft 工具把它穿给 writer client → 正文逐字流到前端编辑器。缺失=不流式（向后兼容）。
- */
-export const REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY = "draftDeltaSink";
-/**
  * 作者在这段对话窗口里说过的话（user 消息原文，旧→新）。重构 P4 起只用来「找原句」：
  * 模型转述作者的话（如出稿的 chapterGoal）时，核对它确实出自作者之口。不用来猜意图。
  */
@@ -63,14 +58,10 @@ export interface MessageRef {
 }
 
 export interface TurnState {
-  /** 模型这一步要调的工具（turn-flow：执行前记下，这一步有出稿就只写稿）。 */
+  /** 模型这一步要调的工具（turn-flow：执行前记下，这一步交了操作又有别的写就一件都不做）。 */
   stepTools?: readonly string[];
   /** 这一轮交上、受理了的操作：这一步走完这一轮就结束，进度和结果由服务端出（契约第三节）。 */
   operationAccepted?: { readonly opId: string };
-  /** 这一轮的出稿正在执行（同一步别的工具不执行，第二份出稿也不写）。没写成就放开，模型可以改了再调。 */
-  draftStarted?: boolean;
-  /** 稿写成了：这一步走完这一轮就结束，结论、核账卡、下一步由服务端出（和「写这一章」按钮同一套）。 */
-  draftWritten?: { readonly chapter: number; readonly output: unknown; readonly thenPreview: boolean };
 }
 
 export interface PickedDirection {
@@ -106,16 +97,6 @@ export function isUserConfirmedTool(context: ToolExecutionContext | undefined, t
   return context?.requestContext?.get(REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY) === toolName;
 }
 
-/**
- * 出稿流式 sink：text = 正文增量；phase = 出稿进行到哪一步（plan 拟章纲 / write 写正文，text 为空串）。
- * 拟章纲要一两分钟、这期间稿纸是空的，作者得知道 AI 在干什么。
- */
-/**
- * replace=true：text 是这次写的、稿纸上该显示的全部，换掉已经流出去的（重写一段时退回、两段之间补空行）。
- * base=true：接着写时本来写好的那段（原样显示、不当新写的清理；replace 换的是它后面新写的）。
- */
-export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string; readonly phase?: "plan" | "write" | "check"; readonly replace?: boolean; readonly base?: boolean }) => void;
-
 function isPositiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
@@ -127,7 +108,6 @@ function isPositiveInt(value: unknown): value is number {
 export function buildProjectRequestContext(
   projectDir: string,
   currentChapter?: number,
-  draftDeltaSink?: DraftDeltaSink,
   authorWords?: readonly string[],
   lastTurnUndoHint?: LastTurnUndoHint,
   pickedDirection?: PickedDirection,
@@ -136,7 +116,6 @@ export function buildProjectRequestContext(
   const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir], [REQUEST_CONTEXT_TURN_STATE_KEY, {} satisfies TurnState]];
   if (messageRef) entries.push([REQUEST_CONTEXT_MESSAGE_REF_KEY, messageRef]);
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
-  if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
   const words = (authorWords ?? []).filter((text) => typeof text === "string" && text.trim());
   if (words.length > 0) entries.push([REQUEST_CONTEXT_AUTHOR_WORDS_KEY, words]);
   if (lastTurnUndoHint) entries.push([REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY, lastTurnUndoHint]);
@@ -172,12 +151,6 @@ export function parseMessageRef(messageId: unknown, issuedAt: unknown): MessageR
 export function readCurrentChapterFromContext(context: ToolExecutionContext | undefined): number | undefined {
   const raw = context?.requestContext?.get(REQUEST_CONTEXT_CURRENT_CHAPTER_KEY);
   return isPositiveInt(raw) ? raw : undefined;
-}
-
-/** 工具层：读出出稿流式 sink（缺失返回 undefined→不流式）。 */
-export function readDraftDeltaSinkFromContext(context: ToolExecutionContext | undefined): DraftDeltaSink | undefined {
-  const raw = context?.requestContext?.get(REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY);
-  return typeof raw === "function" ? (raw as DraftDeltaSink) : undefined;
 }
 
 /** 工具层：读出作者在这段对话里说过的话（缺失返回 undefined——不是对话通道调的，如按钮直达）。 */

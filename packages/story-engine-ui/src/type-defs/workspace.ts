@@ -112,7 +112,7 @@ export type MessageCard =
   | { readonly type: "status-notes"; readonly notes: readonly string[] }
   /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
   | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number }
-  /** AI 一次写几版（generate_draft candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
+  /** AI 一次写几版（写稿 candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
   | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData }
   /**
    * 定论（P12：核账卡「以第 N 章为准」、对话里「以这个为准」）：定论 + 前文要改的几句、账和设定本跟着改的。

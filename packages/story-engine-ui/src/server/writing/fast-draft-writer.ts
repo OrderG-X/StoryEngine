@@ -78,6 +78,12 @@ export interface CacheMetrics {
   readonly cacheMetricsAvailable: boolean;
 }
 
+/**
+ * 写手一次出稿最多调几次（写作版本 P2a 4.5 额度从这里算）：一口气写 1 次；按章纲分两半写 = 前半章 + 重演重写一次 +
+ * 后半章 + 两次重写（generateBySegments）；接着写 = 两段各一次 + 各重写一次 + 字数不够再要一次最后那段（又可能重写一次）。
+ */
+export const WRITER_MAX_CALLS = { whole: 1, halves: 5, continue: 6 } as const;
+
 export interface FastDraftInput {
   readonly projectDir: string;
   readonly chapter: number;
@@ -206,6 +212,8 @@ const SEGMENT_RATIO_MAX = 1.25;
 const MIN_TARGET_TO_SEGMENT = 2000;
 /** 接着往下写、没说写多少时：离本章目标还差得比这少，也写这么多（已经够长了还让接着写，就是要往下推一段）。 */
 const MIN_CONTINUE_LENGTH = 600;
+/** 作者说了这次接着写多少：写到这个比例算写够（不够就重写最后那段一次；结论里照实说少了多少）。 */
+export const CONTINUE_ASKED_MIN_RATIO = 0.85;
 
 /** 改写某一段的内容（token 估算随之更新），其余段原样。 */
 function withSectionContent(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {
@@ -675,7 +683,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     const asked = input.continueFrom?.length;
     const addLength = asked ?? Math.max(draftLengthAim(draftLengthTarget) - existingLength, MIN_CONTINUE_LENGTH);
     const minLength = asked
-      ? Math.round(asked * 0.85)
+      ? Math.round(asked * CONTINUE_ASKED_MIN_RATIO)
       : Math.min(Math.max(draftLengthFloor(draftLengthTarget) - existingLength, Math.round(MIN_CONTINUE_LENGTH * 0.85)), addLength);
     const continued = existing
       ? await generateContinuation({

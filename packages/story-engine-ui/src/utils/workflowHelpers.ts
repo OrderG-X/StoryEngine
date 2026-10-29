@@ -1,3 +1,4 @@
+import type { OperationActionData } from "../api/agentChatClient.js";
 import type { CommitConfirmTarget, ProposalBasis, SuggestedAction } from "../types.js";
 
 export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
@@ -230,20 +231,15 @@ export function ledgerConfirmAction(target: { readonly key: string; readonly dec
   };
 }
 
-/** 「重写这一章」按钮：有稿的章 AI 不覆盖，作者点了才由服务端整章重写（重构 P4）。 */
-export function rewriteConfirmAction(target: { readonly chapter: number; readonly chapterGoal?: string }): SuggestedAction {
+/**
+ * 「重写这一章」「接着往下写」按钮：有稿的章 AI 不覆盖，作者点了才交（重构 P4、P13）。按钮字和点了交的写稿都是服务端出的
+ * （change_draft 没受理时带的 rewriteChoices），接着写的是 continue-confirm，别的是 rewrite-confirm。
+ */
+export function draftChoiceAction(choice: { readonly label: string; readonly mode: string; readonly action: OperationActionData }): SuggestedAction {
   return {
-    ...suggestedAction("rewrite-confirm"),
-    label: `重写第 ${target.chapter} 章`,
-    rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}) },
-  };
-}
-
-/** 「接着往下写」按钮：有稿没定稿的章，从最后一句接着写（P13）。 */
-export function continueConfirmAction(target: { readonly chapter: number; readonly chapterGoal?: string }): SuggestedAction {
-  return {
-    ...suggestedAction("continue-confirm"),
-    rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}), continueDraft: true },
+    ...suggestedAction(choice.mode === "continue" ? "continue-confirm" : "rewrite-confirm"),
+    label: choice.label,
+    operationAction: choice.action,
   };
 }
 

@@ -257,15 +257,21 @@ export function chapterPlanPath(projectDir: string, chapter: number): string {
 /**
  * 章纲落盘：先按读回的同一套归一（读回来和返回的一模一样），在书锁里写（AI 换上稿子前在书锁里核章纲，
  * 核完到换上之间不会被另一轮拟纲换掉，第 6 轮复核 T9）。返回落盘的那份：调用方往后只用它（第 6 轮 T7）。
+ * 出稿操作里不走这里：拟好的那份由 `plan-save` 步骤走核心 `plan.save`（写作版本 P2a 3.1），文本是 chapterPlanFileText。
  */
 export async function writeChapterPlan(projectDir: string, plan: ChapterPlan): Promise<ChapterPlan> {
   const stored = storedChapterPlan(plan);
-  await withBookLock(projectDir, () => writeFileAtomic(chapterPlanPath(projectDir, plan.chapter), `${JSON.stringify(stored, null, 2)}\n`));
+  await withBookLock(projectDir, () => writeFileAtomic(chapterPlanPath(projectDir, plan.chapter), chapterPlanFileText(stored)));
   return stored;
 }
 
-/** 这份章纲落盘、再读回来是什么样（readChapterPlan 同一套归一）。 */
-function storedChapterPlan(plan: ChapterPlan): ChapterPlan {
+/** 章纲文件的整份文本（落盘、核心 plan.save 都用这一份）：先归一成读回来的样子。 */
+export function chapterPlanFileText(plan: ChapterPlan): string {
+  return `${JSON.stringify(storedChapterPlan(plan), null, 2)}\n`;
+}
+
+/** 这份章纲落盘、再读回来是什么样（readChapterPlan 同一套归一）：拟纲只在内存里拟时，往后用的就是这份。 */
+export function storedChapterPlan(plan: ChapterPlan): ChapterPlan {
   const stored = planFromFile(JSON.parse(JSON.stringify(plan)) as Record<string, unknown>, plan.chapter);
   if (!stored) throw new Error(`第 ${plan.chapter} 章章纲没有要点，不能落盘`);
   return stored;

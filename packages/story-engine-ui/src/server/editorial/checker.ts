@@ -1001,6 +1001,7 @@ export async function checkPlanByReader(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  readonly maxVolumeBuilds?: number;
   /** 前面各章原文（调用方已读过就传进来）；缺省从书目录读。 */
   readonly earlier?: EarlierText;
 }): Promise<ReaderPlanCheckResult> {
@@ -1018,6 +1019,7 @@ export async function checkPlanByReader(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: "拟纲",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,

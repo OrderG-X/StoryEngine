@@ -71,10 +71,12 @@ export function operationView(record: OperationRecord): OperationView {
 
 const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "inspect.run": { continuity: "核账", quality: "硬伤检查", review: "内容审阅", flavor: "查 AI 味" },
+  "draft.change": { write: "写稿", continue: "接着写" },
 };
 const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",
   "inspect.run": "检查",
+  "draft.change": "写稿",
 };
 
 /** 一次操作做的什么（中文）：认不出的种类如实说「别的操作」，不把英文种类名给模型念。 */
@@ -87,7 +89,7 @@ const PAUSE_TEXT: Readonly<Record<string, string>> = {
   interrupted: "写到一半停了（软件关过）",
   attempt_unknown: "停着：有一步可能已经发出去、结果没收到（可能已经计费）",
   budget: "停着：这次能用的调用次数用完了",
-  material: "停着：资料还没备好",
+  material: "停着：专员还在读前文",
 };
 
 /** 状态的中文说法（停着的带为什么停）。 */

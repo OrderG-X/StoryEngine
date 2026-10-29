@@ -24,13 +24,10 @@ export function userActionChoiceText(
   /** 「写这一章」照作者挑中的走法写时，那种走法的名字（回显里写明照哪种写）。 */
   directionTitle?: string,
 ): string {
-  if ("kind" in action) return operationActionText(action);
+  if ("kind" in action) return operationActionText(action, directionTitle);
   switch (action.toolName) {
     case "commit_preview":
       return `预览第 ${action.chapter} 章的定稿改动`;
-    case "generate_draft":
-      if (action.continueDraft) return `第 ${action.chapter} 章接着往下写`;
-      return directionTitle ? `照「${directionTitle}」写第 ${action.chapter} 章的正文` : `写第 ${action.chapter} 章的正文`;
     case "commit_apply":
       return `确认定稿第 ${action.chapter} 章`;
     case "prune_snapshots":
@@ -60,11 +57,16 @@ export function userActionChoiceText(
   }
 }
 
-/** 操作按钮（写作版本 P2a）的回显：新检查按种类说；「接着做」「不要了」照按钮字。 */
-function operationActionText(action: import("../api/agentChatClient.js").OperationActionData): string {
+/** 操作按钮（写作版本 P2a）的回显：写稿、新检查按种类说；「接着做」「不要了」照按钮字。 */
+function operationActionText(action: import("../api/agentChatClient.js").OperationActionData, directionTitle?: string): string {
   if (action.kind === "resume") return "接着做";
   if (action.kind === "cancel") return "不要了";
   const chapter = action.params.chapter;
+  if (action.type === "draft.change") {
+    if (action.mode === "continue") return `第 ${chapter} 章接着往下写`;
+    if (action.params.rewrite) return `重写第 ${chapter} 章`;
+    return directionTitle ? `照「${directionTitle}」写第 ${chapter} 章的正文` : `写第 ${chapter} 章的正文`;
+  }
   switch (action.mode) {
     case "continuity":
       return action.params.fresh ? `再核一遍第 ${chapter} 章的账` : `核第 ${chapter} 章的账`;

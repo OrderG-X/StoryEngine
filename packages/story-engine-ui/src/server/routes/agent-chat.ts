@@ -20,15 +20,14 @@
 import { stepCountIs, type ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint, parseMessageRef } from "../agent/request-context.js";
-import { DRAFT_TOOL, endsByFlow, releaseTurnFlow } from "../agent/turn-flow.js";
+import { endsByFlow, releaseTurnFlow } from "../agent/turn-flow.js";
 import { getStoryAgent, getStoryAgentModel, getStoryAgentToolNames, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
-import { generateDraftTool } from "../agent/tools/generate-draft.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
-import { finishDraftTurn, parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
+import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { finishOperationTurn, followOperation, settlesTurn } from "../agent/operation-turn.js";
 import { SUBMIT_TOOL_NAMES } from "../agent/tools/op-tools.js";
 import { reconcileOnOpen } from "../services/operations/executor.js";
@@ -385,8 +384,6 @@ export async function runAgentTurn(args: {
   let finishReason: string | undefined;
   let sawToolActivity = false;
   let lastToolSummary: string | undefined;
-  // 稿写成了（turn-flow 到此收住这一轮）：结论、核账卡、预览、下一步由调用方按 finishDraftTurn 出，这里不再转述。
-  let writtenDraft: WrittenDraft | undefined;
   // 交出去的操作（受理了这一轮就停）：进度、结论、下一步由调用方跟着操作出，这里不再转述回执。
   let acceptedOperation: { readonly opId: string } | undefined;
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
@@ -452,13 +449,10 @@ export async function runAgentTurn(args: {
         sawToolActivity = true;
         const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
         const output = normalizeForwardedToolResult(chunk.payload?.result);
-        const record = output as { readonly summary?: unknown; readonly skipped?: unknown; readonly ok?: unknown; readonly chapter?: unknown; readonly thenPreview?: unknown } | undefined;
+        const record = output as { readonly summary?: unknown; readonly skipped?: unknown } | undefined;
         // 没执行的（turn-flow 按流程跳过的）不当这一轮的结果转述。
         const summary = record?.skipped === true ? undefined : record?.summary;
         if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
-        if (chunk.payload?.toolName === DRAFT_TOOL && record?.ok === true && typeof record.chapter === "number") {
-          writtenDraft = { chapter: record.chapter, output, thenPreview: record.thenPreview === true };
-        }
         const receipt = output as { readonly accepted?: unknown; readonly opId?: unknown } | undefined;
         if (typeof chunk.payload?.toolName === "string" && SUBMIT_TOOL_NAMES.has(chunk.payload.toolName) && receipt?.accepted === true && typeof receipt.opId === "string") {
           acceptedOperation ??= { opId: receipt.opId };
@@ -498,35 +492,27 @@ export async function runAgentTurn(args: {
     }
   }
 
-  const fallback = writtenDraft || acceptedOperation || (sawStreamError && !sawToolActivity)
+  const fallback = acceptedOperation || (sawStreamError && !sawToolActivity)
     ? null
     : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
   if (fallback) {
     const scrubbed = args.scrubber.push(fallback);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
-  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），按流程收的尾（出稿后）也是，都不是步数用完。
+  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），按流程收的尾（交了操作）也是，都不是步数用完。
   if (finishReason === "tool-calls" && !sawStreamError && !args.endedByFlow?.() && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
     const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
   const remainingText = args.scrubber.flush();
   if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-  return { finishReason, emittedText, ...(writtenDraft ? { writtenDraft } : {}), ...(acceptedOperation ? { acceptedOperation } : {}) };
-}
-
-/** 这一轮写成的稿：章号、出稿工具的结果、作者要不要写完就出定稿预览。 */
-export interface WrittenDraft {
-  readonly chapter: number;
-  readonly output: unknown;
-  readonly thenPreview: boolean;
+  return { finishReason, emittedText, ...(acceptedOperation ? { acceptedOperation } : {}) };
 }
 
 export interface AgentTurnResult {
   readonly finishReason: string | undefined;
   /** 模型这一轮说过话（收尾的结论另起一段）。 */
   readonly emittedText: boolean;
-  readonly writtenDraft?: WrittenDraft;
   /** 这一轮交出去的操作（受理回执里的操作号）。 */
   readonly acceptedOperation?: { readonly opId: string };
 }
@@ -599,15 +585,12 @@ async function handleAgentChat(
     const lastTurnUndoHint = parseLastTurnUndoHint(body.lastTurnUndoHint);
 
     const agent = await getStoryAgent();
-    // 出稿流式：注入 sink，让 generate_draft 工具把正文 delta 实时转成 draft-delta SSE 事件（前端逐字进编辑器）。
-    // sink 在工具 await 模型期间同步触发 sendEvent（此时 agent.stream 正 parked，draft-delta 自然单独流出）。
     const pickedDirection = readPickedDirection(body.pickedDirection, currentChapter);
     // 写作版本 P2a：这条作者消息的号和发出时间（前端出的，重发沿用）；对话里交的操作按它认「是不是同一次」。
     const messageRef = parseMessageRef(body.messageId, body.issuedAt);
     const requestContext = buildProjectRequestContext(
       projectDir,
       currentChapter,
-      (payload) => sendEvent("draft-delta", payload),
       [...readAuthorWords(messages), ...(pickedDirection ? [pickedDirection] : [])],
       lastTurnUndoHint,
       pickedDirection && currentChapter !== undefined ? { chapter: currentChapter, text: pickedDirection } : undefined,
@@ -701,29 +684,28 @@ async function handleAgentChat(
         endedByFlow,
         ...(agentModel ? { model: agentModel } : {}),
       });
-      // 稿写成了这一轮就收：一句结论、核账卡、作者要的定稿预览、下一步，和「写这一章」按钮同一套（不再让对话 AI 多说一轮）。
-      if (turn.writtenDraft && !disconnectAbort.signal.aborted) {
-        if (turn.emittedText) sendEvent("text-delta", { text: "\n\n" });
-        releaseTurnFlow(requestContext);
-        await finishDraftTurn({
-          action: { toolName: "generate_draft", chapter: turn.writtenDraft.chapter },
-          output: turn.writtenDraft.output,
-          thenPreview: turn.writtenDraft.thenPreview,
-          requestContext,
-          executeTool: executeUserActionTool,
-          sendEvent,
-          scrubber: visibleTextScrubber,
-          scrubError: stringifyError,
-          projectDir,
-        });
-      }
       // 交了操作这一轮就收：跟着这次操作转进度，到做完 / 等作者 / 停着，再按结果出一句结论和下一步（按钮交的同一套）。
       if (turn.acceptedOperation && !disconnectAbort.signal.aborted) {
         if (turn.emittedText) sendEvent("text-delta", { text: "\n\n" });
         releaseTurnFlow(requestContext);
         const record = await followOperation({ bookDir: projectDir, opId: turn.acceptedOperation.opId, sendEvent, signal: disconnectAbort.signal });
         if (record && !disconnectAbort.signal.aborted && settlesTurn(record.state)) {
-          await finishOperationTurn({ record, projectDir, sendEvent, scrubber: visibleTextScrubber });
+          await finishOperationTurn({
+            record,
+            projectDir,
+            sendEvent,
+            scrubber: visibleTextScrubber,
+            // 写完就出定稿预览：和「定稿」按钮同一条路（服务端直接出预览，不经模型）。
+            previewCommit: (chapter) => runUserAction({
+              action: { toolName: "commit_preview", chapter },
+              requestContext,
+              executeTool: executeUserActionTool,
+              sendEvent,
+              scrubber: visibleTextScrubber,
+              scrubError: stringifyError,
+              projectDir,
+            }),
+          });
         }
       }
       return turn;
@@ -767,13 +749,6 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
     }
     case "commit_apply": {
       const execute = commitApplyTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
-    case "generate_draft": {
-      const execute = generateDraftTool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

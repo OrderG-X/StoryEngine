@@ -1,38 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { OperationViewData } from "../api/agentChatClient.js";
-import { agentFlowStatusForTool, flowAfterOperation, nextFlowAfterToolResult } from "./agentFlowStatus.js";
-
-describe("nextFlowAfterToolResult 出稿失败收尾（含 ok=false 守卫拒绝走 tool-result 这条路）", () => {
-  it("generate_draft ok=false + 卡在 draft_generating + 有草稿 → draft_ready（绝不停在「正在生成草稿」谎报）", () => {
-    expect(nextFlowAfterToolResult("generate_draft", { ok: false }, "draft_generating", true)).toBe("draft_ready");
-  });
-
-  it("generate_draft ok=false + 卡在 draft_generating + 一字未出 → idle", () => {
-    expect(nextFlowAfterToolResult("generate_draft", { ok: false }, "draft_generating", false)).toBe("idle");
-  });
-
-  it("generate_draft 成功 → 照常推进 draft_ready", () => {
-    expect(nextFlowAfterToolResult("generate_draft", {}, "draft_generating", true)).toBe("draft_ready");
-  });
-
-  it("失败但不在 draft_generating（如还在 steering_ready 就被拒）→ 照旧不推进、不乱改", () => {
-    expect(nextFlowAfterToolResult("generate_draft", { ok: false }, "steering_ready", false)).toBe("steering_ready");
-  });
-
-  it("其它工具结果照旧委托 agentFlowStatusForTool", () => {
-    expect(nextFlowAfterToolResult("commit_apply", { committed: true }, "waiting_commit_confirmation", true)).toBe("committed");
-    expect(nextFlowAfterToolResult("read_foundation", {}, "draft_ready", true)).toBe("draft_ready");
-  });
-});
+import { agentFlowStatusForTool, flowAfterOperation } from "./agentFlowStatus.js";
 
 describe("agentFlowStatusForTool", () => {
   it("方向方案 → steering_ready", () => {
     expect(agentFlowStatusForTool("generate_chapter_steering", {}, "idle")).toBe("steering_ready");
   });
 
-  it("出稿/改稿 → draft_ready", () => {
-    expect(agentFlowStatusForTool("generate_draft", {}, "steering_ready")).toBe("draft_ready");
+  it("改稿 → draft_ready", () => {
     expect(agentFlowStatusForTool("revise_draft", {}, "quality_checked")).toBe("draft_ready");
+  });
+
+  it("写稿做完了（操作）：换上了工作稿 → draft_ready（重写已定稿的章也是）；留成候选、没做成的不推", () => {
+    const op = (applied: boolean | undefined, state: OperationViewData["state"] = "succeeded"): OperationViewData => ({
+      opId: "op-0123456789abcdef0123", kind: "draft.change", mode: "write", chapter: 3, what: "写稿", state, stateText: "", allowed: [], summary: "", eventSeq: 1, origin: { kind: "chat" },
+      ...(applied !== undefined ? { draft: { chapter: 3, applied } } : {}),
+    });
+    expect(flowAfterOperation(op(true), "draft_generating")).toBe("draft_ready");
+    expect(flowAfterOperation(op(true), "committed")).toBe("draft_ready");
+    expect(flowAfterOperation(op(false), "draft_generating")).toBe("draft_generating");
+    expect(flowAfterOperation(op(undefined, "failed"), "steering_ready")).toBe("steering_ready");
   });
 
   it("硬伤检查 / 内容审阅做完（操作）→ quality_checked；核账、查 AI 味、没做成的不推；已定稿不退", () => {
@@ -61,7 +48,7 @@ describe("agentFlowStatusForTool", () => {
   });
 
   it("工具失败（ok:false）不推进——不把失败当进度", () => {
-    expect(agentFlowStatusForTool("generate_draft", { ok: false }, "steering_ready")).toBe("steering_ready");
+    expect(agentFlowStatusForTool("revise_draft", { ok: false }, "steering_ready")).toBe("steering_ready");
     expect(agentFlowStatusForTool("quality_check", { ok: false }, "draft_ready")).toBe("draft_ready");
     expect(agentFlowStatusForTool("commit_preview", { ok: false }, "quality_checked")).toBe("quality_checked");
   });

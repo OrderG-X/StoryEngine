@@ -3,11 +3,11 @@
  *
  * 拟第 N 章时，在「读完第 N-1 章」那一刻的窗口后面接上：作者给的方向（可为空）+ 章纲 JSON 要求
  * （plan-chapter 的 PLAN_REQUIREMENT_LINES / PLAN_JSON_FIELDS / planMaterialBlocks 同一份文本——改提示词必须在题库上比分）。
- * 输出宽进归一（normalizeChapterPlan）+ reconcileStoryDay 天数归一，落盘 drafts/plans/。
+ * 输出宽进归一（normalizeChapterPlan）+ reconcileStoryDay 天数归一；不落盘（落盘由调用方定，出稿操作走核心 plan.save）。
  * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
-import { normalizeChapterPlan, PLAN_BEAT_MAX, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { canCallAgain, isThinkingTooLong, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
+import { normalizeChapterPlan, PLAN_BEAT_MAX, storedChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { canCallAgain, isThinkingTooLong, MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
@@ -55,6 +55,12 @@ export const PLANNER_ROLE: ReaderRole = {
 
 /** 拟章纲失败（模型挂了 / 不是 JSON / 缺要点）自动再试的次数（同旧路）。 */
 const PLAN_RETRIES = 1;
+/** 拟一份章纲最多调几次章纲员（写作版本 P2a 4.5 额度从这里算）。 */
+export const PLANNER_DRAFT_CALLS = PLAN_RETRIES + 1;
+/** 改纲调几次（改一轮、不循环）。 */
+export const PLANNER_REVISE_CALLS = 1;
+/** 章纲员开思考的一次调用最多发几次：主 + 备用，思考超长关思考重来一次（不换备用）。 */
+export const PLANNER_THINKING_CALL_MAX_SENDS = MODEL_CALL_MAX_SENDS + 1;
 /** 拟章纲「光想不写」的上限：超过就改用关思考重拟（同旧路 PLAN_MAX_THINKING_MS，别两处改出不一样的数）。 */
 const PLAN_MAX_THINKING_MS = 150_000;
 
@@ -102,19 +108,22 @@ export const callConfiguredPlannerModel: BrainCallModel = async (messages, optio
   }
 };
 
-/** 收尾和旧路 finish 一致：天数归一（程序按上一章往后加）+ 反复出现的描写确定性并进 avoid + 落盘。 */
+/**
+ * 收尾和旧路 finish 一致：天数归一（程序按上一章往后加）+ 反复出现的描写确定性并进 avoid + 归一成落盘后的样子。
+ * 只在内存里：落盘由调用方定（写作版本 P2a：步骤只算不写书，出稿操作的 `plan-save` 走核心 plan.save）。
+ */
 async function finalizePlan(projectDir: string, plan: ChapterPlan, dayOffset: number | undefined, materials: PlanChapterMaterials): Promise<ChapterPlan> {
   const lastDay = await previousChapterEndDay(projectDir, plan.chapter);
   const dated = reconcileStoryDay(plan, dayOffset, lastDay);
   const withAvoid = materials.recurringPhrases.length > 0
     ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
     : dated;
-  return writeChapterPlan(projectDir, withAvoid);
+  return storedChapterPlan(withAvoid);
 }
 
 /**
- * 章纲员拟第 N 章章纲（读到 N-1 的窗口 + 方向 + 章纲 JSON 要求），拟成落盘 drafts/plans/chapter-NNNN.json。
- * 补笔记太多 → skipped:"not_ready" + pending（调用方如实说「还在读前文」并后台补笔记）；拟不成 → ok:false + 原因，不抛、不落盘。
+ * 章纲员拟第 N 章章纲（读到 N-1 的窗口 + 方向 + 章纲 JSON 要求），拟成返回归一好的那份（不落盘，调用方定）。
+ * 补笔记太多 → 冷窗口照拟（cold 带回范围）；拟不成 → ok:false + 原因，不抛。
  */
 export async function planChapterByPlanner(input: {
   readonly projectDir: string;
@@ -124,6 +133,8 @@ export async function planChapterByPlanner(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 这一次最多新生成几个卷节点（出稿操作给 0：笔记在 notes 那一步补过了）；缺省不限。 */
+  readonly maxVolumeBuilds?: number;
   readonly now?: Date;
   readonly onProgress?: (chapter: number) => void;
 }): Promise<PlanChapterByPlannerResult> {
@@ -145,6 +156,7 @@ export async function planChapterByPlanner(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: "拟纲",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress,
@@ -275,6 +287,8 @@ export async function revisePlanByPlanner(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 这一次最多新生成几个卷节点（出稿操作给 0：笔记在 notes 那一步补过了）；缺省不限。 */
+  readonly maxVolumeBuilds?: number;
   readonly now?: Date;
 }): Promise<RevisePlanResult> {
   let window: BrainMessage[];
@@ -291,6 +305,7 @@ export async function revisePlanByPlanner(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: "拟纲",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
@@ -346,7 +361,7 @@ export async function revisePlanByPlanner(input: {
     changed += 1;
   }
   if (changed === 0 && !revisedSummary) return { ok: false, reason: "改纲没改出任何要点（revised 为空或序号越界）" };
-  const settled = await writeChapterPlan(input.projectDir, {
+  const settled = storedChapterPlan({
     ...input.plan,
     beats,
     ...(revisedSummary ? { summary: revisedSummary } : {}),

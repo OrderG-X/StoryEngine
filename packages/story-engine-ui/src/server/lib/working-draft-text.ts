@@ -6,7 +6,7 @@
  */
 import { parseDraftFile } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
-import { defaultDraftPath } from "./project-io.js";
+import { defaultCommittedChapterPath, defaultDraftPath } from "./project-io.js";
 
 async function readExistingDraftWithRetry(draftPath: string): Promise<string> {
   let lastError: unknown;
@@ -25,4 +25,18 @@ async function readExistingDraftWithRetry(draftPath: string): Promise<string> {
 export async function hasWorkingDraftText(projectDir: string, chapter: number): Promise<boolean> {
   const existing = await readExistingDraftWithRetry(defaultDraftPath(projectDir, chapter));
   return parseDraftFile(existing).body.length > 0;
+}
+
+/**
+ * 某章是否已定稿（chapters/N.md 存在且非空）。只有 ENOENT 才算没定稿；权限不足、路径被目录占着这类读错误如实抛
+ * （P2 铁律④：塌成「没定稿」会把出稿目标悄悄推到下一章、写串章号）。
+ */
+export async function isChapterCommitted(projectDir: string, chapter: number): Promise<boolean> {
+  const content = await readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    },
+  );
+  return content !== undefined && content.trim().length > 0;
 }

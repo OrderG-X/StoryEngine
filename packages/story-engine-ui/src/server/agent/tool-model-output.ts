@@ -36,13 +36,8 @@ export function slimToolOutputForModel(toolName: string, output: unknown): unkno
       continue;
     }
     if (toolName === "commit_preview" && key === "plan") continue;
-    // 落选的几版全文只给界面（「另外几版」卡）；模型知道有几版、谁来换就够。
-    if (toolName === "generate_draft" && key === "otherVersions") {
-      if (Array.isArray(value) && value.length > 0) {
-        slim.otherVersionsNote = `另外 ${value.length} 版放在对话的「另外几版」卡上，作者点「用这版」就换进工作稿；你换不了，别说「想换就说」。`;
-      }
-      continue;
-    }
+    // 「接着往下写」「重写这一章」按钮带的动作只给界面；模型照 summary 告诉作者点按钮就够。
+    if (toolName === "change_draft" && key === "rewriteChoices") continue;
     // 定论卡（原句 → 新句的清单）只给界面；模型转述 summary 就够。
     if (toolName === "settle_fact" && key === "settle") continue;
     // 「认下」按钮带的那几步只给界面；模型照 summary 提一句就够。

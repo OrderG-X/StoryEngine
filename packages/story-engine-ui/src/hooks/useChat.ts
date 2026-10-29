@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
-import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
+import { isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
 import { cancelOperationRequest } from "../api/operationsClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
@@ -11,7 +11,7 @@ import {
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
 import { deriveIntentTitle } from "./deriveIntentTitle.js";
-import { flowAfterOperation, nextFlowAfterToolResult } from "./agentFlowStatus.js";
+import { agentFlowStatusForTool, flowAfterOperation } from "./agentFlowStatus.js";
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
@@ -47,11 +47,15 @@ import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
 import { fetchChapterPaper } from "../api/workingDraftClient.js";
 import { patchChapterFlagsFromPaper } from "../utils/bookUtils.js";
 import { ENDED_OPERATION_STATES, projectOperationEverywhere, projectOperationProgressEverywhere } from "../workspace/operationCards.js";
+import { applyDraftDelta, draftPhaseOfStep, EMPTY_DRAFT_STREAM, type DraftStreamState } from "../workspace/draftStream.js";
 import { aiErrorAfterWriteBody, aiErrorBody } from "../lib/ai-error-text.js";
 import { pageLeaving } from "../lib/page-leaving.js";
 import { reconnectOperations } from "../workspace/operationReconnect.js";
 import { cardOf } from "../utils/messageCards.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
+
+/** 操作还在做的那几种（别的都是停下来了：做完、没成、停掉、停着等）。 */
+const LIVE_STATES: ReadonlySet<string> = new Set(["queued", "running"]);
 
 /** 回合收尾等盘上重读最多等这么久（读盘卡住不能一直占着工作区）。 */
 const RESYNC_WAIT_MS = 5_000;
@@ -236,16 +240,15 @@ export function useChat(params: UseChatParams): UseChatResult {
       setChatError(null);
 
       let sawError = false;
-      // 出稿流式缓冲：generate_draft 的正文 delta 逐字累加到这里，显示在稿纸上（只读，不进作者的稿子，重构 P5）。
-      // 每次出稿（generate_draft tool-call）重置；出稿结束后稿纸按盘上终稿重读。
-      let streamedDraft = "";
-      // 接着写时本来写好的那段（服务端先推过来）：原样显示在新写的前面，不当新写的清理（换引号、去星号会改了作者的字）。
-      let streamBase = "";
+      // 写稿操作（draft.change）的正文流：按操作的实时事件拼（workspace/draftStream），显示在稿纸上（只读，不进作者的稿子，重构 P5）。
+      // 这一轮交上的写稿操作一开始重置；做完了稿纸按盘上终稿重读。接着写时本来写好的那段原样显示在新写的前面。
+      let draftStream: DraftStreamState = EMPTY_DRAFT_STREAM;
+      // 这一轮跟着的那次写稿操作（只认它的正文流）。
+      let draftOpId: string | null = null;
       let draftStreamChapter: number | null = null;
-      let reportedDraftChapterMismatch = false;
       // 流式要换到另一章时，先把手上那章存掉、再换稿纸（换完清空）；这期间流来的字先攒着，到的工具结果等它换完再处理。
       let paperSwitch: Promise<void> | null = null;
-      // 流式稿还在出（出稿开始到出稿有结果）：之后迟到的换章不再把流式稿摆回稿纸（第 5 轮 S4）。
+      // 流式稿还在出（写稿操作开始到它停下来）：之后迟到的换章不再把流式稿摆回稿纸（第 5 轮 S4）。
       let streamOpen = false;
       // 这一次出稿报错了：还没换完的换章不换了，稿纸留在原来那章（第 5 轮 S4）。
       let draftFailed = false;
@@ -292,7 +295,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             : {}),
         });
       };
-      // 本轮是否出现过章节写类工具调用（generate_draft/revise_draft/commit_apply）——出错 / 停止收尾时
+      // 本轮是否出现过章节写类动作（写稿操作、revise_draft、commit_apply）——出错 / 停止收尾时
       // 据此重读一次盘上的稿纸和状态（回执可能丢了，盘上其实已写）。纯读 / 问答回合不浪费这次 IO。
       let sawChapterWriteToolCall = false;
       // 定稿在飞：记下发起时盘上那份定稿，收尾时据它判断「其实已经定稿、只是回执丢了」。
@@ -303,16 +306,17 @@ export function useChat(params: UseChatParams): UseChatResult {
       // AI 真撤销了（undo / manage_snapshots op=undo）：回合收尾时剥掉旧回合挂着的过时建议条。
       let agentUndone = false;
 
+      const streamedText = (): string => draftStream.base + streamingDraftDisplay(draftStream.text, draftStream.base);
       const showStreaming = (): void => {
         const paper = useDraftStore.getState();
         if (!streamOpen || turnFinished || draftStreamChapter === null || paper.chapter !== draftStreamChapter) return;
-        paper.setStreaming(streamBase + streamingDraftDisplay(streamedDraft, streamBase));
+        paper.setStreaming(streamedText());
       };
       const endStreaming = (): void => {
         streamOpen = false;
         if (useDraftStore.getState().streaming !== null) useDraftStore.getState().setStreaming(null);
       };
-      // 出稿失败收尾：onToolCall(generate_draft) 把 flowStatus 置「正在生成草稿」，失败路径若不复位，标题区
+      // 写稿没成收尾：写稿操作一开始把 flowStatus 置「正在生成草稿」，失败路径若不复位，标题区
       // 会卡在「正在生成草稿」=明明失败却谎称在生成（诚实铁律）。据稿纸上有没有字复位成 draft_ready/idle。
       const unstickGeneratingFlow = (): void => {
         if (!ownsCurrentWorkspace()) return;
@@ -373,6 +377,118 @@ export function useChat(params: UseChatParams): UseChatResult {
         if (!sawChapterWriteToolCall) return;
         resyncPromise ??= resyncAfterInterruptedWrite(partial);
       };
+      // 写稿操作写的是哪一章（操作的第一份记录就知道）：认领那章——这一轮的操作、书的「当前章」、这轮对话都归它；
+      // 稿纸开着别的章就换过去（先存掉手上那章）。
+      const claimDraftChapter = (chapter: number): void => {
+        if (draftStreamChapter !== null || !canRetargetWorkspaceOperation(operation)) return;
+        draftStreamChapter = chapter;
+        const previousChapter = operation.chapter;
+        // 认领 AI 写的那章：这一轮的操作、书的「当前章」、这轮对话都归它。稿纸要换章时，等稿纸真换过去了才认领
+        // （第 4 轮复核 R8：手上那章存不上、稿纸没换成，就都留在原章，下一句话不能指向 AI 写的那章）。
+        const adopt = (): void => {
+          const adopted = retargetWorkspaceOperation(operation, { chapter });
+          if (!adopted) return;
+          operation = adopted;
+          if (chapter === previousChapter) return;
+          // 这轮对话归那一章（稿纸跳过去后，下一句话说完它不收进「别的章的对话」）。
+          const turnMessages = useChatStore.getState().messages;
+          const assistantIndex = turnMessages.findIndex((message) => message.id === assistantMsgId);
+          const opener = turnMessages.slice(0, Math.max(assistantIndex, 0)).reverse().find((message) => message.role === "user");
+          if (opener && opener.chapter !== chapter) updateMessage(opener.id, (current) => ({ ...current, chapter }));
+          const storeBook = useBookStore.getState();
+          const cur = storeBook.workspace.currentChapter;
+          storeBook.updateWorkspace({
+            currentChapter: {
+              ...cur,
+              chapterNumber: chapter,
+              status: "current",
+              title: `第${chapter}章`,
+              hasCommittedChapter: false,
+              hasDraftFile: false,
+            },
+          });
+        };
+        if (useDraftStore.getState().chapter !== chapter && projectPath) {
+          // AI 写的是另一章：稿纸换到那一章（先存掉手上那章）。回合收完尾、出稿报错了、工作区换了就不换了。
+          const switching = openPaper(projectPath, chapter, { stillWanted: () => !turnFinished && !draftFailed && ownsCurrentWorkspace() })
+            .then((switched) => {
+              if (!switched) return;
+              adopt();
+              // 写前的字按换过去的那章算（停止收尾时只和同一章比）。
+              if (generateAttempt) generateAttempt = { chapter, versionBefore: useDraftStore.getState().baseVersion };
+              showStreaming();
+            }, (error: unknown) => {
+              // 手上那章的字没存上、那一章读不出来：稿纸不换（字还在这一章上），也不认领那一章，如实说一声（第 5 轮 S1）。
+              if (!ownsCurrentWorkspace()) return;
+              const reason = error instanceof UnsavedPaperError
+                ? error.message
+                : `第 ${chapter} 章没读出来（${error instanceof Error ? error.message : String(error)}），稿纸留在原来那章。`;
+              useNavigationStore.getState().showToast(`AI 在写第 ${chapter} 章；${reason}`, 6000);
+            });
+          paperSwitch = switching;
+          void switching.finally(() => { if (paperSwitch === switching) paperSwitch = null; });
+          track(switching);
+        } else {
+          adopt();
+        }
+      };
+      // 这一轮交上的写稿操作开始了：中间区切到写作台、清空流式缓冲、流程态置「正在生成草稿」（否则续写时标题区残留上一章的「已入库」）。
+      const beginDraftStream = (view: OperationViewData): void => {
+        draftOpId = view.opId;
+        sawChapterWriteToolCall = true;
+        useNavigationStore.getState().requestCenterView("desk");
+        draftStream = EMPTY_DRAFT_STREAM;
+        draftStreamChapter = null;
+        streamOpen = true;
+        draftFailed = false;
+        generateAttempt = { chapter: useDraftStore.getState().chapter, versionBefore: useDraftStore.getState().baseVersion };
+        useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
+        if (view.chapter !== undefined) claimDraftChapter(view.chapter);
+      };
+      // 写稿操作停下来了（做完、没成、停掉、停着等）：流式稿收起，按盘上重读稿纸和书的状态。
+      // 停掉的：流出来的字盘上没有更全的一版就留给作者（「已停止 · 已写出的内容保留」，和原来停止出稿一样）。
+      const finishDraftStream = (view: OperationViewData): void => {
+        if (view.opId !== draftOpId || !streamOpen) return;
+        const partial = view.state === "cancelled" && draftStreamChapter !== null ? { text: streamedText(), chapter: draftStreamChapter } : null;
+        endStreaming();
+        generateAttempt = null;
+        useUiStore.getState().setDraftPhase(null);
+        const applied = view.state === "succeeded" && view.draft?.applied === true;
+        if (applied) finishedWrite = "draft";
+        if (view.state !== "succeeded") draftFailed = true;
+        const apply = (): void => {
+          if (!projectPath) return;
+          const sameChapter = view.chapter !== undefined && view.chapter === operation.chapter;
+          // 写的不是稿纸上这章（换章没换成）：这章没在写，马上退出「正在生成草稿」，不挂到这一轮结束。
+          if (!sameChapter) unstickGeneratingFlow();
+          track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 }).then((overview) => {
+            if (!ownsCurrentWorkspace()) return;
+            if (!sameChapter || !applied) {
+              refreshWorkspaceFromOverview?.(overview);
+              return;
+            }
+            applyOverviewToWorkspace(overview, {
+              flowStatus: flowAfterOperation(view, useBookStore.getState().workspace.flowStatus),
+              chapter: view.chapter as number,
+              ...(view.draft?.title ? { title: view.draft.title } : {}),
+            });
+          }).catch(() => undefined));
+          track(refreshPaper().then(() => {
+            if (!ownsCurrentWorkspace()) return;
+            const paper = useDraftStore.getState();
+            if (partial?.text.trim() && partial.chapter === paper.chapter && !paper.incoming && partial.text.trim().length > paper.body.trim().length) {
+              editDraft(partial.text);
+            }
+            if (!applied) unstickGeneratingFlow();
+          }));
+        };
+        // 稿纸正在换到 AI 写的那章：等换完（或没换成）再按那时的当前章应用；回合收完尾还没换完就不应用了。
+        if (paperSwitch) {
+          track(paperSwitch.then(() => { if (!turnFinished && ownsCurrentWorkspace()) apply(); }));
+          return;
+        }
+        apply();
+      };
       // M3：本轮的中止器——「停止」按钮 abort 它即可干净停掉这条流（streamAgentChat 据此不报错收尾）。
       const abortController = new AbortController();
       agentAbortRef.current = abortController;
@@ -405,6 +521,10 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               projectOperationEverywhere(view, assistantMsgId, { announced: ENDED_OPERATION_STATES.has(view.state) });
               liveOperationRef.current = view.allowed.includes("cancel") && view.state !== "paused" ? { projectPath, opId: view.opId } : null;
+              if (view.kind === "draft.change") {
+                if (draftOpId === null) beginDraftStream(view);
+                if (!LIVE_STATES.has(view.state)) finishDraftStream(view);
+              }
               if (view.state === "succeeded") {
                 const flowBefore = useBookStore.getState().workspace.flowStatus;
                 const flow = flowAfterOperation(view, flowBefore);
@@ -415,6 +535,17 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               projectOperationProgressEverywhere(opId, progress);
             },
+            // 写稿操作的步骤开始（稿纸顶上说在拟纲 / 写 / 核）、正文流（逐字进稿纸）。
+            onOperationLive: ({ opId, event }) => {
+              if (!ownsCurrentWorkspace() || opId !== draftOpId) return;
+              if (event.type === "step") {
+                const phase = draftPhaseOfStep(event.step);
+                if (phase) useUiStore.getState().setDraftPhase(phase);
+                return;
+              }
+              draftStream = applyDraftDelta(draftStream, event);
+              showStreaming();
+            },
             // R4：服务端裁了历史窗口/其它状态说明，照实投影成助手消息前的一条系统提示，不静默吞掉。
             onStatus: (message) => project({ type: "status", text: message }),
             onUsage: (usage) => project({ type: "usage", usage }),
@@ -422,96 +553,15 @@ export function useChat(params: UseChatParams): UseChatResult {
             onToolCall: ({ toolName, toolCallId }) => {
               if (!ownsCurrentWorkspace()) return;
               project({ type: "tool-call", toolCallId: stepIdFor(toolName, toolCallId), toolName, startedAt: Date.now() });
-              if (toolName === "generate_draft" || toolName === "revise_draft" || toolName === "commit_apply") {
+              if (toolName === "revise_draft" || toolName === "commit_apply") {
                 sawChapterWriteToolCall = true;
               }
-              // 出稿/续写一开始就把中间区切到写作台，让用户看着正文出现（而不是默默落进数据层、还停在资料中心）。
-              if (toolName === "generate_draft") {
-                useNavigationStore.getState().requestCenterView("desk");
-                streamedDraft = ""; // 新一次出稿：清空流式缓冲，逐字从头累加。
-                streamBase = "";
-                draftStreamChapter = null;
-                reportedDraftChapterMismatch = false;
-                streamOpen = true;
-                draftFailed = false;
-                generateAttempt = { chapter: useDraftStore.getState().chapter, versionBefore: useDraftStore.getState().baseVersion };
-                // 出稿一开始就把流程态置「正在生成草稿」，否则续写时标题区会残留上一章的「已入库」误导用户。
-                useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
-              } else if (toolName === "revise_draft") {
+              if (toolName === "revise_draft") {
                 // 用户让 AI 改稿：也把中间区切到写作台，改完的正文就在眼前。revise 不流式。
                 useNavigationStore.getState().requestCenterView("desk");
               } else if (toolName === "commit_apply") {
                 commitAttempt = { committedBefore: useDraftStore.getState().committed?.body ?? null };
               }
-            },
-            onDraftPhase: ({ phase }) => {
-              if (!ownsCurrentWorkspace()) return;
-              useUiStore.getState().setDraftPhase(phase);
-            },
-            onDraftDelta: ({ chapter, text, replace, base }) => {
-              if (!ownsCurrentWorkspace()) return;
-              if (draftStreamChapter === null) {
-                const previousChapter = operation.chapter;
-                if (!canRetargetWorkspaceOperation(operation)) return;
-                draftStreamChapter = chapter;
-                // 认领 AI 写的那章：这一轮的操作、书的「当前章」、这轮对话都归它。稿纸要换章时，等稿纸真换过去了才认领
-                // （第 4 轮复核 R8：手上那章存不上、稿纸没换成，就都留在原章，下一句话不能指向 AI 写的那章）。
-                const adopt = (): void => {
-                  const adopted = retargetWorkspaceOperation(operation, { chapter });
-                  if (!adopted) return;
-                  operation = adopted;
-                  if (chapter === previousChapter) return;
-                  // 这轮对话归那一章（稿纸跳过去后，下一句话说完它不收进「别的章的对话」）。
-                  const turnMessages = useChatStore.getState().messages;
-                  const assistantIndex = turnMessages.findIndex((message) => message.id === assistantMsgId);
-                  const opener = turnMessages.slice(0, Math.max(assistantIndex, 0)).reverse().find((message) => message.role === "user");
-                  if (opener && opener.chapter !== chapter) updateMessage(opener.id, (current) => ({ ...current, chapter }));
-                  const storeBook = useBookStore.getState();
-                  const cur = storeBook.workspace.currentChapter;
-                  storeBook.updateWorkspace({
-                    currentChapter: {
-                      ...cur,
-                      chapterNumber: chapter,
-                      status: "current",
-                      title: `第${chapter}章`,
-                      hasCommittedChapter: false,
-                      hasDraftFile: false,
-                    },
-                  });
-                };
-                if (useDraftStore.getState().chapter !== chapter && projectPath) {
-                  // AI 写的是另一章：稿纸换到那一章（先存掉手上那章）。回合收完尾、出稿报错了、工作区换了就不换了。
-                  const switching = openPaper(projectPath, chapter, { stillWanted: () => !turnFinished && !draftFailed && ownsCurrentWorkspace() })
-                    .then((switched) => {
-                      if (!switched) return;
-                      adopt();
-                      // 写前的字按换过去的那章算（停止收尾时只和同一章比）。
-                      if (generateAttempt) generateAttempt = { chapter, versionBefore: useDraftStore.getState().baseVersion };
-                      showStreaming();
-                    }, (error: unknown) => {
-                      // 手上那章的字没存上、那一章读不出来：稿纸不换（字还在这一章上），也不认领那一章，如实说一声（第 5 轮 S1）。
-                      if (!ownsCurrentWorkspace()) return;
-                      const reason = error instanceof UnsavedPaperError
-                        ? error.message
-                        : `第 ${chapter} 章没读出来（${error instanceof Error ? error.message : String(error)}），稿纸留在原来那章。`;
-                      useNavigationStore.getState().showToast(`AI 在写第 ${chapter} 章；${reason}`, 6000);
-                    });
-                  paperSwitch = switching;
-                  void switching.finally(() => { if (paperSwitch === switching) paperSwitch = null; });
-                  track(switching);
-                } else {
-                  adopt();
-                }
-              } else if (chapter !== draftStreamChapter) {
-                if (!reportedDraftChapterMismatch) {
-                  reportedDraftChapterMismatch = true;
-                  useNavigationStore.getState().showToast("收到不同章节的迟到正文片段，已拒绝混入当前工作稿。", 5000);
-                }
-                return;
-              }
-              if (base) streamBase = text;
-              else streamedDraft = replace ? text : streamedDraft + text;
-              showStreaming();
             },
             onToolResult: (info) => {
               if (!ownsCurrentWorkspace()) return;
@@ -523,14 +573,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                 endedAt: Date.now(),
                 output: info,
               });
-              if (info.toolName === "generate_draft") {
-                endStreaming();
-                // 结果收到了：之后出错不用再「核对盘上」说它其实写完了。
-                generateAttempt = null;
-              }
-              if ((info.toolName === "generate_draft" || info.toolName === "revise_draft") && info.ok !== false && !info.toolValidationFailure) {
-                finishedWrite = info.toolName === "generate_draft" ? "draft" : "revise";
-              }
+              if (info.toolName === "revise_draft" && info.ok !== false && !info.toolValidationFailure) finishedWrite = "revise";
               const apply = (): void => {
                 // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）：按这时的当前章判。
                 const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
@@ -576,8 +619,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                   useNavigationStore.getState().setUnseenChangesChapter(null);
                 }
                 const flowBefore = useBookStore.getState().workspace.flowStatus;
-                const hasDraftContent = useDraftStore.getState().body.trim().length > 0;
-                const nextFlow = nextFlowAfterToolResult(info.toolName, info, flowBefore, hasDraftContent);
+                const nextFlow = agentFlowStatusForTool(info.toolName, info, flowBefore);
                 if (!info.overview) {
                   const changedBible = info.refreshScope === "foundation"
                     || ((info.toolName === "manage_ledger" || info.toolName === "settle_apply") && info.refreshScope === "full");
@@ -642,10 +684,6 @@ export function useChat(params: UseChatParams): UseChatResult {
               });
               // 再如实回报：追加一条可重试的错误气泡。
               appendErrorMessage(info.message, info.retryable);
-              if (info.toolName === "generate_draft") {
-                endStreaming(); // 半截流式稿只是显示，丢掉即可，盘上旧稿没动
-                draftFailed = true; // 还没换完的换章不换了
-              }
               unstickGeneratingFlow();
               requestResync(); // 断流可能其实已写盘，重读盘上真值更正
             },
@@ -692,7 +730,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           unstickGeneratingFlow();
           requestResync(partial);
         }
-        // 回合收尾兜底：SSE 回合走到 finally 时 generate_draft 必然已结束，残留的流式显示 / draft_generating
+        // 回合收尾兜底：SSE 回合走到 finally 时这一轮跟着的写稿操作已经停下来（或作者断开了），残留的流式显示 / draft_generating
         // 只能是某条中途分支没复位，按稿纸现状复位（unstickGeneratingFlow 只在确实卡住时才动）。
         if (!wasAborted) {
           endStreaming();
@@ -989,14 +1027,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
-      const draftAction = !("kind" in action) && action.toolName === "generate_draft" ? action : undefined;
-      const picked = draftAction ? pickedDirection(liveChat.messages, draftAction.chapter) : undefined;
-      const goal = draftAction?.chapterGoal;
+      const draftAction = isOperationAction(action) && action.kind === "new" && action.type === "draft.change" ? action : undefined;
+      const picked = draftAction ? pickedDirection(liveChat.messages, draftAction.params.chapter) : undefined;
+      const goal = draftAction?.params.direction;
       const text = userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       const echo = authorMessage(text);
       appendMessage(echo.message);
-      // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
+      // 写稿动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 beginDraftStream）。
       if (draftAction) useNavigationStore.getState().requestCenterView("desk");
       await runAgentDispatch(text, conversation, action, echo.ref);
     },
@@ -1108,14 +1146,17 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleSendUserAction({ toolName: "ledger_decision", ...action.ledgerTarget });
           return;
         case "rewrite-confirm":
-        case "continue-confirm":
-          if (!action.rewriteTarget) {
+        case "continue-confirm": {
+          // 存盘读回的按钮动作点的时候再核一遍（服务端执行前还会再核）。
+          const draft = readStoredOperationAction(action.operationAction);
+          if (!draft) {
             showToast("这个按钮已经失效了，请让 AI 重新提一次。", 4200);
             return;
           }
           consumeSuggestedAction(action);
-          void handleSendUserAction({ toolName: "generate_draft", ...action.rewriteTarget });
+          void handleSendUserAction(draft);
           return;
+        }
         case "foundation-confirm":
           if (!action.foundationTarget) {
             showToast("这个改设定按钮已经失效了，请让 AI 重新提一次。", 4200);

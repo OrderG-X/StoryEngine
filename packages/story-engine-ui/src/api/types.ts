@@ -73,7 +73,7 @@ export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirm
 export interface ToolStep {
   readonly id: string;
   readonly label: string;
-  /** 触发该步的工具名（如 generate_draft / quality_check / commit_apply）；供进度卡把步骤映射到「构思/写稿/审校/入库」四相。 */
+  /** 触发该步的工具名（如 change_draft / revise_draft / commit_apply）；供进度卡把步骤映射到「构思/写稿/审校/入库」四相。 */
   readonly toolName?: string;
   readonly status: ToolStepStatus;
   readonly startedAt: number;

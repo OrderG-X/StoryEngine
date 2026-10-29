@@ -1,7 +1,7 @@
 /**
  * brainstorm_chapter —— 头脑风暴（重构 P6 第 5 步）：章纲员出几种走法、核账员替每种对过前文，作者在稿纸上挑。
  *
- * 只读：不落章纲、不进账、不建快照。作者挑中的那种作为「这章的方向」交给写这一章（generate_draft 的 chapterGoal）；
+ * 只读：不落章纲、不进账、不建快照。作者挑中的那种作为「这章的方向」交给写这一章（change_draft 的 chapterGoal / 写稿按钮的 direction）；
  * 没挑中的不留痕。取代原来的 generate_chapter_steering（确定性建议清单，不读前文）。
  */
 import { createTool } from "@mastra/core/tools";
@@ -88,7 +88,7 @@ export const brainstormChapterTool = createTool({
   id: "brainstorm_chapter",
   description:
     "头脑风暴：章纲员按读过的前文给这一章出三种不同的走法（每种几步、推进哪些线索），核账员替每种对过前文；作者在稿纸上挑一种。" +
-    "只读，不写任何文件。作者问『这章怎么写 / 往哪走 / 给我几个思路 / 下一章有什么走法』时调用；作者要正文就调 generate_draft。",
+    "只读，不写任何文件。作者问『这章怎么写 / 往哪走 / 给我几个思路 / 下一章有什么走法』时调用；作者要正文就调 change_draft。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

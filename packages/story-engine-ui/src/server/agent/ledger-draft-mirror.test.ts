@@ -1,20 +1,19 @@
 // @vitest-environment node
 // 确认改账拿着书锁、真相写完还没同步镜像时开写（第 7 轮复核 U3a）：开写在书锁里取依据（第 8 轮起），
 // 等改账连同镜像同步做完才开写，写手读到的是新账。
-// 真确认改账服务 + 真出稿服务 + 真核心写盘，只替换模型和出稿后的质量复核；镜像同步前插一道闸，卡在「真相写完、镜像没同步」那一刻。
+// 真确认改账服务 + 真写稿操作（draft.change）+ 真核心写盘，只替换模型；镜像同步前插一道闸，卡在「真相写完、镜像没同步」那一刻。
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { chapterCommit, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
 import { normalizeChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
-import { runGenerateDraft } from "../services/draft-service.js";
+import { __resetOperationStoreForTests } from "../lib/operations/store.js";
+import { __drainOperationsForTests, __resetRecipesForTests } from "../services/operations/executor.js";
+import { fakeDraftDeps, settledDraftChange, submitDraftChange } from "../services/operations/recipes/draft-change-kit.js";
 import { applyLedgerDecisions } from "./ledger-decisions.js";
 
-vi.mock("../services/draft-pipeline/run-quality-pipeline.js", () => ({
-  runDraftQualityPipeline: vi.fn(async (input: { draftBody: string }) => ({ draftBody: input.draftBody, changed: false, info: {}, notes: [] })),
-}));
 const hooks = vi.hoisted(() => ({ beforeMirror: undefined as undefined | (() => Promise<void>) }));
 vi.mock("../book/mirror/sync.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../book/mirror/sync.js")>();
@@ -28,7 +27,12 @@ vi.mock("../book/mirror/sync.js", async (importOriginal) => {
 });
 
 let root: string | undefined;
+beforeEach(() => {
+  __resetOperationStoreForTests();
+  __resetRecipesForTests();
+});
 afterEach(async () => {
+  await __drainOperationsForTests();
   hooks.beforeMirror = undefined;
   vi.unstubAllEnvs();
   if (root) await rm(root, { recursive: true, force: true });
@@ -51,7 +55,6 @@ async function commitKey(book: string, text: string, key: string): Promise<void>
 const packOf = (context: { readonly sections: readonly { readonly name: string; readonly content?: unknown }[] }): string =>
   JSON.stringify(context.sections.find((section) => section.name === "writing_context_pack")?.content);
 const prose = (line: string): string => Array(6).fill(`${line}林远沿着河岸走了很久，手里的账册越攥越紧。他还记得早上的约定，却不知道对方为什么迟迟没有露面。巷子尽头有人推开门，朝他招了招手，示意他先进去等一会儿。`).join("\n\n");
-const policies = { lengthPolicy: "annotate", aiFlavorRecheck: false } as const;
 
 it("确认改账拿着书锁、还没同步镜像时开写：等改账做完才开写，写手读到的是新账（第 7 轮 U3a）", async () => {
   const book = await makeBook();
@@ -70,27 +73,26 @@ it("确认改账拿着书锁、还没同步镜像时开写：等改账做完才�
   await entered;
   let consumed = "";
   try {
-    const drafting = runGenerateDraft({
-      projectDir: book,
-      chapter: 2,
+    const drafting = submitDraftChange(book, "write", { chapter: 2 }, fakeDraftDeps({
       plannerCallModel: async () => { throw new Error("应沿用作者章纲"); },
-      policies,
       writerClient: {
         async generateDraft({ context }) {
           consumed = packOf(context);
           return { title: "开柜", content: prose("林远输入白鹤，打开了保险柜。") };
         },
       },
-    });
-    // 改账还拿着书锁：开写取不到依据，写手不开工。
+    }));
+    // 改账还拿着书锁：交不上、开写取不到依据，写手不开工。
     await new Promise((done) => setTimeout(done, 50));
     expect(consumed).toBe("");
     release();
     expect((await author).ok).toBe(true);
-    const result = await drafting;
+    const submitted = await drafting;
+    if (!submitted.ok || !("record" in submitted)) throw new Error(`没受理：${JSON.stringify(submitted)}`);
+    const done = await settledDraftChange(book, submitted.record.opId);
     expect(consumed).toContain("白鹤");
     expect(consumed).not.toContain("红松");
-    expect(result.ok).toBe(true);
+    expect(done.result).toMatchObject({ body: { ok: true } });
   } finally {
     release();
     await author;

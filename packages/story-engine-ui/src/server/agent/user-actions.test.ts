@@ -9,55 +9,13 @@ import { defaultDraftPath } from "../lib/project-io.js";
 import { isUserConfirmedTool } from "./request-context.js";
 import {
   commitApplyNextSteps,
-  finishDraftTurn,
   humanizeToolNames,
   nextDraftChapterAfter,
   parseUserAction,
   readCommittedChapterNumbers,
-  retryDraftChoices,
   runUserAction,
-  afterDraftCheckLine,
   type UserActionToolExecutor,
 } from "./user-actions.js";
-
-describe("接着往下写的按钮动作（P13）", () => {
-  it("parseUserAction：continueDraft 只认 true，别的值不带", () => {
-    expect(parseUserAction({ toolName: "generate_draft", chapter: 3, continueDraft: true })).toEqual({ kind: "action", action: { toolName: "generate_draft", chapter: 3, continueDraft: true } });
-    expect(parseUserAction({ toolName: "generate_draft", chapter: 3, continueDraft: "true" })).toEqual({ kind: "action", action: { toolName: "generate_draft", chapter: 3 } });
-  });
-
-  it("点了「接着往下写」→ 带 continueDraft 调工具；写成了回话说接了多少、前面的没动", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    const inputs: unknown[] = [];
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 4, continueDraft: true },
-      requestContext: new RequestContext(),
-      executeTool: async (name, input) => {
-        inputs.push(input);
-        return { ok: true, draftBody: "正文", continued: { kept: 900, added: 1200 }, draftLength: { actualLength: 2100, lowerBound: 2400, lengthStatus: "below_lower_bound" }, qualityPipeline: { continuity: { checked: false } } };
-      },
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(inputs[0]).toEqual({ chapter: 4, continueDraft: true });
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toContain("第 4 章接着写了 1200 字，前面的 900 字没动，全章 2100 字，比下限少 300 字。");
-    const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["接着往下写", "预览定稿", "核账"]);
-  });
-
-  it("没写成的下一步：没得接 → 改成从头写；已定稿 → 不给；别的 → 原样再来一次", () => {
-    const action = { toolName: "generate_draft" as const, chapter: 4, continueDraft: true };
-    expect(retryDraftChoices(action, "nothing_to_continue")).toEqual([expect.objectContaining({ label: "AI 写第 4 章", action: { toolName: "generate_draft", chapter: 4 } })]);
-    expect(retryDraftChoices(action, "chapter_committed")).toEqual([]);
-    expect(retryDraftChoices(action, undefined)).toEqual([expect.objectContaining({ label: "再写一次", action })]);
-    // 导入的书还在通读记账：再点也是同一句「等它记完」。
-    expect(retryDraftChoices({ toolName: "generate_draft", chapter: 11 }, "rereading")).toEqual([]);
-    // 写好了没换上（写作版本 P1b）：AI 这版留在稿纸上等作者选，不给「再写一次」
-    expect(retryDraftChoices(action, undefined, { candidateId: "4-x", reason: "draft_moved" })).toEqual([]);
-  });
-});
 
 describe("parseUserAction 结构化动作解析", () => {
   it("「确认改账」：带标识和裁定草案才收；缺标识 / 空草案 / 超量都按非法处理", () => {
@@ -113,6 +71,20 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 3 }, issuedAt }).kind).toBe("invalid");
     expect(parseUserAction({ kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 3 }, requestKey: "k-1", issuedAt: "昨天" }).kind).toBe("invalid");
     expect(parseUserAction({ kind: "new", type: "draft.generate", mode: "quality", params: { chapter: 3 }, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    // 写稿（写这一章 / 重写 / 接着往下写）：参数照服务端口径归一，方向去空白、过长截断；接着写不收重写、几版。
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, direction: "  苏晚去槐树巷  ", rewrite: true, candidates: 2 }, requestKey: "k-1", issuedAt })).toEqual({
+      kind: "action",
+      action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, direction: "苏晚去槐树巷", rewrite: true, candidates: 2 }, requestKey: "k-1", issuedAt },
+    });
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "continue", params: { chapter: 3, rewrite: true, candidates: 2 }, requestKey: "k-1", issuedAt })).toMatchObject({
+      action: { mode: "continue", params: { chapter: 3 } },
+    });
+    const long = parseUserAction({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, direction: "长".repeat(3000) }, requestKey: "k-1", issuedAt });
+    expect(long.kind === "action" && "params" in long.action ? (long.action.params as { direction?: string }).direction?.length : 0).toBe(2000);
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 3 }, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "draft.change", mode: "write", params: {}, requestKey: "k-1", issuedAt }).kind).toBe("invalid");
+    // 老的出稿按钮（按工具名）不再收。
+    expect(parseUserAction({ toolName: "generate_draft", chapter: 3 }).kind).toBe("invalid");
     expect(parseUserAction({ kind: "resume", opId: "op-0123456789abcdef0123" })).toEqual({ kind: "action", action: { kind: "resume", opId: "op-0123456789abcdef0123" } });
     expect(parseUserAction({ kind: "cancel", opId: "op-x" }).kind).toBe("invalid");
     // 老按钮（核账 / 审稿 / 质检按工具名）不再收。
@@ -164,10 +136,10 @@ describe("parseUserAction 结构化动作解析", () => {
 });
 
 describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
-  it("定稿成功 → 推荐写下一章（带结构化动作：R4.7 点击直达 generate_draft，不经模型）", () => {
+  it("定稿成功 → 推荐写下一章（带结构化动作：R4.7 点击直达，交一次写稿，不经模型）", () => {
     expect(commitApplyNextSteps(5, { committed: true })).toEqual({
       question: "第 5 章定稿了，接下来？",
-      choices: [{ label: "AI 写第 6 章", intent: "继续写第 6 章的正文", recommended: true, action: { toolName: "generate_draft", chapter: 6 } }],
+      choices: [{ label: "AI 写第 6 章", intent: "继续写第 6 章的正文", recommended: true, action: expect.objectContaining({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } }) }],
     });
   });
 
@@ -182,7 +154,7 @@ describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
       { label: "核第 18 章", intent: "核第 18 章的账", recommended: true, action: expect.objectContaining({ kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 18 } }) },
     ]);
     expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: false }).choices[0])
-      .toMatchObject({ label: "AI 写第 18 章", action: { toolName: "generate_draft", chapter: 18 } });
+      .toMatchObject({ label: "AI 写第 18 章", action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 18 } } });
   });
 
   it("没定稿 → 只给「重新预览」（带结构化动作：直达 commit_preview）", () => {
@@ -217,7 +189,7 @@ describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () =
     tempDirs.clear();
   };
 
-  it("重定第 3 章（1～5 章已定稿）→ 建议条推荐「写第 6 章」、直达 generate_draft 第 6 章", async () => {
+  it("重定第 3 章（1～5 章已定稿）→ 建议条推荐「写第 6 章」、直达写第 6 章", async () => {
     const projectDir = await makeProjectWithCommittedChapters([1, 2, 3, 4, 5]);
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
@@ -229,8 +201,8 @@ describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () =
       scrubError: String,
       projectDir,
     });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
-    expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { toolName: "generate_draft", chapter: 6 } });
+    const next = events.at(-1)!.data.output as { choices: { label: string; action?: unknown }[] };
+    expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } } });
     await cleanup();
   });
 
@@ -246,8 +218,8 @@ describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () =
       scrubError: String,
       projectDir,
     });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
-    expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { toolName: "generate_draft", chapter: 6 } });
+    const next = events.at(-1)!.data.output as { choices: { label: string; action?: unknown }[] };
+    expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } } });
     await cleanup();
   });
 
@@ -389,217 +361,6 @@ describe("「定稿」按钮结构化动作（commit_preview）", () => {
   });
 });
 
-describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8：点击直达 body.action，不再发文本给模型）", () => {
-  it("出稿写好（写完没核账）→ 「预览定稿」直达 commit_preview、「核账」交一次核账，只这两个", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true, summary: "本章章纲：苏晚找书。写好了。" }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
-    expect(next.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview", chapter: 2 } });
-    expect(next.choices[1]).toMatchObject({ label: "核账", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 2 } } });
-    expect(next.choices).toHaveLength(2);
-  });
-
-  it("出稿写好且写完核过账 → 回话只一句（字数），接着出核账卡（只读核账记忆，不再调工具），下一步按核账结果给", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    const calls: string[] = [];
-    await finishDraftTurn({
-      action: { toolName: "generate_draft", chapter: 2 },
-      output: {
-        ok: true,
-        draftTitle: "存根",
-        draftBody: "正文",
-        draftLength: { actualLength: 2300, lowerBound: 2400, lengthStatus: "below_lower_bound" },
-        qualityPipeline: { continuity: { checked: true } },
-        summary: "本章章纲：一大段。第 2 章已生成正文并写入工作稿……",
-      },
-      projectDir: "/books/x",
-      readCachedCheck: async () => ({ ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [{}], failures: [], headline: "这一章和前文都没改过，结果同上次。" }),
-      requestContext: new RequestContext(),
-      executeTool: async (name) => {
-        calls.push(name);
-        return { ok: true };
-      },
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(calls).toEqual([]);
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了；另有可能 1 处，在卡上点开看。");
-    // 核账卡按记忆出（card 事件，不是又调了一次核账）；核出确定的几处：改法在核账卡上；稿子短了（P13）才另挂一个「接着往下写」。
-    expect(events.filter((item) => item.event === "card")).toEqual([{ event: "card", data: { type: "continuity", check: expect.objectContaining({ chapter: 2, reused: true }) } }]);
-    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["suggest_next_steps"]);
-    const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { question: string; choices: { label: string; action?: unknown }[] };
-    expect(next.question).toBe("接下来？");
-    expect(next.choices).toEqual([expect.objectContaining({ label: "接着往下写", action: { toolName: "generate_draft", chapter: 2, continueDraft: true } })]);
-  });
-
-  it("写完核过账、但记忆对不上（有一遍没核全）→ 如实说没核全，下一步给「核账」，不偷偷再跑一遍", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    const calls: string[] = [];
-    await finishDraftTurn({
-      action: { toolName: "generate_draft", chapter: 2 },
-      output: { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lengthStatus: "within_range" }, qualityPipeline: { continuity: { checked: true } } },
-      projectDir: "/books/x",
-      readCachedCheck: async () => null,
-      requestContext: new RequestContext(),
-      executeTool: async (name) => {
-        calls.push(name);
-        return { ok: true };
-      },
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(calls).toEqual([]);
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toBe("第 2 章写好了，3000 字。\n写完那遍核账没核全，可以点「核账」再核。");
-    const next = events.at(-1)!.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["预览定稿", "核账"]);
-  });
-
-  it("作者要写完就出定稿预览 → 核账卡后接着出预览，不另给下一步（下一步在预览卡上）", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    const calls: string[] = [];
-    await finishDraftTurn({
-      action: { toolName: "generate_draft", chapter: 2 },
-      output: { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lengthStatus: "within_range" }, qualityPipeline: { continuity: { checked: true } } },
-      thenPreview: true,
-      projectDir: "/books/x",
-      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [], maybe: [], failures: [] }),
-      requestContext: new RequestContext(),
-      executeTool: async (name) => {
-        calls.push(name);
-        return { ok: true, chapter: 2, summary: "预览好了。" };
-      },
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(calls).toEqual(["commit_preview"]);
-    expect(events.map((item) => item.event === "tool-call" ? `tool-call:${String(item.data.toolName)}` : item.event).filter((name) => name === "card" || name.startsWith("tool-call"))).toEqual(["card", "tool-call:commit_preview"]);
-  });
-
-  it("写手把「第 N 章 · 」写进了章名：回话书名号里只放章名", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await finishDraftTurn({
-      action: { toolName: "generate_draft", chapter: 29 },
-      output: { ok: true, draftTitle: "第29章 · 手印", draftBody: "正文", draftLength: { actualLength: 1859, lengthStatus: "within_range" } },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toBe("第 29 章写好了《手印》，1859 字。");
-  });
-
-  it("作者要的要点可能没写到 → 回话照说，下一步先给「补上这几条」", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await finishDraftTurn({
-      action: { toolName: "generate_draft", chapter: 2 },
-      output: { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lengthStatus: "within_range" }, beatFidelity: { missingBeats: ["老周认出账本", ""], postDeAiNewMisses: ["老周认出账本", "雨停"] } },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toBe("第 2 章写好了，3000 字。\n这几条要点可能没写到：老周认出账本、雨停。");
-    const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["补上这几条", "预览定稿", "核账"]);
-    expect(next.choices[1]?.recommended).toBe(false);
-  });
-
-  it("只剩「可能」：稿纸默认不画，回话说在卡上点开看，不说画上了", () => {
-    const item = { quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" };
-    expect(afterDraftCheckLine({ ok: true, sure: [], maybe: [item] })).toBe("写完核了一遍：没有确定对不上的；可能 1 处，在卡上点开看。");
-    expect(afterDraftCheckLine({ ok: true, sure: [item], maybe: [] }, 2)).toBe("写完核账，改了 2 处对不上的；再核还有确定对不上 1 处，画在稿纸上了。");
-  });
-
-  it("写完核出的已按前文改过（2026-10-23）→ 回话说改了几处、再核还剩几处（作者看着正文变了，得知道是改过的）", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await finishDraftTurn({
-      action: { toolName: "generate_draft", chapter: 2 },
-      output: { ok: true, draftTitle: "存根", draftBody: "正文", draftLength: { actualLength: 2500 }, qualityPipeline: { continuity: { checked: true, autoFixed: { applied: 3, failed: 0 } } } },
-      projectDir: "/books/x",
-      readCachedCheck: async () => ({ ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [], failures: [] }),
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toContain("写完核账，改了 3 处对不上的；再核还有确定对不上 1 处，画在稿纸上了。");
-  });
-
-  it("出稿写好但写完那遍核账没跑成 → 如实说一句，不出核账卡", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    const calls: string[] = [];
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: new RequestContext(),
-      executeTool: async (name) => {
-        calls.push(name);
-        return { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lowerBound: 2400, lengthStatus: "within_range" }, qualityPipeline: { continuity: { checked: false } }, summary: "长摘要" };
-      },
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(calls).toEqual(["generate_draft"]);
-    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toBe("第 2 章写好了，3000 字。\n写完那遍核账没跑成，可以点「核账」再核。");
-  });
-
-  it("出稿没写成 → 「再写一次」直达 generate_draft 本章", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: false, summary: "没写成。" }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
-    expect(next.choices[0]).toMatchObject({ label: "再写一次", action: { toolName: "generate_draft", chapter: 2 } });
-  });
-
-  // R7.1 结构化意图标记：按钮/选项点击本身就是写作授权，generate_draft 的写作意图门见标记优先放行
-  // （不赌回显文案命中正向词表）。标记只在执行期间存在，结束即清（与 prune 同款）。
-  it("出稿动作带用户确认标记：执行期间在场、结束即清（写作意图门优先认标记）", async () => {
-    const requestContext = new RequestContext();
-    let markedDuringExecution = false;
-    const executeTool: UserActionToolExecutor = async (toolName, _input, context) => {
-      markedDuringExecution = isUserConfirmedTool({ requestContext: context } as never, toolName);
-      return { ok: true, summary: "写好了。" };
-    };
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 2 },
-      requestContext,
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(markedDuringExecution).toBe(true);
-    expect(isUserConfirmedTool({ requestContext } as never, "generate_draft")).toBe(false);
-    expect(events.at(-1)!.event).toBe("tool-result");
-  });
-});
-
 describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
   it("parseUserAction：keep 可缺省、数字字符串宽容、0=缺省、负数/小数拒绝；不需要章号", () => {
     expect(parseUserAction({ toolName: "prune_snapshots" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });
@@ -647,45 +408,6 @@ describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
     expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
     expect(String(events[2]!.data.text)).toContain("没有完成");
     expect(String(events[2]!.data.text)).toContain("确认裁剪");
-  });
-});
-
-describe("「写这一章」结构化动作（2026-10-10 出稿一条路）", () => {
-  it("解析章号和可选方向；方向去空白、过长截断", async () => {
-    const { parseUserAction } = await import("./user-actions.js");
-    expect(parseUserAction({ toolName: "generate_draft", chapter: 3 })).toEqual({ kind: "action", action: { toolName: "generate_draft", chapter: 3 } });
-    expect(parseUserAction({ toolName: "generate_draft", chapter: "3", chapterGoal: "  苏晚去槐树巷  " })).toEqual({
-      kind: "action",
-      action: { toolName: "generate_draft", chapter: 3, chapterGoal: "苏晚去槐树巷" },
-    });
-    expect(parseUserAction({ toolName: "generate_draft" })).toMatchObject({ kind: "invalid" });
-  });
-
-  it("执行 generate_draft、推结果和下一步选项；工具抛错如实说没写成", async () => {
-    const { runUserAction } = await import("./user-actions.js");
-    const events: { event: string; data: unknown }[] = [];
-    const scrubber = { push: (text: string) => text, flush: () => "" };
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true, summary: "本章章纲：苏晚找书。写好了。" }),
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber,
-      scrubError: (error) => String(error),
-    });
-    expect(events.map((item) => item.event)).toEqual(["tool-call", "tool-result", "text-delta", "tool-call", "tool-result"]);
-    expect(JSON.stringify(events.at(-1)!.data)).toContain("预览定稿");
-    const failed: { event: string; data: unknown }[] = [];
-    await runUserAction({
-      action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: new RequestContext(),
-      executeTool: async () => { throw new Error("服务商超时"); },
-      sendEvent: (event, data) => failed.push({ event, data }),
-      scrubber,
-      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
-    });
-    expect(failed.map((item) => item.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
-    expect(JSON.stringify(failed.at(-1)!.data)).toContain("原来的稿子没动");
   });
 });
 

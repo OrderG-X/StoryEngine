@@ -362,8 +362,9 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
     // 「确认改账」按钮带的裁定草案：不进白名单的话刷新后按钮就空了（点了只能如实说过期）。内容由服务端执行前再校验。
     const ledgerTarget = readWorkspaceLedgerTarget(item.ledgerTarget);
-    // 「重写这一章」「接着往下写」「确认改设定」按钮的参数（重构 P4）：同理要进白名单，内容由服务端执行前再校验。
-    const rewriteTarget = readWorkspaceRewriteTarget(item.rewriteTarget);
+    // 「重写这一章」「接着往下写」按钮的写稿动作（写作版本 P2a）、「确认改设定」按钮的参数（重构 P4）：同理要进白名单，
+    // 内容由前端点的时候、服务端执行前再校验。
+    const operationAction = readWorkspaceOperationAction(item.operationAction);
     const foundationTarget = readWorkspaceFoundationTarget(item.foundationTarget);
     // 「重试这一步」重发的那句话的消息号和发出时间（写作版本 P2a）：不进白名单的话重开书后重试就成了一句新话。
     const retryOf = readMessageRef(item.retryOf);
@@ -379,7 +380,7 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       ...(commitTarget ? { commitTarget } : {}),
       ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
       ...(ledgerTarget ? { ledgerTarget } : {}),
-      ...(rewriteTarget ? { rewriteTarget } : {}),
+      ...(operationAction ? { operationAction } : {}),
       ...(foundationTarget ? { foundationTarget } : {}),
       ...(retryOf ? { retryOf } : {}),
     });
@@ -400,12 +401,12 @@ function readIssuedAt(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
-function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterGoal?: string; continueDraft?: true } | undefined {
-  if (!isRecord(value)) return undefined;
-  const chapter = readPositiveInteger(value.chapter);
-  if (chapter === undefined) return undefined;
-  const chapterGoal = readString(value.chapterGoal);
-  return { chapter, ...(chapterGoal ? { chapterGoal: chapterGoal.slice(0, 2000) } : {}), ...(value.continueDraft === true ? { continueDraft: true as const } : {}) };
+/** 按钮上的写稿动作：只认新交的写稿（种类、请求号、发出时间、参数是对象），原样留着；不长于 8000 字。 */
+function readWorkspaceOperationAction(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || value.kind !== "new" || value.type !== "draft.change" || !isRecord(value.params)) return undefined;
+  const requestKey = readString(value.requestKey);
+  if (!readString(value.mode) || !requestKey || requestKey.length > 64 || !readIssuedAt(value.issuedAt)) return undefined;
+  return JSON.stringify(value).length <= 8000 ? value : undefined;
 }
 
 /** 提议按钮的依据摘要（写作版本 P1a）：原样留着，点按钮时服务端拿它核。 */

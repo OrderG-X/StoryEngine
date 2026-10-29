@@ -40,6 +40,7 @@ import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeChec
 import { readFixLog, type FixRecord } from "../../lib/fix-log.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
+import { prepareReaderNotes, type ReaderNotesOutcome } from "../prepare-notes.js";
 import { withStep } from "../../lib/token-meter.js";
 import { requestReaderBackfill } from "../../lib/reader-backfill.js";
 import { rethrowIfStopped } from "../../lib/operations/context.js";
@@ -142,36 +143,23 @@ export interface ChapterCheckOptions {
   readonly notesReady?: { readonly waited?: ReaderWaited };
 }
 
-export interface CheckerNotesOutcome {
-  /** 还缺几份（超过当场上限、卷节点到了上限）：缺就照冷窗口核。 */
-  readonly missing: number;
-  readonly built: number;
-  readonly volumesBuilt: number;
-  readonly readThrough: number;
-  readonly waited?: ReaderWaited;
-}
+/** 还缺几份（超过当场上限、卷节点到了上限）：缺就照冷窗口核。 */
+export type CheckerNotesOutcome = ReaderNotesOutcome;
 
 /**
  * 核第 chapter 章之前先让核账员读完前文（写作版本 P2a inspect.run 的 notes 步）：当场最多补 READER_MAX_CATCH_UP 章、
  * READER_MAX_VOLUME_BUILDS 个卷节点；缺得更多就不补（0 次调用，之后照冷窗口核、交后台补读）。补到一半模型调用失败照实抛。
  */
-export async function prepareCheckerNotes(projectDir: string, chapter: number, callModel: BrainCallModel = callConfiguredBrainModel): Promise<CheckerNotesOutcome> {
-  if (chapter <= 1) return { missing: 0, built: 0, volumesBuilt: 0, readThrough: 0 };
-  const role = checkerRoleFor(DEFAULT_READER_VARIANT.structuredNotes);
-  const waiting = readerWaitingHandlers(projectDir, role.id, chapter - 1);
-  const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
+export function prepareCheckerNotes(projectDir: string, chapter: number, callModel: BrainCallModel = callConfiguredBrainModel): Promise<CheckerNotesOutcome> {
+  return prepareReaderNotes({
     projectDir,
-    role,
-    upTo: chapter - 1,
+    role: checkerRoleFor(DEFAULT_READER_VARIANT.structuredNotes),
+    chapter,
     callModel,
     maxCatchUp: READER_MAX_CATCH_UP,
     maxVolumeBuilds: READER_MAX_VOLUME_BUILDS,
     waitingAs: "核账",
-    onCatchUpBegin: waiting.onCatchUpBegin,
-    onProgress: waiting.onProgress,
-    onCatchUpEnd: waiting.onCatchUpEnd,
-  }));
-  return { missing: ready.missing, built: ready.built, volumesBuilt: ready.volumesBuilt, readThrough: ready.readThrough, ...(ready.waited ? { waited: ready.waited } : {}) };
+  });
 }
 
 /**

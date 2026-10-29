@@ -19,6 +19,9 @@ import { buildProjectRequestContext } from "./request-context.js";
 import { runCheckTool, type SubmitReceipt } from "./tools/op-tools.js";
 import { readOperationTool, type ReadOperationOutput } from "./tools/read-operation.js";
 import { checkChapterAction, type OperationAction } from "./user-actions.js";
+import { newDraftAction } from "./next-steps.js";
+import { createDraftChangeRecipe } from "../services/operations/recipes/draft-change.js";
+import { fakeDraftDeps, writerOf } from "../services/operations/recipes/draft-change-kit.js";
 
 let root: string;
 let book: string;
@@ -268,8 +271,39 @@ describe("按钮交的操作", () => {
   });
 });
 
+describe("写稿按钮（draft.change）", () => {
+  const prose = Array(6).fill("林舟沿着河岸走了很久，手里的账册越攥越紧。他还记得早上的约定，却不知道对方为什么迟迟没有露面。").join("\n\n");
+
+  it("受理、订阅（正文流转进对话）、收尾：一句结论、工作稿换上", async () => {
+    registerRecipe(createDraftChangeRecipe(fakeDraftDeps({
+      writer: async ({ onDelta }) => ({
+        async generateDraft() {
+          onDelta?.("林舟沿着河岸走了很久。");
+          return { content: prose };
+        },
+      }),
+    })));
+    const out = collector();
+    await runOperationAction({ action: newDraftAction("write", { chapter: 1 }), projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber(), signal: new AbortController().signal });
+    expect(out.operationStates().at(-1)).toBe("succeeded");
+    const live = out.events.filter((item) => item.event === "operation" && (item.data as { type?: string }).type === "live").map((item) => (item.data as { event: { type: string } }).event.type);
+    expect(live).toContain("draft-delta");
+    expect(out.text()).toContain("第 1 章");
+    expect((await readDraftState(book, 1)).version).not.toBeNull();
+  });
+
+  it("没受理（前一章没定稿）：照原因说，下一步给「先定稿第 1 章」「仍要先写第 2 章」，不给「再写一次」", async () => {
+    registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ writerClient: writerOf(prose) })));
+    const out = collector();
+    await runOperationAction({ action: newDraftAction("write", { chapter: 2 }), projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber(), signal: new AbortController().signal });
+    expect(out.text()).toContain("第 1 章还没定稿");
+    expect(out.choices().map((choice) => choice.label)).toEqual(["先定稿第 1 章", "仍要先写第 2 章"]);
+    expect(out.choices()[1]?.action).toMatchObject({ type: "draft.change", params: { chapter: 2, allowWriteAhead: true } });
+  });
+});
+
 function toolContext(messageId?: string): ToolExecutionContext {
-  const requestContext = buildProjectRequestContext(book, 1, undefined, ["帮我核一下第一章"], undefined, undefined, messageId ? { messageId, issuedAt: new Date().toISOString() } : undefined);
+  const requestContext = buildProjectRequestContext(book, 1, ["帮我核一下第一章"], undefined, undefined, messageId ? { messageId, issuedAt: new Date().toISOString() } : undefined);
   return { requestContext } as unknown as ToolExecutionContext;
 }
 

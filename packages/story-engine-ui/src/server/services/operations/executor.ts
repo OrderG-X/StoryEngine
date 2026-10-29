@@ -32,7 +32,7 @@ import {
   type OperationContext,
 } from "../../lib/operations/context.js";
 import { stoppedError, withFence } from "../../lib/operations/fence.js";
-import { emitLive, onLive, type LiveEvent } from "../../lib/operations/live.js";
+import { clearDraftStream, draftStreamCatchUp, emitLive, onLive, type LiveEvent } from "../../lib/operations/live.js";
 import {
   acceptOperation,
   appliedEffectOf,
@@ -255,6 +255,7 @@ async function execute(bookDir: string, record: OperationRecord): Promise<void> 
     await settleError(operation, error);
   } finally {
     execution.unregister();
+    clearDraftStream(bookDir, record.opId);
   }
   if (recipe?.afterRun) {
     const settled = await readOperation(bookDir, record.opId).catch(() => undefined);
@@ -514,6 +515,8 @@ export type OperationEvent =
 export async function subscribeOperation(bookDir: string, opId: string, send: (event: OperationEvent) => void): Promise<(() => void) | undefined> {
   let buffer: OperationEvent[] | undefined = [];
   let seenSeq = 0;
+  // 补发过的正文流到哪一笔：缓冲里、之后再到的同一次执行里不比它新的不再发（补发那份已经含着）。
+  let streamedThrough: { readonly exec: string; readonly streamSeq: number } | undefined;
   const deliver = (event: OperationEvent): void => {
     if (buffer) {
       buffer.push(event);
@@ -523,6 +526,8 @@ export async function subscribeOperation(bookDir: string, opId: string, send: (e
       if (event.record.eventSeq <= seenSeq) return;
       seenSeq = event.record.eventSeq;
     }
+    if (event.type === "live" && event.event.type === "draft-delta" && streamedThrough
+      && event.event.exec === streamedThrough.exec && event.event.streamSeq <= streamedThrough.streamSeq) return;
     send(event);
   };
   const offRecord = onOperationRecord(bookDir, opId, (record) => deliver({ type: "record", record }));
@@ -538,6 +543,10 @@ export async function subscribeOperation(bookDir: string, opId: string, send: (e
   }
   seenSeq = stored.record.eventSeq;
   send({ type: "snapshot", record: stored.record });
+  for (const event of draftStreamCatchUp(bookDir, opId)) {
+    streamedThrough = { exec: event.exec, streamSeq: event.streamSeq };
+    send({ type: "live", event });
+  }
   const pending = buffer;
   buffer = undefined;
   for (const event of pending) deliver(event);

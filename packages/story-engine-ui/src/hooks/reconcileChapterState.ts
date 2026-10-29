@@ -1,7 +1,7 @@
 import type { ChapterWorkflowState } from "../type-defs/workflow.js";
 
 /**
- * 出稿失败收尾：onToolCall(generate_draft) 把 flowStatus 置成「正在生成草稿」(draft_generating)，
+ * 写稿没成收尾：写稿操作一开始（useChat 的 beginDraftStream）把 flowStatus 置成「正在生成草稿」(draft_generating)，
  * 但失败路径(onToolError/onError/未捕获兜底)原本不复位 → 标题区卡在「正在生成草稿」=明明失败却谎称在生成
  * （违反诚实铁律）。纯函数判定该复位成什么：
  *   - 只在当前确实卡在 draft_generating 时才动（其它流程态的失败如实保留，不乱改）→ 否则返回 null。

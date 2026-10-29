@@ -3,11 +3,11 @@
  *
  *  - 空章：一行想法输入 +【给我几种走法】→ brainstorm_chapter 结构化动作（章纲员出、核账员核，结果进对话）。
  *  - 有走法卡：几张走法并排（几步、推进哪些线索、核过前文对不对得上），【用这个】挑一种；【再来几种】换一批。
- *  - 挑中以后收成一条「这章打算」：照着自己写，或【让 AI 照这个起草】（generate_draft 带这条方向）；【换一种】撤回。
+ *  - 挑中以后收成一条「这章打算」：照着自己写，或【让 AI 照这个起草】（交一次写稿，带这条方向）；【换一种】撤回。
  * 挑选只记在对话里的那张卡上（picked），不进账；没挑中的不留痕。「写这一章」按钮也照挑中的那种写。
  */
 import { useEffect, useState, type FormEvent } from "react";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { newDraftAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import type { BrainstormCardData, BrainstormOptionData } from "../../../type-defs/workspace.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { useChapterDirections } from "../../../workspace/chapterProgress.js";
@@ -154,7 +154,7 @@ export function BrainstormPanel({ chapter, draftEmpty, hidden, busy, onAction }:
                 type="button"
                 className="se-bs-pick is-primary"
                 disabled={busy}
-                onClick={() => onAction({ toolName: "generate_draft", chapter, chapterGoal: directionGoal(picked, data.idea) })}
+                onClick={() => onAction(newDraftAction("write", { chapter, direction: directionGoal(picked, data.idea) }))}
               >
                 让 AI 照这个起草
               </button>

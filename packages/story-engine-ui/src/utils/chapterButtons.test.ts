@@ -22,13 +22,13 @@ describe("chapterButtonAction：按钮 → 结构化动作（不靠文案）", (
   });
 
   it("写这一章：方向框有字就带上（原样），空白不带", () => {
-    expect(chapterButtonAction("write", { chapter: 3, chapters, direction: "  林澈夜探旧泵站 " })).toEqual({ toolName: "generate_draft", chapter: 3, chapterGoal: "林澈夜探旧泵站" });
-    expect(chapterButtonAction("write", { chapter: 3, chapters, direction: "   " })).toEqual({ toolName: "generate_draft", chapter: 3 });
+    expect(chapterButtonAction("write", { chapter: 3, chapters, direction: "  林澈夜探旧泵站 " })).toEqual({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, direction: "林澈夜探旧泵站" }, requestKey: expect.any(String), issuedAt: expect.any(String) });
+    expect(chapterButtonAction("write", { chapter: 3, chapters, direction: "   " })).toEqual({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 3 }, requestKey: expect.any(String), issuedAt: expect.any(String) });
   });
 
   it("写下一章：跳过已定稿的章", () => {
-    expect(chapterButtonAction("write_next", { chapter: 1, chapters })).toEqual({ toolName: "generate_draft", chapter: 3 });
-    expect(chapterButtonAction("write_next", { chapter: 3, chapters })).toEqual({ toolName: "generate_draft", chapter: 4 });
+    expect(chapterButtonAction("write_next", { chapter: 1, chapters })).toEqual({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 3 }, requestKey: expect.any(String), issuedAt: expect.any(String) });
+    expect(chapterButtonAction("write_next", { chapter: 3, chapters })).toEqual({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 4 }, requestKey: expect.any(String), issuedAt: expect.any(String) });
   });
 
   it("撤销上一步不要章号；其余没选章返回 undefined（调用方如实提示）", () => {

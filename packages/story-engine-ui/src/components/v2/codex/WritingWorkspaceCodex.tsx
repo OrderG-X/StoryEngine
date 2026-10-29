@@ -215,7 +215,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     setRightOpen(!focusWriting);
   }, [focusWriting]);
 
-  // 出稿/续写一开始（useChat 在 generate_draft tool-call 时 requestCenterView("desk")）→ 自动切到写作台，
+  // 写稿 / 接着写一开始（useChat 跟着的写稿操作开始时 requestCenterView("desk")）→ 自动切到写作台，
   // 让用户看着正文出现，不必手动点。一次性消费后清空，避免之后切走又被拽回。
   const pendingCenterView = useNavigationStore((s) => s.pendingCenterView);
   // 刚定稿还没看过「这章改了什么」：顶栏「设定本」亮小点，点进去先到那一页（看过就清）。

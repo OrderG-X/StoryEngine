@@ -27,7 +27,7 @@ async function makeProject(): Promise<string> {
 
 async function undo(projectDir: string, lastTurnUndoHint?: { snapshotId: string; changes: number }) {
   return execute({}, {
-    requestContext: buildProjectRequestContext(projectDir, undefined, undefined, undefined, lastTurnUndoHint),
+    requestContext: buildProjectRequestContext(projectDir, undefined, undefined, lastTurnUndoHint),
   });
 }
 

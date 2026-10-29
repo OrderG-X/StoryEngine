@@ -1,3 +1,5 @@
+import type { OperationActionData } from "../api/agentChatClient.js";
+
 export type DevApiPermission =
   | "safe_read"
   | "model_call"
@@ -35,8 +37,8 @@ export interface SuggestedAction {
   readonly pruneTarget?: { readonly keep?: number };
   /** 「确认改账」按钮带的裁定草案（ledger-confirm 专用，manage_ledger 提的）。 */
   readonly ledgerTarget?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
-  /** 「重写这一章」「接着往下写」按钮的目标（rewrite-confirm / continue-confirm，generate_draft 遇到有稿的章时给的）。 */
-  readonly rewriteTarget?: { readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean };
+  /** 「重写这一章」「接着往下写」按钮点了交的写稿（rewrite-confirm / continue-confirm，服务端出的，请求号那时就定了）。 */
+  readonly operationAction?: OperationActionData;
   /** 「确认改设定」按钮带的写入（foundation-confirm 专用，foundation_write 被拦下的那次）。 */
   readonly foundationTarget?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
   /** 「重试这一步」重发的是作者哪句话（写作版本 P2a：沿用那句的消息号和发出时间）。 */

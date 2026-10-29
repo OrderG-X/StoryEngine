@@ -42,6 +42,8 @@ export interface ContinueDraftResult {
 }
 
 const DEFAULT_ROUNDS = 2;
+/** 补字数最多几轮（写作版本 P2a 4.5 额度从这里算）。 */
+export const CONTINUE_MAX_ROUNDS = DEFAULT_ROUNDS;
 
 /** 把正文拆成「保留的前文」和「最后一段」：最后一段交给续写一起重写，免得收尾句后面硬接。 */
 export function splitForContinuation(body: string): { readonly prefix: string; readonly lastParagraph: string } {

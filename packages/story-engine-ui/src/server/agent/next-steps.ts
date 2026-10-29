@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { hasWorkingDraftText } from "../lib/working-draft-text.js";
+import type { DraftChangeMode, DraftChangeParams } from "../services/draft-change/params.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import type { OperationAction, UserAction } from "./user-actions.js";
 
@@ -32,6 +33,11 @@ export function humanizeToolNames(text: string): string {
  */
 export function newOperationAction(type: "inspect.run", mode: InspectMode, params: { readonly chapter: number; readonly fresh?: true }): OperationAction {
   return { kind: "new", type, mode, params, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 一次写稿的按钮动作（写这一章 / 重写 / 接着往下写 / 再写一次）：和 newOperationAction 一样出的时候就给号。 */
+export function newDraftAction(mode: DraftChangeMode, params: DraftChangeParams): OperationAction {
+  return { kind: "new", type: "draft.change", mode, params, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
 }
 
 /** 「核账」「再核一遍」：交一次核账。fresh＝正文没改也重新核。 */
@@ -78,17 +84,17 @@ export interface NextDraftTarget {
 
 /**
  * 「写下一章」那个选项（确定性）：下一章还空着 → AI 写；已经有工作稿（回头重定了旧章，下一章正写到一半）→
- * 改成核那一章。选项点了是作者档，generate_draft 会整章重写——不能顶着「AI 写」的名字把手头的稿子换掉（长篇连写 2026-10-24）。
+ * 改成核那一章。不能顶着「AI 写」的名字把手头的稿子换掉（长篇连写 2026-10-24；写稿操作有稿的章不重写，点了也只出「重写」按钮）。
  */
 export function writeNextChoice(target: NextDraftTarget, label: string = `AI 写第 ${target.chapter} 章`): NextStepChoice {
   return target.hasDraft
     ? { label: `核第 ${target.chapter} 章`, intent: `核第 ${target.chapter} 章的账`, action: checkChapterAction(target.chapter) }
-    : { label, intent: `继续写第 ${target.chapter} 章的正文`, action: { toolName: "generate_draft", chapter: target.chapter } };
+    : { label, intent: `继续写第 ${target.chapter} 章的正文`, action: newDraftAction("write", { chapter: target.chapter }) };
 }
 
 /** 「接着往下写」那个选项（P13）：稿子短了，从最后一句接着写，已写的不动。 */
 export function continueChoice(chapter: number): NextStepChoice {
-  return { label: "接着往下写", intent: `第 ${chapter} 章接着往下写`, action: { toolName: "generate_draft", chapter, continueDraft: true } };
+  return { label: "接着往下写", intent: `第 ${chapter} 章接着往下写`, action: newDraftAction("continue", { chapter }) };
 }
 
 /** 写作前沿章（R7.7）：有书目录时按定稿文件现算；没传目录/读不到定稿章 → N+1 旧口径兜底。顺带看那章有没有工作稿。 */

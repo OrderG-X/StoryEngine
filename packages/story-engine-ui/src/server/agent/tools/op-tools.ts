@@ -3,7 +3,7 @@
  * execute 只做一件事：宽进归一 → 交给执行器 → 回受理回执（`accepted` + 操作号）。受理了这一轮就停（turn-flow），
  * 进度、结果、下一步都由服务端出，模型不再多说一轮。没受理（参数不对、前提不满足）回 ok:false + code + 一句原因，模型照常往下走。
  *
- * 片 1 只有 run_check（收编核账、硬伤检查、内容审阅、查 AI 味）；别的提交工具随各自那一片加。
+ * run_check（收编核账、硬伤检查、内容审阅、查 AI 味）、change_draft（收编出稿、接着写，在 change-draft.ts）；别的提交工具随各自那一片加。
  */
 import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
@@ -20,7 +20,7 @@ import {
 } from "../request-context.js";
 
 /** 提交操作的对话工具名（turn-flow 按它们判「这一步交了操作」）。 */
-export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check"]);
+export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft"]);
 
 /** 受理回执（给模型看、也给界面认「这一步交出去了」）。 */
 export interface SubmitReceipt {

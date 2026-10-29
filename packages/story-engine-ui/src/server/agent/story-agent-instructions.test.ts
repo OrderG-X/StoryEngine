@@ -17,16 +17,16 @@ vi.mock("./model.js", () => ({
 
 import { buildInstructions, getStoryAgent, invalidateStoryAgent } from "./story-agent.js";
 
-describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内容审阅 / 查 AI 味合成 run_check，加 read_operation，17 个）", () => {
-  it("17 个工具；旧的四个检查工具和老的补全/文风样本工具都没了；指令里也不再提它们", async () => {
+describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内容审阅 / 查 AI 味合成 run_check，写稿 change_draft 收编 generate_draft，加 read_operation，17 个）", () => {
+  it("17 个工具；旧的四个检查工具、generate_draft 和老的补全/文风样本工具都没了；指令里也不再提它们", async () => {
     invalidateStoryAgent();
     const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
     invalidateStoryAgent();
     expect(tools).toEqual([
       "brainstorm_chapter",
+      "change_draft",
       "commit_preview",
       "foundation_write",
-      "generate_draft",
       "manage_ledger",
       "manage_snapshots",
       "read_chapters_overview",
@@ -42,7 +42,7 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
       "web_search",
     ]);
     const instructions = buildInstructions();
-    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor"]) {
+    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft"]) {
       expect(instructions).not.toContain(gone);
     }
     expect(instructions).toContain("run_check");
@@ -90,15 +90,15 @@ describe("story agent instructions（确认口径唯一）", () => {
 
   it("执行类请求必须实际调用对应工具，不能只在对话里口头答应", () => {
     expect(instructions).toContain("执行类请求必须工具先行");
-    expect(instructions).toContain("写正文=generate_draft");
+    expect(instructions).toContain("写正文 / 接着写=change_draft");
     expect(instructions).toContain("改稿=revise_draft");
     expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write");
     expect(instructions).toContain("定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮");
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
 
-  it("重写有稿的章也要真调 generate_draft：按钮随调用出现，不许凭印象叫作者去点", () => {
-    expect(instructions).toContain("作者要重写、重出已经有稿的章，也照样调 generate_draft");
+  it("重写有稿的章也要真调 change_draft：按钮随调用出现，不许凭印象叫作者去点", () => {
+    expect(instructions).toContain("作者要重写、重出已经有稿的章，也照样调 change_draft");
     expect(instructions).toContain("没调就没有按钮");
     expect(instructions).not.toContain("界面已出「重写这一章」按钮");
   });
@@ -108,9 +108,9 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("提醒、不是拦");
   });
 
-  // R2#1：「写下一章」按钮点了不调 generate_draft（intent 不在换章触发词内 + 模型分两轮只读不写）。
+  // R2#1：「写下一章」按钮点了不调写稿工具（intent 不在换章触发词内 + 模型分两轮只读不写）。
   // 指令须把『写下一章/下一章』并入直接出稿触发、且要求同一轮就出稿。
-  it("3a 把『写下一章/下一章』映射到同一轮 generate_draft 出稿（修 R2#1 写下一章按钮断）", () => {
+  it("3a 把『写下一章/下一章』映射到同一轮 change_draft 出稿（修 R2#1 写下一章按钮断）", () => {
     expect(instructions).toContain("写下一章");
     expect(instructions).toContain("同一轮就出稿");
   });
@@ -256,13 +256,13 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toMatch(/继续[\s\S]*?(下一章|往前走)/);
   });
 
-  it("禁止口头冒充草稿（⑥）：要正文必须调 generate_draft 落盘，没调工具就是没出稿", () => {
+  it("禁止口头冒充草稿（⑥）：要正文必须调 change_draft 落盘，没调工具就是没出稿", () => {
     expect(instructions).toContain("禁止口头冒充草稿");
     expect(instructions).toContain("没出稿");
     expect(instructions).toContain("绝不谎称已写");
   });
 
-  it("generate_draft 工具描述声明缺章号默认当前章", () => {
+  it("change_draft 指令声明缺章号默认当前章", () => {
     expect(instructions).toContain("缺章号时默认用户当前所在章");
   });
 
@@ -309,9 +309,9 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
     expect(instructions).not.toContain("同轮继续 commit_apply");
   });
 
-  it("出稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：出稿那步只写稿、写成了这一轮就结束；写完出预览带 thenPreview", () => {
-    expect(instructions).toContain("出稿那一步只调 generate_draft");
-    expect(instructions).toContain("稿写成了这一轮就结束");
+  it("写稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：写稿那步只交写稿、交上了这一轮就结束；写完出预览带 thenPreview", () => {
+    expect(instructions).toContain("写稿那一步只调 change_draft");
+    expect(instructions).toContain("交上了这一轮就结束");
     expect(instructions).toContain("thenPreview:true");
   });
 

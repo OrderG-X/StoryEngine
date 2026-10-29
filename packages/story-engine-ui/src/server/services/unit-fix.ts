@@ -42,6 +42,8 @@ const MAX_UNITS_PER_FIX = 4;
  * 本章另两句还说「四个字」，再核又报两处）。
  */
 const MAX_ALSO_EDITS = 3;
+/** 一批改句最多调几次：一次 + 格式不对再要一次（写作版本 P2a 4.5 额度从这里算）。 */
+export const UNIT_FIX_MAX_CALLS = 2;
 
 /** 原句落在哪几句（编号）；找不到 / 不唯一 / 太长给原因。 */
 export function unitsOfQuote(text: string, units: readonly TextUnit[], quote: string): readonly number[] | string {
@@ -166,8 +168,9 @@ export async function fixByUnits(input: {
 
   let edits: UnitEdit[] | undefined;
   try {
-    edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
-    if (!edits) edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
+    for (let call = 0; call < UNIT_FIX_MAX_CALLS && !edits; call += 1) {
+      edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
+    }
   } catch (error) {
     rethrowIfStopped(error);
     for (const target of targets) for (const fix of target.fixes) failed.push({ fix, why: `AI 没改成（${errorText(error)}）` });

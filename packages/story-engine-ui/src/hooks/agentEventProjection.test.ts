@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterMessage } from "../types.js";
-import type { OperationViewData } from "../api/agentChatClient.js";
+import { newDraftAction, type OperationViewData } from "../api/agentChatClient.js";
 import {
   emptyAssistantMessage,
   presentationFor,
@@ -430,18 +430,6 @@ describe("projectAgentEvent", () => {
     expect(ok.toolSteps![0].detail).toBeUndefined();
   });
 
-  it("generate_draft 一次写几版：落选的几版挂成「另外几版」卡；没写成不挂", () => {
-    const versions = { chapter: 38, versions: [{ index: 1, body: "另一版正文。" }] };
-    let msg = emptyAssistantMessage("versions");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
-    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "g1", toolName: "generate_draft", endedAt: 2, output: { ok: true, chapter: 38, draftVersions: versions } });
-    expect(cardOf(msg, "draft-versions")?.versions).toEqual(versions);
-    let failed = emptyAssistantMessage("versions-failed");
-    failed = projectAgentEvent(failed, { type: "tool-call", toolCallId: "g2", toolName: "generate_draft", startedAt: 1 });
-    failed = projectAgentEvent(failed, { type: "tool-result", toolCallId: "g2", toolName: "generate_draft", endedAt: 2, output: { ok: false, draftVersions: versions } });
-    expect(cardOf(failed, "draft-versions")).toBeUndefined();
-  });
-
   it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
     let msg = emptyAssistantMessage("preview-verdict");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
@@ -808,37 +796,27 @@ describe("改账待确认投影（manage_ledger 提草案后挂「确认改账�
 });
 
 describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {
-  it("generate_draft 遇到有稿的章 → 步骤待确认 + 挂「重写第 N 章」按钮（带方向原样）", () => {
+  it("change_draft 遇到有稿的章 → 照服务端给的按钮挂「接着往下写」「重写第 N 章」（点了交的写稿原样带着）；再来一遍不重复挂", () => {
+    const continueAction = newDraftAction("continue", { chapter: 3 });
+    const rewriteAction = newDraftAction("write", { chapter: 3, direction: "让林溪回来", rewrite: true });
+    const output = {
+      ok: false,
+      chapter: 3,
+      rewriteChoices: [
+        { label: "接着往下写", mode: "continue" as const, action: continueAction },
+        { label: "重写第 3 章", mode: "write" as const, action: rewriteAction },
+      ],
+      summary: "第 3 章已经有工作稿了…",
+    };
     const message = project([
-      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
-      {
-        type: "tool-result",
-        toolCallId: "g1",
-        toolName: "generate_draft",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, rewriteConfirmAction: { chapter: 3, chapterGoal: "让林溪回来" }, summary: "第 3 章已经有工作稿了…" },
-      },
-    ]);
-    expect(message.toolSteps![0].status).toBe("needs_confirmation");
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", rewriteTarget: { chapter: 3, chapterGoal: "让林溪回来" } }),
-    ]);
-  });
-
-  it("有稿没定稿的章（canContinue）→ 先挂「接着往下写」再挂「重写第 N 章」（P13）", () => {
-    const message = project([
-      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
-      {
-        type: "tool-result",
-        toolCallId: "g1",
-        toolName: "generate_draft",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, rewriteConfirmAction: { chapter: 3, canContinue: true }, summary: "第 3 章已经有工作稿了…" },
-      },
+      { type: "tool-call", toolCallId: "g1", toolName: "change_draft", startedAt: 1 },
+      { type: "tool-result", toolCallId: "g1", toolName: "change_draft", endedAt: 2, output },
+      { type: "tool-call", toolCallId: "g2", toolName: "change_draft", startedAt: 3 },
+      { type: "tool-result", toolCallId: "g2", toolName: "change_draft", endedAt: 4, output },
     ]);
     expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "continue-confirm", label: "接着往下写", rewriteTarget: { chapter: 3, continueDraft: true } }),
-      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", rewriteTarget: { chapter: 3 } }),
+      expect.objectContaining({ id: "continue-confirm", label: "接着往下写", operationAction: continueAction }),
+      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", operationAction: rewriteAction }),
     ]);
   });
 
@@ -885,6 +863,34 @@ describe("操作投影（写作版本 P2a：检查交给执行器做）", () => 
     const marked = { ...msg, cards: msg.cards!.map((card) => (card.type === "quality" ? { ...card, report: { ...refined, summary: "作者看过" } } : card)) };
     const again = projectAgentEvent(marked, { type: "operation", operation: view({ state: "succeeded", eventSeq: 6, inspect: { qualityReport: refined } }) });
     expect(cardOf(again, "quality")?.report.summary).toBe("作者看过");
+  });
+
+  it("写稿做完了：一次写几版的挂「另外几版」卡；同一次再来一遍不重挂", () => {
+    const versions = { chapter: 4, versions: [{ index: 1, body: "另一版正文。" }] };
+    const draftView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.change", mode: "write", what: "写稿·第 4 章", ...overrides });
+    let msg = project([{ type: "operation", operation: draftView() }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, versions } }) });
+    expect(cardOf(msg, "draft-versions")?.versions).toEqual(versions);
+    const again = projectAgentEvent(msg, { type: "operation", operation: draftView({ state: "succeeded", eventSeq: 6, draft: { chapter: 4, applied: true, versions } }) });
+    expect(again.cards!.filter((card) => card.type === "draft-versions")).toHaveLength(1);
+    const single = project([{ type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true } }) }]);
+    expect(cardOf(single, "draft-versions")).toBeUndefined();
+  });
+
+  it("写稿做完了：这一轮记下它打的存档点（章纲在前，「撤销到此」从它退）、换上了的标「影响了正文·草稿」；重来一遍不重记", () => {
+    const draftView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.change", mode: "write", what: "写稿·第 4 章", ...overrides });
+    const done = draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, snapshots: ["s-plan", "s-draft"] } });
+    let msg = project([{ type: "operation", operation: draftView() }, { type: "operation", operation: done }]);
+    expect(msg.turnSnapshots).toEqual([
+      { toolName: "change_draft", snapshotId: "s-plan", chapterNumber: 4 },
+      { toolName: "change_draft", snapshotId: "s-draft", chapterNumber: 4 },
+    ]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...done, eventSeq: 6 } });
+    expect(msg.turnSnapshots).toHaveLength(2);
+    const kept = project([{ type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: false } }) }]);
+    expect(kept.turnSnapshots).toBeUndefined();
+    expect(kept.affectedScopes).toBeUndefined();
   });
 
   it("没做成：只换操作卡，不挂结果卡", () => {

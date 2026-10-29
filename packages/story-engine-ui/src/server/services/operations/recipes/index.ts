@@ -9,6 +9,7 @@ import { BACKFILL_KIND, readBackfillParams, setReaderBackfillHandler, type Reade
 import { listOperations, type OperationRecord } from "../../../lib/operations/store.js";
 import { registerRecipe, submitOperation } from "../executor.js";
 import { backgroundBackfillRecipe } from "./background-backfill.js";
+import { draftChangeRecipe } from "./draft-change.js";
 import { inspectRunRecipe } from "./inspect-run.js";
 
 /** 同一本书交后台补读排成一条（两个请求同时到，不会各受理一次）。 */
@@ -60,5 +61,6 @@ export async function __drainBackfillSubmissionsForTests(): Promise<boolean> {
 export function registerBuiltInRecipes(): void {
   registerRecipe(backgroundBackfillRecipe);
   registerRecipe(inspectRunRecipe);
+  registerRecipe(draftChangeRecipe);
   setReaderBackfillHandler(submitBackfill);
 }

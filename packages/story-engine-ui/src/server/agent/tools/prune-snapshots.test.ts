@@ -68,7 +68,7 @@ type ToolResult = {
 
 function executeTool(input: Record<string, unknown>, projectDir: string, userTurnText?: string): Promise<ToolResult> {
   const context = {
-    requestContext: buildProjectRequestContext(projectDir, undefined, undefined, userTurnText ? [userTurnText] : undefined),
+    requestContext: buildProjectRequestContext(projectDir, undefined, userTurnText ? [userTurnText] : undefined),
   } as unknown as ToolExecutionContext;
   const execute = pruneSnapshotsTool.execute as unknown as (
     input: Record<string, unknown>,
@@ -217,7 +217,7 @@ describe("prune_snapshots 工具（2026-10-07：模型只预览出按钮，用�
   it("用户点了「确认裁剪」按钮（结构化动作带确认标记）→ 真裁落盘", async () => {
     const dir = await makeProjectWithHistory();
     await redirectBackupDir();
-    const requestContext = buildProjectRequestContext(dir, undefined, undefined, ["确认裁剪操作历史"]);
+    const requestContext = buildProjectRequestContext(dir, undefined, ["确认裁剪操作历史"]);
     markUserConfirmedTool(requestContext, "prune_snapshots");
     const execute = pruneSnapshotsTool.execute as unknown as (
       input: Record<string, unknown>,

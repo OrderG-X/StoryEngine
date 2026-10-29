@@ -14,6 +14,8 @@ import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
+import { DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
+import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
 import { checkChapterAction, humanizeToolNames, newOperationAction, resolveNextDraftTarget, sendNextSteps, writeNextChoice, type NextStepChoice } from "./next-steps.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
@@ -70,7 +72,7 @@ const PAUSED_TEXT: Readonly<Record<string, string>> = {
   interrupted: "写到一半停了",
   attempt_unknown: "停下了：有一步可能已经发出去、结果没收到（可能已经计费）",
   budget: "停下了：这次能用的调用次数用完了",
-  material: "停下了：资料还没备好",
+  material: "停下了：专员还在读前文（后台在接着读）",
 };
 
 interface ContinuityBodyLike {
@@ -131,8 +133,20 @@ export async function finishOperationTurn(args: {
   readonly projectDir: string;
   readonly sendEvent: SendEvent;
   readonly scrubber: { push(text: string): string; flush(): string };
+  /** 写完就出定稿预览：出这一章的定稿预览（按钮那条路给）；没给就只给下一步。 */
+  readonly previewCommit?: (chapter: number) => Promise<void>;
 }): Promise<void> {
   const { record } = args;
+  // 写稿做完、没写成：结论、核账卡、定稿预览、下一步按写稿那一套出。
+  if (record.kind === DRAFT_CHANGE_KIND && (record.state === "succeeded" || record.state === "failed" || record.state === "obsolete")) {
+    await finishDraftOperation(record, {
+      projectDir: args.projectDir,
+      sendEvent: args.sendEvent,
+      scrubber: args.scrubber,
+      ...(args.previewCommit ? { previewCommit: args.previewCommit } : {}),
+    });
+    return;
+  }
   const emitText = (text: string): void => {
     const scrubbed = args.scrubber.push(text);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
@@ -204,6 +218,7 @@ export async function runOperationAction(args: {
   readonly sendEvent: SendEvent;
   readonly scrubber: { push(text: string): string; flush(): string };
   readonly signal: AbortSignal;
+  readonly previewCommit?: (chapter: number) => Promise<void>;
 }): Promise<void> {
   const { action, projectDir } = args;
   const emitText = (text: string): void => {
@@ -226,6 +241,9 @@ export async function runOperationAction(args: {
     const receipt = receiptOf(outcome, "button", { kind: action.type, mode: action.mode, chapter });
     if (!receipt.accepted || !receipt.opId) {
       emitText(receipt.summary);
+      // 写稿没受理（有稿、前一章没定稿、没得接……）：按原因给下一步；别的原因（在忙、按过了）不给「再写一次」。
+      const read = action.type === DRAFT_CHANGE_KIND && !receipt.ok ? readDraftChangeParams(action.mode, action.params) : undefined;
+      if (read) sendNextSteps(args.sendEvent, "接下来？", await draftRetryChoices(projectDir, receipt.code, read.mode, read.params, false));
       return;
     }
     opId = receipt.opId;
@@ -249,5 +267,5 @@ export async function runOperationAction(args: {
   }
   const record = await followOperation({ bookDir: projectDir, opId, sendEvent: args.sendEvent, signal: args.signal });
   if (!record || args.signal.aborted || !settlesTurn(record.state)) return;
-  await finishOperationTurn({ record, projectDir, sendEvent: args.sendEvent, scrubber: args.scrubber });
+  await finishOperationTurn({ record, projectDir, sendEvent: args.sendEvent, scrubber: args.scrubber, ...(args.previewCommit ? { previewCommit: args.previewCommit } : {}) });
 }

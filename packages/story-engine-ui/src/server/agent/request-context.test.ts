@@ -45,25 +45,25 @@ describe("request-context projectDir + currentChapter 注入/读取", () => {
   });
 
   it("buildProjectRequestContext 带作者原话 → 可读回（空白条丢掉）", () => {
-    const c = ctx(buildProjectRequestContext("/tmp/book", 3, undefined, ["写第59章", "  ", "让林溪回来"]));
+    const c = ctx(buildProjectRequestContext("/tmp/book", 3, ["写第59章", "  ", "让林溪回来"]));
 
     expect(readAuthorWordsFromContext(c)).toEqual(["写第59章", "让林溪回来"]);
   });
 
   it("作者原话缺省或全空白 → 读回 undefined", () => {
     expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book")))).toBeUndefined();
-    expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book", 3, undefined, ["   "])))).toBeUndefined();
+    expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book", 3, ["   "])))).toBeUndefined();
     expect(readAuthorWordsFromContext(undefined)).toBeUndefined();
   });
 });
 
 describe("request-context 作者挑中的走法", () => {
   it("只对挑的那一章读得回；没带、没字、章号不对都是 undefined", () => {
-    const c = ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, undefined, { chapter: 14, text: " 老民警：1. 去派出所 " }));
+    const c = ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, { chapter: 14, text: " 老民警：1. 去派出所 " }));
     expect(readPickedDirectionFromContext(c, 14)).toBe("老民警：1. 去派出所");
     expect(readPickedDirectionFromContext(c, 15)).toBeUndefined();
     expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14)), 14)).toBeUndefined();
-    expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, undefined, { chapter: 14, text: "  " })), 14)).toBeUndefined();
+    expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, { chapter: 14, text: "  " })), 14)).toBeUndefined();
     expect(readPickedDirectionFromContext(undefined, 14)).toBeUndefined();
   });
 });
@@ -73,7 +73,7 @@ describe("request-context lastTurnUndoHint 注入/读取/容错", () => {
   const validHint = { snapshotId: "a".repeat(40), changes: 2 };
 
   it("buildProjectRequestContext 带 hint → 工具层原样读回", () => {
-    const c = ctx(buildProjectRequestContext("/tmp/book", 3, undefined, undefined, validHint));
+    const c = ctx(buildProjectRequestContext("/tmp/book", 3, undefined, validHint));
     expect(readLastTurnUndoHintFromContext(c)).toEqual(validHint);
   });
 
