@@ -54,14 +54,24 @@ export async function withFence<T>(context: OperationContext, write: () => Promi
 
 /**
  * 书里的缓存写（设计 6.3：核账记忆、改句记录、跟读笔记、卷笔记——按内容键整份覆盖，步骤里可写）：
- * 在这本书的一次操作里 → 栅栏里写（书锁里核栅栏、同一次持锁写，停掉 / 暂停之后写不进）；
- * 不在操作里（还没迁走的旧入口）→ 先 stat 书目录、不在就不写（不建出幽灵目录）。
+ * - 在这本书的一次操作里 → 栅栏里写（书锁里核栅栏、同一次持锁写，停掉 / 暂停之后写不进）；
+ * - 在**别的书**的操作里 → 拒绝（Astra P2a 第 8 轮第 3 条：不当成操作外的写放过去，不然停掉的操作还能写别的书）；
+ * - 不在操作里（还没迁走的旧入口）→ 同一次持书锁里先核书目录在、再写：删书进回收站也拿这把锁，
+ *   不会核过之后书被挪走、写又在原处建出幽灵目录（第 8 轮第 3 条）。
  */
 export async function writeBookCache<T>(bookDir: string, write: () => Promise<T>): Promise<T> {
   const context = currentOperation();
-  if (context && resolve(context.bookDir) === resolve(bookDir)) return withFence(context, write);
-  await stat(bookDir);
-  return write();
+  if (context) {
+    if (resolve(context.bookDir) !== resolve(bookDir)) {
+      throw new OperationStopped("cross_book_write", "这次操作只写它自己那本书，别的书没有写。");
+    }
+    return withFence(context, write);
+  }
+  assertNotHoldingRecordLock();
+  return withBookLock(bookDir, async () => {
+    if (!(await bookDirExists(bookDir))) throw new OperationStopped("book_gone", "这本书已经不在原处了，没有写。");
+    return write();
+  });
 }
 
 /**

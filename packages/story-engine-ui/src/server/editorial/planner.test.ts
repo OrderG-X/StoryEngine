@@ -5,7 +5,9 @@ import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, readChapterPlan } from "../book/chapter-plan.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { readReadersCatchUpStatus, startReaderCatchUp } from "./catch-up.js";
+import { readReadersCatchUpStatus } from "./catch-up.js";
+import { readerWaitingHandlers } from "./reader-progress.js";
+import { ensureReaderWindow } from "./reader-window.js";
 import {
   callConfiguredPlannerModel,
   PLANNER_ROLE,
@@ -140,9 +142,9 @@ describe("章纲员：拟章纲", () => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let started = false;
-    // 后台补读的假模型：第一次调用（写第 1 章笔记）就卡住，把章纲员的锁拿在手里。
+    // 别人补读的假模型：第一次调用（写第 1 章笔记）就卡住，把章纲员的锁拿在手里（带上进度回调，进度行看得到它在读）。
     const bg: BrainCallModel = async () => { started = true; await gate; return "笔记"; };
-    const bgRound = startReaderCatchUp(dir, PLANNER_ROLE, 2, { callModel: bg });
+    const bgRound = ensureReaderWindow({ projectDir: dir, role: PLANNER_ROLE, upTo: 2, callModel: bg, ...readerWaitingHandlers(dir, PLANNER_ROLE.id, 2) });
     await vi.waitFor(() => expect(started).toBe(true), { timeout: 5_000 });
     // 并发拟纲（第 3 章）：开口时一章笔记都还没有（waited.from=1），排在锁后面等。
     const { callModel } = fakePlanner();
@@ -163,7 +165,7 @@ describe("章纲员：拟章纲", () => {
   it("笔记本来就齐 → 没等就不说（R6.1）：不带 waited，进度不标在等", async () => {
     const dir = await makeBook();
     // 先把第 1～2 章笔记补齐（同一角色，哈希对得上），再拟第 3 章。
-    await startReaderCatchUp(dir, PLANNER_ROLE, 2, { callModel: async () => "笔记" });
+    await ensureReaderWindow({ projectDir: dir, role: PLANNER_ROLE, upTo: 2, callModel: async () => "笔记" });
     const { callModel } = fakePlanner();
     const result = await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel });
     expect(result.ok).toBe(true);

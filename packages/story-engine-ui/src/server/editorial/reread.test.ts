@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { readReadersCatchUpStatus, runInReaderCatchUpQueue } from "./catch-up.js";
-import { maybeStartReadersCatchUp } from "./index.js";
+import { resumeBackgroundReading } from "./index.js";
+import { setReaderBackfillHandler, type ReaderBackfillRequest } from "../lib/reader-backfill.js";
 import type { BrainCallModel } from "./reader-window.js";
 import { beginReread, isRereadActive, REREAD_ATTEMPTS, runReread } from "./reread.js";
 import { readRereadState, rereadBlocker, rereadEtaMinutes, writeRereadState } from "./reread-state.js";
@@ -93,7 +94,7 @@ describe("通读记账", () => {
     expect(status.roles.find((role) => role.role === "ledger")).toMatchObject({ reading: false, done: 1, total: 3 });
 
     // 停下的开书时不自动重试（一直失败的话每次开书都白花调用）。
-    await maybeStartReadersCatchUp(book);
+    await resumeBackgroundReading(book);
     expect(isRereadActive(book)).toBe(false);
 
     const good = fakeKeeper();
@@ -140,14 +141,17 @@ describe("通读记账", () => {
   it("进程重启前在记的：开书时接着记", async () => {
     await beginReread(book, 3);
     const keeper = fakeKeeper();
-    await maybeStartReadersCatchUp(book, { callModel: keeper });
-    await vi.waitFor(async () => expect((await readRereadState(book))?.status).toBe("done"), { timeout: 5000 });
-    expect(keeper.calls).toBeGreaterThan(0);
-    // 记完接着排三个专员补读：等它们读完再收拾目录。
-    await vi.waitFor(async () => {
-      const status = await readReadersCatchUpStatus(book);
-      expect(status.roles.every((role) => !role.reading && role.done === 3)).toBe(true);
-    }, { timeout: 5000 });
-    await runInReaderCatchUpQueue(book, async () => undefined);
+    const backfills: ReaderBackfillRequest[] = [];
+    setReaderBackfillHandler(async (_book, request) => { backfills.push(request); });
+    try {
+      await resumeBackgroundReading(book, { callModel: keeper });
+      await vi.waitFor(async () => expect((await readRereadState(book))?.status).toBe("done"), { timeout: 5000 });
+      expect(keeper.calls).toBeGreaterThan(0);
+      // 记完交一次三个专员的后台补读（执行器的 background.backfill）。
+      await vi.waitFor(() => expect(backfills).toEqual([{ upTo: 3 }]), { timeout: 5000 });
+      await runInReaderCatchUpQueue(book, async () => undefined);
+    } finally {
+      setReaderBackfillHandler(undefined);
+    }
   });
 });

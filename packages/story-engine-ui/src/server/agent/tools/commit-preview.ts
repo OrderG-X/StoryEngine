@@ -16,7 +16,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import { readCardsOrLegacy, readChapterPaper, type TruthBasis } from "@actalk/story-core";
 
-import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
+import { callConfiguredBrainModel, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
+import { requestReaderBackfill } from "../../lib/reader-backfill.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
@@ -160,7 +161,7 @@ export async function buildCommitPreviewToolOutput(input: {
   }));
   if (preview.cold) {
     // 记账员还没读完全书：这次按已有笔记 + 最近几章原文记的，笔记在后台接着补。
-    void catchUpReaders(projectDir, chapter - 1, { ...(input.callModel ? { callModel: input.callModel } : {}), roles: ["ledger"] });
+    requestReaderBackfill(projectDir, { roles: ["ledger"], upTo: chapter - 1 });
   }
   if (!preview.ok) {
     return blocked(chapter, [preview.reason], `第 ${chapter} 章现在还定不了：${preview.reason}`);

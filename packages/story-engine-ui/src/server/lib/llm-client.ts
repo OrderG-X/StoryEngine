@@ -204,6 +204,8 @@ export type ResolvedChatModel = {
   readonly task?: ModelTaskProfileKey;
 };
 
+type ProviderSummary = ModelSettingsLoadResult["summary"]["providers"][number];
+
 /** 档案 → 可调用的模型（服务商、密钥、自定义头）。缺服务商 / 缺密钥抛人话错误。 */
 async function resolveProfileModel(
   settings: ModelSettingsLoadResult,
@@ -214,6 +216,11 @@ async function resolveProfileModel(
   if (!provider) {
     throw new ModelSetupError(`模型「${profile.label || profile.model || profile.id}」用的服务商不见了（可能删掉了），去 设置 → 模型 重新选一个。`);
   }
+  return resolveWithProvider(provider, profile, thinking);
+}
+
+/** 服务商已经定了：读密钥、自定义头（调用时读，不冻结）。缺密钥抛人话错误。 */
+async function resolveWithProvider(provider: ProviderSummary, profile: ModelProfile, thinking: boolean): Promise<ResolvedChatModel> {
   const apiKey = await resolveProviderApiKey(provider);
   if (provider.apiKeyStatus === "missing" && !apiKey) {
     throw new ModelSetupError(`「${provider.label || provider.id}」还没填密钥，去 设置 → 模型 填上就能用。`);
@@ -333,7 +340,8 @@ export async function frozenCompatAllowance(frozen: FrozenModels, tasks: readonl
   const seen = new Set<string>();
   let total = 0;
   for (const profile of profiles) {
-    const provider = settings.summary.providers.find((item) => item.id === profile.provider);
+    // 按开工时冻结的服务商地址算（发请求也只发这个地址，见 resolveFrozenChatModel）。
+    const provider = frozen.providers[profile.provider];
     if (!provider) continue;
     const key = modelCapabilityKey(provider.baseUrl, profile.model);
     if (seen.has(key)) continue;
@@ -343,37 +351,87 @@ export async function frozenCompatAllowance(frozen: FrozenModels, tasks: readonl
   return total;
 }
 
-export const FROZEN_MODELS_SCHEMA = "operation-models/1" as const;
+export const FROZEN_MODELS_SCHEMA = "operation-models/2" as const;
+
+/**
+ * 开工时冻结的服务商路由（Astra P2a 第 8 轮第 5 条）：请求发到哪（类型、地址）、用哪份密钥（密钥来源的名字，不是密钥）、
+ * 归哪个限流组。都不是秘密。密钥、自定义头的值照旧调用时读。
+ */
+export interface FrozenProvider {
+  readonly id: string;
+  readonly type: ProviderSummary["type"];
+  readonly baseUrl: string;
+  readonly apiKeyEnv?: string;
+  readonly quotaGroup?: string;
+}
+
+function frozenProviderOf(provider: ProviderSummary): FrozenProvider {
+  return {
+    id: provider.id,
+    type: provider.type,
+    baseUrl: provider.baseUrl,
+    ...(provider.apiKeyEnv !== undefined ? { apiKeyEnv: provider.apiKeyEnv } : {}),
+    ...(provider.quotaGroup !== undefined ? { quotaGroup: provider.quotaGroup } : {}),
+  };
+}
+
+/** 现在设置里的这个服务商，请求还发不发到开工时那个地方、用不用那份密钥（限流组改了不算，按冻结的那份排队）。 */
+const sameRoute = (frozen: FrozenProvider, current: ProviderSummary): boolean =>
+  frozen.type === current.type && frozen.baseUrl === current.baseUrl && frozen.apiKeyEnv === current.apiKeyEnv;
 
 /**
  * 一次操作开工时冻结的模型选择（写作版本 P2a 4.5，存在操作的 `inputs/models.json`）：每个任务用哪个档案（整份档案，
- * 不含密钥——密钥照旧调用时读）、开不开思考；备用档案。开工时就解析不出来的任务记下那句原因，调到时照它如实失败。
+ * 不含密钥——密钥照旧调用时读）、开不开思考；备用档案；这些档案用的服务商路由（`providers`，按服务商 id）。
+ * 开工时就解析不出来的任务记下那句原因，调到时照它如实失败。发请求、算额度都按这一份。
  */
 export interface FrozenModels {
   readonly schema: typeof FROZEN_MODELS_SCHEMA;
   readonly tasks: Partial<Record<ModelTaskProfileKey, { readonly profile: ModelProfile; readonly thinking: boolean } | { readonly error: string }>>;
   readonly fallback?: ModelProfile;
+  readonly providers: Readonly<Record<string, FrozenProvider>>;
 }
+
+const missingProviderMessage = (profile: ModelProfile): string =>
+  `模型「${profile.label || profile.model || profile.id}」用的服务商不见了（可能删掉了），去 设置 → 模型 重新选一个。`;
 
 export async function freezeModelChoices(): Promise<FrozenModels> {
   const settings = await loadGlobalModelSettings();
   const tasks: Partial<Record<ModelTaskProfileKey, { readonly profile: ModelProfile; readonly thinking: boolean } | { readonly error: string }>> = {};
-  if (!settings.available) return { schema: FROZEN_MODELS_SCHEMA, tasks };
+  const providers: Record<string, FrozenProvider> = {};
+  if (!settings.available) return { schema: FROZEN_MODELS_SCHEMA, tasks, providers };
+  /** 档案用的服务商冻进去；服务商不见了返回 false。 */
+  const freezeProvider = (profile: ModelProfile): boolean => {
+    const provider = settings.summary.providers.find((item) => item.id === profile.provider);
+    if (!provider) return false;
+    providers[provider.id] = frozenProviderOf(provider);
+    return true;
+  };
   const { file: assignments } = await readTaskAssignments(homedir());
   for (const task of TASK_ASSIGNMENT_KEYS) {
     try {
-      tasks[task] = chooseTaskProfile(settings, assignments, task);
+      const choice = chooseTaskProfile(settings, assignments, task);
+      tasks[task] = freezeProvider(choice.profile) ? choice : { error: missingProviderMessage(choice.profile) };
     } catch (error) {
       tasks[task] = { error: error instanceof Error ? error.message : String(error) };
     }
   }
-  const fallback = assignments?.fallbackProfileId ? settings.summary.profiles.find((item) => item.id === assignments.fallbackProfileId) : undefined;
-  return { schema: FROZEN_MODELS_SCHEMA, tasks, ...(fallback ? { fallback } : {}) };
+  const found = assignments?.fallbackProfileId ? settings.summary.profiles.find((item) => item.id === assignments.fallbackProfileId) : undefined;
+  const fallback = found && freezeProvider(found) ? found : undefined;
+  return { schema: FROZEN_MODELS_SCHEMA, tasks, ...(fallback ? { fallback } : {}), providers };
 }
 
 export function isFrozenModels(value: unknown): value is FrozenModels {
   const frozen = value as Partial<FrozenModels> | null;
-  return frozen?.schema === FROZEN_MODELS_SCHEMA && typeof frozen.tasks === "object" && frozen.tasks !== null;
+  return frozen?.schema === FROZEN_MODELS_SCHEMA && typeof frozen.tasks === "object" && frozen.tasks !== null
+    && typeof frozen.providers === "object" && frozen.providers !== null;
+}
+
+/** 冻结的模型选择里这个任务能不能用：不能用返回一句原因（受理前挡下，不受理一次注定失败的操作）。 */
+export function frozenModelProblem(frozen: FrozenModels, task: ModelTaskProfileKey): string | undefined {
+  const choice = frozen.tasks[task];
+  if (!choice) return `「${TASK_LABELS[task] ?? task}」还没配模型，没法用；去 设置 → 模型 配好再来一次。`;
+  if ("error" in choice) return choice.error;
+  return undefined;
 }
 
 async function resolveFrozenChatModel(settings: ModelSettingsLoadResult, frozen: FrozenModels, task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
@@ -385,12 +443,28 @@ async function resolveFrozenChatModel(settings: ModelSettingsLoadResult, frozen:
   if (!settings.summary.profiles.some((item) => item.id === choice.profile.id)) {
     throw new ModelSetupError(`开工时给「${label}」用的模型「${choice.profile.label || choice.profile.model || choice.profile.id}」被删了，这次没法接着用；重新来一次就按现在的设置。`);
   }
-  const primary = await resolveProfileModel(settings, choice.profile, choice.thinking);
+  const primary = await resolveFrozenProfile(settings, frozen, choice.profile, choice.thinking, label);
   const fallbackProfile = frozen.fallback;
   const fallback = fallbackProfile && settings.summary.profiles.some((item) => item.id === fallbackProfile.id)
-    ? await tryFallback(() => resolveProfileModel(settings, fallbackProfile, true))
+    ? await tryFallback(() => resolveFrozenProfile(settings, frozen, fallbackProfile, true, "备用模型"))
     : undefined;
   return withFallback(primary, fallback, task);
+}
+
+/**
+ * 冻结的档案 → 可调用的模型：请求只发开工时冻结的那个地址（Astra P2a 第 8 轮第 5 条：额度按它算的，发也得按它）。
+ * 作者中途改了这个服务商的类型、地址、密钥来源：这次如实停下，不拿现在的密钥往旧地址发，也不悄悄改发新地址。
+ * 服务商的名字跟现在的走（只是显示）；限流组按冻结的。
+ */
+async function resolveFrozenProfile(settings: ModelSettingsLoadResult, frozen: FrozenModels, profile: ModelProfile, thinking: boolean, label: string): Promise<ResolvedChatModel> {
+  const route = frozen.providers[profile.provider];
+  const current = settings.summary.providers.find((item) => item.id === profile.provider);
+  if (!route || !current) throw new ModelSetupError(missingProviderMessage(profile));
+  if (!sameRoute(route, current)) {
+    throw new ModelSetupError(`开工之后「${current.label || current.id}」的服务商地址（或密钥来源）改了，「${label}」这次没法接着用；重新来一次就按现在的设置。`);
+  }
+  const { quotaGroup: _current, ...rest } = current;
+  return resolveWithProvider({ ...rest, ...(route.quotaGroup !== undefined ? { quotaGroup: route.quotaGroup } : {}) }, profile, thinking);
 }
 
 // ---------------------------------------------------------------------------
@@ -785,7 +859,11 @@ function hasUnknownCapability(key: string, body: Readonly<Record<string, unknown
  * 额度里给兼容改参留几次（设计 4.5：受理时按这次冻结的模型算；接着做时再按当时没学全的算一次）：
  * 这个模型两项能力里还没学到的项数（学到不认的、确认认的都不算）。能关思考只在方言能发思考开关时算。
  */
-export async function unlearnedCapabilityCount(configured: Pick<ResolvedChatModel, "provider" | "profile" | "thinkingDialect">): Promise<number> {
+export async function unlearnedCapabilityCount(configured: {
+  readonly provider: Pick<ResolvedChatModel["provider"], "baseUrl">;
+  readonly profile: Pick<ResolvedChatModel["profile"], "model">;
+  readonly thinkingDialect: ThinkingDialect;
+}): Promise<number> {
   const key = modelCapabilityKey(configured.provider.baseUrl, configured.profile.model);
   const streamKnown = workingCapabilities.has(`${key}|stream_options`) || (await isNoStreamOptionsModel(configured.provider.baseUrl, configured.profile.model));
   const thinkingKnown = configured.thinkingDialect === "none"

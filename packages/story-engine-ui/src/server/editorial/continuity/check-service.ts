@@ -10,7 +10,6 @@ import { describeTimelineForChapter, readStoryTimeline, type StoryTimeline } fro
 import { type FactEntry } from "../../book/types.js";
 import {
   callConfiguredBrainModel,
-  catchUpReaders,
   checkChapterByReader,
   countCommittedChapters,
   DEFAULT_READER_VARIANT,
@@ -37,6 +36,7 @@ import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLo
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";
+import { requestReaderBackfill } from "../../lib/reader-backfill.js";
 import { readTruthBasisToCompare, readWithStableBasisForWork } from "../../book/truth-basis.js";
 
 export interface ChapterCheckItem {
@@ -301,7 +301,7 @@ export async function checkChapterBody(
       // 读完后作者再点一次「核账」，就是按读完全书来核的；冷窗口没写任何笔记，两边不会混。
       // 分母统一（R4.3 验收 3.3）：回执和界面进度行同一个口径——共 y 章（已定稿）取已定稿章数。
       coldTotal = Math.max(result.coverage.rawTo, await countCommittedChapters(projectDir));
-      void catchUpReaders(projectDir, coldTotal, { callModel: readerCallModel, roles: ["checker"] });
+      requestReaderBackfill(projectDir, { roles: ["checker"], upTo: coldTotal });
     }
   }
   // 核账记忆：冷窗口的结果不写盘（它对照的范围小，不该被当成全书核过缓存起来；下次点「核账」重核，

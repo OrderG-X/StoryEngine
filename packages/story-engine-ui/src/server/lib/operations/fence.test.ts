@@ -2,12 +2,13 @@
 // 栅栏、暂停入口、派生发布（写作版本 P2a 设计 6.2、6.3）。
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bookEpochWrite, draftSave, readBookEpoch, runCommand, withBookLock } from "@actalk/story-core";
 import { createStoryProject } from "../../book/project-store.js";
 import { makeHomeTempDir } from "../home-test-tmp.js";
-import { __resetExecutionsForTests, OperationStopped, registerExecution, type OperationContext } from "./context.js";
-import { checkFence, fencePrecondition, pauseOperation, publishDerived, withFence } from "./fence.js";
+import { moveBookToTrash } from "../book-trash.js";
+import { __resetExecutionsForTests, OperationStopped, registerExecution, runInOperation, type OperationContext } from "./context.js";
+import { checkFence, fencePrecondition, pauseOperation, publishDerived, withFence, writeBookCache } from "./fence.js";
 import { __resetOperationStoreForTests, acceptOperation, changeOperation, readOperation, type OperationRecord } from "./store.js";
 
 let root: string;
@@ -98,6 +99,48 @@ describe("栅栏", () => {
     });
     expect(outcome).toMatchObject({ ok: false, code: "operation_stopped" });
     await expect(stat(join(book, "drafts/fast/chapter-0001.md"))).rejects.toThrow();
+  });
+});
+
+describe("书里的缓存写（writeBookCache，Astra P2a 第 8 轮第 3 条）", () => {
+  it("操作外：核书目录和写在同一次书锁里——删书等写完再挪，挪走之后的写不在原处建目录", async () => {
+    vi.stubEnv("SE_BOOKS_DIR", root);
+    try {
+      const writing = deferred();
+      const release = deferred();
+      const cache = writeBookCache(book, async () => {
+        writing.resolve();
+        await release.promise;
+        await mkdir(join(book, "agents", "cache"), { recursive: true });
+        await writeFile(join(book, "agents", "cache", "a.json"), "{}");
+      });
+      await writing.promise;
+      const trashed = moveBookToTrash(book, "栅栏");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      release.resolve();
+      await cache;
+      const id = await trashed;
+      await expect(stat(book)).rejects.toThrow();
+      expect(await readFile(join(root, "回收站", id, "book", "agents", "cache", "a.json"), "utf-8")).toBe("{}");
+
+      const write = vi.fn(async () => mkdir(join(book, "agents"), { recursive: true }));
+      await expect(writeBookCache(book, write)).rejects.toMatchObject({ code: "book_gone" });
+      expect(write).not.toHaveBeenCalled();
+      await expect(stat(book)).rejects.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("在别的书的操作里：拒绝，不当成操作外的写放过去（取消了的操作也写不进别的书）", async () => {
+    const { context } = await running();
+    const { projectDir: other } = await createStoryProject({ rootDir: root, title: "另一本", genre: "悬疑", protagonistName: "林远" });
+    const write = vi.fn(async () => writeFile(join(other, "cache.json"), "{}"));
+    await expect(runInOperation(context, () => writeBookCache(other, write))).rejects.toMatchObject({ code: "cross_book_write" });
+    await changeOperation(book, context.opId, (current) => ({ ...current, state: "cancelled", runEpoch: 2 }));
+    await expect(runInOperation(context, () => writeBookCache(other, write))).rejects.toMatchObject({ code: "cross_book_write" });
+    await expect(runInOperation(context, () => writeBookCache(book, write))).rejects.toBeInstanceOf(OperationStopped);
+    expect(write).not.toHaveBeenCalled();
   });
 });
 

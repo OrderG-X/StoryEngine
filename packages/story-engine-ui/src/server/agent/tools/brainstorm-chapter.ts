@@ -9,7 +9,8 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { brainstormChapter, catchUpReaders, callConfiguredBrainModel, callConfiguredPlannerModel, rereadBlocker, type BrainCallModel, type BrainstormOption } from "../../editorial/index.js";
+import { brainstormChapter, callConfiguredBrainModel, callConfiguredPlannerModel, rereadBlocker, type BrainCallModel, type BrainstormOption } from "../../editorial/index.js";
+import { requestReaderBackfill } from "../../lib/reader-backfill.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("想第几章；省略=作者当前所在章。")),
@@ -61,7 +62,7 @@ export async function runBrainstormTool(input: {
     callPlanner,
     callChecker,
     // 冷窗口：笔记在后台接着补（同拟章纲），读齐后下次就按全书想。
-    onCold: (role) => void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: role === "planner" ? callPlanner : callChecker, roles: [role] }),
+    onCold: (role) => requestReaderBackfill(input.projectDir, { roles: [role], upTo: input.chapter - 1 }),
   });
   if (!result.ok) return { ok: false, chapter: input.chapter, summary: `第 ${input.chapter} 章的走法没想出来：${result.reason}` };
   const conflicted = result.options.filter((option) => option.problems.length > 0).length;

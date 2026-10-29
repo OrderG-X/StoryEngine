@@ -12,6 +12,7 @@ import { registerSearchSettingsRoutes } from "./routes/search-settings.js";
 import { registerAboutRoutes } from "./routes/about.js";
 import { registerStateOverviewRoutes } from "./routes/state-overview.js";
 import { registerOperationsRoutes } from "./routes/operations.js";
+import { registerBuiltInRecipes } from "./services/operations/recipes/index.js";
 import { registerReaderProgressRoutes } from "./routes/reader-progress.js";
 import { registerDraftRoutes } from "./routes/draft.js";
 import { registerDraftRevisionRoutes } from "./routes/draft-revision.js";
@@ -44,6 +45,8 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   router.use(createSecurityGate());
   // 每个请求一个用量范围：路由过项目路径闸时记下书，这次请求里调模型的用量记到它名下（P10）。
   router.use((_req, _res, next) => runInUsageScope(() => next()));
+  // 写作版本 P2a：配方登记进执行器、补读提交口接上处理函数（路由用到之前）。
+  registerBuiltInRecipes();
   registerStateOverviewRoutes(router);
   registerReaderProgressRoutes(router);
   registerDraftRoutes(router);

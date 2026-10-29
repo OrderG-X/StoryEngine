@@ -42,4 +42,7 @@ export function backfillBudget(chapters: number, volumeBuilds: number): number {
   return (chapters + volumeBuilds) * READER_CALL_MAX_SENDS;
 }
 
+/** 后台补读一步最多发几次：这一章的笔记 1 次 + 卷节点上限 × 每次（接着做时按它加额度）。 */
+export const BACKFILL_STEP_SENDS = (1 + READER_MAX_VOLUME_BUILDS) * READER_CALL_MAX_SENDS;
+
 export const sumBudget = (steps: Readonly<Record<string, number>>): number => Object.values(steps).reduce((sum, value) => sum + value, 0);

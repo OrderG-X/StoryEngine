@@ -10,11 +10,12 @@
  * - **开书对账**（6.5）：本进程调度表里的不碰；其余 queued / running：有没处理的结果不明 → paused:attempt_unknown，
  *   后台配方登记了自动续 → 接着跑，其余 → paused:interrupted；配方版本对不上 → obsolete。
  */
-import { readBookEpoch, withBookLock } from "@actalk/story-core";
+import { bookKey, readBookEpoch, withBookLock } from "@actalk/story-core";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
 import { freezeModelChoices, isFrozenModels, type FrozenModels } from "../../lib/llm-client.js";
 import { readOperationInput } from "../../lib/operations/inputs.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
+import { withUsageBook } from "../../lib/usage-scope.js";
 import { listAttempts, settleAbandonedAttempt, unsettledUnknowns } from "../../lib/operations/attempts.js";
 import { inputHashOf, readCheckpoint, writeCheckpoint } from "../../lib/operations/checkpoints.js";
 import {
@@ -93,6 +94,8 @@ export interface Recipe<P = unknown> {
   run(ctx: RecipeContext<P>): Promise<OperationResult>;
   /** 接着做时这一步从头做，额度加多少（这一步的最坏值）。 */
   stepBudget(stepId: string | undefined, params: P): number;
+  /** 这一次执行收尾之后（记录已经换成终态或停着）调一次，拿到的是收尾后的记录（后台补读跑完再看一眼要不要再交一次）。不许抛。 */
+  afterRun?(bookDir: string, record: OperationRecord): Promise<void>;
 }
 
 const recipes = new Map<string, Recipe<unknown>>();
@@ -149,7 +152,7 @@ export async function submitOperation(bookDir: string, input: SubmitInput): Prom
   }, { bookEpoch: () => readBookEpoch(bookDir), inputs: { models } });
   if (!accepted.ok) return accepted;
   if ("tombstone" in accepted) return accepted;
-  if (!accepted.existing) void startOperation(bookDir, accepted.record.opId);
+  if (!accepted.existing) track(startOperation(bookDir, accepted.record.opId));
   return accepted;
 }
 
@@ -183,8 +186,16 @@ export async function startOperation(bookDir: string, opId: string, options: Sta
     };
   });
   if (!record || !changed) return record;
-  void execute(bookDir, record);
+  track(execute(bookDir, record));
   return record;
+}
+
+/** 在跑的（连开跑前换状态那一下、收尾那一步）；只给单测等它们跑完。 */
+const inFlight = new Set<Promise<unknown>>();
+function track(run: Promise<unknown>): void {
+  inFlight.add(run);
+  const done = () => { inFlight.delete(run); };
+  run.then(done, done);
 }
 
 async function execute(bookDir: string, record: OperationRecord): Promise<void> {
@@ -204,12 +215,17 @@ async function execute(bookDir: string, record: OperationRecord): Promise<void> 
     if (!recipe) throw Object.assign(new Error("这类操作还没有。"), { code: "unknown_operation" });
     // 冻结的模型选择受理时写在记录之前；读不到就不按现在的设置凑合着跑（那就不是开工时那一套了）。
     if (!operation.models) throw Object.assign(new Error("开工时记下的模型设置读不到了，这次没法接着做；重新来一次。"), { code: "inputs_missing" });
-    const result = await runInOperation(operation, () => recipe.run(contextFor(record, operation)));
+    // 用量记到这本书名下（P10）：后台操作可能比交它的那次请求活得久。
+    const result = await withUsageBook(bookDir, () => runInOperation(operation, () => recipe.run(contextFor(record, operation))));
     await finish(operation, result);
   } catch (error) {
     await settleError(operation, error);
   } finally {
     execution.unregister();
+  }
+  if (recipe?.afterRun) {
+    const settled = await readOperation(bookDir, record.opId).catch(() => undefined);
+    if (settled?.kind === "record") await recipe.afterRun(bookDir, settled.record).catch((error: unknown) => console.warn(`[operations] ${record.kind} 收尾后的那一步没成`, error));
   }
 }
 
@@ -362,6 +378,22 @@ export async function reconcileOperations(bookDir: string): Promise<{ readonly r
   return { resumed };
 }
 
+const reconciled = new Map<string, Promise<unknown>>();
+
+/** 开书时对账，这个进程里每本书只对一次（之后的操作都是本进程调度的，不会被判没人管）。对账出错只记一笔、下次开书再对。 */
+export async function reconcileOnOpen(bookDir: string): Promise<void> {
+  const key = bookKey(bookDir);
+  let pending = reconciled.get(key);
+  if (!pending) {
+    pending = reconcileOperations(bookDir).catch((error: unknown) => {
+      reconciled.delete(key);
+      console.warn("[operations] 开书对账没成（不影响开书，下次开书再对）", error);
+    });
+    reconciled.set(key, pending);
+  }
+  await pending;
+}
+
 /** 一次操作给作者看的一句结果（墓碑、摘要用）。 */
 export function summaryLine(record: OperationRecord): string {
   const result = record.result as Partial<OperationResult> | undefined;
@@ -416,7 +448,16 @@ export async function subscribeOperation(bookDir: string, opId: string, send: (e
   return unsubscribe;
 }
 
-/** 测试用：清登记的配方。 */
+/** 测试用：清登记的配方和开书对账的记号。 */
 export function __resetRecipesForTests(): void {
   recipes.clear();
+  reconciled.clear();
+  inFlight.clear();
+}
+
+/** 单测：等这个进程里交上的操作都跑完（连收尾那一步、收尾里接着交的）。等过返回 true。 */
+export async function __drainOperationsForTests(): Promise<boolean> {
+  if (inFlight.size === 0) return false;
+  while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+  return true;
 }

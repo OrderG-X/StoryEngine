@@ -8,7 +8,6 @@ import { readStoryTimeline } from "../book/story-timeline.js";
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
-  catchUpReaders,
   checkPlanByReader,
   describeReaderWait,
   planChapterByPlanner,
@@ -19,6 +18,7 @@ import {
 import { containsQuote, normalize } from "./continuity/check-chapter.js";
 import { collectPlanMaterials } from "./plan-materials.js";
 import { withStep } from "../lib/token-meter.js";
+import { requestReaderBackfill } from "../lib/reader-backfill.js";
 import { readWithStableBasisForWork } from "../book/truth-basis.js";
 
 export interface ResolvedChapterPlan {
@@ -60,7 +60,7 @@ async function planByEditorialRoom(input: {
   //   数字见 scripts/eval/results/r52-cold-gap-*.json。）
   let planColdNote = "";
   if (planned.cold) {
-    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: plannerCallModel });
+    requestReaderBackfill(input.projectDir, { roles: ["planner"], upTo: input.chapter - 1 });
     planColdNote = `章纲员还没读完全书（第 ${planned.cold.notedThrough} / ${input.chapter - 1} 章），这次按${
       [
         ...(planned.cold.notedThrough > 0 ? ["已读笔记"] : []),
@@ -87,7 +87,7 @@ async function planByEditorialRoom(input: {
   // 冷窗口审纲：核账员还没读完全书，这次按已有笔记 + 最近 K 章原文审的，笔记后台接着补（点名 checker）。
   let checkColdNote = "";
   if (checked.cold) {
-    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: checkCallModel, roles: ["checker"] });
+    requestReaderBackfill(input.projectDir, { roles: ["checker"], upTo: input.chapter - 1 });
     checkColdNote = `核账员还没读完全书（第 ${checked.cold.notedThrough} / ${input.chapter - 1} 章），这次按${coldBasis(checked.cold)}审的纲，更早的细节可能漏。`;
   }
   const coldNote = [planColdNote, checkColdNote].filter(Boolean).map((note) => `（${note}）`).join("");

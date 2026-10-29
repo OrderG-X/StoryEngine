@@ -327,6 +327,35 @@ describe("开工时冻结的模型选择（写作版本 P2a 4.5）", () => {
     await expect(inOperation(frozen, () => resolveConfiguredChatModel("qualityCheck"))).rejects.toThrow(/开工时给「.*」用的模型「fast-model」被删了/u);
     await expect(inOperation(frozen, () => resolveConfiguredChatModel("fastDraft"))).rejects.toThrow(/ghost/u);
   });
+
+  it("服务商路由一起冻住（Astra P2a 第 8 轮第 5 条）：开工后改了地址 / 密钥来源 → 这次如实停下，不往哪边发；只改限流组照旧、按冻结的组排队", async () => {
+    const base = settingsWithoutTriage();
+    const withProvider = (patch: Record<string, unknown>): ModelSettingsLoadResult => ({ ...base, summary: { ...base.summary, providers: [{ ...base.summary.providers[0]!, ...patch }] } });
+    loadModelSettingsV0.mockResolvedValue(withProvider({ quotaGroup: "套餐甲" }));
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: { qualityCheck: { profileId: "fast", thinking: true } }, fallbackProfileId: "balanced" }, corrupt: false });
+    const frozen = await freezeModelChoices();
+    expect(frozen.providers.main).toEqual({ id: "main", type: "openai-compatible", baseUrl: "https://api.example.invalid/v1", quotaGroup: "套餐甲" });
+
+    loadModelSettingsV0.mockResolvedValue(withProvider({ quotaGroup: "套餐乙", label: "改了名" }));
+    expect(await inOperation(frozen, () => resolveConfiguredChatModel("qualityCheck"))).toMatchObject({ provider: { baseUrl: "https://api.example.invalid/v1", quotaGroup: "套餐甲", label: "改了名" } });
+
+    loadModelSettingsV0.mockResolvedValue(withProvider({ baseUrl: "https://other.example.invalid/v1" }));
+    await expect(inOperation(frozen, () => resolveConfiguredChatModel("qualityCheck"))).rejects.toThrow(/服务商地址（或密钥来源）改了/u);
+    loadModelSettingsV0.mockResolvedValue(withProvider({ apiKeyEnv: "OTHER_KEY", apiKeyStatus: "present" }));
+    await expect(inOperation(frozen, () => resolveConfiguredChatModel("qualityCheck"))).rejects.toThrow(/服务商地址（或密钥来源）改了/u);
+    // 操作外照现在的设置。
+    expect(await resolveConfiguredChatModel("qualityCheck")).toMatchObject({ provider: { apiKeyEnv: "OTHER_KEY" } });
+  });
+
+  it("档案的服务商开工时就不在：那个任务冻结成一句原因（受理前就挡下），备用不带", async () => {
+    const base = settingsWithoutTriage();
+    loadModelSettingsV0.mockResolvedValue({ ...base, summary: { ...base.summary, profiles: [...base.summary.profiles, { id: "orphan", provider: "gone", model: "orphan-model" }] } });
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: { qualityCheck: { profileId: "orphan", thinking: true } }, fallbackProfileId: "orphan" }, corrupt: false });
+    const frozen = await freezeModelChoices();
+    expect(frozen.tasks.qualityCheck).toEqual({ error: expect.stringMatching(/服务商不见了/u) });
+    expect(frozen.fallback).toBeUndefined();
+    expect(frozen.providers.gone).toBeUndefined();
+  });
 });
 
 describe("callOpenAICompatibleChatModel（重构 P4：内部走流式 + 空闲超时，不设总时长上限）", () => {

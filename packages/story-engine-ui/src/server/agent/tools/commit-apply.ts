@@ -156,7 +156,7 @@ export async function applyCommitToolLogic(input: {
   const mirror = await syncLegacyMirror(projectDir);
   if (!mirror.ok) console.warn(`[commit_apply] 第 ${chapter} 章定稿后重生成老格式镜像没成：${mirror.reason}`);
   // 编辑部预热：后台给专员把笔记补到这一章，失败只 warn。
-  void warmUpReaders(projectDir, chapter);
+  warmUpReaders(projectDir, chapter);
   // 写作统计：定稿后这章按定稿重数（工作稿还在就数工作稿）。
   await recordChapterWords(projectDir, chapter, "other");
   // 自动备份（设置里能关）：后台打一份，没成不挡定稿，结果记进备份设置、设置里看得到。

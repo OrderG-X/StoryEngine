@@ -441,6 +441,15 @@ async function inspectNotes(input: { readonly projectDir: string; readonly root:
   return { upTo: bodies.length, bodies, valid, chain, stale };
 }
 
+/**
+ * 一个角色的笔记读到哪了（只读盘、不调模型）：readable = 第 1..upTo 章里连着读得到定稿的章数，
+ * valid = 从第 1 章起连续有效的笔记数。valid < readable 就是还差第 valid+1～readable 章（后台补读按它冻结范围）。
+ */
+export async function readerNotesStatus(input: { readonly projectDir: string; readonly role: ReaderRole; readonly upTo: number; readonly notesRoot?: string }): Promise<{ readonly readable: number; readonly valid: number }> {
+  const state = await inspectNotes({ projectDir: input.projectDir, root: input.notesRoot ?? input.projectDir, role: input.role, upTo: input.upTo });
+  return { readable: state.upTo, valid: state.valid.length };
+}
+
 /** 已定稿到第几章（chapters/NNNN.md 里最大的章号）。目录读不到是 0。 */
 export async function countCommittedChapters(projectDir: string): Promise<number> {
   const files = await readdir(join(projectDir, "chapters")).catch(() => [] as string[]);
@@ -463,6 +472,11 @@ async function withCatchUpLock<T>(key: string, run: () => Promise<T>): Promise<T
   } finally {
     if (catchUpLocks.get(key) === tail) catchUpLocks.delete(key);
   }
+}
+
+/** 测试用：模拟进程没了（在飞的补笔记还攥着锁，新进程里没有这把锁）。 */
+export function __resetCatchUpLocksForTests(): void {
+  catchUpLocks.clear();
 }
 
 /** 读一条卷笔记：字段齐、哈希对得上（下级材料 + 卷笔记提示词）才要。 */
