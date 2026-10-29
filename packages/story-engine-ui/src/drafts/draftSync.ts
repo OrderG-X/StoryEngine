@@ -115,8 +115,8 @@ function clearTimer(): void {
 }
 
 /** 作者改了字：记下，停笔后存。 */
-export function editDraft(body: string, title?: string): void {
-  useDraftStore.getState().edit(body, title);
+export function editDraft(body: string): void {
+  useDraftStore.getState().edit(body);
   scheduleDraftSave();
 }
 
@@ -185,7 +185,8 @@ function send(keepalive: boolean): Promise<DraftFlushResult> | undefined {
     projectPath: sent.projectPath,
     chapter: sent.chapter,
     body: sent.body,
-    ...(sent.title.trim() ? { title: sent.title.trim() } : {}),
+    // 整份稿：章名一直带上（空串 = 没章名），服务端以它为准；不带就会沿用盘上的，回执确认的就不是作者这份了（第 13 轮复核）。
+    title: sent.title.trim(),
     baseVersion: sent.baseVersion,
     ...sender,
   }, keepalive ? { keepalive: true } : undefined).then(
@@ -368,7 +369,8 @@ export type PaperDecisionResult = { readonly ok: true } | { readonly ok: false; 
 
 /**
  * 稿纸提示条上「换成那一版」：
- * - 撞版本 / 盘上变了：换成盘上那版（撞版本时那份恢复稿作者不要了，一起删）。
+ * - 撞版本 / 盘上变了：稿纸换成那版，马上存一笔核盘——盘上还是它就存上（空写）；别处又改了就撞版本、再提示（第 13 轮复核 AA1：
+ *   不拿旧提示当盘上的确认）。撞版本时那份恢复稿作者不要了，一起删（在路上的这笔序号更大，删不到它）。
  * - AI 候选 / 恢复稿：先存掉手上的字，再让服务端换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），换完重读。
  */
 export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
@@ -379,6 +381,7 @@ export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
     const projectPath = state.projectPath;
     const chapter = state.chapter;
     state.acceptIncoming();
+    scheduleDraftSave(0);
     if (!incoming.recoveryId) return { ok: true };
     // 本窗口自己的那份：带上窗口号和已发到第几笔，还在路上的旧笔到了也不再把它写回来。
     const dropped = await decidePendingDraft({ projectPath, chapter, pending: { kind: "recovery", id: incoming.recoveryId, sha: "" }, decision: "dismiss", baseVersion: null, from: { client: clientId, seq } });

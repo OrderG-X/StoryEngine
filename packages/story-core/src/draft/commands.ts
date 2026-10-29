@@ -14,7 +14,7 @@ import { draftPath } from "../store/paths.js";
 import { fail } from "../commands/runner.js";
 import type { PlanContext, WriteCommandSpec } from "../commands/types.js";
 import type { DraftStamp } from "../store/control.js";
-import { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readDraft, readDraftStamp, type Draft } from "./draft.js";
+import { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readDraftStamp, type Draft } from "./draft.js";
 
 /** 三条命令同一份参数：都要说清是拿哪一版改 / 换的（这一章原来没有工作稿就是 null）。 */
 export const DraftSaveArgs = z.object({
@@ -69,11 +69,15 @@ function planWrite(context: PlanContext, chapter: number, nextText: string, curr
   };
 }
 
-/** 标题：给了用给的，没给沿用盘上的。 */
+/**
+ * 章名：给了（空串也算给了，= 不要章名）就以它为准，正文开头自带的章名行去掉（写作版本 P1 第 13 轮复核：作者存的是整份稿，
+ * 回执确认的必须是真写下的那份）；没给（AI 写稿只管正文）就认正文开头的章名行，再没有就沿用盘上的。
+ */
 async function nextDraftText(bookDir: string, args: { readonly chapter: number; readonly body: string; readonly title?: string }, currentText: string | undefined): Promise<string> {
-  const currentTitle = currentText === undefined ? undefined : (await readDraft(bookDir, args.chapter))?.title;
-  const title = args.title?.trim() || currentTitle;
-  return composeDraftFile({ ...(title ? { title } : {}), body: args.body });
+  if (args.title !== undefined) return composeDraftFile({ title: args.title, body: args.body });
+  const own = parseDraftFile(args.body);
+  const title = own.title ?? (currentText === undefined ? undefined : parseDraftFile(currentText).title);
+  return composeDraftFile({ title: title ?? "", body: own.body });
 }
 
 async function planReplace(context: PlanContext, args: DraftSaveArgs, label: string) {

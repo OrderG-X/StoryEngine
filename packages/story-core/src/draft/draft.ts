@@ -14,6 +14,9 @@ import { join } from "node:path";
 import { readChapterText, sha256 } from "../store/book.js";
 import { draftStampOf, readDraftGens, type DraftStamp } from "../store/control.js";
 import { draftPath } from "../store/paths.js";
+import { parseDraftFile, sameDraftBody } from "./format.js";
+
+export { composeDraftFile, leadingHeading, normalizeDraft, parseDraftFile, retitleText, sameDraft, sameDraftBody, type DraftText } from "./format.js";
 
 export interface Draft {
   readonly chapter: number;
@@ -24,8 +27,6 @@ export interface Draft {
   /** 代次 + 文件全文的哈希（前 16 位）。 */
   readonly version: string;
 }
-
-const HEADING = /^#{1,6}\s+(.*)$/u;
 
 /** 老书（还没换过纪元、这章没号）就是全文的哈希，升级前打开的稿纸照样对得上。 */
 export function draftVersionOf(fileText: string, stamp: DraftStamp): string {
@@ -46,34 +47,6 @@ export function absentDraftVersion(stamp: DraftStamp): string | null {
 /** 一章工作稿此刻的代次。 */
 export async function readDraftStamp(bookDir: string, chapter: number): Promise<DraftStamp> {
   return draftStampOf(await readDraftGens(bookDir), chapter);
-}
-
-/** 拆文件：第一行非空行是「# 章名」就当章名，其余是正文。 */
-export function parseDraftFile(fileText: string): { readonly title?: string; readonly body: string } {
-  const lines = fileText.replace(/\r\n?/gu, "\n").split("\n");
-  const first = lines.findIndex((line) => line.trim().length > 0);
-  if (first < 0) return { body: "" };
-  const heading = HEADING.exec(lines[first]!.trim());
-  if (!heading) return { body: lines.slice(first).join("\n").trim() };
-  const title = heading[1]!.trim();
-  const body = lines.slice(first + 1).join("\n").trim();
-  return { ...(title ? { title } : {}), body };
-}
-
-/** 拼文件：正文自己带「# 章名」就照写；否则有章名就补在第一行。 */
-export function composeDraftFile(input: { readonly title?: string; readonly body: string }): string {
-  const body = input.body.replace(/\r\n?/gu, "\n").trim();
-  const firstLine = body.split("\n").find((line) => line.trim().length > 0) ?? "";
-  if (HEADING.test(firstLine.trim())) return `${body}\n`;
-  const title = input.title?.trim();
-  if (!title) return body ? `${body}\n` : "";
-  return body ? `# ${title}\n\n${body}\n` : `# ${title}\n`;
-}
-
-/** 只差换行写法、行尾空白、多余空行的两份正文算同一份（稿纸重新载入会收掉多余空段落）。 */
-export function sameDraftBody(a: string, b: string): boolean {
-  const tidy = (text: string) => text.replace(/\r\n?/gu, "\n").split("\n").map((line) => line.trimEnd()).join("\n").replace(/\n{3,}/gu, "\n\n").trim();
-  return tidy(a) === tidy(b);
 }
 
 /**

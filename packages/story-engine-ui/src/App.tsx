@@ -14,7 +14,7 @@ import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
 import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
 import { setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
-import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
+import { countTextWords } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
 import { isRealDraftContent } from "./utils/draftContent.js";
 import { editDraft, flushDraftSave, hasFailedUnsavedDraft } from "./drafts/draftSync.js";
@@ -295,7 +295,7 @@ export function App() {
               if (useChatStore.getState().chatError) useChatStore.getState().setChatError(null);
             },
             onDraftContentChange: (content: string) => {
-              editDraft(content, extractDraftTitle(content) ?? undefined);
+              editDraft(content);
               // 作者自己写出了正文：章节状态跟着进「有草稿」，下面的按钮换成核账 / 审稿 / 定稿
               // （2026-10-10 验收：作者贴完一整章，状态还是「待开始」，只给「写这一章 / 先给方案」两个让 AI 写的按钮）。
               const wsBook = useBookStore.getState();

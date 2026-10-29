@@ -167,10 +167,12 @@ describe("稿纸状态", () => {
     useDraftStore.getState().markSaved("c", "C。", "", sentRev);
     expect(useDraftStore.getState()).toMatchObject({ baseVersion: "c", body: "A。" });
     expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
-    // 在提示上选也算一下：「换成那一版」之后盘上确认过；「保留我这版」存上之前都算没存。
+    // 在提示上选也算一下，两种选法存上之前都算没存：「换成那一版」那版可能已经被别处又改了，要存一笔核盘（第 13 轮复核 AA1）。
     useDraftStore.getState().markConflict({ current: { chapter: 1, body: "D。", version: "d" }, currentVersion: "d" });
     useDraftStore.getState().acceptIncoming();
     expect(useDraftStore.getState()).toMatchObject({ body: "D。", baseVersion: "d" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(true);
+    useDraftStore.getState().markSaved("d", "D。", "", useDraftStore.getState().rev);
     expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
     useDraftStore.getState().edit("E。");
     useDraftStore.getState().markConflict({ current: { chapter: 1, body: "F。", version: "f" }, currentVersion: "f" });
@@ -211,7 +213,7 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState()).toMatchObject({ baseVersion: "v1", savedBody: "一。二。三。", saveStatus: "saved" });
   });
 
-  it("新的一章没有章名：存稿不带章名（导航上的「下一章」之类占位名不写进稿子）", async () => {
+  it("新的一章没有章名：存稿带空章名（导航上的「下一章」之类占位名不写进稿子；空 = 没章名，不沿用盘上的）", async () => {
     const server = fakeServer({});
     vi.stubGlobal("fetch", server.fetchMock);
     await openPaper(PROJECT, 11);
@@ -219,7 +221,7 @@ describe("存稿调度", () => {
     editDraft("清晨的雾还没散。");
     await flushDraftSave();
     expect(server.puts).toHaveLength(1);
-    expect(server.puts[0]).not.toHaveProperty("title");
+    expect(server.puts[0]).toMatchObject({ title: "" });
   });
 
   it("撞版本：不覆盖盘上的，挂提示；作者那份存成恢复稿，接着打的字也存进去；同一份不重发；选保留我这版后再存一次就过", async () => {
@@ -247,7 +249,7 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState().incoming).toBeNull();
   });
 
-  it("撞版本后换成那一版：作者的字换成盘上的，不再存；那份恢复稿删掉", async () => {
+  it("撞版本后换成那一版：作者的字换成盘上的，照那版存一笔核盘（盘上还是它就存上）；那份恢复稿删掉", async () => {
     const server = fakeServer({ 3: { version: "v0", body: "原稿。" } });
     vi.stubGlobal("fetch", server.fetchMock);
     await openPaper(PROJECT, 3);
@@ -258,7 +260,11 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState()).toMatchObject({ body: "AI 改过。", baseVersion: "ai", incoming: null });
     expect(server.recoveries["3-v0"]).toBeUndefined();
     await flushDraftSave();
-    expect(server.puts).toHaveLength(1);
+    expect(server.puts).toHaveLength(2);
+    expect(server.puts[1]).toMatchObject({ body: "AI 改过。", baseVersion: "ai" });
+    expect(hasUnsavedEdits(useDraftStore.getState())).toBe(false);
+    await flushDraftSave();
+    expect(server.puts).toHaveLength(2);
   });
 
   it("上次没存上的一版：开章时提示，找回那一版换上（带眼前的版本）", async () => {

@@ -127,11 +127,3 @@ export function looksLikeDraftBody(text: string): boolean {
   return paragraphs.length >= 3 && normalized.length > 360;
 }
 
-export function extractDraftTitle(content: string | undefined): string | null {
-  if (!content) return null;
-  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!firstLine?.startsWith("#")) return null;
-  // 不猜白名单：章节标题
-  const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
-  return title || null;
-}

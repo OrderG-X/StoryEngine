@@ -183,7 +183,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
 
   const editor = useEditor({
     // 纯文本纸面：关掉 StarterKit 的标题/列表/引用/代码/分隔线与加粗斜体等输入规则，
-    // 否则用户在行首敲「# 」会被转成 <h1>、getText 吞掉「#」前缀，破坏 extractDraftTitle 的标题识别契约。
+    // 否则用户在行首敲「# 」会被转成 <h1>、getText 吞掉「#」前缀，破坏正文开头「# 章名」行的识别（核心 leadingHeading，稿纸认章名靠它）。
     extensions: [
       StarterKit.configure({
         heading: false,

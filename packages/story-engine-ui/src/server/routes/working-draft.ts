@@ -19,7 +19,7 @@
  *
  * 版本号是这章的工作稿代次 + 草稿文件全文的哈希（核心包 draft/draft.ts）。
  */
-import { chapterRetitle, draftAdoptCandidate, draftSave, readChapterPaper, readDraftState, runCommand, sha256, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
+import { chapterRetitle, draftAdoptCandidate, draftSave, readChapterPaper, readDraftState, runCommand, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -38,6 +38,7 @@ import {
   clearSavedRecoveries,
   consumeDraftRecovery,
   dismissDraftRecovery,
+  draftSha,
   pendingDraftFor,
   readDraftCandidate,
   readDraftRecovery,
@@ -128,12 +129,14 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         // 查那一份、换上、清掉它，整段在书锁里（写作版本 P1b 第 3 轮复核）：查过之后别的存稿改了它，就不会拿旧的换上、再把新的删了。
         const reply = await withBookLock(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
           const entry = kind === "candidate" ? await readDraftCandidate(projectDir, id) : await readDraftRecovery(projectDir, id);
-          const live = entry && entry.chapter === chapter && entry.body.trim() ? entry : undefined;
+          // 还等着作者选的：候选是 AI 写了字的那份；恢复稿看有没有清过（只起了章名的也算，第 13 轮复核 AA5）。
+          const waiting = entry && entry.chapter === chapter && ("settled" in entry ? !entry.settled : entry.body.trim().length > 0);
+          const live = waiting ? entry : undefined;
           if (decision === "dismiss") {
             if (kind === "candidate") {
               // 不要了：已经不在也算成（重发、两个窗口各点一次）。
               if (!live) return { status: 200, payload: { ok: true } };
-              if (sha !== undefined && sha !== sha256(live.body)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
+              if (sha !== undefined && sha !== draftSha(live)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
               await removeDraftCandidate(projectDir, id);
               return { status: 200, payload: { ok: true } };
             }
@@ -143,8 +146,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             return dismissed ? { status: 200, payload: { ok: true } } : { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
           }
           if (!live) return { status: 404, payload: { ok: false, error: "那一份已经不在了（可能已经换上或不要了）。" } };
-          // 作者看到的就是这一份才换（这期间又存进了新字之类，内容变了就不换）。
-          if (sha !== sha256(live.body)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没换。看一眼再选。" } };
+          // 作者看到的就是这一份才换（这期间又存进了新字、改了章名之类，整份变了就不换）。
+          if (sha !== draftSha(live)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没换。看一眼再选。" } };
           const baseVersion = readBaseVersion(body.baseVersion);
           const label = kind === "candidate" ? `换上 AI 稿：第${chapter}章` : `找回没存上的稿：第${chapter}章`;
           const wordsBefore = await chapterWordsNow(projectDir, chapter).catch(() => undefined);
@@ -152,7 +155,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             runCommand(projectDir, draftAdoptCandidate, {
               chapter,
               body: live.body,
-              ...(live.title ? { title: live.title } : {}),
+              // 恢复稿是作者的整份稿：没章名就是没有（不沿用盘上的）；AI 候选只管正文，没章名沿用盘上的。
+              ...(kind === "recovery" ? { title: live.title ?? "" } : live.title ? { title: live.title } : {}),
               baseVersion,
             }, { caller: "author", snapshot }), label);
           if (!outcome.ok) {
@@ -192,7 +196,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         if (typeof body.body !== "string") throw new Error("正文不能缺。");
         const text = body.body;
         const baseVersion = readBaseVersion(body.baseVersion);
-        const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
+        // 稿纸带的是整份稿：章名给了（空串 = 没章名）就以它为准；没给（旧页面）沿用盘上的。
+        const title = typeof body.title === "string" ? body.title.trim() : undefined;
         const from = recoveryClientOf(body.client, body.seq);
         await assertStoryEngineProject(projectDir);
         // 存稿和撞版本时留恢复稿在同一把书锁里（写作版本 P1b 第 3 轮复核）：两笔存稿不会交错着写恢复稿，找回也切不进中间。
@@ -217,7 +222,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           const outcome = await runCommand(projectDir, draftSave, {
             chapter,
             body: text,
-            ...(title ? { title } : {}),
+            ...(title !== undefined ? { title } : {}),
             baseVersion: lineage ? diskVersion : baseVersion,
           }, { caller: "author" });
           // 只有这笔真写出了新版本才接进这个窗口的那一串（序号上面已经记了）；和盘上一样的空写不接——盘上那版可能是撤销、AI、
@@ -230,7 +235,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           if (outcome.ok) {
             if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, "author", wordsBefore);
             // 存上了：这个窗口的恢复稿、和这份一样的恢复稿没用了。清不掉不影响存稿（下次开章和工作稿一样也不提示）。
-            await clearSavedRecoveries(projectDir, chapter, { body: text, ...(title ? { title } : {}) }, from).catch(() => undefined);
+            await clearSavedRecoveries(projectDir, chapter, { body: text, ...(title !== undefined ? { title } : {}) }, from).catch(() => undefined);
             return { status: 200, payload: { ok: true, version: outcome.result.version, unchanged: outcome.result.unchanged } };
           }
           if (outcome.code !== "draft_conflict") return { status: 400, payload: { ok: false, code: outcome.code, error: outcome.message } };
@@ -238,7 +243,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           // 作者手上这份先留下来（写作版本 P1b）：稿纸上选「换成那一版」之前、或这时应用被关了，字都还在。
           // 留不下来就如实说没存上（503），稿纸当没存、过一会儿再试，换章、关书都拦着。
           try {
-            const saved = await saveDraftRecovery(projectDir, { chapter, body: text, ...(title ? { title } : {}), baseVersion, ...(from ? { from } : {}) });
+            const saved = await saveDraftRecovery(projectDir, { chapter, body: text, ...(title !== undefined ? { title } : {}), baseVersion, ...(from ? { from } : {}) });
             return { status: 409, payload: { ok: false, code: outcome.code, error: outcome.message, current: details?.current ?? null, currentVersion: details?.currentVersion ?? null, recoveryId: saved.recovery.id } };
           } catch (error) {
             console.warn(`[working-draft] 第 ${chapter} 章没存上的那份没留成恢复稿：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`);
