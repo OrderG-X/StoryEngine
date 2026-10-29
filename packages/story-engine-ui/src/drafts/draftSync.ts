@@ -66,7 +66,10 @@ const requests = new Set<Promise<unknown>>();
 
 /** 发出过几笔存稿：读盘前后比一比，读的期间发过就说明读回来的可能比刚存的旧。 */
 let savesSent = 0;
-/** 这个窗口存成的版本号（最近几十个）：盘上是这些版本就是作者自己的字，不是别处写的（第 6 轮复核 T4）。 */
+/**
+ * 这个窗口真写出来的版本号（最近几十个，服务端回执说写了新版本才记）：AI 回合收尾时分辨盘上的新版是作者自己存的还是 AI 写的
+ * （第 6 轮复核 T4）。和盘上一样的空写不记：那一版可能是 AI、撤销、别的窗口写的（第 11 轮复核 Y1）。只拿来说话，不拿来认底版。
+ */
 const ownVersions: string[] = [];
 const OWN_VERSIONS_KEPT = 50;
 
@@ -143,7 +146,7 @@ function markFailed(sent: SentPaper, seqSent: number, message: string): DraftFlu
 
 /** 一笔回来了：按 decides 定下这一章，或者什么都不改。 */
 function receive(sent: SentPaper, seqSent: number, result: SaveWorkingDraftResult): DraftFlushResult {
-  if (result.ok) rememberOwnVersion(result.version);
+  if (result.ok && !result.unchanged) rememberOwnVersion(result.version);
   if (!decides(sent, seqSent)) return { ok: true };
   const live = useDraftStore.getState();
   if ("superseded" in result) return markFailed(sent, seqSent, "这一笔存稿没定下来，稍后自动再试。");
@@ -155,7 +158,8 @@ function receive(sent: SentPaper, seqSent: number, result: SaveWorkingDraftResul
   }
   // 撞了版本：作者这份服务端存成了恢复稿才有号，稿纸出提示。这份不再重发；作者接着改了就再存（更新恢复稿）。
   // 没有号 = 没另外存下来：当没存上，字还在稿纸上，过一会儿再试。
-  live.markConflict(result);
+  // 发出这笔之后作者已经在提示上选过（底版换了）：这条回执说的是选之前的事，不再挂提示（第 11 轮复核 Y2），按新底版接着存。
+  if (sent.baseVersion === live.baseVersion) live.markConflict(result);
   if (!result.recoveryId) return markFailed(sent, seqSent, "别处刚改过这一章，你这段也没能另存下来。字还在稿纸上，稍后自动再试。");
   sync = { projectPath: sent.projectPath, chapter: sent.chapter, lastSeq: seqSent, pending: false, failed: false };
   rejected = sent;
@@ -338,9 +342,9 @@ export async function refreshPaper(options: { readonly chapter?: number } = {}):
     shownTicket = read.ticket;
     // 有没有没存的字看统一待存状态（第 10 轮复核 X2）：最后那笔没存上时手上的字可能正好等于底版，只比字会把它当成存好了换掉。
     const live = useDraftStore.getState();
-    const outcome = live.receivePaper(projectPath, paper, { unsaved: needsSave(live), isOwn: isOwnSavedVersion });
-    if (outcome === "own") rememberOwnVersion(useDraftStore.getState().baseVersion);
-    // 盘上变了、作者手上还有没存的字：马上存一笔（撞版本，服务端存成恢复稿；盘上是自己的那版就顺着存上），别只留在页面里。
+    const outcome = live.receivePaper(projectPath, paper, { unsaved: needsSave(live) });
+    // 盘上变了、作者手上还有没存的字：马上存一笔。盘上那版是这个窗口早先存的，服务端认得出、顺着存上（提示随之收起）；
+    // 认不出就撞版本、存成恢复稿（第 11 轮复核 Y1：稿纸自己不认底版）。
     if (outcome === "incoming" || (outcome === "own" && needsSave(useDraftStore.getState()))) scheduleDraftSave(0);
     return outcome;
   }

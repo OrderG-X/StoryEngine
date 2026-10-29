@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave, hasFailedUnsavedDraft, openPaper, refreshPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
+import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, hasFailedUnsavedDraft, isOwnSavedVersion, keepPaperMine, openPaper, refreshPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { setCommitIoTestHookForTests } from "../book/legacy-commit-recovery.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
@@ -425,7 +425,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect((await readDraft(book, 1))?.body).toBe("最新 B。");
   });
 
-  it("真稿纸：补发 B 落盘回执压着、改回 A 重存写盘失败、B 的回执迟到：重读不把 A 换成 B，A 接着存上（第 10 轮 X2）", async () => {
+  it("真稿纸：补发 B 落盘回执压着、改回 A 重存写盘失败、B 的回执迟到：重读不把 A 换成 B；A 接着存，服务端认出是这个窗口接着写的、存上（第 10 轮 X2、第 11 轮 Y1）", async () => {
     await save(1, "原稿 A。");
     const keepaliveLanded = barrier();
     const releaseKeepalive = barrier();
@@ -461,11 +461,13 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     await vi.waitFor(() => expect(keepaliveAnswered).toBe(true));
     // 这时手上 A = 底版，最后那笔没存上；AI 工具结果之类触发重读。
     expect(hasFailedUnsavedDraft()).toBe(true);
-    expect(await refreshPaper()).toBe("own");
+    // 稿纸不自己认底版：盘上 B 先当成「盘上变了」，手上的 A 不动、马上存一笔。
+    expect(await refreshPaper()).toBe("incoming");
     expect(useDraftStore.getState().body).toBe("原稿 A。");
-    expect(useDraftStore.getState().incoming ?? null).toBeNull();
     expect(await flushDraftSave()).toEqual({ ok: true });
     expect((await readDraft(book, 1))?.body).toBe("原稿 A。");
+    // 存上了：提示收起，没有恢复稿。
+    expect(useDraftStore.getState().incoming ?? null).toBeNull();
     expect(hasFailedUnsavedDraft()).toBe(false);
     expect(await pendingDraftFor(book, 1)).toBeUndefined();
   });
@@ -586,6 +588,188 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect((await readDraft(book, 1))?.version).not.toBe(base);
     expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "旧窗口的字。", baseVersion: base })).status).toBe(409);
     expect((await readDraft(book, 1))?.body).toBe("搬走前的稿。");
+  });
+});
+
+type Reply = Awaited<ReturnType<typeof call>>;
+
+/** 稿纸的 fetch 接到真路由上；after 在回执交回稿纸之前调（压住回执用）。 */
+function wireRoutesWith(after?: (result: Reply, init?: RequestInit) => Promise<void>) {
+  const sent: Record<string, unknown>[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const input = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+    if (init?.method === "PUT" && input) sent.push(input);
+    const result = await call(init?.method ?? "GET", url, input);
+    await after?.(result, init);
+    return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+  }));
+  return sent;
+}
+
+// Astra 第 11 轮探针改写（真稿纸、真路由、真核心事务，只控制回执什么时候到）。
+describe("稿纸不自己认底版、旧回执不复活提示（第 11 轮复核）", () => {
+  it("Y1：别处写的 B、这个窗口同文空写的旧回执迟到：重读只提示，作者的 C 进恢复稿，B 不被盖", async () => {
+    await save(1, "原稿 A。");
+    const landed = barrier();
+    const releaseAck = barrier();
+    let puts = 0;
+    let noOp: Reply | undefined;
+    const sent = wireRoutesWith(async (result, init) => {
+      if (init?.method === "PUT" && ++puts === 1) {
+        noOp = result;
+        landed.release();
+        await releaseAck.promise;
+      }
+    });
+    await openPaper(book, 1);
+    expect(await applyAiDraft(book, { chapter: 1, body: "共同得到的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
+    const foreign = (await readDraft(book, 1))!;
+    editDraft("共同得到的 B。");
+    saveDraftKeepalive();
+    await landed.promise;
+    expect(noOp?.payload).toMatchObject({ ok: true, unchanged: true, version: foreign.version });
+    editDraft("作者后来改的 C。");
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(useDraftStore.getState().incoming?.cause).toBe("conflict"));
+    expect((await readSaveMark(book, 1, String(sent[0]!.client)))?.saved).toBeUndefined();
+    releaseAck.release();
+    expect(await refreshPaper()).toBe("incoming");
+    expect(isOwnSavedVersion(foreign.version)).toBe(false);
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.body).toBe("共同得到的 B。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ body: "作者后来改的 C。" });
+    // 提示还是撞版本那条（带恢复稿号），点「换成那一版」能一起清掉恢复稿。
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", version: foreign.version });
+    expect(typeof useDraftStore.getState().incoming?.recoveryId).toBe("string");
+  });
+
+  it("Y2：重读提示后点「保留我这版」，选之前那笔的 409 迟到：不复活提示，C 存上、恢复稿清掉", async () => {
+    await save(1, "原稿 A。");
+    const landed = barrier();
+    const releaseAck = barrier();
+    let puts = 0;
+    let conflict: Reply | undefined;
+    wireRoutesWith(async (result, init) => {
+      if (init?.method === "PUT" && ++puts === 1) {
+        conflict = result;
+        landed.release();
+        await releaseAck.promise;
+      }
+    });
+    await openPaper(book, 1);
+    await save(1, "别处的 B。");
+    editDraft("作者的 C。");
+    expect(await refreshPaper()).toBe("incoming");
+    await landed.promise;
+    expect(useDraftStore.getState().incoming?.cause).toBe("update");
+    expect(await keepPaperMine()).toEqual({ ok: true });
+    releaseAck.release();
+    await vi.waitFor(() => expect(useDraftStore.getState().savedBody).toBe("作者的 C。"));
+    expect(useDraftStore.getState().incoming).toBeNull();
+    expect((await readDraft(book, 1))?.body).toBe("作者的 C。");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+    expect((await readDraftRecovery(book, String(conflict!.payload.recoveryId)))?.body).toBe("");
+    expect(await refreshPaper()).toBe("unchanged");
+    expect(useDraftStore.getState().incoming).toBeNull();
+  });
+
+  it("提示之后盘上又撤回原版：重读收起失效提示，作者的字接着存上", async () => {
+    const original = await save(1, "原稿 A。");
+    wireRealRoutes();
+    await openPaper(book, 1);
+    await save(1, "别处的 B。");
+    editDraft("作者的 C。");
+    expect(await refreshPaper()).toBe("incoming");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState().incoming?.cause).toBe("conflict");
+    // 盘上回到原稿（撤销那类）：版本号还是原来那个。
+    await runCommand(book, draftSave, { chapter: 1, body: "原稿 A。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+    expect((await readDraftState(book, 1)).version).not.toBe(original);
+    expect(await refreshPaper()).toBe("incoming");
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "update", body: "原稿 A。" });
+    expect(useDraftStore.getState().body).toBe("作者的 C。");
+  });
+
+  it("C111：没有同文空写时，重读只提示，恢复稿留着，不自动盖别处的版本", async () => {
+    await save(1, "原稿 A。");
+    wireRealRoutes();
+    await openPaper(book, 1);
+    await save(1, "别处的 B。");
+    editDraft("作者的 C。");
+    expect(await refreshPaper()).toBe("incoming");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.body).toBe("别处的 B。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ body: "作者的 C。" });
+    expect(useDraftStore.getState().incoming?.cause).toBe("conflict");
+  });
+
+  it("C114：别的章同文的版本号不同，不认成自己的", async () => {
+    await save(1, "第一章 A。");
+    await save(2, "第二章 A。");
+    wireRealRoutes();
+    await openPaper(book, 1);
+    editDraft("共同的 B。");
+    await flushDraftSave();
+    const own = (await readDraft(book, 1))!;
+    expect(isOwnSavedVersion(own.version)).toBe(true);
+    await openPaper(book, 2);
+    const foreign = await save(2, "共同的 B。");
+    expect(foreign).not.toBe(own.version);
+    expect(isOwnSavedVersion(foreign)).toBe(false);
+    editDraft("第二章作者 C。");
+    expect(await refreshPaper()).toBe("incoming");
+    await flushDraftSave();
+    expect((await readDraft(book, 2))?.body).toBe("共同的 B。");
+    expect(await pendingDraftFor(book, 2)).toMatchObject({ body: "第二章作者 C。" });
+  });
+
+  it("C116：重读读到自己的 B、别处又写了 D：自动存的 C 撞版本进恢复稿，D 不被盖", async () => {
+    await save(1, "原稿 A。");
+    const landed = barrier();
+    const releaseAck = barrier();
+    const readCaptured = barrier();
+    const releaseRead = barrier();
+    let puts = 0;
+    let holdRead = false;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const nth = init?.method === "PUT" ? ++puts : 0;
+      if (nth === 2) throw new Error("第二笔传输失败，服务端没收到");
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      if (nth === 1) { landed.release(); await releaseAck.promise; }
+      if (!init?.method && holdRead) { holdRead = false; readCaptured.release(); await releaseRead.promise; }
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    editDraft("自己的 B。");
+    saveDraftKeepalive();
+    await landed.promise;
+    editDraft("作者最新 C。");
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(hasFailedUnsavedDraft()).toBe(true));
+    releaseAck.release();
+    holdRead = true;
+    const refresh = refreshPaper();
+    await readCaptured.promise;
+    await save(1, "别处最新 D。");
+    releaseRead.release();
+    expect(await refresh).toBe("incoming");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.body).toBe("别处最新 D。");
+    expect(useDraftStore.getState().body).toBe("作者最新 C。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ body: "作者最新 C。" });
+  });
+
+  it("撞版本提示上点「换成那一版」：稿纸换成盘上那版，作者那份恢复稿一起清掉", async () => {
+    await save(1, "原稿 A。");
+    wireRealRoutes();
+    await openPaper(book, 1);
+    await save(1, "别处的 B。");
+    editDraft("作者的 C。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState().incoming?.cause).toBe("conflict");
+    expect(await acceptPaperIncoming()).toEqual({ ok: true });
+    expect(useDraftStore.getState()).toMatchObject({ body: "别处的 B。", incoming: null });
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
   });
 });
 

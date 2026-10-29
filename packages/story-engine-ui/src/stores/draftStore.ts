@@ -56,13 +56,14 @@ export interface DraftStoreState {
   /**
    * 盘上来了新版本：作者手上没有没存的字就换上，有就提示（谁改的都一样，撤销也不直接盖）。
    * 「没存的字」看存稿调度的统一待存状态（`unsaved`：没落定、没存上、或手上和盘上不一样），不只比手上和底版（第 10 轮复核 X2）。
-   * `isOwn`：盘上这个版本是不是这个窗口自己存的。
-   * 返回怎么处理的：unchanged 盘上没变；own 盘上是作者自己的字（手上那份以它为底接着存）；replaced 换上了；incoming 出了提示；skipped 不是这一章。
+   * 盘上那版是不是这个窗口自己早先存的，稿纸不猜（第 11 轮复核 Y1）：接着存一笔，服务端按窗口的存稿记号认得出就顺着存上，
+   * 认不出就撞版本、存成恢复稿。
+   * 返回怎么处理的：unchanged 盘上没变；own 盘上就是作者眼前的字；replaced 换上了；incoming 出了提示；skipped 不是这一章。
    */
   readonly receivePaper: (
     projectPath: string,
     paper: ChapterPaper,
-    sync?: { readonly unsaved: boolean; readonly isOwn: (version: string | null) => boolean },
+    sync?: { readonly unsaved: boolean },
   ) => "unchanged" | "own" | "replaced" | "incoming" | "skipped";
   /** 作者在稿纸上改字。 */
   readonly edit: (body: string, title?: string) => void;
@@ -106,9 +107,15 @@ function pendingIncoming(pending: PendingDraft | undefined): PaperIncoming | nul
   return { ...(pending.title ? { title: pending.title } : {}), body: pending.body, version: null, cause: pending.kind, pending };
 }
 
-/** 盘上没变时提示条该是什么：撞版本、盘上变了的提示留着（作者还没选）；其余跟着盘上等着选的那一份走。 */
-function keepOrPending(current: PaperIncoming | null, paper: ChapterPaper): PaperIncoming | null {
-  if (current && (current.cause === "conflict" || current.cause === "update")) return current;
+/** 撞版本、盘上变了的提示（说的是盘上的哪一版）。 */
+const aboutDisk = (incoming: PaperIncoming | null): boolean => incoming?.cause === "conflict" || incoming?.cause === "update";
+
+/**
+ * 读到盘上这一份之后提示条该是什么：撞版本、盘上变了的提示只在它说的那一版还在盘上时留着（作者还没选）——
+ * 盘上又变了（撤销、作者那份存上了），它指着的那版已经不在，留着就是失效提示（第 11 轮复核 Y2）。其余跟着盘上等着选的那一份走。
+ */
+function keepOrPending(current: PaperIncoming | null, paper: ChapterPaper, diskVersion: string | null): PaperIncoming | null {
+  if (aboutDisk(current) && current!.version === diskVersion) return current;
   if (current?.pending && paper.pending && current.pending.id === paper.pending.id && current.pending.sha === paper.pending.sha) return current;
   return pendingIncoming(paper.pending);
 }
@@ -155,18 +162,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       ? disk.version === state.baseVersion
       : state.baseVersion === null && sameText(disk.body, state.savedBody);
     if (unchanged) {
-      set({ committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
+      set({ committed: paper.committed, incoming: keepOrPending(state.incoming, paper, disk.version) });
       return "unchanged";
     }
-    // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突。
+    // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突；说盘上别的版本的提示没得选了。
     if (dirty && sameText(disk.body, state.body)) {
-      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
-      return "own";
-    }
-    // 手上的字还没落定、盘上是这个窗口自己早先存成的那版（迟到的回执没定下这一章）：不是别处改的，不提示、不换；
-    // 以它为底，手上的字接着存（第 10 轮复核 X2）。
-    if (dirty && sync?.isOwn(disk.version)) {
-      set({ baseVersion: disk.version, savedBody: disk.body, savedTitle: disk.title ?? "", committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
+      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(aboutDisk(state.incoming) ? null : state.incoming, paper, disk.version) });
       return "own";
     }
     if (!dirty) {
@@ -185,7 +186,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       });
       return "replaced";
     }
-    set({ committed: paper.committed, incoming: { ...(disk.title ? { title: disk.title } : {}), body: disk.body, version: disk.version, cause: "update" } });
+    // 已经在提示的就是盘上这一版（撞版本那条带着恢复稿号）：留着，不换成一条新的。
+    const current = state.incoming;
+    const incoming = aboutDisk(current) && current!.version === disk.version
+      ? current
+      : { ...(disk.title ? { title: disk.title } : {}), body: disk.body, version: disk.version, cause: "update" as const };
+    set({ committed: paper.committed, incoming });
     return "incoming";
   },
 
@@ -195,13 +201,15 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
 
   markSaving: () => set({ saveStatus: "saving", saveError: null }),
 
-  markSaved: (version, sentBody, sentTitle) => set({
+  // 存上了 = 盘上就是作者这份：说盘上别的版本的提示都过时了（第 11 轮复核 Y2）；AI 候选、恢复稿不在工作稿里，照旧等作者选。
+  markSaved: (version, sentBody, sentTitle) => set((state) => ({
     baseVersion: version,
     savedBody: sentBody,
     savedTitle: sentTitle,
     saveStatus: "saved",
     saveError: null,
-  }),
+    incoming: aboutDisk(state.incoming) ? null : state.incoming,
+  })),
 
   markSaveError: (message) => set({ saveStatus: "error", saveError: message }),
 

@@ -124,15 +124,30 @@ describe("稿纸状态", () => {
     expect(useDraftStore.getState()).toMatchObject({ title: "", savedTitle: "", baseVersion: "a" });
   });
 
-  it("手上的字等于底版、但最后那笔没存上：盘上别处的新版只出提示；盘上是自己存的那版就以它为底接着存（第 10 轮复核 X2）", () => {
-    const own = (version: string | null) => version === "b";
+  it("手上的字等于底版、但最后那笔没存上：盘上的新版只出提示，稿纸不自己认底版（第 10 轮 X2、第 11 轮 Y1）", () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
-    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "AI 的 C。", version: "c" }), { unsaved: true, isOwn: own })).toBe("incoming");
-    expect(useDraftStore.getState()).toMatchObject({ body: "A。", baseVersion: "a", incoming: { body: "AI 的 C。", version: "c" } });
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "盘上的 B。", version: "b" }), { unsaved: true })).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ body: "A。", baseVersion: "a", incoming: { body: "盘上的 B。", version: "b", cause: "update" } });
+  });
+
+  it("提示只在它说的那版还在盘上时留着；存上了就收起（第 11 轮复核 Y2）", () => {
+    const conflict = { current: { chapter: 1, body: "别处的 B。", version: "b" }, currentVersion: "b", recoveryId: "r1" };
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
-    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "自己的 B。", version: "b" }), { unsaved: true, isOwn: own })).toBe("own");
-    expect(useDraftStore.getState()).toMatchObject({ body: "A。", baseVersion: "b", savedBody: "自己的 B。", incoming: null });
-    expect(isDraftDirty(useDraftStore.getState())).toBe(true);
+    useDraftStore.getState().edit("作者的 C。");
+    useDraftStore.getState().markConflict(conflict);
+    // 盘上还是 B：撞版本那条（带恢复稿号）留着，不换成新的一条。
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "别处的 B。", version: "b" }), { unsaved: true })).toBe("incoming");
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", recoveryId: "r1" });
+    // 盘上撤回了 A：提示指着的 B 不在了，收起；作者的字还在、照旧要存。
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "A。", version: "a" }), { unsaved: true })).toBe("unchanged");
+    expect(useDraftStore.getState()).toMatchObject({ body: "作者的 C。", incoming: null });
+    // 存上了：说盘上别的版本的提示一并收起；AI 候选照旧留着等作者选。
+    useDraftStore.getState().markConflict(conflict);
+    useDraftStore.getState().markSaved("c", "作者的 C。", "");
+    expect(useDraftStore.getState().incoming).toBeNull();
+    useDraftStore.getState().loadPaper(PROJECT, { ...paper(1, { body: "C。", version: "c" }), pending: { kind: "candidate", id: "k1", sha: "s", body: "AI 的。", reason: "draft_moved" } });
+    useDraftStore.getState().markSaved("d", "C。", "");
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "candidate" });
   });
 
   it("别的章、别的书的新版本不收", () => {
