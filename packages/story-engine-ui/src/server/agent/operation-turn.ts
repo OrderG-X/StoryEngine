@@ -12,6 +12,7 @@ import { rereadBlocker } from "../editorial/reread-state.js";
 import { cancelOperation, resumeOperation, submitOperation, subscribeOperation, type OperationEvent, type OperationResult } from "../services/operations/executor.js";
 import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
+import { LEDGER_CHANGE_KIND } from "../services/operations/recipes/ledger-change.js";
 import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
@@ -218,7 +219,9 @@ export async function finishOperationTurn(args: {
         ? "改法在卡上：点「换上」才换进稿子。"
         : record.kind === SETTINGS_CHANGE_KIND
           ? "这次要改的碰到了你写的，在卡上：点「确认改设定」才改。"
-          : `${what}在等你点卡上的按钮。`);
+          : record.kind === LEDGER_CHANGE_KIND
+            ? `${record.mode === "review" ? "理出来收了的" : "要改的账"}在卡上：点「确认改账」才记。`
+            : `${what}在等你点卡上的按钮。`);
       return;
     default:
       return;

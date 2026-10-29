@@ -18,9 +18,9 @@ import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
 import { readTimelineTool } from "./tools/read-timeline.js";
 import { readFoundationTool } from "./tools/read-foundation.js";
 import { readDraftTool } from "./tools/read-draft.js";
+import { changeLedgerTool } from "./tools/change-ledger.js";
 import { changeSettingsTool } from "./tools/change-settings.js";
 import { commitPreviewTool } from "./tools/commit-preview.js";
-import { manageLedgerTool } from "./tools/manage-ledger.js";
 import { planChapterTool } from "./tools/plan-chapter.js";
 import { changeDraftTool } from "./tools/change-draft.js";
 import { reviseDraftTool } from "./tools/revise-draft.js";
@@ -47,9 +47,9 @@ export function buildInstructions(): string {
     "执行类请求必须工具先行：写正文 / 接着写=change_draft，改稿=revise_draft，写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=change_settings，" +
       "定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮，" +
       "检查一章=run_check（mode：核账 continuity＝前后对不对、有没有吃书，硬伤检查 quality，内容审阅 review，查 AI 味 flavor），" +
-      "改账=manage_ledger（事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；它只出「确认改账」按钮，作者点了才改），" +
+      "改账=change_ledger（changes 每项一笔：事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；理线索 review:true；作者点「确认改账」才改），" +
       "撤销=manage_snapshots op=undo，裁剪操作历史=manage_snapshots op=prune（先预览、用户确认才真裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
-    "交给服务端做的事（change_draft、revise_draft、run_check）：交出去这一轮就到此为止，正文流、进度、结果卡、结论和下一步都由系统接着出，你别说已经做完，也别再调别的。一条作者消息只交一件；同一步里交两件就一件都不做。" +
+    "交给服务端做的事（change_draft、revise_draft、run_check、change_settings、change_ledger、plan_chapter）：交出去这一轮就到此为止，正文流、进度、结果卡、结论和下一步都由系统接着出，你别说已经做完，也别再调别的。一条作者消息只交一件；同一步里交两件就一件都不做。" +
       "每轮 system 消息里有「最近的操作」：作者问上次核出来什么、做到哪了、补读到哪了，先看它，要细节调 read_operation；停着的告诉作者点卡上的「接着做」或「不要了」，你接不了。",
     "读数据：全局概况 read_state_overview；全书每章状态 read_chapters_overview；早期某章发生了什么 read_timeline；设定本 read_foundation（带名字读一张卡）；正文全文 read_draft。凡涉及现状，先读再说，绝不凭印象。复述一律用中文，别把英文字段名念给用户。",
     "",
@@ -94,11 +94,11 @@ export function buildInstructions(): string {
     "定稿与账本：",
     "- 【定稿 = 你预览、用户点按钮】你没有定稿工具。用户想定稿时先对该章 commit_preview；canCommit=true 就转告要点，请用户在定稿清单里点「确认定稿」；canCommit=false 时如实说明阻断原因。**绝不说『已定稿/已入库』**。",
     "- 定稿后的下一步：用户点按钮后，系统会直接转告定稿结果并给出选项，你不用补。定稿结果里提到新出现的人物只转告、不替用户建卡，没有就别提，绝不编造『新出现了谁』。",
-    "- 【改账 = 你提、作者点按钮】改账（补记/改写/删掉事实、标不再成立、线索记为已收/归并/调大小、改已定稿章的天数和梗概）是作者的决定：manage_ledger 不会改任何东西，" +
-      "它只把要改的列出来、给作者出「确认改账」按钮（一轮里调几次，界面合成一个按钮，点一次全记）。调完转告它列的要改的内容，请作者点按钮；**绝不说『已记好/已改好/已收口』**。" +
-      "只在作者明说要改账时调，作者没说过的决定不要替作者做、也不要说成作者定过的。没找到 / 对上多条时照它说的如实问作者，别自己编 id。",
-    "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 manage_ledger op=group（每组第一条留下）。作者要理线索、清过期线索、问哪些线索其实收了时，调 manage_ledger op=review（记账员按全书判、点出收口原句，出「确认改账」按钮），收哪几条作者定。" +
-      "作者说某一条其实已经完了，就 manage_ledger op=resolve 那一条。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实。",
+    "- 【改账 = 你提、作者点按钮】改账（补记/改写/删掉事实、标不再成立、线索记为已收/归并/调大小、改已定稿章的天数和梗概）是作者的决定：change_ledger 交出去不会马上改，" +
+      "服务端把要改的列在「确认改账」卡上，作者点了才记。作者一句话里要改几处就一次交几项 changes；**绝不说『已记好/已改好/已收口』**。" +
+      "只在作者明说要改账时调，作者没说过的决定不要替作者做、也不要说成作者定过的。指的是哪条查不准时卡上会如实说，别自己编 id。",
+    "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 change_ledger 一项 op=group（每组第一条留下）。作者要理线索、清过期线索、问哪些线索其实收了时，调 change_ledger review:true（记账员按全书判、点出收口原句，出「确认改账」卡），收哪几条作者定。" +
+      "作者说某一条其实已经完了，就 change_ledger 一项 op=resolve。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实。",
     "- 【定论 = 你查、作者点按钮】作者定下某个说法、要全书以它为准（『以这个为准』『前面写错了，统一成…』）时调 settle_fact：它查全书哪几句对不上、出一张定论卡，" +
       "作者点「确认」才一次改齐。调完一句话转告查到几处，请作者在卡上看、点「确认」；**绝不说『已改齐』**。作者没明说要定下来，别替作者定；只改本章一两处用 revise_draft。",
     "- 定稿预览被字数下限挡住、作者让你改了每章字数下限：改完下一步选项里推荐『生成第N章定稿预览』。",
@@ -194,10 +194,9 @@ function storyAgentTools() {
     commit_preview: commitPreviewTool,
     // commit_apply 不给对话 AI（2026-10-10）：定稿只能由作者点「确认定稿」按钮（结构化动作直达，不经模型）。
     suggest_next_steps: suggestNextStepsTool,
-    // 2026-10-12 编辑部 R3b 瘦身：硬事实+线索合成 manage_ledger（重构 P3 起只提裁定草案、作者点「确认改账」才记）；
-    // 文风样本并入 change_settings（重构 P9 起是设定卡 exemplar.add / exemplar.remove）；撤销+裁剪合成 manage_snapshots（按 op 转给原工具，
-    // 「确认裁剪」按钮仍直达原 prune_snapshots）。原名保留在原文件，界面步骤名/撤销标签/老会话回放不受影响。
-    manage_ledger: manageLedgerTool,
+    // 写作版本 P2a 片 3：改账、理线索是提交工具（ledger.change，收编 manage_ledger）：只提议，作者点「确认改账」才记。
+    // 撤销+裁剪合成 manage_snapshots（按 op 转给原工具，「确认裁剪」按钮仍直达原 prune_snapshots）。
+    change_ledger: changeLedgerTool,
     manage_snapshots: manageSnapshotsTool,
     settle_fact: settleFactTool,
     web_search: webSearchTool,

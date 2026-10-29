@@ -8,13 +8,14 @@
 import type { RequestContext } from "@mastra/core/di";
 
 import { isOperationId } from "../lib/operations/store.js";
-import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
+import { LEDGER_CHANGE_KIND, MAX_LEDGER_CHANGES } from "../services/operations/recipes/ledger-change.js";
+import { readLedgerRequest, type LedgerChangeRequest } from "../services/ledger-change/plan.js";
 import {
   isCandidateDecisionKind,
   isDraftEditMode,
@@ -58,8 +59,8 @@ export const USER_ACTION_TOOL_NAMES = [
   "manage_snapshots",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
-/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」；P12：定论预览 / 改齐）。 */
-const DIRECT_ACTION_NAMES = ["ledger_decision", "undo", "settle_preview", "settle_apply"] as const;
+/** 不走工具、服务端直接执行的作者命令（P12：定论预览 / 改齐；「撤销上一步」）。 */
+const DIRECT_ACTION_NAMES = ["undo", "settle_preview", "settle_apply"] as const;
 
 /**
  * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
@@ -116,7 +117,16 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
-  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」）带上是哪个按钮、点的哪个、划掉了哪几处。 */
+  /** 作者在线索板 / 梗概上直接改账（片 3）：这几笔不再问，直接记（作者档、存档、可撤销）。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof LEDGER_CHANGE_KIND;
+    readonly mode: "author";
+    readonly params: { readonly changes: readonly LedgerChangeRequest[] };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」「确认改账」）带上是哪个按钮、点的哪个、划掉了哪几处。 */
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
   | { readonly kind: "cancel"; readonly opId: string };
 
@@ -139,11 +149,6 @@ export type UserAction =
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" }
-  /**
-   * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
-   * decisions 在服务端执行前逐条按裁定 schema 校验。
-   */
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string; readonly basis?: string }
   /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
   | SettleUserAction;
 
@@ -155,15 +160,6 @@ export type ParsedUserAction =
   | { readonly kind: "none" }
   | { readonly kind: "invalid"; readonly reason: string }
   | { readonly kind: "action"; readonly action: UserAction };
-
-/** 按钮标识最长多少字：一轮里提了几次改账 / 改设定，界面并成一个按钮，标识是几次的拼起来（「+」隔开）。 */
-const MAX_ACTION_KEY_LENGTH = 600;
-
-/** 按钮带的依据摘要（写作版本 P1a）：原样带给执行那步取回核对；不是字符串、太长的当没带（执行时如实说按钮旧了）。 */
-function basisOf(record: Record<string, unknown>): { readonly basis?: string } {
-  const basis = typeof record.basis === "string" ? record.basis.trim() : "";
-  return basis && basis.length <= 128 ? { basis } : {};
-}
 
 const INSPECT_MODES: readonly InspectMode[] = ["continuity", "quality", "review", "flavor"];
 const MAX_DRAFT_DIRECTION = 2000;
@@ -193,7 +189,7 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
-  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && !isCandidateDecisionKind(record.type)) {
+  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && !isCandidateDecisionKind(record.type)) {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
   const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
@@ -206,6 +202,15 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     const accept = typeof params.accept === "string" && isOperationId(params.accept) ? params.accept : undefined;
     if (!accept) return { kind: "invalid", reason: "这个按钮缺了标记，请刷新后再点。" };
     return { kind: "action", action: { kind: "new", type: SETTINGS_CHANGE_KIND, params: { accept }, ...stamp } };
+  }
+  if (record.type === LEDGER_CHANGE_KIND) {
+    // 按钮只有作者直接改这一种（对话 AI 提的改账停着等「确认改账」，点的是 resume）。
+    const items = Array.isArray(params.changes) ? params.changes : [];
+    const changes = items.map(readLedgerRequest);
+    if (record.mode !== "author" || items.length === 0 || items.length > MAX_LEDGER_CHANGES || changes.some((item) => item === undefined)) {
+      return { kind: "invalid", reason: "改账内容不对，请刷新后再点。" };
+    }
+    return { kind: "action", action: { kind: "new", type: LEDGER_CHANGE_KIND, mode: "author", params: { changes: changes as LedgerChangeRequest[] }, ...stamp } };
   }
   const chapter = params.chapter;
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
@@ -253,16 +258,6 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   const toolName = record.toolName;
   if (typeof toolName !== "string" || ![...USER_ACTION_TOOL_NAMES, ...DIRECT_ACTION_NAMES].includes(toolName as never)) {
     return { kind: "invalid", reason: "不支持的操作。" };
-  }
-  if (toolName === "ledger_decision") {
-    const key = typeof record.key === "string" ? record.key.trim() : "";
-    if (!key || key.length > MAX_ACTION_KEY_LENGTH) return { kind: "invalid", reason: "改账按钮缺少有效标识。" };
-    if (!Array.isArray(record.decisions) || record.decisions.length === 0) return { kind: "invalid", reason: "改账内容不对。" };
-    if (record.decisions.length > MAX_DECISIONS_PER_CHANGE) {
-      return { kind: "invalid", reason: `一次最多改 ${MAX_DECISIONS_PER_CHANGE} 条账，这次有 ${record.decisions.length} 条，请让 AI 分几次提。` };
-    }
-    const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
-    return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}), ...basisOf(record) } };
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
   if (toolName === "settle_preview" || toolName === "settle_apply") {
@@ -392,10 +387,6 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "commit_preview") {
     await runCommitPreviewAction({ ...args, action });
-    return;
-  }
-  if (action.toolName === "ledger_decision") {
-    await runLedgerDecisionAction({ ...args, action });
     return;
   }
   if (action.toolName === "undo") {
@@ -558,48 +549,6 @@ async function runPruneAction(args: Omit<Parameters<typeof runUserAction>[0], "a
     : result?.ok === true ? "操作历史已裁剪。" : "操作历史没有裁剪。";
   emitText(summary);
   flush();
-}
-
-/** 「确认改账」：作者点了按钮，按作者档命令记下裁定（改前存档、点两次只记一次），回执照实说。 */
-async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "ledger_decision" }>;
-}): Promise<void> {
-  const { action } = args;
-  const toolCallId = `user-action-manage_ledger-${Date.now()}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: "manage_ledger", args: { op: "confirm" } });
-  if (!args.projectDir) {
-    const message = "没改账：没拿到书的位置，请重新打开这本书再点。";
-    args.sendEvent("tool-result", { toolCallId, toolName: "manage_ledger", output: { ok: false, op: "confirm", summary: message } });
-    emitText(message);
-    return;
-  }
-  let outcome: Awaited<ReturnType<typeof applyLedgerDecisions>>;
-  try {
-    outcome = await applyLedgerDecisions(args.projectDir, {
-      key: action.key,
-      decisions: action.decisions,
-      ...(action.label ? { label: action.label } : {}),
-      ...(action.basis ? { basis: action.basis } : {}),
-    });
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "manage_ledger", error: message, retryable: true });
-    emitText(`没改账：${message}。可以再点一次「确认改账」重试。`);
-    return;
-  }
-  args.sendEvent("tool-result", {
-    toolCallId,
-    toolName: "manage_ledger",
-    // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改账。
-    output: { ok: outcome.ok, op: "confirm", summary: outcome.summary, refreshScope: "full", ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}) },
-  });
-  emitText(outcome.summary);
 }
 
 /** 「撤销上一步」按钮：同对话里的撤销（manage_snapshots op=undo，优先整回合回退），回执照实说。 */

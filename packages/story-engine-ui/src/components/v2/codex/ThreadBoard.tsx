@@ -3,11 +3,11 @@
  *
  *  - 四列：刚埋下 / 在推进 / 停太久 / 已收口，直接是新核心投影里的四种状态（不猜）。
  *  - 点一张卡：展开它的经过（第几章埋、推进、收，各一句话 + 原句）；点原句回写作台那一章、滚到这句。
- *  - 卡上两件事直接点：【这条收了】、调分量（大伏笔 / 普通 / 小线索）。走「确认改账」结构化动作，
- *    服务端记作者裁定、改前存档可撤销，结果照常进对话——和对 AI 说「把这条收了」是同一条命令。
+ *  - 卡上两件事直接点：【这条收了】、调分量（大伏笔 / 普通 / 小线索）。交一次直接改账（ledger.change），
+ *    服务端记作者裁定、改前存档可撤销，结果照常进对话——和对 AI 说「把这条收了」记的是同一种裁定。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { newLedgerAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { fetchThreadBoard, type ThreadBoard as Board, type ThreadBoardItem } from "../../../api/storyThreadsClient.js";
 import { PageHead, Skeleton } from "./bibleVisual.js";
 
@@ -40,23 +40,13 @@ export function threadMeta(thread: ThreadBoardItem): string {
   return `第 ${thread.openedAt} 章埋下`;
 }
 
-/** 收掉 / 调分量：「确认改账」结构化动作（同 manage_ledger 出的按钮）。key 带上算到的章，同一状态点两次只记一次。 */
+/** 收掉 / 调分量：直接改账（ledger.change，作者档、改前存档可撤销），和对 AI 说「把这条收了」再点「确认改账」记的是同一种裁定。 */
 export function closeThreadAction(thread: ThreadBoardItem, upTo: number): AgentUserAction {
-  return {
-    toolName: "ledger_decision",
-    key: `board-close-${thread.id}-${upTo}`,
-    decisions: [{ type: "thread.close", thread: thread.id, chapter: Math.max(1, upTo) }],
-    label: `收掉线索「${thread.title}」`,
-  };
+  return newLedgerAction([{ op: "resolve", id: thread.id, chapter: Math.max(1, upTo), title: thread.title }]);
 }
 
-export function weighThreadAction(thread: ThreadBoardItem, weight: Weight, upTo: number): AgentUserAction {
-  return {
-    toolName: "ledger_decision",
-    key: `board-weight-${thread.id}-${weight}-${upTo}`,
-    decisions: [{ type: "thread.weight", thread: thread.id, weight }],
-    label: `线索「${thread.title}」定为${WEIGHT_LABELS[weight]}`,
-  };
+export function weighThreadAction(thread: ThreadBoardItem, weight: Weight): AgentUserAction {
+  return newLedgerAction([{ op: "importance", id: thread.id, importance: weight, title: thread.title }]);
 }
 
 function ThreadCard({ thread, open, onToggle, busy, upTo, onJump, onAction }: {
@@ -107,7 +97,7 @@ function ThreadCard({ thread, open, onToggle, busy, upTo, onJump, onAction }: {
                     aria-pressed={thread.weight === weight}
                     className={thread.weight === weight ? "on" : ""}
                     disabled={busy || thread.weight === weight}
-                    onClick={() => onAction(weighThreadAction(thread, weight, upTo))}
+                    onClick={() => onAction(weighThreadAction(thread, weight))}
                   >
                     {WEIGHT_LABELS[weight]}
                   </button>

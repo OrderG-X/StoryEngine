@@ -76,11 +76,25 @@ describe("想走法只有执行器一个入口（片 2D）", () => {
   });
 });
 
+describe("改账只有执行器一个入口（片 3B）", () => {
+  it("记裁定、理线索只在 ledger.change 配方里调", async () => {
+    expect(await filesMatching(SERVER, /\bdecisionRecord\b/u)).toEqual(["services/operations/recipes/ledger-change.ts"]);
+    expect(await filesMatching(SERVER, /\breviewOpenThreads\s*\(/u)).toEqual(["editorial/thread-review.ts", "services/operations/recipes/ledger-change.ts"]);
+  });
+
+  it("对话工具、按钮分发、界面里没有 P2a 前的改账入口名", async () => {
+    const legacy = /["'](?:manage_ledger|ledger_decision|ledger-confirm)["']/u;
+    expect(await filesMatching(join(SERVER, "agent"), legacy)).toEqual([]);
+    expect(await filesMatching(join(SERVER, "routes"), legacy)).toEqual([]);
+    // 界面只留老会话回放用的步骤名（manage_ledger → 「改账」），按钮那两样都没了。
+    expect((await filesMatching(SRC, /["'](?:ledger_decision|ledger-confirm)["']/u)).filter((file) => !file.startsWith("server/"))).toEqual([]);
+  });
+});
+
 /** 路由以外登记过的几处；后两处在迁那一类操作的那片里删（设计第十一节）。 */
 const ON_CORE_CALLERS: Readonly<Record<string, string>> = {
   "book/mirror/ensure.ts": "定义处",
   "services/operations/executor.ts": "submitOperation 受理之前",
-  "agent/ledger-decisions.ts": "理账",
   "agent/tools/commit-preview.ts": "定稿预览",
 };
 

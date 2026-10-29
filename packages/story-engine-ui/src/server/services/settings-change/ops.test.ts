@@ -271,7 +271,7 @@ describe("碰了作者写的：整批一个字不改，等作者点「确认改�
     expect(record.state).toBe("waiting_author");
     expect(record.pendingActions).toEqual([expect.objectContaining({ actionId: "confirm-settings", kind: SETTINGS_CONFIRM_KIND, decisions: ["apply"] })]);
     const preview = record.pendingActions[0]!.preview as SettingsConfirmPreview;
-    expect(preview).toEqual({ lines: ["「林远」的「身份」改了", "建了物品卡「蓝色账册」"], notDone: [] });
+    expect(preview).toEqual({ lines: ["「林远」的「身份」改了", "建了物品卡「蓝色账册」"], notes: [] });
     expect(await cardsText()).toBe(before);
 
     const done = await confirm(record);

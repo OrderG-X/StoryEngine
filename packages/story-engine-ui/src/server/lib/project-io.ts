@@ -360,12 +360,8 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const commitTarget = readWorkspaceCommitTarget(item.commitTarget);
     // 「确认裁剪」按钮的保留条数：不进白名单的话刷新后丢失，按钮会按默认 200 条裁（与预览不一致）。
     const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
-    // 「确认改账」按钮带的裁定草案：不进白名单的话刷新后按钮就空了（点了只能如实说过期）。内容由服务端执行前再校验。
-    const ledgerTarget = readWorkspaceLedgerTarget(item.ledgerTarget);
-    // 「重写这一章」「接着往下写」按钮的写稿动作（写作版本 P2a）、「确认改设定」按钮的参数（重构 P4）：同理要进白名单，
-    // 内容由前端点的时候、服务端执行前再校验。
+    // 「重写这一章」「接着往下写」按钮的写稿动作（写作版本 P2a）：同理要进白名单，内容由前端点的时候、服务端执行前再校验。
     const operationAction = readWorkspaceOperationAction(item.operationAction);
-    const foundationTarget = readWorkspaceFoundationTarget(item.foundationTarget);
     // 「重试这一步」重发的那句话的消息号和发出时间（写作版本 P2a）：不进白名单的话重开书后重试就成了一句新话。
     const retryOf = readMessageRef(item.retryOf);
     actions.push({
@@ -379,9 +375,7 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       ...(readString(item.disabledReason) ? { disabledReason: readString(item.disabledReason) } : {}),
       ...(commitTarget ? { commitTarget } : {}),
       ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
-      ...(ledgerTarget ? { ledgerTarget } : {}),
       ...(operationAction ? { operationAction } : {}),
-      ...(foundationTarget ? { foundationTarget } : {}),
       ...(retryOf ? { retryOf } : {}),
     });
   }
@@ -407,29 +401,6 @@ function readWorkspaceOperationAction(value: unknown): Record<string, unknown> |
   const requestKey = readString(value.requestKey);
   if (!readString(value.mode) || !requestKey || requestKey.length > 64 || !readIssuedAt(value.issuedAt)) return undefined;
   return JSON.stringify(value).length <= 8000 ? value : undefined;
-}
-
-/** 提议按钮的依据摘要（写作版本 P1a）：原样留着，点按钮时服务端拿它核。 */
-function readWorkspaceProposalBasis(value: Record<string, unknown>): { basis?: string; basisFrom?: string } {
-  const basis = readString(value.basis);
-  const basisFrom = readString(value.basisFrom);
-  return { ...(basis ? { basis: basis.slice(0, 128) } : {}), ...(basisFrom ? { basisFrom: basisFrom.slice(0, 128) } : {}) };
-}
-
-function readWorkspaceFoundationTarget(value: unknown): { key: string; input: Record<string, unknown>; label?: string; basis?: string; basisFrom?: string } | undefined {
-  if (!isRecord(value) || !isRecord(value.input)) return undefined;
-  const key = readString(value.key);
-  if (!key) return undefined;
-  const label = readString(value.label);
-  return { key, input: value.input, ...(label ? { label } : {}), ...readWorkspaceProposalBasis(value) };
-}
-
-function readWorkspaceLedgerTarget(value: unknown): { key: string; decisions: unknown[]; label?: string; basis?: string; basisFrom?: string } | undefined {
-  if (!isRecord(value)) return undefined;
-  const key = readString(value.key);
-  if (!key || !Array.isArray(value.decisions) || value.decisions.length === 0) return undefined;
-  const label = readString(value.label);
-  return { key, decisions: value.decisions.filter(isRecord).slice(0, 20), ...(label ? { label } : {}), ...readWorkspaceProposalBasis(value) };
 }
 
 function readWorkspacePermission(value: unknown): string | readonly string[] | undefined {

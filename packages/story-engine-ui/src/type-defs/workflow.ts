@@ -35,22 +35,10 @@ export interface SuggestedAction {
   readonly commitTarget?: CommitConfirmTarget;
   /** 「确认裁剪」按钮的参数（prune-confirm 专用）：保留最近多少条，缺省=引擎默认。 */
   readonly pruneTarget?: { readonly keep?: number };
-  /** 「确认改账」按钮带的裁定草案（ledger-confirm 专用，manage_ledger 提的）。 */
-  readonly ledgerTarget?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
   /** 「重写这一章」「接着往下写」按钮点了交的写稿（rewrite-confirm / continue-confirm，服务端出的，请求号那时就定了）。 */
   readonly operationAction?: OperationActionData;
   /** 「重试这一步」重发的是作者哪句话（写作版本 P2a：沿用那句的消息号和发出时间）。 */
   readonly retryOf?: { readonly messageId: string; readonly issuedAt: string };
-}
-
-/**
- * AI 提议按钮带的依据（写作版本 P1a）：basis = 提议时书的样子（摘要），作者点了服务端拿它核，变了就不执行。
- * basisFrom = 这次提议的工具自己写之前的样子；一轮几个按钮合成一个时，
- * 后一个的 basisFrom 接得上前一个的 basis 才换成后一个的依据，接不上就留前一个的（点了如实说过期）。
- */
-export interface ProposalBasis {
-  readonly basis?: string;
-  readonly basisFrom?: string;
 }
 
 /** 「确认定稿」结构化动作的目标章与预览令牌（令牌让服务重启后仍能凭「这版草稿已预览」放行）。 */

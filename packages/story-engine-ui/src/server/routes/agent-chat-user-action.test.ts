@@ -2,7 +2,7 @@
 //
 // agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：用户点「确认定稿」按钮 → body.action →
 // 服务端直接执行 commit_apply，不经模型（agent.stream 一次都不调）。真项目 + 真预览票据 + 真落盘。
-// 「确认改设定」（写作版本 P2a：改设定是一次操作，按钮接着那次）、定稿回执里的「还没建卡的人」也在这里走真链。
+// 「确认改设定」「确认改账」（写作版本 P2a：改设定、改账是一次操作，按钮接着那次）、梗概上直接改、定稿回执里的「还没建卡的人」也在这里走真链。
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -26,9 +26,9 @@ vi.mock("../editorial/index.js", async (importOriginal) => ({
 }));
 
 import { buildCommitPreviewToolOutput } from "../agent/tools/commit-preview.js";
-import { runManageLedger } from "../agent/tools/manage-ledger.js";
 import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, submitOperation } from "../services/operations/executor.js";
+import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
 import { registerAgentChatRoutes } from "./agent-chat.js";
@@ -117,7 +117,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     await expect(access(join(projectDir, "chapters", "0001.md"))).rejects.toThrow();
   });
 
-  it("「确认改账」：AI 提的裁定草案原样带回 → 记成作者裁定、老格式账本跟着变；点两次只记一次", { timeout: 30_000 }, async () => {
+  it("「确认改账」：AI 提的改账停着等作者 → 点了记成作者裁定、老格式账本跟着变；点两次只记一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
     const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1, callModel: fakeKeeper });
     const committed = callAgentChatRoute({
@@ -127,27 +127,35 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     });
     await committed.handlerPromise;
 
-    const proposal = await runManageLedger(projectDir, { op: "remove", targetText: "停下脚步" });
-    expect(proposal).toMatchObject({ ok: false, needsConfirmation: true, blockedReason: "awaiting_user_confirmation" });
-    expect(proposal.summary).toContain("「林远在会议室外停下脚步」");
-    expect(proposal.summary).not.toMatch(/c1-|d-\d/u);
+    registerRecipe(ledgerChangeRecipe);
+    const proposal = await submitOperation(projectDir, {
+      kind: LEDGER_CHANGE_KIND,
+      mode: "edit",
+      params: { changes: [{ op: "remove", targetText: "停下脚步" }] },
+      requestKey: randomUUID(),
+      issuedAt: new Date().toISOString(),
+      origin: { kind: "chat", messageId: randomUUID() },
+    });
+    if (!proposal.ok || !("record" in proposal)) throw new Error("没受理");
+    await __drainOperationsForTests();
+    const opId = proposal.record.opId;
+    const waiting = await readOperation(projectDir, opId);
+    expect(waiting).toMatchObject({ kind: "record", record: { state: "waiting_author" } });
+    const lines = waiting.kind === "record" ? (waiting.record.pendingActions[0]?.preview as { lines: string[] }).lines : [];
+    expect(lines).toEqual(["删掉第 1 章记错的事实「林远在会议室外停下脚步」"]);
     expect((await projectBook(projectDir)).facts.every((fact) => fact.status !== "retracted")).toBe(true);
 
-    const action = { toolName: "ledger_decision", ...proposal.ledgerConfirm };
-    const snapshotIds: unknown[] = [];
+    const action = { kind: "resume", opId, answer: { actionId: "confirm-ledger", decision: "apply" } };
+    const snapshots: number[] = [];
     for (let click = 0; click < 2; click += 1) {
       const { handlerPromise, res } = callAgentChatRoute({ projectPath: projectDir, messages: [{ role: "user", content: "确认改账" }], action });
       await handlerPromise;
-      const events = parseSse(res.written.join(""));
-      const result = events.find((e) => e.event === "tool-result" && e.data.toolName === "manage_ledger");
-      expect(result?.data.output).toMatchObject({ ok: true, refreshScope: "full" });
-      snapshotIds.push((result?.data.output as { snapshotId?: unknown } | undefined)?.snapshotId);
-      const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
-      expect(text).toContain(click === 0 ? "账改好了" : "已经记过了");
+      const text = parseSse(res.written.join("")).filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
+      expect(text).toContain("账改好了：删掉第 1 章记错的事实「林远在会议室外停下脚步」（可撤销）。");
+      expect(text).not.toMatch(/c1-|d-\d/u);
+      snapshots.push((await listSnapshots(projectDir)).length);
     }
-    // 真改了账才带撤销点（界面凭它登记成一步）；第二次点没改任何东西，不带。
-    expect(typeof snapshotIds[0]).toBe("string");
-    expect(snapshotIds[1]).toBeUndefined();
+    expect(snapshots[1]).toBe(snapshots[0]);
     const view = await projectBook(projectDir);
     expect(view.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("retracted");
     const legacy = JSON.parse(await readFile(join(projectDir, "story", "fact-ledger.json"), "utf-8")) as { facts: { text: string }[] };
@@ -156,10 +164,33 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     expect(agent?.stream).not.toHaveBeenCalled();
 
     // 按这次改账的撤销点撤销：只退改账，第 1 章定稿还在（10-18 走查：曾把前一回合的定稿一起撤了）。
-    await restoreSnapshot(projectDir, snapshotIds[0] as string);
+    const stored = await readOperation(projectDir, opId);
+    const snapshotId = stored.kind === "record" ? (stored.record.result as { body?: { snapshotId?: string } } | undefined)?.body?.snapshotId : undefined;
+    expect((await listSnapshots(projectDir)).find((entry) => entry.id === snapshotId)?.label.startsWith("core:decision.record:")).toBe(true);
+    await restoreSnapshot(projectDir, snapshotId as string);
     const undone = await projectBook(projectDir);
     expect(undone.chapters.map((chapter) => chapter.chapter)).toEqual([1]);
     expect(undone.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("current");
+  });
+
+  it("梗概上「改」：直接改账（不再问），对话里如实说改好了", { timeout: 30_000 }, async () => {
+    const projectDir = await makeProjectWithDraft(1);
+    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1, callModel: fakeKeeper });
+    await callAgentChatRoute({
+      projectPath: projectDir,
+      messages: [{ role: "user", content: "确认定稿第 1 章" }],
+      action: { toolName: "commit_apply", chapter: 1, previewToken: preview.previewToken },
+    }).handlerPromise;
+    registerRecipe(ledgerChangeRecipe);
+    const { handlerPromise, res } = callAgentChatRoute({
+      projectPath: projectDir,
+      messages: [{ role: "user", content: "改第 1 章的梗概" }],
+      action: { kind: "new", type: LEDGER_CHANGE_KIND, mode: "author", params: { changes: [{ op: "summary", chapter: 1, text: "林远决定先不进会议室。" }] }, requestKey: randomUUID(), issuedAt: new Date().toISOString() },
+    });
+    await handlerPromise;
+    const text = parseSse(res.written.join("")).filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
+    expect(text).toContain("账改好了：第 1 章的梗概改成：林远决定先不进会议室（可撤销）。");
+    expect((await projectBook(projectDir)).chapters[0]?.summary).toBe("林远决定先不进会议室。");
   });
 
   it("「确认改设定」：AI 改作者写的 / 删作者建的卡整批等作者 → 作者点了按作者身份 card.write、带存档点；点两次只做一次；撤销点只退这一步", { timeout: 30_000 }, async () => {

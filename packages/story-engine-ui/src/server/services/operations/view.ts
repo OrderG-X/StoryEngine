@@ -97,6 +97,7 @@ const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   "inspect.run": { continuity: "核账", quality: "硬伤检查", review: "内容审阅", flavor: "查 AI 味" },
   "draft.change": { write: "写稿", continue: "接着写", revise: "改稿", fix: "按核账改", deai: "去 AI 味" },
   "settings.change": { ai: "改设定", accept: "认下设定" },
+  "ledger.change": { edit: "改账", author: "改账", review: "理线索" },
 };
 const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",
@@ -106,6 +107,7 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   "draft.discard": "不要 AI 稿",
   "plan.propose": "想走法",
   "settings.change": "改设定",
+  "ledger.change": "改账",
 };
 
 /** 一次操作做的什么（中文）：认不出的种类如实说「别的操作」，不把英文种类名给模型念。 */

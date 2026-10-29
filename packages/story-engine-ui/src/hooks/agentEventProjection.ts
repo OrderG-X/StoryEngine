@@ -20,7 +20,7 @@
  */
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { InspectCardsData, OperationViewData, RewriteChoiceData } from "../api/agentChatClient.js";
-import type { ChapterMessage, MessageCard, MessageSegment, ProposalBasis } from "../types.js";
+import type { ChapterMessage, MessageCard, MessageSegment } from "../types.js";
 import type { BrainstormCardData, CommitPreviewCardData, NextStepPrompt, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
 import { cardOf, updateCard, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
@@ -28,7 +28,7 @@ const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, draftChoiceAction, ledgerConfirmAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, draftChoiceAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -80,8 +80,6 @@ export interface AgentToolResultOutput {
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
-  /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
-  readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
   /** change_draft 专属：有稿的章 AI 不覆盖，挂「接着往下写」「重写这一章」按钮（服务端出的写稿动作）。 */
   readonly rewriteChoices?: readonly RewriteChoiceData[];
 }
@@ -152,8 +150,10 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // 2026-10-10 对话 AI 瘦身：上面 8 个合成 enrich_foundation、下面 4 个线索工具合成 manage_threads（原名保留给老会话回放）
   enrich_foundation: { stepLabel: "补全设定本", card: null },
   manage_threads: { stepLabel: "管理线索", card: null },
-  // 2026-10-12 编辑部 R3b 瘦身：manage_ledger（硬事实+线索）、manage_snapshots（撤销+裁剪）二合一入口
+  // 改账：交一次改账 / 理线索（写作版本 P2a 片 3）；manage_ledger 是之前的工具（老会话回放仍显示原名）
+  change_ledger: { stepLabel: "改账", card: null },
   manage_ledger: { stepLabel: "改账", card: null },
+  // 2026-10-12 编辑部 R3b 瘦身：manage_snapshots（撤销+裁剪）二合一入口
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "拟章纲", card: null },
@@ -313,14 +313,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
-      // 改账草案：模型只提议，挂「确认改账」按钮（建议条渲染），作者点了才由服务端记成作者裁定。
-      if (event.toolName === "manage_ledger" && event.output?.ledgerConfirmAction) {
-        const button = ledgerConfirmAction(event.output.ledgerConfirmAction);
-        return {
-          ...withEffects,
-          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
-        };
-      }
       // 有稿的章：AI 不覆盖，挂「接着往下写」（没定稿的）「重写这一章」按钮（作者档，点了才交）。
       if (event.toolName === "change_draft" && event.output?.rewriteChoices?.length) {
         const buttons = event.output.rewriteChoices.map(draftChoiceAction);
@@ -375,7 +367,7 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     ...(announced || (same && current.announced) ? { announced: true as const } : {}),
     ...(view.pending ? { pending: view.pending } : {}),
   };
-  const next = withSettingsEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view);
+  const next = withChangeEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view);
   if (same && current.state === "succeeded") return next;
   // 一次写几版时落选的几版（「另外几版」卡）：作者点开挑一版换进工作稿。
   const cards = [
@@ -402,13 +394,14 @@ function withDraftEffects(message: ChapterMessage, view: OperationViewData): Cha
   return next;
 }
 
-/** 改设定做完：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」。同一个存档点只记一次。 */
-function withSettingsEffects(message: ChapterMessage, view: OperationViewData): ChapterMessage {
-  const settings = view.settings;
-  if (!settings) return message;
+/** 改设定、改账做完：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」（线索板、故事地图也在设定本里）。同一个存档点只记一次。 */
+function withChangeEffects(message: ChapterMessage, view: OperationViewData): ChapterMessage {
+  const changed = view.changed;
+  if (!changed) return message;
   const known = new Set((message.turnSnapshots ?? []).map((entry) => entry.snapshotId));
-  let next = settings.snapshotId && !known.has(settings.snapshotId)
-    ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), { toolName: "change_settings", snapshotId: settings.snapshotId }] }
+  const toolName = changed.what === "settings" ? "change_settings" : "change_ledger";
+  let next = changed.snapshotId && !known.has(changed.snapshotId)
+    ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), { toolName, snapshotId: changed.snapshotId }] }
     : message;
   const scopes = next.affectedScopes ?? [];
   if (!scopes.includes("foundation")) next = { ...next, affectedScopes: [...scopes, "foundation"] };

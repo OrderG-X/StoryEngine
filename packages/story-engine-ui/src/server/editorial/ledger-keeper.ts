@@ -186,6 +186,8 @@ export async function openKeeperWindow(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 当场最多新生成几个卷节点（缺省不限）。 */
+  readonly maxVolumeBuilds?: number;
   /** 等读期间进度行标注的动作名。 */
   readonly waitingAs: string;
 }): Promise<{ readonly window: BrainMessage[]; readonly cold?: ColdCoverage; readonly waited?: ReaderWaited }> {
@@ -199,6 +201,7 @@ export async function openKeeperWindow(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       maxCatchUp: input.maxCatchUp ?? KEEPER_MAX_CATCH_UP,
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: input.waitingAs,
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,

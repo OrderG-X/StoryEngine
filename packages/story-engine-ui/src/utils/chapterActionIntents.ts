@@ -33,8 +33,6 @@ export function userActionChoiceText(
       return `确认定稿第 ${action.chapter} 章`;
     case "prune_snapshots":
       return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
-    case "ledger_decision":
-      return action.label ? `确认改账：${action.label}` : "确认改账";
     case "undo":
       return "撤销上一步";
     case "settle_preview":
@@ -47,9 +45,20 @@ export function userActionChoiceText(
   }
 }
 
-/** 等作者点的按钮点了哪个：先按按钮认（改设定的「确认改设定」），再按选法认（改写的「换上 / 再改一版」）。 */
-const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定" };
+/** 等作者点的按钮点了哪个：先按按钮认（「确认改设定」「确认改账」），再按选法认（改写的「换上 / 再改一版」）。 */
+const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定", "confirm-ledger": "确认改账" };
 const DECISION_TEXT: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
+
+const WEIGHT_TEXT = { major: "大伏笔", normal: "普通线索", minor: "小线索" } as const;
+
+/** 直接改账（线索板、梗概上点的）的回显：只有一笔照它说，几笔说几笔（没带标题的说「这条」，不念编号）。 */
+function ledgerActionText(changes: readonly import("../api/agentChatClient.js").LedgerChangeData[]): string {
+  if (changes.length !== 1) return `改 ${changes.length} 笔账`;
+  const change = changes[0]!;
+  if (change.op === "summary") return `改第 ${change.chapter} 章的梗概`;
+  const thread = change.title ? `线索「${change.title}」` : "这条线索";
+  return change.op === "resolve" ? `收掉${thread}` : `${thread}定为${WEIGHT_TEXT[change.importance]}`;
+}
 
 /** 回显里引一句原文：太长的截短。 */
 const quoted = (text: string): string => {
@@ -74,6 +83,7 @@ function operationActionText(action: import("../api/agentChatClient.js").Operati
   if (action.kind === "resume") return action.answer ? (ACTION_TEXT[action.answer.actionId] ?? DECISION_TEXT[action.answer.decision] ?? "接着做") : "接着做";
   if (action.kind === "cancel") return "不要了";
   if (action.type === "settings.change") return "认下 AI 刚写的设定";
+  if (action.type === "ledger.change") return ledgerActionText(action.params.changes);
   const chapter = action.params.chapter;
   if (isDraftEditAction(action)) return editActionText(action.params);
   if (action.type === "draft.adopt") return `第 ${chapter} 章换成 AI 写好的那版`;

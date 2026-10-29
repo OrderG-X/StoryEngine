@@ -24,9 +24,9 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
     invalidateStoryAgent();
     expect(tools).toEqual([
       "change_draft",
+      "change_ledger",
       "change_settings",
       "commit_preview",
-      "manage_ledger",
       "manage_snapshots",
       "plan_chapter",
       "read_chapters_overview",
@@ -237,8 +237,8 @@ describe("buildInstructions 写设定（第一轮就把已给的写进卡，不�
 describe("buildInstructions 改账 = 你提、作者点按钮（重构 P3）", () => {
   const instructions = buildInstructions();
 
-  it("manage_ledger 只出「确认改账」按钮；绝不说已记好；作者没说过的决定不替作者做", () => {
-    expect(instructions).toContain("「确认改账」按钮");
+  it("change_ledger 只提议、作者点「确认改账」才记；绝不说已记好；作者没说过的决定不替作者做", () => {
+    expect(instructions).toContain("「确认改账」卡");
     expect(instructions).toContain("绝不说『已记好/已改好/已收口』");
     expect(instructions).toContain("作者没说过的决定不要替作者做");
   });
@@ -271,10 +271,12 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toContain("系统会直接转告定稿结果");
   });
 
-  it("待收口提醒只转告并给归并选项；单条已完结用 manage_ledger op=resolve", () => {
+  it("待收口提醒只转告并给归并选项；单条已完结用 change_ledger op=resolve；理线索 review", () => {
     expect(instructions).toContain("待收口提醒只转告");
-    expect(instructions).toContain("manage_ledger op=group");
-    expect(instructions).toContain("manage_ledger op=resolve");
+    expect(instructions).toContain("change_ledger 一项 op=group");
+    expect(instructions).toContain("change_ledger 一项 op=resolve");
+    expect(instructions).toContain("change_ledger review:true");
+    expect(instructions).not.toContain("manage_ledger");
   });
 
   it("出稿后下一步交给选项卡，文字不要重复口播工作稿保存/下一步提示", () => {

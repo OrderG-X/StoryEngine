@@ -50,7 +50,6 @@ export const RAIL_MAX_VISIBLE = 3;
 const AUTHOR_CONFIRM_ACTION_IDS: ReadonlySet<string> = new Set([
   "commit-apply",
   "prune-confirm",
-  "ledger-confirm",
   "rewrite-confirm",
   "continue-confirm",
 ]);

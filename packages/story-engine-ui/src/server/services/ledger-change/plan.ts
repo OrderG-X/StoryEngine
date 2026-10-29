@@ -1,37 +1,17 @@
 /**
- * 改账（重构 P3 起）：手动改账是「作者裁定」，只有作者点了「确认改账」按钮才记（新核心的作者档命令）。
- *
- *   对话 AI 调 manage_ledger → planLedgerChange 把要改什么翻成裁定草案（指向的事实 / 线索按编号或原话查准，
- *   查不准就如实说、列候选，绝不猜）→ 界面出「确认改账」按钮 → 作者点了 → applyLedgerDecisions 存一个撤销点、
- *   整批记裁定（一个事务，要么全记上、要么都不记）→ 重生成老格式镜像。
- *
- * 老代码直接改 story/*.json 的那套（edit_fact_ledger / resolve_thread / group_related_leads / clean_legacy_threads /
- * set_foreshadowing_importance）在新核心下会被镜像盖掉（删了等于没删），已整体换成这里。
+ * 改账的规划（写作版本 P2a 片 3B，从 agent/ledger-decisions.ts 挪来）：一次改账请求翻成裁定草案。
+ * 只算草案、不写盘；作者点「确认改账」才由 ledger.change 操作按作者档记下（见 recipes/ledger-change.ts）。
  */
-import {
-  decisionRecord,
-  DecisionInput,
-  nameKey,
-  projectBook,
-  runCommand,
-  sha256,
-  type BookProjection,
-  type FactView,
-  type ThreadView,
-  type TruthBasis,
-} from "@actalk/story-core";
+import { DecisionInput, nameKey, type BookProjection, type FactView, type ThreadView } from "@actalk/story-core";
 
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
-import { syncLegacyMirror } from "../book/mirror/sync.js";
-import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
-import { describeBasisChanges, readTruthBasisForWork } from "../book/truth-basis.js";
-import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
-
-/** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */
+/** 一次最多改几条（卡上摆得下、看得清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
 
+export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "summary"] as const;
+export type LedgerEditOp = (typeof LEDGER_OPS)[number];
+
 export interface LedgerChangeRequest {
-  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "group" | "importance" | "day" | "summary";
+  readonly op: LedgerEditOp;
   readonly id?: string;
   readonly chapter?: number;
   readonly text?: string;
@@ -49,18 +29,8 @@ export interface LedgerChangeRequest {
   readonly dayEnd?: number;
 }
 
-/** 一份待作者确认的改账：按钮原样带回。 */
-export interface LedgerChangeProposal {
-  readonly key: string;
-  readonly decisions: readonly DecisionInput[];
-  /** 给作者看的每一条（只有名字 / 原话，没有编号）。 */
-  readonly lines: readonly string[];
-  /** 依据摘要（见 lib/truth-basis-store）：算草案时书的样子。planOnView 只算草案，依据由外层补上。 */
-  readonly basis?: string;
-}
-
 export type LedgerPlanOutcome =
-  | ({ readonly ok: true } & LedgerChangeProposal)
+  | { readonly ok: true; readonly decisions: readonly DecisionInput[]; readonly lines: readonly string[] }
   | { readonly ok: false; readonly code: string; readonly reason: string };
 
 const WEIGHT_LABELS = { major: "大伏笔（不许丢）", normal: "普通线索", minor: "小线索（停多久都不提醒）" } as const;
@@ -96,27 +66,14 @@ function fail(code: string, reason: string): LedgerPlanOutcome {
   return { ok: false, code, reason };
 }
 
-export function proposal(decisions: DecisionInput[], lines: string[]): LedgerPlanOutcome & { readonly ok: true } {
-  const key = `ledger:${sha256(JSON.stringify(decisions)).slice(0, 12)}:${Date.now().toString(36)}`;
-  return { ok: true, key, decisions, lines };
+function proposal(decisions: DecisionInput[], lines: string[]): LedgerPlanOutcome {
+  return { ok: true, decisions, lines };
 }
 
 /**
- * 把一次改账请求翻成裁定草案。不写盘（老书没接上新核心时会先导入，导入前存撤销点）。
- * 草案带依据（写作版本 P1a）：照哪一版账算的；作者点「确认改账」时账变了就不记、重新提。
+ * 一次改账请求翻成裁定（在一份投影上算，不写盘）。指向的事实 / 线索按编号或原话查准，查不准如实说、列候选，绝不猜。
  */
-export async function planLedgerChange(projectDir: string, request: LedgerChangeRequest): Promise<LedgerPlanOutcome> {
-  const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
-  if (!onCore.ok) return fail("not_on_core", `这本书的账还没接到新格式上：${onCore.reason}`);
-  // 先记依据再读投影：读的中途账变了，确认时对不上，照样作废。
-  const basis = await readTruthBasisForWork(projectDir);
-  const view = await projectBook(projectDir);
-  if (view.chapters.length === 0) return fail("no_chapters", "还没有定稿的章，账本是空的；先定稿一章再改账。");
-  const planned = planOnView(view, request);
-  return planned.ok ? { ...planned, basis: await rememberBasis(projectDir, basis) } : planned;
-}
-
-function planOnView(view: BookProjection, request: LedgerChangeRequest): LedgerPlanOutcome {
+export function planOnView(view: BookProjection, request: LedgerChangeRequest): LedgerPlanOutcome {
   const latest = view.upTo;
 
   switch (request.op) {
@@ -243,82 +200,86 @@ function planOnView(view: BookProjection, request: LedgerChangeRequest): LedgerP
   }
 }
 
-export interface LedgerApplyOutcome {
-  readonly ok: boolean;
-  /** 记上了几条。 */
-  readonly applied: number;
-  readonly summary: string;
-  /** 改前存的撤销点：这次真改了账才有（界面凭它把这一步登记成可撤销的一步，「撤销上一步」只撤这一步）。 */
-  readonly snapshotId?: string;
-}
 
-/** AI 提的改账草案的键（`proposal` 生成）；作者在故事地图、梗概上直接点的不带这个前缀。合并的按钮键用 `+` 连着（workflowHelpers）。 */
-export function isAiLedgerKey(key: string): boolean {
-  return key.split("+").some((part) => part.startsWith("ledger:"));
-}
-
-/**
- * 作者点了「确认改账」：存一个撤销点，整批记裁定（一个事务；幂等：点两次只记一次），再重生成老格式镜像。
- * AI 提的草案必须带依据（basis = 摘要）：在书锁里核，账从提议之后变了就一条都不记、如实说（写作版本 P1a）。
- * 整批一个事务，所以不会记了一半、重点按钮时后半截绕过依据（P1a 复核）。
- * 作者在故事地图上直接点的（不是 AI 提的）照现在的账执行，不带依据。
- */
-export async function applyLedgerDecisions(projectDir: string, input: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string; readonly basis?: string }): Promise<LedgerApplyOutcome> {
+/** 一批改账请求一起算：各条的裁定、给作者看的话接起来；算不成的如实列进「没改成」（同一条裁定只记一次）。 */
+export function planLedgerRequests(view: BookProjection, requests: readonly LedgerChangeRequest[]): {
+  readonly decisions: readonly DecisionInput[];
+  readonly lines: readonly string[];
+  readonly notDone: readonly string[];
+} {
   const decisions: DecisionInput[] = [];
-  for (const raw of input.decisions.slice(0, MAX_DECISIONS_PER_CHANGE)) {
-    const parsed = DecisionInput.safeParse(raw);
-    if (!parsed.success) return { ok: false, applied: 0, summary: "没改账：按钮带的改账内容不完整，请让 AI 重新提一次。" };
+  const lines: string[] = [];
+  const notDone: string[] = [];
+  const seen = new Set<string>();
+  for (const request of requests) {
+    const planned = planOnView(view, request);
+    if (!planned.ok) {
+      notDone.push(planned.reason.endsWith("。") ? planned.reason.slice(0, -1) : planned.reason);
+      continue;
+    }
+    const fresh = planned.decisions.filter((decision) => {
+      const key = JSON.stringify(decision);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (fresh.length === 0) continue;
+    if (decisions.length + fresh.length > MAX_DECISIONS_PER_CHANGE) {
+      notDone.push(`一次最多改 ${MAX_DECISIONS_PER_CHANGE} 条，${planned.lines.join("；")}这次没算上，分几次改`);
+      continue;
+    }
+    decisions.push(...fresh);
+    lines.push(...planned.lines);
+  }
+  return { decisions, lines, notDone };
+}
+
+/** 按钮、记录里带的裁定读回来（核心的格式校验）；不对的整批不收。 */
+export function readDecisions(raw: unknown): readonly DecisionInput[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_DECISIONS_PER_CHANGE) return undefined;
+  const decisions: DecisionInput[] = [];
+  for (const item of raw) {
+    const parsed = DecisionInput.safeParse(item);
+    if (!parsed.success) return undefined;
     decisions.push(parsed.data);
   }
-  if (decisions.length === 0) return { ok: false, applied: 0, summary: "没改账：按钮里没有要改的内容。" };
-  let basis: TruthBasis | undefined;
-  if (isAiLedgerKey(input.key)) {
-    basis = input.basis ? await recallBasis(projectDir, input.basis) : undefined;
-    if (!basis) return { ok: false, applied: 0, summary: "没改账：这个改账按钮是旧的（不知道是照哪一版账提的），请让 AI 重新提一次。" };
-  }
-  const label = `agent:manage_ledger${input.label ? `:${input.label.slice(0, 40)}` : ""}`;
-  let run: { readonly snapshotId?: string; readonly result: { applied: number; replayed: boolean; failure?: string; mirrorOk: boolean } };
-  try {
-    // 存撤销点和记裁定在同一把书锁里：撤销不会插进改账中间。真要写才存（重放、没记上就不存）。
-    run = await runWithLazySnapshot(projectDir, async (snapshot) => {
-      // 核心先回放回执再核依据：按钮点第二次照样回「刚才已经记过了」。
-      const outcome = await runCommand(projectDir, decisionRecord, { decisions }, {
-        caller: "author",
-        idempotencyKey: input.key,
-        snapshot,
-        ...(basis ? { basis } : {}),
-      });
-      let failure: string | undefined;
-      if (!outcome.ok) {
-        if (outcome.code === "basis_changed") {
-          const changes = (outcome.details as { readonly changes?: Parameters<typeof describeBasisChanges>[0] } | undefined)?.changes ?? [];
-          failure = `提议之后${describeBasisChanges(changes)}改过，这份草案是照改之前算的，请让 AI 重新提一次`;
-        } else {
-          failure = outcome.message;
-        }
-      }
-      const mirror = outcome.ok && !outcome.replayed ? await syncLegacyMirror(projectDir) : { ok: true as const };
-      if (!mirror.ok) console.warn(`[manage_ledger] 改账后重生成老格式镜像没成：${mirror.reason}`);
-      return {
-        applied: outcome.ok && !outcome.replayed ? outcome.result.decisions.length : 0,
-        replayed: outcome.ok && outcome.replayed,
-        ...(failure ? { failure } : {}),
-        mirrorOk: mirror.ok,
-      };
-    }, label);
-  } catch (error) {
-    return { ok: false, applied: 0, summary: `没改账：没能先存撤销点（${error instanceof Error ? error.message : String(error)}），这次一条都没记。` };
-  }
-  const { applied, replayed, failure, mirrorOk } = run.result;
-  const reason = failure ?? "没记上";
-  const parts = [
-    applied > 0 ? `账改好了（${applied} 条），改前已存档，可撤销。` : replayed ? "这次改账刚才已经记过了，没有重复记。" : `没改账：${reason.endsWith("。") ? reason.slice(0, -1) : reason}。`,
-    ...(mirrorOk ? [] : ["（老格式资料没同步上，下次打开书会补；裁定本身已经记好。）"]),
-  ];
-  return {
-    ok: failure === undefined && (applied > 0 || replayed),
-    applied,
-    summary: parts.join(" "),
-    ...(applied > 0 && run.snapshotId ? { snapshotId: run.snapshotId } : {}),
+  return decisions;
+}
+
+const MAX_TEXT_CHARS = 2000;
+const IMPORTANCE = ["major", "normal", "minor"] as const;
+const NATURES = ["hard", "state", "event"] as const;
+
+const text = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim().slice(0, MAX_TEXT_CHARS) : undefined);
+const positive = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
+const oneOf = <T extends string>(items: readonly T[], value: unknown): T | undefined => items.find((item) => item === value);
+
+/** 一条改账请求读回来（交来的参数、记录里存的）：op 不认识是 undefined；别的字段形状不对就当没给（planOnView 如实说缺什么）。 */
+export function readLedgerRequest(raw: unknown): LedgerChangeRequest | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const op = oneOf(LEDGER_OPS, value.op);
+  if (!op) return undefined;
+  const groups = Array.isArray(value.groups)
+    ? value.groups
+      .map((group) => (Array.isArray(group) ? group.map(text).filter((item): item is string => item !== undefined) : []))
+      .filter((group) => group.length > 0)
+      .slice(0, MAX_DECISIONS_PER_CHANGE)
+    : [];
+  const fields: Record<string, unknown> = {
+    id: text(value.id),
+    chapter: positive(value.chapter),
+    text: text(value.text),
+    targetText: text(value.targetText),
+    query: text(value.query),
+    importance: oneOf(IMPORTANCE, value.importance),
+    nature: oneOf(NATURES, value.nature),
+    subject: text(value.subject),
+    attribute: text(value.attribute),
+    value: text(value.value),
+    day: positive(value.day),
+    dayEnd: positive(value.dayEnd),
+    ...(op === "group" ? { groups } : {}),
   };
+  return { op, ...Object.fromEntries(Object.entries(fields).filter(([, item]) => item !== undefined)) } as LedgerChangeRequest;
 }

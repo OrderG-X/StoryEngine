@@ -16,15 +16,18 @@ import {
 } from "./user-actions.js";
 
 describe("parseUserAction 结构化动作解析", () => {
-  it("「确认改账」：带标识和裁定草案才收；缺标识 / 空草案 / 超量都按非法处理", () => {
-    const decisions = [{ type: "fact.retract", fact: "c1-1" }];
-    expect(parseUserAction({ toolName: "ledger_decision", key: " k1 ", decisions, label: "删掉一条" })).toEqual({
+  it("线索板 / 梗概上直接改账：只认作者直接改、每笔认得出才收；老的「确认改账」按钮（ledger_decision）不再认", () => {
+    const stamp = { requestKey: "k-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    const changes = [{ op: "resolve", id: "t1-1", chapter: 2, title: "钟为什么停" }];
+    expect(parseUserAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes }, ...stamp })).toEqual({
       kind: "action",
-      action: { toolName: "ledger_decision", key: "k1", decisions, label: "删掉一条" },
+      action: { kind: "new", type: "ledger.change", mode: "author", params: { changes: [{ op: "resolve", id: "t1-1", chapter: 2 }] }, ...stamp },
     });
-    expect(parseUserAction({ toolName: "ledger_decision", decisions }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: [] }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: Array.from({ length: 21 }, () => decisions[0]) }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "ledger.change", mode: "edit", params: { changes }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes: [] }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes: [{ op: "explode" }] }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes: Array.from({ length: 21 }, () => changes[0]) }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "ledger_decision", key: "k1", decisions: [{ type: "fact.retract", fact: "c1-1" }] }).kind).toBe("invalid");
   });
 
   it("「认下」（改设定那次的操作号）才收；号不对、缺号按非法；老的「确认改设定」按钮（foundation_decision）不再认", () => {

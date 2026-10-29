@@ -747,36 +747,6 @@ describe("裁剪待确认投影（prune_snapshots 预览后挂「确认裁剪」
   });
 });
 
-describe("改账待确认投影（manage_ledger 提草案后挂「确认改账」按钮）", () => {
-  it("ledgerConfirmAction → 消息挂「确认改账」按钮（带裁定草案原样）", () => {
-    const decisions = [{ type: "fact.retract", fact: "c1-1" }];
-    const message = project([
-      {
-        type: "tool-result",
-        toolCallId: "l1",
-        toolName: "manage_ledger",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions, label: "删掉一条" }, summary: "要改的账：…" },
-      },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "ledger-confirm", label: "确认改账", ledgerTarget: { key: "k1", decisions, label: "删掉一条" } }),
-    ]);
-  });
-
-  it("一轮里两次改账提议 → 一个按钮带两次的裁定（不丢前一次）", () => {
-    const first = [{ type: "thread.weight", thread: "t1-1", weight: "major" }];
-    const second = [{ type: "thread.weight", thread: "t1-2", weight: "major" }];
-    const message = project([
-      { type: "tool-result", toolCallId: "l1", toolName: "manage_ledger", endedAt: 2, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions: first }, summary: "…" } },
-      { type: "tool-result", toolCallId: "l2", toolName: "manage_ledger", endedAt: 3, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k2", decisions: second }, summary: "…" } },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "ledger-confirm", ledgerTarget: { key: "k1+k2", decisions: [...first, ...second] } }),
-    ]);
-  });
-});
-
 describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {
   it("change_draft 遇到有稿的章 → 照服务端给的按钮挂「接着往下写」「重写第 N 章」（点了交的写稿原样带着）；再来一遍不重复挂", () => {
     const continueAction = newDraftAction("continue", { chapter: 3 });
@@ -810,6 +780,16 @@ describe("操作投影（写作版本 P2a：检查交给执行器做）", () => 
     ...overrides,
   });
   const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };
+
+  it("改设定、改账做完了：这一轮记下存档点（工具名分开）、块头标「设定本」；同一个存档点只记一次；交的那一步叫「改账」", () => {
+    const ledger = view({ kind: "ledger.change", mode: "edit", chapter: undefined, what: "改账", state: "succeeded", allowed: [], eventSeq: 5, changed: { what: "ledger", snapshotId: "s-1" } });
+    let msg = project([{ type: "operation", operation: ledger }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...ledger, eventSeq: 6 } });
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ opId: "op-11111111111111111111", kind: "settings.change", mode: "ai", chapter: undefined, state: "succeeded", allowed: [], changed: { what: "settings", snapshotId: "s-2" } }) });
+    expect(msg.turnSnapshots).toEqual([{ toolName: "change_ledger", snapshotId: "s-1" }, { toolName: "change_settings", snapshotId: "s-2" }]);
+    expect(msg.affectedScopes).toEqual(["foundation"]);
+    for (const toolName of ["change_ledger", "manage_ledger"]) expect(presentationFor(toolName).stepLabel).toBe("改账");
+  });
 
   it("在做 → 操作卡；进度只记给在做的那次；做完挂结果卡（带查的版本），进度清掉", () => {
     let msg = project([{ type: "operation", operation: view() }]);

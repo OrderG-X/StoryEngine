@@ -15,7 +15,7 @@
  */
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
-import type { AiFlavorReport, ProposalBasis } from "../types.js";
+import type { AiFlavorReport } from "../types.js";
 import type { BrainstormCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import { readDraftVersions } from "../utils/draftVersions.js";
@@ -142,8 +142,21 @@ export type OperationActionData =
   | { readonly kind: "new"; readonly type: "plan.propose"; readonly params: PlanParamsData; readonly requestKey: string; readonly issuedAt: string }
   /** 「认下」（片 3）：那次改设定里 AI 刚写进去的那几处算作者写的。accept = 那次改设定的操作号。 */
   | { readonly kind: "new"; readonly type: "settings.change"; readonly params: { readonly accept: string }; readonly requestKey: string; readonly issuedAt: string }
+  /** 作者在线索板 / 梗概上直接改账（片 3）：这几笔不再问，直接记（作者档、可撤销）。 */
+  | { readonly kind: "new"; readonly type: "ledger.change"; readonly mode: "author"; readonly params: { readonly changes: readonly LedgerChangeData[] }; readonly requestKey: string; readonly issuedAt: string }
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
   | { readonly kind: "cancel"; readonly opId: string };
+
+/** 作者直接改的一笔账（和服务端 services/ledger-change/plan.ts 的 LedgerChangeRequest 同形，界面只用到这几种）。title 只给对话里回显用，服务端不读。 */
+export type LedgerChangeData =
+  | { readonly op: "resolve"; readonly id: string; readonly chapter: number; readonly title?: string }
+  | { readonly op: "importance"; readonly id: string; readonly importance: "major" | "normal" | "minor"; readonly title?: string }
+  | { readonly op: "summary"; readonly chapter: number; readonly text: string };
+
+/** 一个直接改账的按钮（请求号这时候给：点了一次就是这一次）。 */
+export function newLedgerAction(changes: readonly LedgerChangeData[]): OperationActionData {
+  return { kind: "new", type: "ledger.change", mode: "author", params: { changes }, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
+}
 
 /** 换上 / 不要 AI 稿（和服务端 services/draft-change/params.ts 的 CandidateDecisionParams 同形）。 */
 export type CandidateDecisionTypeData = "draft.adopt" | "draft.discard";
@@ -227,7 +240,6 @@ export type AgentUserAction =
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   | { readonly toolName: "undo" }
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
   | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
   /** 设定本定论页「查前文」：拿这条定论查全书。 */
@@ -397,8 +409,6 @@ export interface AgentToolResult {
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：模型只做了预览、有可裁内容，等用户点「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
-  /** manage_ledger 专属：改账是作者裁定，模型只提了草案，等作者点「确认改账」按钮。 */
-  readonly ledgerConfirmAction?: LedgerConfirmTarget;
   /** change_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「接着往下写」「重写这一章」（服务端出的按钮动作）。 */
   readonly rewriteChoices?: readonly RewriteChoiceData[];
 }
@@ -408,13 +418,6 @@ export interface RewriteChoiceData {
   readonly label: string;
   readonly mode: DraftModeData;
   readonly action: OperationActionData;
-}
-
-/** 「确认改账」按钮带回服务端的东西（manage_ledger 提的裁定草案，服务端执行前再校验）。 */
-export interface LedgerConfirmTarget extends ProposalBasis {
-  readonly key: string;
-  readonly decisions: readonly unknown[];
-  readonly label?: string;
 }
 
 /** 操作的状态（与服务端 lib/operations/store.ts 的 OperationState 同形）。 */
@@ -458,13 +461,15 @@ export interface OperationViewData {
   readonly draft?: DraftOperationData;
   /** 想走法做完了的几种走法（走法卡、稿纸上方给作者挑）。 */
   readonly plan?: BrainstormCardData;
-  /** 改设定做完了（设定本跟着重读、这一轮记下存档点）。 */
-  readonly settings?: SettingsChangeData;
-  /** 等作者点的（改写的改前改后 +「换上 / 再改一版」、改设定的「确认改设定」）；点过的不算。 */
+  /** 改设定、改账做完了（设定本 / 概况跟着重读、这一轮记下存档点）。 */
+  readonly changed?: ChangedData;
+  /** 等作者点的（改写的改前改后 +「换上 / 再改一版」、改设定的「确认改设定」、改账的「确认改账」）；点过的不算。 */
   readonly pending?: PendingActionData;
 }
 
-export interface SettingsChangeData {
+/** 改设定、改账做完了（两样都在设定本里：设定卡、线索板和故事地图）：打的存档点。 */
+export interface ChangedData {
+  readonly what: "settings" | "ledger";
   readonly snapshotId?: string;
 }
 
@@ -476,17 +481,13 @@ export interface RevisePreviewData {
   readonly brief?: string;
 }
 
-/** 等作者点的那个按钮：哪个、能点哪几个决定、卡上摆什么。 */
-/** 改设定等作者点「确认改设定」的那几处（服务端 SettingsConfirmPreview 的子集，只有名字）。 */
-export interface SettingsConfirmData {
-  readonly lines: readonly string[];
-  readonly notDone: readonly string[];
-}
-
-/** 等作者点的那个按钮：改写的「换上 / 再改一版」、改设定的「确认改设定」。 */
+/**
+ * 等作者点的那个按钮：改写的「换上 / 再改一版」；改设定的「确认改设定」、改账的「确认改账」（同一张确认卡：
+ * 服务端 SettingsConfirmPreview / LedgerConfirmPreview，要改的每一处只有名字、原话，notes 是附带要说的）。
+ */
 export type PendingActionData =
   | { readonly kind: "revise"; readonly actionId: string; readonly decisions: readonly string[]; readonly revise: RevisePreviewData }
-  | { readonly kind: "settings"; readonly actionId: string; readonly decisions: readonly string[]; readonly settings: SettingsConfirmData };
+  | { readonly kind: "confirm"; readonly what: "settings" | "ledger"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] };
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
 export interface DraftOperationData {
@@ -532,9 +533,9 @@ function editChanges(value: unknown): readonly EditChangeData[] | undefined {
   return changes.length > 0 ? changes : undefined;
 }
 
-/** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）、改设定等作者点「确认改设定」（SETTINGS_CONFIRM_KIND）；点过的、认不出的不算。 */
+/** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）、「确认改设定」（SETTINGS_CONFIRM_KIND）、「确认改账」（LEDGER_CONFIRM_KIND）；点过的、认不出的不算。 */
 const REVISE_CONFIRM_KIND = "draft.revise.confirm";
-const SETTINGS_CONFIRM_KIND = "settings_confirm";
+const CONFIRM_KINDS: Readonly<Record<string, "settings" | "ledger">> = { settings_confirm: "settings", ledger_confirm: "ledger" };
 
 function readPendingAction(value: unknown): PendingActionData | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -542,11 +543,12 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
     if (!isRecord(item) || item.decided === true || typeof item.actionId !== "string") continue;
     const decisions = Array.isArray(item.decisions) ? item.decisions.filter((decision): decision is string => typeof decision === "string") : [];
     const preview = isRecord(item.preview) ? item.preview : undefined;
-    if (item.kind === SETTINGS_CONFIRM_KIND) {
-      // 一次最多改 60 步（核心 MAX_OPS_PER_CHANGE），卡上一条不漏。
+    const what = typeof item.kind === "string" ? CONFIRM_KINDS[item.kind] : undefined;
+    if (what) {
+      // 改设定一次最多 60 步（核心 MAX_OPS_PER_CHANGE），改账最多 20 笔：卡上一条不漏。
       const lines = preview ? textList(preview.lines, 60) : undefined;
       if (!lines || decisions.length === 0) continue;
-      return { kind: "settings", actionId: item.actionId, decisions, settings: { lines, notDone: textList(preview!.notDone, 60) ?? [] } };
+      return { kind: "confirm", what, actionId: item.actionId, decisions, lines, notes: textList(preview!.notes, 20) ?? [] };
     }
     if (item.kind !== REVISE_CONFIRM_KIND) continue;
     const changes = preview ? editChanges(preview.changes) : undefined;
@@ -830,16 +832,6 @@ export async function streamAgentChat(
                   },
                 }
               : {}),
-            ...(parsed.toolName === "manage_ledger" && output.needsConfirmation === true && isLedgerConfirm(output.ledgerConfirm)
-              ? {
-                  ledgerConfirmAction: {
-                    key: output.ledgerConfirm.key,
-                    decisions: output.ledgerConfirm.decisions,
-                    ...(typeof output.ledgerConfirm.label === "string" && output.ledgerConfirm.label ? { label: output.ledgerConfirm.label } : {}),
-                    ...proposalBasisOf(output.ledgerConfirm),
-                  },
-                }
-              : {}),
             ...(parsed.toolName === "change_draft" && readRewriteChoices(output.rewriteChoices)
               ? { rewriteChoices: readRewriteChoices(output.rewriteChoices)! }
               : {}),
@@ -956,18 +948,6 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
   });
 }
 
-/** 提议按钮带的依据摘要原样透传（服务端点按钮时核）。 */
-function proposalBasisOf(value: Record<string, unknown>): ProposalBasis {
-  return {
-    ...(typeof value.basis === "string" && value.basis ? { basis: value.basis } : {}),
-    ...(typeof value.basisFrom === "string" && value.basisFrom ? { basisFrom: value.basisFrom } : {}),
-  };
-}
-
-function isLedgerConfirm(value: unknown): value is { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: unknown } {
-  return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && Array.isArray(value.decisions) && value.decisions.length > 0;
-}
-
 /** change_draft 回执里的「接着往下写」「重写这一章」（防御解析：动作对不上写稿的丢掉）。 */
 function readRewriteChoices(value: unknown): readonly RewriteChoiceData[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -1003,7 +983,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const inspect = state === "succeeded" && value.kind === "inspect.run" && mode && result ? readInspectCards(mode, result.body) : undefined;
   const draft = state === "succeeded" && (value.kind === "draft.change" || value.kind === "draft.adopt") && result ? readDraftOperation(result.body) : undefined;
   const plan = state === "succeeded" && value.kind === "plan.propose" && result ? readBrainstormData(result.body) : undefined;
-  const settings = state === "succeeded" && value.kind === "settings.change" && result ? readSettingsChange(result.body) : undefined;
+  const changed = state === "succeeded" && result ? readChanged(value.kind, result.body) : undefined;
   const pending = state === "waiting_author" ? readPendingAction(value.pendingActions) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
@@ -1030,15 +1010,16 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     ...(inspect ? { inspect } : {}),
     ...(draft ? { draft } : {}),
     ...(plan ? { plan } : {}),
-    ...(settings ? { settings } : {}),
+    ...(changed ? { changed } : {}),
     ...(pending ? { pending } : {}),
   };
 }
 
-/** 改设定做完了：打的存档点（这一轮的「撤销到此」从它退）。 */
-function readSettingsChange(body: unknown): SettingsChangeData | undefined {
-  if (!isRecord(body) || body.kind !== "settings.change") return undefined;
-  return typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {};
+/** 改设定、改账做完了：改了哪一片、打的存档点（这一轮的「撤销到此」从它退）。不是这两类是 undefined。 */
+function readChanged(kind: unknown, body: unknown): ChangedData | undefined {
+  const what = kind === "settings.change" ? "settings" : kind === "ledger.change" ? "ledger" : undefined;
+  if (!what || !isRecord(body) || body.kind !== kind) return undefined;
+  return { what, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}) };
 }
 
 /**
@@ -1139,6 +1120,12 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
     const accept = isRecord(value.params) ? value.params.accept : undefined;
     return typeof accept === "string" && /^op-[0-9a-f]{20}$/u.test(accept) ? { kind: "new", type: "settings.change", params: { accept }, ...stamp } : undefined;
   }
+  if (value.type === "ledger.change") {
+    const changes = isRecord(value.params) && Array.isArray(value.params.changes) ? value.params.changes.map(readLedgerChange) : [];
+    return value.mode === "author" && changes.length > 0 && changes.length <= 20 && changes.every((item) => item !== undefined)
+      ? { kind: "new", type: "ledger.change", mode: "author", params: { changes: changes as LedgerChangeData[] }, ...stamp }
+      : undefined;
+  }
   if (value.type === "draft.change" && isDraftEditMode(value.mode)) {
     const params = readEditParams(value.mode, value.params);
     return params ? { kind: "new", type: "draft.change", mode: params.mode, params, ...stamp } : undefined;
@@ -1160,6 +1147,22 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
     params: { chapter, ...(mode === "continuity" && params.fresh === true ? { fresh: true as const } : {}) },
     ...stamp,
   };
+}
+
+/** 直接改账的一笔（防御解析）：形状不对是 undefined。 */
+function readLedgerChange(value: unknown): LedgerChangeData | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = nonEmptyText(value.id, 200);
+  const chapter = positiveInt(value.chapter);
+  const title = nonEmptyText(value.title, 200);
+  const named = title ? { title } : {};
+  if (value.op === "resolve") return id && chapter ? { op: "resolve", id, chapter, ...named } : undefined;
+  if (value.op === "importance") {
+    const importance = value.importance === "major" || value.importance === "normal" || value.importance === "minor" ? value.importance : undefined;
+    return id && importance ? { op: "importance", id, importance, ...named } : undefined;
+  }
+  const text = nonEmptyText(value.text, 2000);
+  return value.op === "summary" && chapter && text ? { op: "summary", chapter, text } : undefined;
 }
 
 const positiveInt = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);

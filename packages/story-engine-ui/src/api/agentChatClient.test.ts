@@ -427,23 +427,34 @@ describe("streamAgentChat", () => {
     expect(views[2]?.pending).toBeUndefined();
   });
 
-  it("改设定（片 3）：停着等作者的带那几处和没改成的；做完了带存档点；「认下」按钮存下来读回来，号不对的不认", async () => {
+  it("改设定、改账（片 3）：停着等作者的带那几处和附带的话；做完了带存档点；「认下」、直接改账的按钮存下来读回来，不对的不认", async () => {
     const settingsView = (overrides: Record<string, unknown>) => opView("ai", null, { kind: "settings.change", what: "改设定", chapter: undefined, ...overrides });
+    const ledgerView = (overrides: Record<string, unknown>) => opView("edit", null, { kind: "ledger.change", what: "改账", chapter: undefined, ...overrides });
     const { views } = await collectOperations([
       frame("operation", { type: "record", operation: settingsView({ state: "waiting_author", result: undefined, pendingActions: [
-        { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: ["「林远」的「身份」改了", 3], notDone: ["没有叫「甲」的卡"] }, decided: false },
+        { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: ["「林远」的「身份」改了", 3], notes: ["没改成：没有叫「甲」的卡。"] }, decided: false },
       ] }) }),
       frame("operation", { type: "record", operation: settingsView({ state: "waiting_author", result: undefined, pendingActions: [
         { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: [] }, decided: false },
       ] }) }),
       frame("operation", { type: "record", operation: settingsView({ result: { schema: "operation-result/1", summary: "改好了", body: { kind: "settings.change", applied: ["x"], notDone: [], snapshotId: "s-9" } } }) }),
+      frame("operation", { type: "record", operation: ledgerView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-ledger", kind: "ledger_confirm", decisions: ["apply"], preview: { lines: ["把线索「钟为什么停」记为第 2 章已收"], notes: [] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: ledgerView({ result: { schema: "operation-result/1", summary: "账改好了", body: { kind: "ledger.change", applied: ["x"], notes: [] } } }) }),
     ]);
-    expect(views[0]?.pending).toEqual({ kind: "settings", actionId: "confirm-settings", decisions: ["apply"], settings: { lines: ["「林远」的「身份」改了"], notDone: ["没有叫「甲」的卡"] } });
+    expect(views[0]?.pending).toEqual({ kind: "confirm", what: "settings", actionId: "confirm-settings", decisions: ["apply"], lines: ["「林远」的「身份」改了"], notes: ["没改成：没有叫「甲」的卡。"] });
     expect(views[1]?.pending).toBeUndefined();
-    expect(views[2]?.settings).toEqual({ snapshotId: "s-9" });
+    expect(views[2]?.changed).toEqual({ what: "settings", snapshotId: "s-9" });
+    expect(views[3]?.pending).toEqual({ kind: "confirm", what: "ledger", actionId: "confirm-ledger", decisions: ["apply"], lines: ["把线索「钟为什么停」记为第 2 章已收"], notes: [] });
+    expect(views[4]?.changed).toEqual({ what: "ledger" });
     const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
     expect(readStoredOperationAction({ kind: "new", type: "settings.change", params: { accept: OP_ID }, ...stamp })).toEqual({ kind: "new", type: "settings.change", params: { accept: OP_ID }, ...stamp });
     expect(readStoredOperationAction({ kind: "new", type: "settings.change", params: { accept: "op-1" }, ...stamp })).toBeUndefined();
+    const changes = [{ op: "resolve", id: "t1-1", chapter: 2, title: "钟为什么停" }, { op: "summary", chapter: 1, text: "她找到了钥匙。" }];
+    expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes }, ...stamp })).toEqual({ kind: "new", type: "ledger.change", mode: "author", params: { changes }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "edit", params: { changes }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes: [{ op: "resolve", id: "t1-1" }] }, ...stamp })).toBeUndefined();
   });
 
   it("改稿按钮、等作者点的「接着做」防御解析（和服务端同一口径）：章号、原文、决定不对的不认", () => {
@@ -800,26 +811,6 @@ describe("streamAgentChat", () => {
     expect(received[0]?.needsConfirmation).toBe(true);
     expect(received[0]?.commitConfirmAction).toEqual({ chapter: 4, previewToken: "t4" });
     expect(received[1]?.commitConfirmAction).toBeUndefined();
-  });
-
-  it("改账按钮带的依据摘要原样透传（作者点按钮时服务端拿它核）", async () => {
-    const basis = "a".repeat(64);
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "l1",
-          toolName: "manage_ledger",
-          output: { ok: false, needsConfirmation: true, ledgerConfirm: { key: "ledger:x", decisions: [{ type: "fact.retract", fact: "f1" }], basis }, summary: "…" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-    const received: { ledgerConfirmAction?: unknown }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "改" }] },
-      { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
-    );
-    expect(received[0]?.ledgerConfirmAction).toMatchObject({ key: "ledger:x", basis });
   });
 
   it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {

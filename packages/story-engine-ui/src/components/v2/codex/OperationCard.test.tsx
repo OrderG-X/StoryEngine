@@ -86,7 +86,7 @@ describe("OperationCard：改写停着等作者（片 2C）", () => {
   });
 });
 
-describe("OperationCard：改设定碰了作者写的，等作者点（片 3）", () => {
+describe("OperationCard：改设定碰了作者写的、AI 提的改账，等作者点（片 3）", () => {
   const waiting = (overrides: Partial<OperationCardData> = {}) => op({
     kind: "settings.change",
     mode: "ai",
@@ -94,22 +94,36 @@ describe("OperationCard：改设定碰了作者写的，等作者点（片 3）"
     state: "waiting_author",
     stateText: "等你定",
     allowed: ["cancel"],
-    pending: { kind: "settings", actionId: "confirm-settings", decisions: ["apply"], settings: { lines: ["「林远」的「身份」改了", "建了物品卡「蓝色账册」"], notDone: ["没有叫「不存在的人」的卡"] } },
+    pending: { kind: "confirm", what: "settings", actionId: "confirm-settings", decisions: ["apply"], lines: ["「林远」的「身份」改了", "建了物品卡「蓝色账册」"], notes: ["没改成：没有叫「不存在的人」的卡。"] },
     ...overrides,
   });
 
-  it("整批每一处照摆 + 没改成的一句；「确认改设定」交回 apply，「不要了」停掉；忙的时候点不了", () => {
+  it("整批每一处照摆 + 附带的话；「确认改设定」交回 apply，「不要了」停掉；忙的时候点不了", () => {
     const onAction = vi.fn();
     const { rerender } = render(<OperationCard op={waiting()} inLiveTurn={false} busy={false} onAction={onAction} />);
     expect(screen.getByText("「林远」的「身份」改了")).toBeTruthy();
     expect(screen.getByText("建了物品卡「蓝色账册」")).toBeTruthy();
-    expect(screen.getByText("没改成：没有叫「不存在的人」的卡")).toBeTruthy();
+    expect(screen.getByText("没改成：没有叫「不存在的人」的卡。")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认改设定" }));
     expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-settings", decision: "apply" } });
     fireEvent.click(screen.getByRole("button", { name: "不要了" }));
     expect(onAction).toHaveBeenLastCalledWith({ kind: "cancel", opId: OP_ID });
     rerender(<OperationCard op={waiting()} inLiveTurn={false} busy onAction={onAction} />);
     expect((screen.getByRole("button", { name: "确认改设定" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("改账同一张卡，按钮叫「确认改账」", () => {
+    const onAction = vi.fn();
+    render(<OperationCard op={waiting({
+      kind: "ledger.change",
+      mode: "review",
+      what: "理线索",
+      pending: { kind: "confirm", what: "ledger", actionId: "confirm-ledger", decisions: ["apply"], lines: ["「钟楼的门为什么开着」第 2 章已收：「第二天，钟楼的门锁上了。」"], notes: ["理了 2 条开着的线索：1 条看着已经收了，1 条还开着。"] },
+    })} inLiveTurn={false} busy={false} onAction={onAction} />);
+    expect(screen.getByText("理了 2 条开着的线索：1 条看着已经收了，1 条还开着。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "确认改设定" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "确认改账" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-ledger", decision: "apply" } });
   });
 });
 

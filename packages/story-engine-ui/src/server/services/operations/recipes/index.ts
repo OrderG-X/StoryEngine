@@ -12,6 +12,7 @@ import { backgroundBackfillRecipe } from "./background-backfill.js";
 import { draftAdoptRecipe, draftDiscardRecipe } from "./draft-candidate.js";
 import { draftChangeRecipe } from "./draft-change.js";
 import { inspectRunRecipe } from "./inspect-run.js";
+import { ledgerChangeRecipe } from "./ledger-change.js";
 import { planProposeRecipe } from "./plan-propose.js";
 import { settingsChangeRecipe } from "./settings-change.js";
 
@@ -69,5 +70,6 @@ export function registerBuiltInRecipes(): void {
   registerRecipe(draftDiscardRecipe);
   registerRecipe(planProposeRecipe);
   registerRecipe(settingsChangeRecipe);
+  registerRecipe(ledgerChangeRecipe);
   setReaderBackfillHandler(submitBackfill);
 }

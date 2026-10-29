@@ -37,10 +37,10 @@ import { moveBookToTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { writeCards } from "../lib/card-write.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
-import { __resetOperationStoreForTests } from "../lib/operations/store.js";
+import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../services/operations/executor.js";
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
-import { applyLedgerDecisions, planLedgerChange } from "./ledger-decisions.js";
+import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
 
 /** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
 const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
@@ -109,17 +109,32 @@ describe("依据安全契约", () => {
 
   it("R2 改账整批一个事务：提议之后作者改了天数，整批一条都不记、如实说", async () => {
     await seed();
-    const proposal = await planLedgerChange(book, { op: "summary", chapter: 1, text: "第一条" });
-    if (!proposal.ok) throw new Error(proposal.reason);
-    const day = await planLedgerChange(book, { op: "day", chapter: 1, day: 2 });
-    if (!day.ok) throw new Error(day.reason);
-    ok(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, author("author-new-day")));
-    const result = await applyLedgerDecisions(book, { key: proposal.key, decisions: [...proposal.decisions, ...day.decisions], basis: proposal.basis });
-    const view = await projectBook(book);
-    expect(result).toMatchObject({ ok: false, applied: 0 });
-    expect(result.summary).toContain("请让 AI 重新提一次");
-    expect(view.chapters[0]?.day).toBe(20);
-    expect(view.chapters[0]?.summary).not.toBe("第一条");
+    __resetOperationStoreForTests();
+    registerRecipe(ledgerChangeRecipe);
+    try {
+      const outcome = ok(await submitOperation(book, {
+        kind: LEDGER_CHANGE_KIND,
+        mode: "edit",
+        params: { changes: [{ op: "summary", chapter: 1, text: "第一条" }, { op: "day", chapter: 1, day: 2 }] },
+        requestKey: crypto.randomUUID(),
+        issuedAt: new Date().toISOString(),
+        origin: { kind: "chat", messageId: crypto.randomUUID() },
+      }));
+      if (!("record" in outcome)) throw new Error("没受理");
+      await __drainOperationsForTests();
+      ok(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, author("author-new-day")));
+      ok(await resumeOperation(book, outcome.record.opId, { actionId: "confirm-ledger", decision: "apply" }));
+      await __drainOperationsForTests();
+      const read = await readOperation(book, outcome.record.opId);
+      if (read.kind !== "record") throw new Error("记录没了");
+      expect(read.record.state).toBe("obsolete");
+      expect(read.record.failure?.message).toContain("这份改账是照改之前算的，没改");
+      const view = await projectBook(book);
+      expect(view.chapters[0]?.day).toBe(20);
+      expect(view.chapters[0]?.summary).not.toBe("第一条");
+    } finally {
+      __resetRecipesForTests();
+    }
   });
 
   it("R3 确认定稿后撤销，再点同一张旧票：作废，不重新定稿", async () => {

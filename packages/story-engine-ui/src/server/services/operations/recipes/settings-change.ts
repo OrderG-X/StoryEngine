@@ -28,10 +28,10 @@ export type SettingsChangeParams =
   /** 作者点「认下」：认下哪一次改设定里 AI 刚写进去的那几处。 */
   | { readonly mode: "accept"; readonly from: string };
 
-/** 给作者等着点的「确认改设定」卡上摆的。 */
+/** 给作者等着点的「确认改设定」卡上摆的（和「确认改账」卡同一个形状）：要改的每一处，和附带要说的（没改成的那几步）。 */
 export interface SettingsConfirmPreview {
   readonly lines: readonly string[];
-  readonly notDone: readonly string[];
+  readonly notes: readonly string[];
 }
 
 /** 结果的 body（界面按它挂「认下」按钮、重读设定本）。 */
@@ -178,7 +178,7 @@ export const settingsChangeRecipe: Recipe<SettingsChangeParams> = {
     const plan = await ctx.step("plan", { ops: params.ops }, () => planSettings(bookDir, params.ops, params.notDone));
     if (plan.needsAuthor) {
       if (plan.lines.length === 0) throw nothingDone(plan.notDone);
-      const preview: SettingsConfirmPreview = { lines: plan.lines, notDone: plan.notDone };
+      const preview: SettingsConfirmPreview = { lines: plan.lines, notes: plan.notDone.length > 0 ? [notDoneLine(plan.notDone)] : [] };
       await ctx.waitForAuthor({ actionId: SETTINGS_CONFIRM_ACTION, kind: SETTINGS_CONFIRM_KIND, decisions: ["apply"], preview });
       const outcome = await ctx.apply("apply", { ops: plan.ops }, () => writeCardsInOperation(bookDir, { by: "author", ops: plan.ops, basis: plan.basis }));
       throwIfFailed(outcome, "提议");

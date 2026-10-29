@@ -83,7 +83,7 @@ export interface UseChatParams {
   projectPath: string | null;
   /**
    * 资料类刷新：仅按 StateOverview 重建资料/侧栏面板，保留当前章节/草稿/消息。
-   * 改设定做完了（settings.change）、带 refreshScope:"foundation" 的工具结果调它；可不传。
+   * 改设定、改账做完了（settings.change / ledger.change）、带 refreshScope:"foundation" 的工具结果调它；可不传。
    */
   refreshWorkspaceFromOverview?: (overview: StateOverview) => void;
 }
@@ -258,8 +258,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       const track = (promise: Promise<unknown>): void => {
         pendingPaperSyncs.push(promise.catch(() => undefined));
       };
-      // 这一轮做完的改设定（重读过概况的）：同一次的记录会来几回，只读一回。
-      const refreshedSettings = new Set<string>();
+      // 这一轮做完的改设定、改账（重读过概况的）：同一次的记录会来几回，只读一回。
+      const refreshedChanges = new Set<string>();
       // 这一轮已经写好的稿（写稿 / 改稿换上了）：之后再出错，「重试这一步」会把整句话重发、再写再改一遍，不给。
       let finishedWrite: "draft" | "revise" | null = null;
       // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
@@ -561,9 +561,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                 if (draftOpId === null) beginDraftStream(view);
                 if (!LIVE_STATES.has(view.state)) finishDraftStream(view);
               }
-              // 改设定做完了（结果不带概况）：重读一份，设定本、主角、待处理跟着变。同一次只读一回。
-              if (view.kind === "settings.change" && view.state === "succeeded" && !refreshedSettings.has(view.opId) && projectPath) {
-                refreshedSettings.add(view.opId);
+              // 改设定、改账做完了（结果不带概况）：重读一份，设定本、主角、线索、待处理跟着变。同一次只读一回。
+              if (view.changed && !refreshedChanges.has(view.opId) && projectPath) {
+                refreshedChanges.add(view.opId);
                 track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
                   .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
                   .catch(() => undefined));
@@ -659,9 +659,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                 const nextFlow = agentFlowStatusForTool(info.toolName, info, flowBefore);
                 if (!info.overview) {
                   const changedBible = info.refreshScope === "foundation"
-                    || ((info.toolName === "manage_ledger" || info.toolName === "settle_apply") && info.refreshScope === "full");
+                    || (info.toolName === "settle_apply" && info.refreshScope === "full");
                   if (changedBible && projectPath) {
-                    // 改设定、确认改账的结果不带概况（重构 P9）：重读一份，设定本、主角、待处理跟着变。
+                    // 定论改齐的结果不带概况：重读一份，设定本、主角、待处理跟着变。
                     track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
                       .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
                       .catch(() => undefined));
@@ -1166,14 +1166,6 @@ export function useChat(params: UseChatParams): UseChatResult {
         case "prune-confirm":
           consumeSuggestedAction(action);
           void handleConfirmPrune(action.pruneTarget);
-          return;
-        case "ledger-confirm":
-          if (!action.ledgerTarget) {
-            showToast("这个改账按钮已经失效了，请让 AI 重新提一次。", 4200);
-            return;
-          }
-          consumeSuggestedAction(action);
-          void handleSendUserAction({ toolName: "ledger_decision", ...action.ledgerTarget });
           return;
         case "rewrite-confirm":
         case "continue-confirm": {

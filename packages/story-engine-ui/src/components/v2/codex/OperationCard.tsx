@@ -43,7 +43,7 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
     );
   }
   if (op.state === "waiting_author" && op.pending?.kind === "revise") return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
-  if (op.state === "waiting_author" && op.pending?.kind === "settings") return <SettingsConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
+  if (op.state === "waiting_author" && op.pending?.kind === "confirm") return <ChangeConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   const running = RUNNING.has(op.state);
   const canResume = Boolean(onAction) && op.allowed.includes("resume");
   const canCancel = Boolean(onAction) && op.allowed.includes("cancel") && !inLiveTurn;
@@ -113,22 +113,24 @@ function ReviseChoice({ op, pending, busy, onAction }: {
   );
 }
 
+const CONFIRM_LABELS = { settings: "确认改设定", ledger: "确认改账" } as const;
+
 /**
- * 改设定碰到了作者写的（片 3）：整批摆出来，点「确认改设定」按作者写的改齐；「不要了」一个字不改。
+ * 等作者点头的改动（片 3）：改设定碰到了作者写的、AI 提的改账（或理线索理出收了的）整批摆出来，
+ * 点「确认改设定 / 确认改账」才改；「不要了」一个字不改。附带要说的（没改成的、拿不准的）摆在下面。
  */
-function SettingsConfirm({ op, pending, busy, onAction }: {
+function ChangeConfirm({ op, pending, busy, onAction }: {
   readonly op: OperationCardData;
-  readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "settings" }>;
+  readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "confirm" }>;
   readonly busy: boolean;
   readonly onAction?: ((action: AgentUserAction) => void) | undefined;
 }) {
-  const { lines, notDone } = pending.settings;
   return (
     <div className="se-op-card se-op-settings" role="group" aria-label={op.what}>
       <ul className="se-op-lines">
-        {lines.map((line, index) => <li key={index}>{line}</li>)}
+        {pending.lines.map((line, index) => <li key={index}>{line}</li>)}
       </ul>
-      {notDone.length > 0 ? <p className="se-op-failed">没改成：{notDone.join("；")}</p> : null}
+      {pending.notes.map((note, index) => <p key={index} className="se-op-failed">{note}</p>)}
       {onAction ? (
         <span className="se-op-acts">
           {pending.decisions.includes("apply") ? (
@@ -138,7 +140,7 @@ function SettingsConfirm({ op, pending, busy, onAction }: {
               disabled={busy}
               onClick={() => onAction({ kind: "resume", opId: op.opId, answer: { actionId: pending.actionId, decision: "apply" } })}
             >
-              确认改设定
+              {CONFIRM_LABELS[pending.what]}
             </button>
           ) : null}
           {op.allowed.includes("cancel") ? (

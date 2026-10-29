@@ -1,5 +1,5 @@
 import type { OperationActionData } from "../api/agentChatClient.js";
-import type { CommitConfirmTarget, ProposalBasis, SuggestedAction } from "../types.js";
+import type { CommitConfirmTarget, SuggestedAction } from "../types.js";
 
 export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
   const actions: Record<string, SuggestedAction> = {
@@ -87,13 +87,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: "destructive_write",
       requiresConfirmation: false,
     },
-    "ledger-confirm": {
-      id: "ledger-confirm",
-      label: "确认改账",
-      description: "按 AI 提的改账方案记下（改前自动存档，可在操作历史撤销）。",
-      permission: "formal_state_write",
-      requiresConfirmation: false,
-    },
     "rewrite-confirm": {
       id: "rewrite-confirm",
       label: "重写这一章",
@@ -137,63 +130,9 @@ export function pruneConfirmAction(target?: { readonly keep?: number }): Suggest
   return { ...suggestedAction("prune-confirm"), pruneTarget: { ...(target?.keep ? { keep: target.keep } : {}) } };
 }
 
-/**
- * 把作者档按钮挂进这一轮的建议条。同一种按钮一轮只摆一个：AI 一轮里提了几次改账、改设定 / 认下（并排调了几次工具），
- * 合成一个按钮一起确认——长篇实跑：AI 一轮提了两条「定为大伏笔」，界面只剩后一个按钮，作者点了只记上一条，另一条悄悄丢了。
- * 同一次提议再来一遍（key 已经并进去了）不重复并。定稿、裁剪、重写这类一轮只有一个的，后来的换掉先前的。
- */
+/** 把作者档按钮挂进这一轮的建议条。同一种按钮一轮只摆一个（定稿、裁剪这类）：后来的换掉先前的。 */
 export function withAuthorButton(actions: readonly SuggestedAction[] | undefined, button: SuggestedAction): SuggestedAction[] {
-  const list = [...(actions ?? [])];
-  const index = list.findIndex((action) => action.id === button.id);
-  if (index < 0) return [...list, button];
-  const [previous] = list.splice(index, 1);
-  return [...list, mergeAuthorButtons(previous!, button)];
-}
-
-const KEY_JOIN = "+";
-
-function joinLabels(previous: string | undefined, next: string | undefined): string | undefined {
-  if (!previous || previous === next) return next;
-  return next ? `${previous}；${next}` : previous;
-}
-
-/** 两个提议并成一个时的依据：后一个接得上前一个（中间只有它自己那批写）才用后一个的，否则留前一个的。 */
-function chainBasis(previous: ProposalBasis, next: ProposalBasis): ProposalBasis {
-  const from = previous.basisFrom ?? previous.basis;
-  if (!previous.basis || !next.basis) return {};
-  const basis = (next.basisFrom ?? next.basis) === previous.basis ? next.basis : previous.basis;
-  return { basis, ...(from ? { basisFrom: from } : {}) };
-}
-
-function basisFields(target: ProposalBasis): ProposalBasis {
-  return { ...(target.basis ? { basis: target.basis } : {}), ...(target.basisFrom ? { basisFrom: target.basisFrom } : {}) };
-}
-
-function mergeAuthorButtons(previous: SuggestedAction, next: SuggestedAction): SuggestedAction {
-  const ledgerBefore = previous.ledgerTarget;
-  const ledgerNext = next.ledgerTarget;
-  if (ledgerBefore && ledgerNext) {
-    if (ledgerBefore.key.split(KEY_JOIN).includes(ledgerNext.key)) return previous;
-    const label = joinLabels(ledgerBefore.label, ledgerNext.label);
-    return {
-      ...next,
-      ledgerTarget: {
-        key: `${ledgerBefore.key}${KEY_JOIN}${ledgerNext.key}`,
-        decisions: [...ledgerBefore.decisions, ...ledgerNext.decisions],
-        ...(label ? { label } : {}),
-        ...chainBasis(ledgerBefore, ledgerNext),
-      },
-    };
-  }
-  return next;
-}
-
-/** 「确认改账」按钮：点了发结构化动作、由服务端按作者档记下裁定（manage_ledger 提议之后出现）。 */
-export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis): SuggestedAction {
-  return {
-    ...suggestedAction("ledger-confirm"),
-    ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}), ...basisFields(target) },
-  };
+  return [...(actions ?? []).filter((action) => action.id !== button.id), button];
 }
 
 /**

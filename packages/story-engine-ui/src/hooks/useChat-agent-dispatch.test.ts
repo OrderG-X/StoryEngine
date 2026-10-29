@@ -992,7 +992,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     mockedFetchStateOverview.mockResolvedValueOnce(overview);
     scriptAgentStream((handlers) => {
       handlers.onToolResult({ toolName: "read_foundation" });
-      handlers.onToolResult({ toolName: "manage_ledger", refreshScope: "full", snapshotId: "snap-3" });
+      const changed = opView({ kind: "ledger.change", mode: "edit", chapter: undefined, what: "改账", state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 7, changed: { what: "ledger", snapshotId: "snap-3" } });
+      handlers.onOperation?.(changed);
+      handlers.onOperation?.({ ...changed, eventSeq: 8 });
       handlers.onDone();
     });
     const refreshWorkspaceFromOverview = vi.fn();
