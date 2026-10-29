@@ -146,6 +146,27 @@ describe("清理和墓碑", () => {
     expect((await readOperation(book, opId)).kind).toBe("absent");
   });
 
+  it.each([
+    ["快 100 天", 100],
+    ["慢 100 天", -100],
+  ])("客户端时钟%s：同键请求还能进来的时候墓碑一定还在（期限按服务端时钟、max(受理, issuedAt) + 400 天）", async (_label, skewDays) => {
+    const day = (n: number) => new Date(NOW.getTime() + n * 24 * 3600 * 1000);
+    const issuedAt = day(skewDays).toISOString();
+    const first = await acceptOperation(book, request({ issuedAt }), { bookEpoch: epoch, now: NOW });
+    if (!first.ok || !("record" in first)) throw new Error("没受理");
+    await changeOperation(book, first.record.opId, (current) => ({ ...current, state: "cancelled" }), NOW);
+    await pruneOperations(book, () => "停掉了", day(31));
+    expect(await readOperation(book, first.record.opId)).toMatchObject({ kind: "tombstone", tombstone: { issuedAt, acceptedAt: NOW.toISOString() } });
+    // 同键请求最后能进来的那天：服务端时钟 = issuedAt + 365 天。那天墓碑还在，回放、不重新开工。
+    const lastDay = skewDays + 365;
+    await pruneOperations(book, () => "", day(lastDay));
+    expect(await acceptOperation(book, request({ issuedAt }), { bookEpoch: epoch, now: day(lastDay) })).toMatchObject({ ok: true, tombstone: { opId: first.record.opId } });
+    // 过了期限请求早就过期；墓碑这才删。
+    expect(await acceptOperation(book, request({ issuedAt }), { bookEpoch: epoch, now: day(lastDay + 1) })).toMatchObject({ ok: false, code: "request_expired" });
+    await pruneOperations(book, () => "", day(Math.max(0, skewDays) + 401));
+    expect((await readOperation(book, first.record.opId)).kind).toBe("absent");
+  });
+
   it("没结束的不清（等作者、暂停也不清）", async () => {
     const first = await accept();
     if (!first.ok || !("record" in first)) throw new Error("没受理");

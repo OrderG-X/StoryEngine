@@ -12,12 +12,12 @@ import { writeFileAtomic } from "./project-io.js";
 import { recordPipelineUsage, recordTurnNotice, sampleFromOpenAIUsage } from "./token-meter.js";
 import { recordUsage } from "./usage-ledger.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
-import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
+import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking, TASK_ASSIGNMENT_KEYS, type TaskAssignmentsFile } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
-import { ModelCallError, ModelSetupError, StepHaltedError, UpstreamSilentError, type UnusableReason } from "./ai-errors.js";
+import { ModelCallError, ModelSetupError, StepHaltedError, UpstreamSilentError, type PolicyStop, type UnusableReason } from "./ai-errors.js";
 import type { AttemptOutcome, AttemptTarget, SendTicket } from "./operations/attempts.js";
 import { classifyThrown } from "./operations/classify.js";
-import { currentOperation, haltStep, OperationStopped, StopSignal, stopOf } from "./operations/context.js";
+import { currentOperation, haltStep, noteRefusedInStep, OperationStopped, refusedInStep, StopSignal, stopOf } from "./operations/context.js";
 import { TASK_LABELS } from "../../components/ModelSettingsDialogTypes.js";
 
 // 旁路文件损坏只警告一次（resolveConfiguredChatModel 每次请求都读，避免刷屏）；恢复正常后重置，再坏再警告。
@@ -248,15 +248,10 @@ async function resolveFallbackFrom(settings: ModelSettingsLoadResult, profileId:
   return resolveProfileModel(settings, profile, true);
 }
 
-export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
-  const settings = await loadGlobalModelSettings();
-  if (!settings.available) {
-    throw new ModelSetupError("还没接上 AI：去 设置 → 模型 接一家服务商、填上密钥就能用。");
-  }
-  // 任务→{档案,思考} 存 UI 旁路 task-assignments.json（引擎零改）。profileId 解析顺序：
-  // 旁路 → engineProfileFallback（与面板展示同口径）→ defaultProfile → 第一个。thinking 默认开。
-  const { file: assignments, corrupt } = await readTaskAssignments(homedir());
-  warnIfTaskAssignmentsCorrupt(corrupt);
+type ModelProfile = ModelSettingsLoadResult["summary"]["profiles"][number];
+
+/** 某任务用哪个档案、开不开思考（旁路 → 引擎回退 → 默认 → 第一个）；找不到抛人话错误。 */
+function chooseTaskProfile(settings: ModelSettingsLoadResult, assignments: TaskAssignmentsFile | null, task: ModelTaskProfileKey): { readonly profile: ModelProfile; readonly thinking: boolean } {
   const tp = settings.summary.taskProfiles as Record<string, string>;
   // 审查 #9：区分「显式指定的 profileId」与「回退链解析出的 id」。显式指定却查不到 → 明确报错，
   // 绝不静默切到 profiles[0]（那会让界面显示模型 A、实际用模型 B，影响成本/隐私/能力判断）。
@@ -277,20 +272,125 @@ export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Pro
       `「${TASK_LABELS[task] ?? task}」没找到能用的模型（解析结果：「${profileId ?? "空"}」）。请在设置中检查它用哪个模型。`,
     );
   }
-  const primary = await resolveProfileModel(settings, profile, resolveTaskThinking(assignments, task));
+  return { profile, thinking: resolveTaskThinking(assignments, task) };
+}
+
+/** 主模型 + 备用（和主模型同一个就不带），标上是哪个任务。 */
+function withFallback(primary: ResolvedChatModel, fallback: ResolvedChatModel | undefined, task: ModelTaskProfileKey): ResolvedChatModel {
+  const sameModel = fallback && fallback.provider.id === primary.provider.id && fallback.profile.model === primary.profile.model;
+  return fallback && !sameModel ? { ...primary, task, fallback: { ...fallback, task } } : { ...primary, task };
+}
+
+async function tryFallback(resolve: () => Promise<ResolvedChatModel | undefined>): Promise<ResolvedChatModel | undefined> {
   // 备用模型解析不出来不挡主模型：只 warn 一次（同一原因不刷屏），体检会把原因露给作者。
-  let fallback: ResolvedChatModel | undefined;
   try {
-    fallback = await resolveFallbackFrom(settings, assignments?.fallbackProfileId);
+    return await resolve();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!warnedFallbackErrors.has(message)) {
       warnedFallbackErrors.add(message);
       console.warn(`[model] 备用模型用不了：${message}`);
     }
+    return undefined;
   }
-  const sameModel = fallback && fallback.provider.id === primary.provider.id && fallback.profile.model === primary.profile.model;
-  return fallback && !sameModel ? { ...primary, task, fallback: { ...fallback, task } } : { ...primary, task };
+}
+
+export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
+  const settings = await loadGlobalModelSettings();
+  if (!settings.available) {
+    throw new ModelSetupError("还没接上 AI：去 设置 → 模型 接一家服务商、填上密钥就能用。");
+  }
+  // 在一次操作里：按开工时冻结的那份取（写作版本 P2a 4.5），作者中途改设置影响下一次操作。
+  const frozen = currentOperation()?.models;
+  if (frozen) return resolveFrozenChatModel(settings, frozen, task);
+  // 任务→{档案,思考} 存 UI 旁路 task-assignments.json（引擎零改）。thinking 默认开。
+  const { file: assignments, corrupt } = await readTaskAssignments(homedir());
+  warnIfTaskAssignmentsCorrupt(corrupt);
+  const choice = chooseTaskProfile(settings, assignments, task);
+  const primary = await resolveProfileModel(settings, choice.profile, choice.thinking);
+  return withFallback(primary, await tryFallback(() => resolveFallbackFrom(settings, assignments?.fallbackProfileId)), task);
+}
+
+/**
+ * 一次 streamChatModelToText 调用最多几次占额度的物理发送（写作版本 P2a 4.5）：主模型 + 换备用一次。
+ * 兼容改参另按 frozenCompatAllowance 算；闸里 429 的重发不占额度。
+ */
+export const MODEL_CALL_MAX_SENDS = 2;
+
+/**
+ * 额度里给兼容改参留几次（4.5）：这次冻结的、这几个任务会用到的模型（含备用）按能力键去重，每个数还没学到的项。
+ * 档案的服务商不见了不算（调到时照样如实失败，不会发）。
+ */
+export async function frozenCompatAllowance(frozen: FrozenModels, tasks: readonly ModelTaskProfileKey[]): Promise<number> {
+  const settings = await loadGlobalModelSettings();
+  if (!settings.available) return 0;
+  const profiles: ModelProfile[] = [];
+  for (const task of tasks) {
+    const choice = frozen.tasks[task];
+    if (choice && "profile" in choice) profiles.push(choice.profile);
+  }
+  if (frozen.fallback) profiles.push(frozen.fallback);
+  const seen = new Set<string>();
+  let total = 0;
+  for (const profile of profiles) {
+    const provider = settings.summary.providers.find((item) => item.id === profile.provider);
+    if (!provider) continue;
+    const key = modelCapabilityKey(provider.baseUrl, profile.model);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    total += await unlearnedCapabilityCount({ provider, profile, thinkingDialect: resolveThinkingDialect(profile.model) });
+  }
+  return total;
+}
+
+export const FROZEN_MODELS_SCHEMA = "operation-models/1" as const;
+
+/**
+ * 一次操作开工时冻结的模型选择（写作版本 P2a 4.5，存在操作的 `inputs/models.json`）：每个任务用哪个档案（整份档案，
+ * 不含密钥——密钥照旧调用时读）、开不开思考；备用档案。开工时就解析不出来的任务记下那句原因，调到时照它如实失败。
+ */
+export interface FrozenModels {
+  readonly schema: typeof FROZEN_MODELS_SCHEMA;
+  readonly tasks: Partial<Record<ModelTaskProfileKey, { readonly profile: ModelProfile; readonly thinking: boolean } | { readonly error: string }>>;
+  readonly fallback?: ModelProfile;
+}
+
+export async function freezeModelChoices(): Promise<FrozenModels> {
+  const settings = await loadGlobalModelSettings();
+  const tasks: Partial<Record<ModelTaskProfileKey, { readonly profile: ModelProfile; readonly thinking: boolean } | { readonly error: string }>> = {};
+  if (!settings.available) return { schema: FROZEN_MODELS_SCHEMA, tasks };
+  const { file: assignments } = await readTaskAssignments(homedir());
+  for (const task of TASK_ASSIGNMENT_KEYS) {
+    try {
+      tasks[task] = chooseTaskProfile(settings, assignments, task);
+    } catch (error) {
+      tasks[task] = { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const fallback = assignments?.fallbackProfileId ? settings.summary.profiles.find((item) => item.id === assignments.fallbackProfileId) : undefined;
+  return { schema: FROZEN_MODELS_SCHEMA, tasks, ...(fallback ? { fallback } : {}) };
+}
+
+export function isFrozenModels(value: unknown): value is FrozenModels {
+  const frozen = value as Partial<FrozenModels> | null;
+  return frozen?.schema === FROZEN_MODELS_SCHEMA && typeof frozen.tasks === "object" && frozen.tasks !== null;
+}
+
+async function resolveFrozenChatModel(settings: ModelSettingsLoadResult, frozen: FrozenModels, task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
+  const label = TASK_LABELS[task] ?? task;
+  const choice = frozen.tasks[task];
+  if (!choice) throw new ModelSetupError(`这次开工时「${label}」还没配模型，没法用；去 设置 → 模型 配好再来一次。`);
+  if ("error" in choice) throw new ModelSetupError(choice.error);
+  // 档案按开工时那份用；档案本身被删了就如实失败，不悄悄换成现在设置里的别的模型。
+  if (!settings.summary.profiles.some((item) => item.id === choice.profile.id)) {
+    throw new ModelSetupError(`开工时给「${label}」用的模型「${choice.profile.label || choice.profile.model || choice.profile.id}」被删了，这次没法接着用；重新来一次就按现在的设置。`);
+  }
+  const primary = await resolveProfileModel(settings, choice.profile, choice.thinking);
+  const fallbackProfile = frozen.fallback;
+  const fallback = fallbackProfile && settings.summary.profiles.some((item) => item.id === fallbackProfile.id)
+    ? await tryFallback(() => resolveProfileModel(settings, fallbackProfile, true))
+    : undefined;
+  return withFallback(primary, fallback, task);
 }
 
 // ---------------------------------------------------------------------------
@@ -478,14 +578,15 @@ function warnIfModelCapabilitiesCorrupt(corrupt: boolean): void {
 }
 
 /**
- * 进程里学到的「不认」（`能力键|alwaysOnThinking` / `能力键|noStreamOptions`）：学到那一刻先记这里、再落盘，
- * 落盘失败也只是重启后又不知道，这个进程不会再发被拒的那项（写作版本 P2a 4.5）。
+ * 进程里学到的「不认」（`能力文件|能力键|alwaysOnThinking` / `…|noStreamOptions`）：学到那一刻先记这里、再落盘，
+ * 落盘失败也只是重启后又不知道，这个进程不会再发被拒的那项（写作版本 P2a 4.5）。按能力文件路径键住，和 opencode 会话缓存同理。
  */
 const learnedInProcess = new Set<string>();
+const learnedKey = (key: string, what: "alwaysOnThinking" | "noStreamOptions") => `${globalModelCapabilitiesPath()}|${key}|${what}`;
 
 /** 查「该模型是否已确认不可关思考」。读失败/坏 JSON 只当无记忆，绝不因此挡住请求。 */
 export async function isAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<boolean> {
-  if (learnedInProcess.has(`${modelCapabilityKey(baseUrl, modelId)}|alwaysOnThinking`)) return true;
+  if (learnedInProcess.has(learnedKey(modelCapabilityKey(baseUrl, modelId), "alwaysOnThinking"))) return true;
   const { models, corrupt } = await readModelCapabilities();
   warnIfModelCapabilitiesCorrupt(corrupt);
   return models[modelCapabilityKey(baseUrl, modelId)]?.alwaysOnThinking === true;
@@ -493,7 +594,7 @@ export async function isAlwaysOnThinkingModel(baseUrl: string, modelId: string):
 
 /** 查「该模型（这个网关上）已确认不认 stream_options」。 */
 async function isNoStreamOptionsModel(baseUrl: string, modelId: string): Promise<boolean> {
-  if (learnedInProcess.has(`${modelCapabilityKey(baseUrl, modelId)}|noStreamOptions`)) return true;
+  if (learnedInProcess.has(learnedKey(modelCapabilityKey(baseUrl, modelId), "noStreamOptions"))) return true;
   const { models, corrupt } = await readModelCapabilities();
   warnIfModelCapabilitiesCorrupt(corrupt);
   return models[modelCapabilityKey(baseUrl, modelId)]?.noStreamOptions === true;
@@ -513,8 +614,8 @@ export async function learnAlwaysOnThinkingModel(baseUrl: string, modelId: strin
 
 function learnCapability(baseUrl: string, modelId: string, learned: Pick<ModelCapabilityEntry, "alwaysOnThinking" | "noStreamOptions">): Promise<void> {
   const key = modelCapabilityKey(baseUrl, modelId);
-  if (learned.alwaysOnThinking) learnedInProcess.add(`${key}|alwaysOnThinking`);
-  if (learned.noStreamOptions) learnedInProcess.add(`${key}|noStreamOptions`);
+  if (learned.alwaysOnThinking) learnedInProcess.add(learnedKey(key, "alwaysOnThinking"));
+  if (learned.noStreamOptions) learnedInProcess.add(learnedKey(key, "noStreamOptions"));
   capabilityLearnChain = capabilityLearnChain.then(() => persistCapability(baseUrl, modelId, learned));
   return capabilityLearnChain;
 }
@@ -990,7 +1091,7 @@ export type StreamChatInput = {
   /** 每段正文 delta 实时回调（出稿流式进编辑器用）；不传则照常只聚合、不外发。 */
   readonly onDelta?: (delta: string) => void;
   /**
-   * 「光想不写」上限（毫秒）：从发请求起这么久还一个正文字都没出（只在吐思考 token）→ 掐掉并抛 ThinkingTooLongError，
+   * 「光想不写」上限（毫秒）：从发请求起这么久还一个正文字都没出（只在吐思考 token）→ 掐掉并抛思考超长（isThinkingTooLong 认得），
    * 由调用方改用关思考重试。不是总时长上限：一旦开始出正文就不再计时，正文写多久都行（守超时铁律）。
    * 十章验收实锤：拟章纲开思考陷进去 20 分钟（单回合思考 11 万字）——空闲超时管不住，因为思考 token 一直在续命。
    */
@@ -1054,28 +1155,42 @@ export async function streamChatModelToText(input: StreamChatInput): Promise<Str
   }
 }
 
+/** 模型身份（同一服务商的同一个模型）：步骤里记「拒过的主模型」用。 */
+const modelIdentity = (configured: ResolvedChatModel): string => `${configured.provider.id}\u0000${configured.profile.model}`;
+
 async function streamWithFallback(input: StreamChatInput): Promise<StreamChatResult> {
+  const fallback = input.configured.fallback;
+  // 这一步里主模型刚拒过这次调用的身份：直接用备用，不再重发拒过的那个（关思考重来、补一遍这类再调都一样）。
+  if (fallback && refusedInStep(modelIdentity(input.configured))) {
+    return streamOnFallback(input, fallback, `主模型 ${modelLabel(input.configured)} 这一步刚才拒过`);
+  }
   try {
     return await streamChatModelOnce(input);
   } catch (error) {
-    const fallback = input.configured.fallback;
     if (!fallback || !canFallBack(error)) throw error;
+    if ((error as ModelCallError).attemptClass === "rejected") noteRefusedInStep(modelIdentity(input.configured));
     const primaryReason = (error as Error).message;
     console.warn(`[model] 主模型 ${modelLabel(input.configured)} 没连上，换备用 ${modelLabel(fallback)} 再试：${primaryReason.slice(0, 200)}`);
-    try {
-      const result = await streamChatModelOnce({ ...input, configured: { ...fallback, thinking: input.configured.thinking } });
-      recordTurnNotice(fallbackNotice(input.configured, fallback));
-      return result;
-    } catch (fallbackError) {
-      if (!(fallbackError instanceof ModelCallError)) throw fallbackError;
-      throw new ModelCallError(
-        `${primaryReason}（备用模型 ${modelLabel(fallback)} 也没成：${fallbackError.message}）`,
-        fallbackError.attemptClass,
-        fallbackError.statusCode,
-        fallbackError.unusable,
-        { cause: fallbackError },
-      );
-    }
+    return streamOnFallback(input, fallback, primaryReason);
+  }
+}
+
+async function streamOnFallback(input: StreamChatInput, fallback: ResolvedChatModel, primaryReason: string): Promise<StreamChatResult> {
+  try {
+    const result = await streamChatModelOnce({ ...input, configured: { ...fallback, thinking: input.configured.thinking } });
+    recordTurnNotice(fallbackNotice(input.configured, fallback));
+    return result;
+  } catch (fallbackError) {
+    // 这一步已经停发（备用那笔根本没发出去）：原样抛，别包成备用的失败。
+    if (!(fallbackError instanceof ModelCallError) || fallbackError instanceof StepHaltedError) throw fallbackError;
+    // 两边原因一起如实报；类别、状态码、策略原因照备用那次的（上层关思考重来、这一步停发只认这几栏）。
+    throw new ModelCallError(
+      `${primaryReason}（备用模型 ${modelLabel(fallback)} 也没成：${fallbackError.message}）`,
+      fallbackError.attemptClass,
+      fallbackError.statusCode,
+      fallbackError.unusable,
+      { cause: fallbackError, ...(fallbackError.policy ? { policy: fallbackError.policy } : {}) },
+    );
   }
 }
 
@@ -1278,9 +1393,7 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
     const attemptClass = classifyThrown(error, signal, ticket !== undefined);
     if (ticket) await settle({ class: attemptClass, note: error instanceof Error ? error.name : "stream_failed" });
     const stop = stopOf(signal.aborted ? signal.reason : undefined);
-    if (stop?.type === "policy" && stop.policy === "thinking_too_long") throw new ThinkingTooLongError(input.maxThinkingMs ?? 0);
-    if (stop?.type === "policy" && stop.policy === "runaway") throw new RunawayError(input.maxContentChars ?? 0);
-    if (stop?.type === "policy") throw new ModelCallError("这一份被对冲的另一份先回来了，已停下。", "policy_abort");
+    if (stop?.type === "policy") throw policyError(stop.policy, input);
     // 操作被取消 / 暂停：原样抛（降级的 catch 用 rethrowIfStopped 认它）。
     if (stop) throw signal.reason;
     if (idle.controller.signal.aborted) {
@@ -1299,26 +1412,28 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
   }
 }
 
-/** 「光想不写」超过上限（见 streamChatModelToText 的 maxThinkingMs）：调用方应改用关思考重试。我们自己掐的（policy_abort）。 */
-export class ThinkingTooLongError extends ModelCallError {
-  override readonly name = "ThinkingTooLongError";
-  constructor(readonly maxThinkingMs: number) {
-    super(`模型思考超过 ${Math.round(maxThinkingMs / 1000)} 秒还没开始输出，已停下（可改用不思考重试）`, "policy_abort");
-  }
+/**
+ * 我们自己按策略掐的（policy_abort）：思考超长 → 调用方可以关思考重来（isThinkingTooLong）；正文跑飞 → 这一步不再发；
+ * 对冲输家 → 另一份先回来了。上层只认 policy 这一栏。
+ */
+function policyError(policy: PolicyStop, input: StreamChatInput): ModelCallError {
+  const message = policy === "thinking_too_long"
+    ? `模型思考超过 ${Math.round((input.maxThinkingMs ?? 0) / 1000)} 秒还没开始输出，已停下（可改用不思考重试）`
+    : policy === "runaway"
+      ? `模型输出超过 ${input.maxContentChars ?? 0} 字还没收尾（多半在原地打转），已停下，请重试。`
+      : "这一份被对冲的另一份先回来了，已停下。";
+  return new ModelCallError(message, "policy_abort", undefined, undefined, { policy });
 }
 
-/** 正文超过这次调用的上限还没收尾（多半在原地打转）：我们自己掐的（policy_abort），不再发。 */
-export class RunawayError extends ModelCallError {
-  override readonly name = "RunawayError";
-  constructor(readonly maxContentChars: number) {
-    super(`模型输出超过 ${maxContentChars} 字还没收尾（多半在原地打转），已停下，请重试。`, "policy_abort");
-  }
+/** 「光想不写」超过上限被掐的（换了备用的也算）：调用方应改用关思考重试。 */
+export function isThinkingTooLong(error: unknown): boolean {
+  return error instanceof ModelCallError && error.policy === "thinking_too_long";
 }
 
 /** 这一步里出了这种失败就不再发（设计 4.2 兜底）：被拒、结果不明、跑飞。思考超长（登记了关思考重来）、对冲输家不算。 */
 function haltsStep(error: unknown): error is ModelCallError {
   if (!(error instanceof ModelCallError) || error instanceof StepHaltedError) return false;
-  return error.attemptClass === "rejected" || error.attemptClass === "unknown" || error instanceof RunawayError;
+  return error.attemptClass === "rejected" || error.attemptClass === "unknown" || error.policy === "runaway";
 }
 
 // ---------------------------------------------------------------------------

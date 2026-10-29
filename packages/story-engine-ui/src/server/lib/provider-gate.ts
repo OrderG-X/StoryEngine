@@ -21,6 +21,7 @@
  *   操作里的模型调用不带记账就不发（不让哪条路悄悄绕过额度）。
  */
 
+import { StepHaltedError } from "./ai-errors.js";
 import { beforeSend, type AttemptTarget, type SendTicket } from "./operations/attempts.js";
 import { classifyThrown } from "./operations/classify.js";
 import { currentOperation } from "./operations/context.js";
@@ -246,11 +247,13 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
           throw error;
         }
       }
-      // 拿许可、落 attempt 的期间被停了：没调 fetch，记没发出去。
-      if (signal?.aborted) {
+      // 拿许可、落 attempt 的期间被停了，或这一步刚判了停发（Astra 第 7 轮第 3 条）：没调 fetch，记没发出去。
+      // 这里到 fetch 之间没有 await，判过就不会再有别的调用插进来改它。
+      const halted = operation?.step?.halt.failure;
+      if (signal?.aborted || halted) {
         release();
-        await settle(ticket, { class: "not_sent", note: "aborted_before_send" });
-        throw signal.reason ?? new Error("aborted");
+        await settle(ticket, { class: "not_sent", note: halted ? "step_halted" : "aborted_before_send" });
+        throw halted && !signal?.aborted ? new StepHaltedError(halted) : signal?.reason ?? new Error("aborted");
       }
       let response: Response;
       try {

@@ -7,7 +7,8 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bookKey } from "@actalk/story-core";
-import type { ModelCallError } from "../ai-errors.js";
+import type { ModelCallError, PolicyStop } from "../ai-errors.js";
+import type { FrozenModels } from "../llm-client.js";
 import type { GateLane } from "../provider-gate.js";
 import type { PauseReason } from "./store.js";
 
@@ -15,7 +16,7 @@ import type { PauseReason } from "./store.js";
 export type StopReason =
   | { readonly type: "cancel" }
   | { readonly type: "pause"; readonly reason: PauseReason }
-  | { readonly type: "policy"; readonly policy: "thinking_too_long" | "runaway" | "hedge_loser" };
+  | { readonly type: "policy"; readonly policy: PolicyStop };
 
 /** abort 的 reason 一律用它：失败分类只看结构（类型），不看文案。 */
 export class StopSignal extends Error {
@@ -47,13 +48,19 @@ export interface OperationContext {
   readonly bookEpoch: string;
   readonly signal: AbortSignal;
   readonly lane: GateLane;
+  /** 开工时冻结的模型选择（`inputs/models.json`）：这次操作里调模型都按它取（设计 4.5）。 */
+  readonly models?: FrozenModels;
   /** 这一刻在跑的步骤和执行号（`runEpoch:stepId:第几次`，整步重做换新的）。 */
   readonly step?: { readonly id: string; readonly exec: string; readonly halt: StepHalt };
 }
 
-/** 这一步（这一次执行）里出过不能再发的失败：记下第一次的，之后这一步的 beforeSend 不放（设计 4.2 兜底）。 */
+/**
+ * 这一步（这一次执行）里出过不能再发的失败：记下第一次的，之后这一步的 beforeSend、闸真发之前都不放（设计 4.2 兜底）。
+ * refused：这一步里明确拒了这次调用身份（401 / 403 / 404）、换了备用的主模型，之后这一步直接用备用，不再重发它（Astra 第 7 轮第 2 条）。
+ */
 export interface StepHalt {
   failure?: ModelCallError;
+  refused?: Set<string>;
 }
 
 const storage = new AsyncLocalStorage<OperationContext>();
@@ -77,6 +84,17 @@ export function runInStep<T>(stepId: string, exec: string, fn: () => T): T {
 export function haltStep(error: ModelCallError): void {
   const step = storage.getStore()?.step;
   if (step && !step.halt.failure) step.halt.failure = error;
+}
+
+/** 记下这一步里拒过的主模型（模型身份由调用方给）。不在步骤里就不记。 */
+export function noteRefusedInStep(model: string): void {
+  const step = storage.getStore()?.step;
+  if (!step) return;
+  (step.halt.refused ??= new Set()).add(model);
+}
+
+export function refusedInStep(model: string): boolean {
+  return storage.getStore()?.step?.halt.refused?.has(model) ?? false;
 }
 
 /** 在后台道跑（拿着前台要等的锁时临时提到前台用的另一面，见设计第五节依赖提权）。 */

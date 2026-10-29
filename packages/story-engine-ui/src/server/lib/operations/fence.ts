@@ -9,8 +9,9 @@
  * - **派生发布**：锁外算好，短拿书锁核书目录在、纪元没换、head 还是算的那版，才发布；核不过丢掉、记一句，不建目录。
  */
 import { stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { fail, readBookEpoch, readHead, withBookLock, type CommandFailure } from "@actalk/story-core";
-import { abortExecution, OperationStopped, StopSignal, stopOf, type OperationContext } from "./context.js";
+import { abortExecution, currentOperation, OperationStopped, StopSignal, stopOf, type OperationContext } from "./context.js";
 import { assertNotHoldingRecordLock, changeOperation, readOperation, type OperationRecord, type PauseReason } from "./store.js";
 
 async function bookDirExists(bookDir: string): Promise<boolean> {
@@ -49,6 +50,18 @@ export async function withFence<T>(context: OperationContext, write: () => Promi
     if (blocked) throw new OperationStopped(blocked.code, blocked.message);
     return write();
   });
+}
+
+/**
+ * 书里的缓存写（设计 6.3：核账记忆、改句记录、跟读笔记、卷笔记——按内容键整份覆盖，步骤里可写）：
+ * 在这本书的一次操作里 → 栅栏里写（书锁里核栅栏、同一次持锁写，停掉 / 暂停之后写不进）；
+ * 不在操作里（还没迁走的旧入口）→ 先 stat 书目录、不在就不写（不建出幽灵目录）。
+ */
+export async function writeBookCache<T>(bookDir: string, write: () => Promise<T>): Promise<T> {
+  const context = currentOperation();
+  if (context && resolve(context.bookDir) === resolve(bookDir)) return withFence(context, write);
+  await stat(bookDir);
+  return write();
 }
 
 /**

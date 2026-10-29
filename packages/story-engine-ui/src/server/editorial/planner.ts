@@ -7,7 +7,7 @@
  * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
 import { normalizeChapterPlan, PLAN_BEAT_MAX, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { canCallAgain, resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
+import { canCallAgain, isThinkingTooLong, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
@@ -95,7 +95,8 @@ export const callConfiguredPlannerModel: BrainCallModel = async (messages, optio
   try {
     return await call(thinking);
   } catch (error) {
-    if (!(error instanceof ThinkingTooLongError)) throw error;
+    // 换了备用的那次思考超长也认（只看策略原因）；重来时这一步里主模型拒过就直接用备用（llm-client）。
+    if (!isThinkingTooLong(error)) throw error;
     console.warn(`[draft-pipeline] 章纲员拟纲思考超过 ${PLAN_MAX_THINKING_MS / 1000} 秒还没出结果，改用不思考重拟`);
     return call(false);
   }

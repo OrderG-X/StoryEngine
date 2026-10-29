@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { writeBookCache } from "../../lib/operations/fence.js";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { basisDigestBefore, type TruthBasis } from "@actalk/story-core";
 import type { ContinuityIssueV2 } from "./check-chapter.js";
@@ -82,11 +83,12 @@ export async function readCheckMemory(projectDir: string, chapter: number): Prom
 }
 
 export async function writeCheckMemory(projectDir: string, memory: Omit<CheckMemory, "version" | "checkedAt">): Promise<void> {
-  await stat(projectDir); // 书已删就别再写（免得建出幽灵目录）
   const path = memoryPath(projectDir, memory.chapter);
-  await mkdir(dirname(path), { recursive: true });
   const file: CheckMemory = { version: CHECK_MEMORY_VERSION, checkedAt: new Date().toISOString(), ...memory };
-  await writeFileAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
+  await writeBookCache(projectDir, async () => {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFileAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
+  });
 }
 
 /**
@@ -118,9 +120,10 @@ export async function readFixLog(projectDir: string, chapter: number): Promise<r
 export async function appendFixLog(projectDir: string, chapter: number, changes: readonly FixRecord[]): Promise<void> {
   const fresh = changes.filter((change) => change.to.trim().length > 0 && change.to !== change.from);
   if (fresh.length === 0) return;
-  await stat(projectDir); // 书已删就别再写
   const path = fixLogPath(projectDir, chapter);
-  await mkdir(dirname(path), { recursive: true });
-  const log = [...(await readFixLog(projectDir, chapter)), ...fresh.map(({ from, to }) => ({ from, to }))].slice(-FIX_LOG_MAX);
-  await writeFileAtomic(path, `${JSON.stringify(log, null, 2)}\n`);
+  await writeBookCache(projectDir, async () => {
+    await mkdir(dirname(path), { recursive: true });
+    const log = [...(await readFixLog(projectDir, chapter)), ...fresh.map(({ from, to }) => ({ from, to }))].slice(-FIX_LOG_MAX);
+    await writeFileAtomic(path, `${JSON.stringify(log, null, 2)}\n`);
+  });
 }

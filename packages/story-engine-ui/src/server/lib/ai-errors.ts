@@ -20,20 +20,30 @@ export class UpstreamSilentError extends Error {
 /** 见了结束标记、产物却不能用的是哪一种（写作版本 P2a 4.2 的 unusable）。 */
 export type UnusableReason = "error_frame" | "bad_frames" | "truncated" | "empty" | "thinking_only";
 
+/** 我们自己按策略掐的是哪一种（attemptClass = policy_abort）：思考超长（登记了关思考重来）、正文跑飞（这一步停发）、对冲输家。 */
+export type PolicyStop = "thinking_too_long" | "runaway" | "hedge_loser";
+
+export interface ModelCallErrorOptions extends ErrorOptions {
+  readonly policy?: PolicyStop;
+}
+
 /**
  * 一次模型调用没成（写作版本 P2a 4.2）：带失败类别（`attempt-class`），换不换备用、能不能再发都只看它，不看文案。
  * statusCode：拿到了 HTTP 状态码的（服务商回了非 2xx），给作者看的分类按它。
+ * policy：策略掐的是哪一种。上层（关思考重来、这一步停发）只认这一栏，换备用没成包一层也原样带着（Astra 第 7 轮第 2 条：别靠子类型）。
  */
 export class ModelCallError extends Error {
   override readonly name: string = "ModelCallError";
+  readonly policy?: PolicyStop;
   constructor(
     message: string,
     readonly attemptClass: AttemptClass,
     readonly statusCode?: number,
     readonly unusable?: UnusableReason,
-    options?: ErrorOptions,
+    options?: ModelCallErrorOptions,
   ) {
     super(message, options);
+    if (options?.policy) this.policy = options.policy;
   }
 }
 

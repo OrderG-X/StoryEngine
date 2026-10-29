@@ -278,10 +278,10 @@ describe("章纲员的模型调用", () => {
     }
   });
 
-  it("「光想不写」超时（ThinkingTooLongError）→ 关思考重拟一次", async () => {
-    const { ThinkingTooLongError } = await import("../lib/llm-client.js");
+  it("「光想不写」超时（策略原因 thinking_too_long）→ 关思考重拟一次", async () => {
+    const { ModelCallError } = await import("../lib/ai-errors.js");
     llmMocks.streamChatModelToText
-      .mockRejectedValueOnce(new ThinkingTooLongError(150_000))
+      .mockRejectedValueOnce(new ModelCallError("思考超长", "policy_abort", undefined, undefined, { policy: "thinking_too_long" }))
       .mockResolvedValueOnce({ content: "第二次好了", thinking: "" });
     expect(await callConfiguredPlannerModel([{ role: "user", content: "拟" }], { json: true })).toBe("第二次好了");
     expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);

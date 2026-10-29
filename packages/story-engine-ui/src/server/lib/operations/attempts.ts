@@ -147,8 +147,10 @@ export async function beforeSend(context: OperationContext, target: AttemptTarge
   const { bookDir, opId, runEpoch } = context;
   // 这一步里已经有一次被拒 / 结果不明 / 跑飞：不再发（设计 4.2 兜底，上层哪个循环 catch 了再调也到这儿为止）。
   if (context.step?.halt.failure) throw new StepHaltedError(context.step.halt.failure);
-  const verdict = await withRecordLock(bookDir, opId, async (): Promise<{ readonly ok: true; readonly attempt: ModelAttempt } | { readonly ok: false; readonly error: OperationStopped }> => {
+  const verdict = await withRecordLock(bookDir, opId, async (): Promise<{ readonly ok: true; readonly attempt: ModelAttempt } | { readonly ok: false; readonly error: OperationStopped | StepHaltedError }> => {
     if (context.signal.aborted) return { ok: false, error: stoppedError(context) };
+    // 等锁的时候同一步里别的调用可能刚判了停发（Astra 第 7 轮第 3 条）：拿到锁再看一眼，没落 attempt 就不算发过。
+    if (context.step?.halt.failure) return { ok: false, error: new StepHaltedError(context.step.halt.failure) };
     const stored = await readOperation(bookDir, opId);
     if (stored.kind !== "record" || stored.record.state !== "running" || stored.record.runEpoch !== runEpoch) {
       return { ok: false, error: new OperationStopped("operation_stopped", "这次已经停掉了，没有再发请求。") };

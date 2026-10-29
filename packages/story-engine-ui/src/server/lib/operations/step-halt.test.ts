@@ -104,7 +104,7 @@ describe("一步里被拒过，这一步不再发", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("主模型 401 换备用成了：不拦；主、备都 401：这一步不再发", async () => {
+  it("主模型 401 换备用成了：不拦（同一步再调直接用备用）；主、备都 401：这一步不再发", async () => {
     const context = await running();
     let backupOk = true;
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
@@ -113,14 +113,14 @@ describe("一步里被拒过，这一步不再发", () => {
       expect((await streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] })).content).toBe("备用写的");
       expect((await streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] })).content).toBe("备用写的");
     });
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(3);
 
     backupOk = false;
     await inStep(context, "check", async () => {
       await expect(streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] })).rejects.toThrow("备用模型");
       await expect(streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] })).rejects.toBeInstanceOf(StepHaltedError);
     });
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch).toHaveBeenCalledTimes(5);
   });
 
   it("不在步骤里（对话 AI 那一轮、设置里测连接）：不记、不拦", async () => {

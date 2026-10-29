@@ -282,6 +282,9 @@ function spanBetween(text: string, a: string, b: string): string | undefined {
  * 第一份失败、对冲还没发：只有 canCallAgain 放行（产物不能用、没发出去、不是模型调用的错）才马上补发一份；
  * 结果不明、被拒、被停的不再发，等已经发出的另一份，或如实失败。
  */
+/** 对冲最多几份（额度按它算，写作版本 P2a 4.5）。 */
+export const HEDGE_MAX_COPIES = 2;
+
 export function hedged<T>(run: (signal: AbortSignal) => Promise<T>, afterMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const copies: AbortController[] = [];
@@ -312,7 +315,7 @@ export function hedged<T>(run: (signal: AbortSignal) => Promise<T>, afterMs: num
           running -= 1;
           if (!winner) {
             errors.push(error);
-            if (running === 0 && copies.length < 2 && canCallAgain(error)) {
+            if (running === 0 && copies.length < HEDGE_MAX_COPIES && canCallAgain(error)) {
               start();
               return;
             }
@@ -322,7 +325,7 @@ export function hedged<T>(run: (signal: AbortSignal) => Promise<T>, afterMs: num
       );
     };
     const timer = setTimeout(() => {
-      if (!winner && running > 0 && copies.length < 2) start();
+      if (!winner && running > 0 && copies.length < HEDGE_MAX_COPIES) start();
     }, afterMs);
     (timer as unknown as { unref?: () => void }).unref?.();
     start();

@@ -21,7 +21,9 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { __resetCapabilityMemoryForTests, buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, ThinkingTooLongError, unlearnedCapabilityCount } from "./llm-client.js";
+import { __resetCapabilityMemoryForTests, buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, freezeModelChoices, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, unlearnedCapabilityCount } from "./llm-client.js";
+
+import { runInOperation } from "./operations/context.js";
 
 // 进程里学到的兼容能力每条用例清掉（写作版本 P2a 4.5：「不认」先进内存再落盘），用例之间不串。
 beforeEach(() => __resetCapabilityMemoryForTests());
@@ -297,6 +299,36 @@ describe("resolveConfiguredChatModel 合成思考开关（旁路）", () => {
   });
 });
 
+describe("开工时冻结的模型选择（写作版本 P2a 4.5）", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+  const inOperation = <T>(models: Awaited<ReturnType<typeof freezeModelChoices>>, fn: () => Promise<T>): Promise<T> =>
+    runInOperation({ bookDir: "/tmp/book", opId: "op-1", runEpoch: 1, bookEpoch: "e", signal: new AbortController().signal, lane: "foreground", models }, fn);
+
+  it("操作里按开工时那份取：作者中途改了任务用哪个模型、改了思考开关，这次操作照旧", async () => {
+    loadModelSettingsV0.mockResolvedValue(settingsWithoutTriage());
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: { qualityCheck: { profileId: "fast", thinking: false } }, fallbackProfileId: "balanced" }, corrupt: false });
+    const frozen = await freezeModelChoices();
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: { qualityCheck: { profileId: "balanced", thinking: true } } }, corrupt: false });
+
+    const inside = await inOperation(frozen, () => resolveConfiguredChatModel("qualityCheck"));
+    expect(inside).toMatchObject({ profile: { id: "fast" }, thinking: false, task: "qualityCheck", fallback: { profile: { id: "balanced" } } });
+    // 操作外（下一次）按现在的设置。
+    expect(await resolveConfiguredChatModel("qualityCheck")).toMatchObject({ profile: { id: "balanced" }, thinking: true });
+  });
+
+  it("开工时那个档案后来被删了：如实失败，不悄悄换成别的模型；开工时就配不出的任务照那时的原因失败", async () => {
+    loadModelSettingsV0.mockResolvedValue(settingsWithoutTriage());
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: { qualityCheck: { profileId: "fast", thinking: true }, fastDraft: { profileId: "ghost", thinking: true } } }, corrupt: false });
+    const frozen = await freezeModelChoices();
+    const without = settingsWithoutTriage();
+    loadModelSettingsV0.mockResolvedValue({ ...without, summary: { ...without.summary, profiles: without.summary.profiles.filter((profile) => profile.id !== "fast") } });
+    await expect(inOperation(frozen, () => resolveConfiguredChatModel("qualityCheck"))).rejects.toThrow(/开工时给「.*」用的模型「fast-model」被删了/u);
+    await expect(inOperation(frozen, () => resolveConfiguredChatModel("fastDraft"))).rejects.toThrow(/ghost/u);
+  });
+});
+
 describe("callOpenAICompatibleChatModel（重构 P4：内部走流式 + 空闲超时，不设总时长上限）", () => {
   function sse(chunks: readonly string[]): globalThis.Response {
     const encoder = new TextEncoder();
@@ -433,9 +465,9 @@ describe("streamChatModelToText 「光想不写」上限（maxThinkingMs）", ()
     return new Response(stream, { status: 200 });
   }
 
-  it("一直只思考、超过上限还没出正文 → 抛 ThinkingTooLongError（调用方据此关思考重试）", async () => {
+  it("一直只思考、超过上限还没出正文 → 抛策略原因 thinking_too_long（调用方据此关思考重试）", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => pacedStream(init?.signal, 0, 0));
-    await expect(streamChatModelToText({ configured, messages: [], maxThinkingMs: 120 })).rejects.toBeInstanceOf(ThinkingTooLongError);
+    await expect(streamChatModelToText({ configured, messages: [], maxThinkingMs: 120 })).rejects.toMatchObject({ attemptClass: "policy_abort", policy: "thinking_too_long" });
     spy.mockRestore();
   });
 

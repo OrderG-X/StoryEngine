@@ -574,6 +574,41 @@ describe("专员窗口：卷笔记（T5 长书）", () => {
     }
   });
 
+  it("maxVolumeBuilds（写作版本 P2a 4.5）：新生成的卷节点到上限就停，已生成的留着、当没备齐（missing ≥ 1、窗口空），下次接着生成", async () => {
+    const dir = await longBook(115);
+    await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 115, callModel: volumeFakeModel().callModel, maxChars: 6_000 });
+    const changed = { ...VOLUME_ROLE, volumeTask: "缩写成一份卷笔记，换个写法。" };
+    const first = volumeFakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: changed, upTo: 115, callModel: first.callModel, maxChars: 6_000, maxVolumeBuilds: 2 });
+    expect(first.calls).toHaveLength(2); // 数的是实际新生成的每一个
+    expect(out).toMatchObject({ messages: [], built: 0, volumesBuilt: 2, readThrough: 115 });
+    expect(out.missing).toBeGreaterThanOrEqual(1);
+    // 下次接着来：前两个认领、不重生成；放开上限就补齐
+    const rest = volumeFakeModel();
+    const done = await ensureReaderWindow({ projectDir: dir, role: changed, upTo: 115, callModel: rest.callModel, maxChars: 6_000 });
+    expect(done.missing).toBe(0);
+    expect(done.volumesBuilt).toBe(rest.calls.length);
+    // 对照：同样的书一次不限生成的个数 = 分两次的合计（上限没让它多生成、也没漏）
+    const control = await longBook(115);
+    await ensureReaderWindow({ projectDir: control, role: VOLUME_ROLE, upTo: 115, callModel: volumeFakeModel().callModel, maxChars: 6_000 });
+    const total = (await ensureReaderWindow({ projectDir: control, role: changed, upTo: 115, callModel: volumeFakeModel().callModel, maxChars: 6_000 })).volumesBuilt;
+    expect(done.volumesBuilt).toBe(total - 2);
+  });
+
+  it("maxVolumeBuilds：补笔记途中卷节点到上限——已写的笔记留着，built 如实数，下次只补剩下的", async () => {
+    const dir = await longBook(25);
+    const first = volumeFakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: first.callModel, maxChars: VOLUME_BUDGET, maxVolumeBuilds: 0 });
+    expect(out.messages).toEqual([]);
+    expect(out.volumesBuilt).toBe(0);
+    expect(out.built).toBeGreaterThan(0);
+    expect(out.missing).toBe(25 - out.built);
+    expect(await notesOf(dir)).toHaveLength(out.built);
+    const second = volumeFakeModel();
+    const done = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: second.callModel, maxChars: VOLUME_BUDGET });
+    expect(done).toMatchObject({ missing: 0, built: 25 - out.built, reused: out.built });
+  });
+
   it("第二次调用：卷笔记全复用，不调模型", async () => {
     const dir = await longBook(25);
     await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: volumeFakeModel().callModel, maxChars: VOLUME_BUDGET });

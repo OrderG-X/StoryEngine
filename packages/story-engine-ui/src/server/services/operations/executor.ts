@@ -11,6 +11,10 @@
  *   后台配方登记了自动续 → 接着跑，其余 → paused:interrupted；配方版本对不上 → obsolete。
  */
 import { readBookEpoch, withBookLock } from "@actalk/story-core";
+import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { freezeModelChoices, isFrozenModels, type FrozenModels } from "../../lib/llm-client.js";
+import { readOperationInput } from "../../lib/operations/inputs.js";
+import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { listAttempts, settleAbandonedAttempt, unsettledUnknowns } from "../../lib/operations/attempts.js";
 import { inputHashOf, readCheckpoint, writeCheckpoint } from "../../lib/operations/checkpoints.js";
 import {
@@ -84,8 +88,8 @@ export interface Recipe<P = unknown> {
   readonly lane: GateLane;
   /** 后台配方：进程没了、开书时自动接着跑（没有结果不明的调用时）。 */
   readonly autoResume?: boolean;
-  /** 归一、校验参数，算写位和额度（设计 4.5 的算式）；不受理返回失败。 */
-  prepare(bookDir: string, input: { readonly mode?: string; readonly params: unknown; readonly origin: OperationOrigin }): Promise<PrepareOutcome<P>>;
+  /** 归一、校验参数，算写位和额度（设计 4.5 的算式，跟模型有关的项按这次冻结的模型选择算）；不受理返回失败。 */
+  prepare(bookDir: string, input: { readonly mode?: string; readonly params: unknown; readonly origin: OperationOrigin; readonly models: FrozenModels }): Promise<PrepareOutcome<P>>;
   run(ctx: RecipeContext<P>): Promise<OperationResult>;
   /** 接着做时这一步从头做，额度加多少（这一步的最坏值）。 */
   stepBudget(stepId: string | undefined, params: P): number;
@@ -120,11 +124,17 @@ export type SubmitOutcome =
   | { readonly ok: true; readonly tombstone: OperationTombstone }
   | { readonly ok: false; readonly code: string; readonly message: string; readonly occupant?: OperationRecord };
 
-/** 提交一次操作：配方归一参数、算写位和额度 → 受理 → 新受理的马上在后台跑起来。只返回受理回执。 */
+/**
+ * 提交一次操作：老书先接上新核心（一次性迁移，不是操作；没接上不受理）→ 冻结模型选择 → 配方归一参数、算写位和额度
+ * → 受理（冻结材料写在记录之前）→ 新受理的马上在后台跑起来。只返回受理回执。
+ */
 export async function submitOperation(bookDir: string, input: SubmitInput): Promise<SubmitOutcome> {
   const recipe = recipes.get(input.kind);
   if (!recipe) return { ok: false, code: "unknown_operation", message: "这类操作还没有。" };
-  const prepared = await recipe.prepare(bookDir, { ...(input.mode !== undefined ? { mode: input.mode } : {}), params: input.params, origin: input.origin });
+  const onCore = await ensureBookOnCore(bookDir, { snapshot: coreSnapshotFor(bookDir) });
+  if (!onCore.ok) return { ok: false, code: "book_not_on_core", message: `这本书还没接上新格式，没有开始：${onCore.reason}` };
+  const models = await freezeModelChoices();
+  const prepared = await recipe.prepare(bookDir, { ...(input.mode !== undefined ? { mode: input.mode } : {}), params: input.params, origin: input.origin, models });
   if (!prepared.ok) return prepared;
   const accepted = await acceptOperation(bookDir, {
     requestKey: input.requestKey,
@@ -136,7 +146,7 @@ export async function submitOperation(bookDir: string, input: SubmitInput): Prom
     origin: input.origin,
     writeScope: prepared.writeScope,
     budget: { limit: prepared.budget },
-  }, { bookEpoch: () => readBookEpoch(bookDir) });
+  }, { bookEpoch: () => readBookEpoch(bookDir), inputs: { models } });
   if (!accepted.ok) return accepted;
   if ("tombstone" in accepted) return accepted;
   if (!accepted.existing) void startOperation(bookDir, accepted.record.opId);
@@ -180,6 +190,7 @@ export async function startOperation(bookDir: string, opId: string, options: Sta
 async function execute(bookDir: string, record: OperationRecord): Promise<void> {
   const recipe = recipes.get(record.kind);
   const execution = registerExecution(bookDir, record.opId, record.runEpoch);
+  const models = await readOperationInput(bookDir, record.opId, "models");
   const operation: OperationContext = {
     bookDir,
     opId: record.opId,
@@ -187,9 +198,12 @@ async function execute(bookDir: string, record: OperationRecord): Promise<void> 
     bookEpoch: record.bookEpoch,
     signal: execution.signal,
     lane: recipe?.lane ?? "foreground",
+    ...(isFrozenModels(models) ? { models } : {}),
   };
   try {
     if (!recipe) throw Object.assign(new Error("这类操作还没有。"), { code: "unknown_operation" });
+    // 冻结的模型选择受理时写在记录之前；读不到就不按现在的设置凑合着跑（那就不是开工时那一套了）。
+    if (!operation.models) throw Object.assign(new Error("开工时记下的模型设置读不到了，这次没法接着做；重新来一次。"), { code: "inputs_missing" });
     const result = await runInOperation(operation, () => recipe.run(contextFor(record, operation)));
     await finish(operation, result);
   } catch (error) {

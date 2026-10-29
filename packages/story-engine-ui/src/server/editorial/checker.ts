@@ -14,11 +14,12 @@
  */
 import { describeTimelineForChapter, readStoryTimeline } from "../book/story-timeline.js";
 import { findEarlierPassages } from "../writing/earlier-passages.js";
-import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
+import { MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import {
   containsQuote,
   dropLiteralEscapes,
+  HEDGE_MAX_COPIES,
   hedged,
   normalize,
   parseFullReadIssues,
@@ -163,6 +164,19 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
  */
 export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 };
+
+/** 核账员（含跟读笔记、卷笔记）一次调用最多几次占额度的发送：对冲份数 × 每份（主 + 备用）。写作版本 P2a 4.5。 */
+export const READER_CALL_MAX_SENDS = HEDGE_MAX_COPIES * MODEL_CALL_MAX_SENDS;
+
+/** 整章核一次最多几次核账员调用：翻原文 1 + 对设定本 1 + 三遍 × 每遍次数 + 自复核 1（额度按它算）。 */
+export function readerCheckCalls(variant: ReaderCheckVariant): number {
+  return 1 + 1 + CHECKER_PASSES.length * Math.max(1, variant.passRepeats ?? 1) + (variant.selfReview ? 1 : 0);
+}
+
+/** 只核改过的句子一次最多几次：翻原文 1 + 并行次数 + 自复核 1。 */
+export function readerRecheckCalls(variant: ReaderCheckVariant): number {
+  return 1 + Math.max(1, variant.recheckRepeats ?? variant.passRepeats ?? 1) + (variant.selfReview ? 1 : 0);
+}
 
 /** 翻原文那一轮的问法：窗口里有看不到原文的章（折叠只剩笔记，或冷窗口没给到）时，问它要翻哪些词的前文原文。 */
 export function keywordTask(chapter: number, cold = false): string {
@@ -540,6 +554,8 @@ interface ReaderCheckInput {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 这次最多新生成几个卷节点（见 ensureReaderWindow）；到了走冷窗口。 */
+  readonly maxVolumeBuilds?: number;
   /** 窗口字数预算；缺省 READER_WINDOW_MAX_CHARS（测试用小值，好让折叠和翻原文真的发生）。 */
   readonly maxChars?: number;
   /** 前面各章原文（核账服务已读过就传进来，省得再读一遍）；缺省从书目录读。 */
@@ -580,6 +596,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
       waitingAs: "核账",
       onCatchUpBegin: waiting.onCatchUpBegin,

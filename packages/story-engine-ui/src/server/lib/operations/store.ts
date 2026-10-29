@@ -10,7 +10,8 @@
  *   拿着记录锁不许等书锁（withRecordLock 里再要书锁直接抛错）。beforeSend 只拿记录锁。
  * - 写位：受理后 writeScope 不变；占位 = 状态是 queued / running 的操作的 writeScope。
  * - 本进程调度表：受理时在同一次持书锁里登记；开书对账先排除登记着的（不把刚受理、还没起 worker 的判死）。
- * - 清理留墓碑：同键重送回放结果或拒绝，绝不重新开工；墓碑留 400 天，请求的 issuedAt 早于 365 天的直接拒。
+ * - 清理留墓碑：同键重送回放结果或拒绝，绝不重新开工。期限都按服务端时钟：请求的 issuedAt 早于 365 天的直接拒；
+ *   墓碑留到过了 max(受理时间, issuedAt) + 400 天——客户端时钟偏快偏慢，墓碑都比还能进来的同键请求活得久。
  * 这里只放记录的格式、读写、锁和受理；跑配方在 services/operations/executor.ts。
  */
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -125,6 +126,9 @@ export interface OperationTombstone {
   readonly state: OperationState;
   /** 给作者看的一句结果。 */
   readonly summary: string;
+  /** 请求自己带的时间（前端时钟）和服务端受理的时间：墓碑留到 max(两者) + 400 天。 */
+  readonly issuedAt: string;
+  readonly acceptedAt: string;
   readonly clearedAt: string;
 }
 
@@ -151,6 +155,18 @@ export function operationDir(bookDir: string, opId: string): string {
 
 const recordPath = (bookDir: string, opId: string): string => join(operationDir(bookDir, opId), "operation.json");
 
+/** 冻结材料 `inputs/<名>.json`（名字只用字母、数字、横线，配方里写死的）。读在 inputs.ts。 */
+export function inputPath(bookDir: string, opId: string, name: string): string {
+  if (!/^[0-9A-Za-z-]+$/u.test(name)) throw new Error(`冻结材料的名字不对：${name}`);
+  return join(operationDir(bookDir, opId), "inputs", `${name}.json`);
+}
+
+async function writeInputFile(bookDir: string, opId: string, name: string, value: unknown): Promise<void> {
+  const path = inputPath(bookDir, opId, name);
+  await mkdir(join(operationDir(bookDir, opId), "inputs"), { recursive: true });
+  await writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 function isRecord(value: unknown): value is OperationRecord {
   const record = value as Partial<OperationRecord> | null;
   return (
@@ -173,7 +189,15 @@ function isRecord(value: unknown): value is OperationRecord {
 
 function isTombstone(value: unknown): value is OperationTombstone {
   const stone = value as Partial<OperationTombstone> | null;
-  return stone?.schema === OPERATION_SCHEMA && stone.tombstone === true && typeof stone.opId === "string" && typeof stone.requestKey === "string" && typeof stone.requestHash === "string";
+  return (
+    stone?.schema === OPERATION_SCHEMA &&
+    stone.tombstone === true &&
+    typeof stone.opId === "string" &&
+    typeof stone.requestKey === "string" &&
+    typeof stone.requestHash === "string" &&
+    !Number.isNaN(Date.parse(stone.issuedAt ?? "")) &&
+    !Number.isNaN(Date.parse(stone.acceptedAt ?? ""))
+  );
 }
 
 /** 读一次操作。键对不上（不是这个 opId 的记录）也算坏的。 */
@@ -378,7 +402,12 @@ const sameRequest = (record: { readonly requestHash: string }, request: Operatio
 export async function acceptOperation(
   bookDir: string,
   request: OperationRequest,
-  context: { readonly bookEpoch: () => Promise<string>; readonly now?: Date },
+  context: {
+    readonly bookEpoch: () => Promise<string>;
+    readonly now?: Date;
+    /** 冻结材料（名 → 内容）：新受理时写进 `inputs/`，在 operation.json 之前；同键回原操作时不动。 */
+    readonly inputs?: Readonly<Record<string, unknown>>;
+  },
 ): Promise<AcceptOutcome> {
   const now = context.now ?? new Date();
   const issued = Date.parse(request.issuedAt);
@@ -429,6 +458,7 @@ export async function acceptOperation(
     };
     syncScheduler(bookDir, record);
     try {
+      for (const [name, value] of Object.entries(context.inputs ?? {})) await writeInputFile(bookDir, opId, name, value);
       await writeRecordFile(bookDir, record);
     } catch (error) {
       syncScheduler(bookDir, { ...record, state: "cancelled" });
@@ -444,8 +474,14 @@ export async function acceptOperation(
 
 const ageDays = (iso: string, now: Date): number => (now.getTime() - Date.parse(iso)) / DAY_MS;
 
+/** 墓碑什么时候能删：服务端时钟过了 max(受理时间, issuedAt) + 400 天（那时同键请求按它的 issuedAt 早就过期了）。 */
+export function tombstoneExpired(stone: Pick<OperationTombstone, "issuedAt" | "acceptedAt">, now: Date): boolean {
+  const latest = Math.max(Date.parse(stone.issuedAt), Date.parse(stone.acceptedAt));
+  return now.getTime() > latest + TOMBSTONE_KEEP_DAYS * DAY_MS;
+}
+
 /**
- * 开书时（书锁里）清：结束超 30 天、或每本书超 200 次的操作目录，留墓碑；墓碑超 400 天的删。
+ * 开书时（书锁里）清：结束超 30 天、或每本书超 200 次的操作目录，留墓碑；墓碑过了期限（tombstoneExpired）的删。
  * summaryOf 给墓碑写一句结果（操作结果的投影，executor 给）。
  */
 export async function pruneOperations(bookDir: string, summaryOf: (record: OperationRecord) => string, now: Date = new Date()): Promise<{ readonly cleared: readonly string[] }> {
@@ -461,7 +497,7 @@ export async function pruneOperations(bookDir: string, summaryOf: (record: Opera
   for (const name of names) {
     const stored = await readOperation(bookDir, name);
     if (stored.kind === "tombstone") {
-      if (ageDays(stored.tombstone.clearedAt, now) > TOMBSTONE_KEEP_DAYS) await rm(operationDir(bookDir, name), { recursive: true, force: true });
+      if (tombstoneExpired(stored.tombstone, now)) await rm(operationDir(bookDir, name), { recursive: true, force: true });
       else await removeAllButRecord(bookDir, name);
     } else if (stored.kind === "record" && isTerminal(stored.record.state)) {
       finished.push(stored.record);
@@ -478,6 +514,8 @@ export async function pruneOperations(bookDir: string, summaryOf: (record: Opera
       requestHash: record.requestHash,
       state: record.state,
       summary: summaryOf(record),
+      issuedAt: record.issuedAt,
+      acceptedAt: record.createdAt,
       clearedAt: now.toISOString(),
     };
     // 先把记录换成墓碑（原子写），再删别的：崩在中间只多留几个文件，下次清；同键重送读到的已经是墓碑。

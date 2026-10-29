@@ -121,7 +121,9 @@ function earlierOpenNote(chapter: number, items: readonly ChapterCheckItem[]): s
 }
 
 /** 核账员那一路最多当场补多少章笔记；超过就如实说「还在读前文」，笔记在后台补（T5），这次不硬核。 */
-const READER_MAX_CATCH_UP = 10;
+export const READER_MAX_CATCH_UP = 10;
+/** 核账员那一路当场最多新生成几个卷节点（写作版本 P2a 4.5 额度按它算）；到了也走冷窗口、剩下的后台补。 */
+export const READER_MAX_VOLUME_BUILDS = 2;
 
 export interface ChapterCheckOptions {
   /** 正文没改也重新核；改过也整章重核（不只核改过的句子）。 */
@@ -153,6 +155,7 @@ async function checkByReader(input: {
     draftBody: input.body,
     callModel: input.callModel,
     maxCatchUp: READER_MAX_CATCH_UP,
+    maxVolumeBuilds: READER_MAX_VOLUME_BUILDS,
     earlier: input.earlier,
     variant: DEFAULT_READER_VARIANT,
   };

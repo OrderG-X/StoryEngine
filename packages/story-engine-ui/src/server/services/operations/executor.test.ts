@@ -45,7 +45,7 @@ const deferred = <T = void>() => {
 };
 
 /** 两步的配方：a、b 各记一次调用；hold 给了就在 b 里等它。 */
-function twoSteps(options: { readonly hold?: Promise<void>; readonly autoResume?: boolean; readonly failInB?: string; readonly sendInB?: boolean } = {}) {
+function twoSteps(options: { readonly hold?: Promise<void>; readonly autoResume?: boolean; readonly failInB?: string; readonly sendInB?: boolean; readonly inB?: () => void } = {}) {
   const calls = { a: 0, b: 0 };
   const recipe: Recipe<{ readonly n: number }> = {
     kind: "test.two",
@@ -63,6 +63,7 @@ function twoSteps(options: { readonly hold?: Promise<void>; readonly autoResume?
       const b = await ctx.step("b", { a }, async () => {
         calls.b += 1;
         if (options.sendInB) await beforeSend(currentOperation()!, { provider: "测试", model: "m", quotaGroup: "g" });
+        options.inB?.();
         if (options.hold) await options.hold;
         if (options.failInB) throw new Error(options.failInB);
         return { plus: a.doubled + 1 };
@@ -145,7 +146,7 @@ describe("纪元", () => {
 });
 
 describe("开书对账、接着做", () => {
-  /** 模拟进程没了：调度表、执行登记清掉（盘上的记录还是 running）。 */
+  /** 模拟进程没了：调度表、执行登记清掉（盘上的记录还是 running）。得等配方停在 b 里再「死」：不然还活着的执行再写一笔记录，又登记回调度表。 */
   function processDied(): void {
     __resetOperationStoreForTests();
     __resetExecutionsForTests();
@@ -153,15 +154,11 @@ describe("开书对账、接着做", () => {
 
   it("上一个进程跑到一半：标 paused:interrupted；接着做从停下那步做，做完的步骤零调用，额度加那一步的", async () => {
     const hold = deferred();
-    const calls = twoSteps({ hold: hold.promise });
+    const inB = deferred();
+    const calls = twoSteps({ hold: hold.promise, inB: inB.resolve });
     const first = await submit();
     if (!first.ok || !("record" in first)) throw new Error("没受理");
-    await settled(first.record.opId, ["running"]);
-    for (let i = 0; i < 100; i += 1) {
-      const stored = await readOperation(book, first.record.opId);
-      if (stored.kind === "record" && stored.record.currentStep === "b") break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await inB.promise;
     processDied();
     expect(await reconcileOperations(book)).toEqual({ resumed: [] });
     expect(await readOperation(book, first.record.opId)).toMatchObject({ record: { state: "paused", pauseReason: "interrupted", runEpoch: 2, currentStep: "b" } });
@@ -193,10 +190,11 @@ describe("开书对账、接着做", () => {
 
   it("后台配方登记了自动续：开书时接着跑", async () => {
     const hold = deferred();
-    twoSteps({ hold: hold.promise, autoResume: true });
+    const inB = deferred();
+    twoSteps({ hold: hold.promise, autoResume: true, inB: inB.resolve });
     const first = await submit("background:b1");
     if (!first.ok || !("record" in first)) throw new Error("没受理");
-    await settled(first.record.opId, ["running"]);
+    await inB.promise;
     processDied();
     hold.resolve();
     expect(await reconcileOperations(book)).toEqual({ resumed: [first.record.opId] });
@@ -215,10 +213,11 @@ describe("开书对账、接着做", () => {
   });
 
   it("配方版本对不上：obsolete", async () => {
-    twoSteps({ hold: new Promise(() => undefined) });
+    const inB = deferred();
+    twoSteps({ hold: new Promise(() => undefined), inB: inB.resolve });
     const first = await submit();
     if (!first.ok || !("record" in first)) throw new Error("没受理");
-    await settled(first.record.opId, ["running"]);
+    await inB.promise;
     processDied();
     __resetRecipesForTests();
     registerRecipe({ ...({} as Recipe), kind: "test.two", version: 2, lane: "foreground", prepare: async () => ({ ok: false, code: "x", message: "x" }), run: async () => ({ schema: "operation-result/1", summary: "" }), stepBudget: () => 0 });
