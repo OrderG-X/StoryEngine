@@ -34,6 +34,7 @@ function fakeServer(initial: Record<number, Disk>, committed: Record<number, { b
     disk[chapter] = { version: `v${seq}`, body, ...(title ? { title } : {}) };
     return `v${seq}`;
   };
+  const flags: { adoptWarning?: string } = {};
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (!init || !init.method || init.method === "GET") {
       const chapter = Number(new URL(url, "http://x").searchParams.get("chapter"));
@@ -56,6 +57,8 @@ function fakeServer(initial: Record<number, Disk>, committed: Record<number, { b
       }
       if (!entry) return new Response(JSON.stringify({ ok: false, error: "那一份已经不在了" }), { status: 404 });
       if (request.baseVersion !== (disk[request.chapter]?.version ?? null)) return new Response(JSON.stringify({ ok: false, error: "又改过了，没换" }), { status: 409 });
+      // 换上了、清那一份没成：服务端回成功带一句（那一份还在）。
+      if (flags.adoptWarning) return new Response(JSON.stringify({ ok: true, version: write(request.chapter, entry.body), warning: flags.adoptWarning }), { status: 200 });
       delete store[request.id];
       return new Response(JSON.stringify({ ok: true, version: write(request.chapter, entry.body) }), { status: 200 });
     }
@@ -73,7 +76,7 @@ function fakeServer(initial: Record<number, Disk>, committed: Record<number, { b
   const keepCandidate = (chapter: number, body: string, id = `${chapter}-cand`): void => {
     candidates[id] = { kind: "candidate", id, chapter, body, sha: `sha-${body}`, reason: "draft_moved" };
   };
-  return { disk, puts, decisions, recoveries, candidates, keepCandidate, fetchMock };
+  return { disk, puts, decisions, recoveries, candidates, keepCandidate, fetchMock, flags };
 }
 
 beforeEach(() => {
@@ -276,6 +279,16 @@ describe("存稿调度", () => {
     expect(await acceptPaperIncoming()).toEqual({ ok: true });
     expect(server.decisions).toEqual([expect.objectContaining({ kind: "recovery", id: "3-old", sha: "sha-old", decision: "adopt", baseVersion: "v0" })]);
     expect(useDraftStore.getState()).toMatchObject({ body: "上回没存上的字。", incoming: null });
+  });
+
+  it("找回换上了、但那一份没清掉：如实说出来（稿子已经是找回的那版）", async () => {
+    const server = fakeServer({ 3: { version: "v0", body: "原稿。" } });
+    server.recoveries["3-old"] = { kind: "recovery", id: "3-old", chapter: 3, body: "上回没存上的字。", sha: "sha-old" };
+    server.flags.adoptWarning = "换好了，但那一份没清掉（下次开这一章还会提示）：写不进去";
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 3);
+    expect(await acceptPaperIncoming()).toEqual({ ok: false, error: "换好了，但那一份没清掉（下次开这一章还会提示）：写不进去" });
+    expect(useDraftStore.getState()).toMatchObject({ body: "上回没存上的字。" });
   });
 
   it("换章前先把没存的字存掉", async () => {

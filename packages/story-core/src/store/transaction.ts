@@ -24,8 +24,9 @@
  * 挪进 `.story-core-kept/` 留证（不删），那里攒到 KEPT_REPORT_THRESHOLD 份以上就在恢复报告里如实提醒。
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
-import { basename, dirname, join, normalize, sep } from "node:path";
+import { dirname, join, normalize, sep } from "node:path";
 import {
   hasPendingLegacyTransactions,
   LegacyResidueError,
@@ -38,6 +39,7 @@ import {
 import { withBookLock } from "./lock.js";
 import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "./control.js";
 import { assertInsideBook, DRAFT_GENS_PATH, draftChapterOfPath, isControlPath, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
+import { moveFileInBook, readFileInBook, writeFileInBook } from "./safe-fs.js";
 import { saveCopyBeforeRestore } from "./saved-copies.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
@@ -127,8 +129,9 @@ async function checkTarget(root: string, path: string): Promise<boolean> {
   }
 }
 
-async function writeDurable(path: string, content: string): Promise<void> {
-  const handle = await open(path, "w");
+/** 事务目录里新建一个文件（暂存、备份）：只新建、不跟软链，落盘。权限和以前一样受 umask 管。 */
+async function createDurable(path: string, content: string): Promise<void> {
+  const handle = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o666);
   try {
     await handle.writeFile(content, "utf-8");
     await handle.sync();
@@ -137,14 +140,8 @@ async function writeDurable(path: string, content: string): Promise<void> {
   }
 }
 
-async function writeManifest(txDir: string, manifest: Manifest): Promise<void> {
-  const temporary = join(txDir, "manifest.json.tmp");
-  await writeDurable(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
-  await rename(temporary, join(txDir, "manifest.json"));
-}
-
-async function copyDurable(from: string, to: string): Promise<void> {
-  await writeDurable(to, await readFile(from, "utf-8"));
+async function writeManifest(bookDir: string, txDir: string, manifest: Manifest): Promise<void> {
+  await writeFileInBook(bookDir, join(txDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { label: "transaction manifest" });
 }
 
 /** 退回一份做了什么：真换上过文件没有、碰了哪几章工作稿、碰没碰工作稿代次（调用方据此换代次）。 */
@@ -203,7 +200,7 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
     const restore = file.existed ? await readFile(backup, "utf-8") : undefined;
     await keepForeignCurrent(bookDir, { from: coreInstance(manifest), path, ...(file.wrote !== undefined ? { wrote: file.wrote } : {}), ...(restore !== undefined ? { restore } : {}) });
     if (!file.existed) await rm(target, { force: true });
-    else await rename(backup, target);
+    else await moveFileInBook(bookDir, backup, target, { label: "rollback target", expectSha: digest(restore!) });
   }
   return { changed, draftChapters: [...draftChapters], gensTouched };
 }
@@ -213,10 +210,8 @@ async function writeControl(bookDir: string, write: TxWrite): Promise<void> {
   await assertPlainDirs(bookDir, dirname(path));
   await mkdir(dirname(join(bookDir, path)), { recursive: true });
   await checkTarget(bookDir, path);
-  // 先写临时文件再一次 rename（同目录、原子）：被杀在中间要么是旧的、要么是新的，不会是半截。
-  const temporary = join(bookDir, dirname(path), `.${basename(path)}.${randomBytes(4).toString("hex")}.tmp`);
-  await writeDurable(temporary, write.content);
-  await rename(temporary, join(bookDir, path));
+  // 同目录临时文件 + 一次 rename（safe-fs）：被杀在中间要么是旧的、要么是新的，不会是半截；途中路径被调换如实报错。
+  await writeFileInBook(bookDir, join(bookDir, path), write.content, { label: "control file", createMode: 0o666 });
 }
 
 /**
@@ -248,8 +243,8 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const target = join(bookDir, path);
       const slot = String(index);
       const existed = await checkTarget(bookDir, path);
-      if (existed) await copyDurable(target, join(txDir, "backup", slot));
-      await writeDurable(join(txDir, "staged", slot), write.content);
+      if (existed) await createDurable(join(txDir, "backup", slot), (await readFileInBook(bookDir, target, "transaction target"))!);
+      await createDurable(join(txDir, "staged", slot), write.content);
       files.push({ path, existed, slot, wrote: digest(write.content) });
     }
   } catch (error) {
@@ -258,13 +253,13 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
     throw error;
   }
   const manifest: Manifest = { schema: "story-core-tx/1", id, createdAt: new Date().toISOString(), status: "prepared", files };
-  await writeManifest(txDir, manifest);
+  await writeManifest(bookDir, txDir, manifest);
   try {
     for (const file of files) {
       const target = join(bookDir, file.path);
       await assertPlainDirs(bookDir, dirname(file.path));
       await mkdir(dirname(target), { recursive: true });
-      await rename(join(txDir, "staged", file.slot), target);
+      await moveFileInBook(bookDir, join(txDir, "staged", file.slot), target, { label: "transaction target", ...(file.wrote !== undefined ? { expectSha: file.wrote } : {}) });
     }
   } catch (error) {
     // 进程内失败：一直拿着书锁，工作稿代次照原样换回（见文件头），写入代次换新。
@@ -273,7 +268,7 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
     await rm(txDir, { recursive: true, force: true });
     throw error;
   }
-  await writeManifest(txDir, { ...manifest, status: "applied" });
+  await writeManifest(bookDir, txDir, { ...manifest, status: "applied" });
   await rm(txDir, { recursive: true, force: true });
 }
 

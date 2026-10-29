@@ -9,13 +9,16 @@
  *
  * 去重只认存妥了的（P1 第 20 轮 AH1）：盘上有一份普通文件、读得出、同一事务实例同一文件、原文和指纹都对得上、作者还没处理。
  * 同名的是目录、软链、坏的、原文对不上、已经清过的，都不算——另起一个号再存一份（号被占了不等于存过）。
+ *
+ * 另存区本身得是书里的真目录（P1 第 21 轮 AI1）：是软链、不是目录的，读一律当没有（不把书外的稿当本书的恢复稿给作者看、
+ * 更不拿来换上），写一律拒绝（恢复停下）。读写都按书目录的真实路径算，逐级核没有软链；写走 safe-fs。
  */
 import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDraftFile } from "../draft/format.js";
 import { draftChapterOfPath, SAVED_COPIES_DIR } from "./paths.js";
+import { plainDirIdentity, readFileInBook, syncDirectory, writeFileInBook } from "./safe-fs.js";
 
 export const SAVED_COPY_SCHEMA = "story-core-saved/1" as const;
 
@@ -50,52 +53,31 @@ function savedId(from: string, path: string, sha: string, salt?: string): string
   return `kept-${sha256(`${from}\n${path}\n${sha}${salt === undefined ? "" : `\n${salt}`}`).slice(0, 20)}`;
 }
 
-/** 目录落盘（rename 换上的那一项被杀也还在）。 */
-async function syncDirectory(dir: string): Promise<void> {
-  const handle = await open(dir, fsConstants.O_RDONLY);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
+const LABEL = "saved copy";
 
-/** 先写同目录临时文件（新建、不跟软链）、落盘，再一次 rename 换上，目录落盘。 */
-async function writeDurableAtomic(dir: string, name: string, content: string): Promise<void> {
-  const temporary = join(dir, `.${name}.${randomBytes(6).toString("hex")}.tmp`);
-  const handle = await open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
-  let renamed = false;
+/** 另存区（要写时）：不在就建；建完、本来就在的都核是书里的真目录。root 是书目录的真实路径。 */
+async function savedDirForWrite(root: string): Promise<string> {
+  const dir = join(root, SAVED_COPIES_DIR);
   try {
-    try {
-      await handle.writeFile(content, "utf-8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rename(temporary, join(dir, name));
-    renamed = true;
-  } finally {
-    if (!renamed) await rm(temporary, { force: true }).catch(() => undefined);
-  }
-  await syncDirectory(dir);
-}
-
-async function assertPlainDir(dir: string): Promise<void> {
-  const stat = await lstat(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`另存区不是普通目录，拒绝写：${SAVED_COPIES_DIR}`);
-}
-
-async function savedDir(bookDir: string): Promise<string> {
-  const dir = join(bookDir, SAVED_COPIES_DIR);
-  try {
-    await assertPlainDir(dir);
+    await plainDirIdentity(root, dir, LABEL);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`另存区不是普通目录，拒绝写：${SAVED_COPIES_DIR}`, { cause: error });
     await mkdir(dir);
-    await assertPlainDir(dir);
-    await syncDirectory(bookDir);
+    await plainDirIdentity(root, dir, LABEL);
+    await syncDirectory(root);
   }
   return dir;
+}
+
+/** 另存区（读时）：书里的真目录才返回；不在、是软链、不是目录都是 undefined（见文件头）。 */
+async function savedDirForRead(root: string): Promise<string | undefined> {
+  const dir = join(root, SAVED_COPIES_DIR);
+  try {
+    await plainDirIdentity(root, dir, LABEL);
+    return dir;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 名字被占着没有（什么都算：普通文件、目录、软链，断了的也算）。 */
@@ -119,17 +101,18 @@ function sameUnsettledCopy(file: SavedCopyFile, input: { readonly from: string; 
  * 号被别的东西占着（见文件头）另起一个号存。写不下抛出（调用方停下这一轮恢复）。
  */
 export async function saveCopyBeforeRestore(bookDir: string, input: { readonly from: string; readonly path: string; readonly content: string }): Promise<void> {
+  const root = await realpath(bookDir);
   const sha = sha256(input.content);
-  const dir = await savedDir(bookDir);
+  const dir = await savedDirForWrite(root);
   for (const name of await readdir(dir)) {
     if (!name.endsWith(".json") || name.startsWith(".")) continue;
-    const file = await readSaved(bookDir, name.slice(0, -".json".length));
+    const file = await readSaved(root, name.slice(0, -".json".length));
     if (file && sameUnsettledCopy(file, input, sha)) return;
   }
   let id = savedId(input.from, input.path, sha);
   if (await occupied(join(dir, `${id}.json`))) id = savedId(input.from, input.path, sha, randomBytes(8).toString("hex"));
   const file: SavedCopyFile = { schema: SAVED_COPY_SCHEMA, id, path: input.path, content: input.content, sha, from: input.from, savedAt: new Date().toISOString() };
-  await writeDurableAtomic(dir, `${id}.json`, `${JSON.stringify(file, null, 2)}\n`);
+  await writeFileInBook(root, join(dir, `${id}.json`), `${JSON.stringify(file, null, 2)}\n`, { label: LABEL });
 }
 
 function parseSaved(raw: string): SavedCopyFile | undefined {
@@ -167,18 +150,15 @@ function asDraft(file: SavedCopyFile): SavedDraft | undefined {
   };
 }
 
-/** 读一份（不跟软链、只认普通文件）：读不出、对不上的是 undefined。 */
-async function readSaved(bookDir: string, id: string): Promise<SavedCopyFile | undefined> {
+/** 读一份（root 是书目录真实路径；另存区和这份都不跟软链、只认单链接的普通文件）：读不出、对不上的是 undefined。 */
+async function readSaved(root: string, id: string): Promise<SavedCopyFile | undefined> {
   if (!ID.test(id)) return undefined;
+  const dir = await savedDirForRead(root);
+  if (!dir) return undefined;
   try {
-    const handle = await open(join(bookDir, SAVED_COPIES_DIR, `${id}.json`), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
-    try {
-      if (!(await handle.stat()).isFile()) return undefined;
-      const parsed = parseSaved(await handle.readFile("utf-8"));
-      return parsed?.id === id ? parsed : undefined;
-    } finally {
-      await handle.close();
-    }
+    const text = await readFileInBook(root, join(dir, `${id}.json`), LABEL);
+    const parsed = text === undefined ? undefined : parseSaved(text);
+    return parsed?.id === id ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -191,9 +171,12 @@ export function isSavedCopyId(id: string): boolean {
 
 /** 这一章工作稿另存的、作者还没处理的（新的在前）。只读：不拿锁、不写盘。 */
 export async function listSavedDrafts(bookDir: string, chapter: number): Promise<readonly SavedDraft[]> {
+  const root = await realpath(bookDir);
+  const dir = await savedDirForRead(root);
+  if (!dir) return [];
   let names: string[];
   try {
-    names = await readdir(join(bookDir, SAVED_COPIES_DIR));
+    names = await readdir(dir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -201,7 +184,7 @@ export async function listSavedDrafts(bookDir: string, chapter: number): Promise
   const drafts: SavedDraft[] = [];
   for (const name of names) {
     if (!name.endsWith(".json") || name.startsWith(".")) continue;
-    const file = await readSaved(bookDir, name.slice(0, -".json".length));
+    const file = await readSaved(root, name.slice(0, -".json".length));
     const draft = file && !file.settled ? asDraft(file) : undefined;
     if (draft && draft.chapter === chapter) drafts.push(draft);
   }
@@ -210,15 +193,16 @@ export async function listSavedDrafts(bookDir: string, chapter: number): Promise
 
 /** 读一份工作稿另存的（作者点「找回 / 不要了」时核）。不是工作稿的、读不出的是 undefined。 */
 export async function readSavedDraft(bookDir: string, id: string): Promise<SavedDraft | undefined> {
-  const file = await readSaved(bookDir, id);
+  const file = await readSaved(await realpath(bookDir), id);
   return file ? asDraft(file) : undefined;
 }
 
 /** 作者处理了（找回了 / 不要了）：记成已清、清掉字（调用方持书锁）。已经清了、不在了都算成。 */
 export async function settleSavedCopy(bookDir: string, id: string): Promise<void> {
-  const file = await readSaved(bookDir, id);
+  const root = await realpath(bookDir);
+  const file = await readSaved(root, id);
   if (!file || file.settled) return;
-  const dir = await savedDir(bookDir);
+  const dir = await savedDirForWrite(root);
   const settled: SavedCopyFile = { ...file, content: "", settled: true };
-  await writeDurableAtomic(dir, `${id}.json`, `${JSON.stringify(settled, null, 2)}\n`);
+  await writeFileInBook(root, join(dir, `${id}.json`), `${JSON.stringify(settled, null, 2)}\n`, { label: LABEL });
 }

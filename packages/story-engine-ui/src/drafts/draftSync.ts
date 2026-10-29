@@ -403,7 +403,8 @@ export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
   if (result.ok) live.clearIncoming();
   // 换上了就把新稿读回来；没换上也重读一次（那一份可能已经不在了）。
   await refreshPaper().catch(() => undefined);
-  return result;
+  // 换成了、但那一份没清掉：照「没删掉」那条一样如实说（作者看得到）。
+  return result.ok && result.warning ? { ok: false, error: result.warning } : result;
 }
 
 /**

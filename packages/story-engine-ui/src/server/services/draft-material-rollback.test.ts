@@ -82,7 +82,8 @@ it.each(["写 applied 清单时失败", "存成了"] as const)("构包读到前�
     };
     if (failed) {
       hooks.beforeRename = async (from, to) => {
-        if (from.endsWith("/manifest.json.tmp") && to.endsWith("/manifest.json") && (await readDraft(book, 1))?.body.includes("青鹭")) {
+        // 清单整份换上用同目录临时文件 `.manifest.json.<随机>.tmp`（store/safe-fs）。
+        if (/\/\.manifest\.json\.[0-9a-f]+\.tmp$/u.test(from) && to.endsWith("/manifest.json") && (await readDraft(book, 1))?.body.includes("青鹭")) {
           hooks.beforeRename = undefined;
           throw Object.assign(new Error("注入：写 applied 清单时磁盘满"), { code: "ENOSPC" });
         }

@@ -89,7 +89,8 @@ export async function saveWorkingDraft(input: SaveWorkingDraftRequest, options: 
   return { ok: true, version: payload.version, unchanged: payload.unchanged === true };
 }
 
-export type PendingDecisionResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
+/** warning＝换成了，但之后清掉那一份没成（下次还会提示）。 */
+export type PendingDecisionResult = { readonly ok: true; readonly warning?: string } | { readonly ok: false; readonly error: string };
 
 /**
  * 对等着选的那一份做决定：adopt = 换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），dismiss = 不要了。
@@ -119,8 +120,8 @@ export async function decidePendingDraft(input: {
         ...(input.from ? { client: input.from.client, seq: input.from.seq } : {}),
       }),
     });
-    const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
-    if (payload.ok === true) return { ok: true };
+    const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; warning?: string };
+    if (payload.ok === true) return typeof payload.warning === "string" && payload.warning.trim() ? { ok: true, warning: payload.warning.trim() } : { ok: true };
     return { ok: false, error: payload.error?.trim() || `没成（${response.status}）。` };
   } catch (error) {
     return { ok: false, error: `没成：${error instanceof Error ? error.message : String(error)}` };

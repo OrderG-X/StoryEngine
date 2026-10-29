@@ -181,10 +181,16 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             };
           }
           if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, kind === "candidate" ? "ai" : "author", wordsBefore);
-          if (kind === "candidate") await removeDraftCandidate(projectDir, id);
-          else if (savedCopy) await settleSavedCopy(projectDir, id);
-          else await consumeDraftRecovery(projectDir, live as DraftRecovery);
-          return { status: 200, payload: { ok: true, version: outcome.result.version, ...(snapshotId ? { snapshotId } : {}) } };
+          // 稿子已经换上了：之后清掉那一份没成，也是换成了（报 500 会让作者以为没换），如实带一句「那一份还在」（P1 第 21 轮 AI1）。
+          let warning: string | undefined;
+          try {
+            if (kind === "candidate") await removeDraftCandidate(projectDir, id);
+            else if (savedCopy) await settleSavedCopy(projectDir, id);
+            else await consumeDraftRecovery(projectDir, live as DraftRecovery);
+          } catch (error) {
+            warning = `换好了，但那一份没清掉（下次开这一章还会提示）：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`;
+          }
+          return { status: 200, payload: { ok: true, version: outcome.result.version, ...(snapshotId ? { snapshotId } : {}), ...(warning ? { warning } : {}) } };
         });
         const reply = settledReply.ok ? settledReply.value : { status: 400, payload: { ok: false, code: settledReply.code, error: settledReply.message } };
         writeJson(res, reply.status, reply.payload);

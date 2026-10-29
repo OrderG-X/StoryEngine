@@ -10,7 +10,7 @@
  * - AF3 Markdown 标题的闭合井号（`# 第一章 #`）不算章名，名字中间、贴着字的井号留着（第 18 轮）。
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -301,6 +301,33 @@ describe("AG3 收拾半截事务时另存的稿：稿纸上找得回、不要了
     expect(adopted.status).toBe(200);
     expect(await readDraft(book, 1)).toMatchObject({ title: "后来的章名", body: "后来存下的 C。" });
     expect(await pendingOnPaper()).toBeUndefined();
+  });
+
+  it("另存区被换成书外目录的软链（P1 第 21 轮 AI1）：稿纸上不提示，找回不换", async () => {
+    await residueOverC();
+    const pending = (await pendingOnPaper())!;
+    const movedOut = join(root, "saved-outside");
+    await rename(join(book, ".story-core-saved"), movedOut);
+    await symlink(movedOut, join(book, ".story-core-saved"));
+    expect(await pendingOnPaper()).toBeUndefined();
+    const adopted = await call("/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id: pending.id, sha: pending.sha, decision: "adopt", baseVersion: (await readDraftState(book, 1)).version });
+    expect(adopted.status).toBe(404);
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原章名", body: "作者原正文 A。" });
+  });
+
+  it("换上了、清掉那一份没成：回成功并如实说那一份还在", async () => {
+    await residueOverC();
+    const pending = (await pendingOnPaper())!;
+    await chmod(join(book, ".story-core-saved"), 0o500);
+    try {
+      const adopted = await call("/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id: pending.id, sha: pending.sha, decision: "adopt", baseVersion: (await readDraftState(book, 1)).version });
+      expect(adopted.status).toBe(200);
+      expect(String(adopted.payload.warning)).toMatch(/^换好了，但那一份没清掉/u);
+      expect(String(adopted.payload.warning)).not.toContain(root);
+      expect(await readDraft(book, 1)).toMatchObject({ title: "后来的章名", body: "后来存下的 C。" });
+    } finally {
+      await chmod(join(book, ".story-core-saved"), 0o700);
+    }
   });
 
   it("不要了：指纹对得上才清；清了不再提示，稿子不动", async () => {
