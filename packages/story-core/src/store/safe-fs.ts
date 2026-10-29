@@ -19,6 +19,7 @@
  *  1. 先把目标 rename 到调用方给的固定名字（aside，事务目录里）——这之后原处有人放了新的，不会被盖；
  *  2. 拿着打开的它核：挪开的就是核过的那个文件、内容（从头重读）还是该换掉的那份；不是就放回原处（原处又有了就留在 aside），如实失败；
  *  3. 在原处独占新建（O_CREAT | O_EXCL：原处有了就不建，如实失败）、整份写进要放上的内容、落盘、核（删的跳过这步）；
+ *     没建成、原处还空着（磁盘满……）就当场把挪开的那份放回去再报错；
  *  4. 把 aside **挪进留证区**（`.story-core-kept/displaced/`，不删）：挪完拿着它再从头读一遍，有人往里写过就如实失败（东西在留证区）。
  * 被杀在任何一步，下次照固定名字 settleInterruptedPlace 收拾：挪开了还没放上的放回去，原处另有一份的交调用方另存。
  * 第 1 步到第 3 步写完之间原处是空的、或是写到一半的（读的一方读到「没有」或半份）：只有回滚、恢复这种本来就有半截事务挡着的
@@ -474,7 +475,13 @@ export async function restoreFileInBook(
   }
   try {
     const exactMode = displaced ? (await displaced.held.stat()).mode & 0o7777 : undefined;
-    await createInBook(root, target, content, { label, createMode: options.createMode, exactMode, hook: options.hook });
+    try {
+      await createInBook(root, target, content, { label, createMode: options.createMode, exactMode, hook: options.hook });
+    } catch (error) {
+      // 没放上（目标还空着）就把挪开的那份原样放回，书里还是原来那份；放上了一半的不动，下次恢复按 aside 收拾。
+      if (displaced && !(await lstatOrUndefined(target).catch(() => true))) await putBack(root, displaced.aside, target, label);
+      throw error;
+    }
     if (displaced) await retireHeld(root, displaced.aside, displaced.held, displaced.expect, label);
   } finally {
     await displaced?.held.close();

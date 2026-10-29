@@ -319,6 +319,18 @@ describe("回滚 / 恢复盖掉、删掉别人可能动过的那份：先挪开�
     expect(await readFile(aside(), "utf-8")).toBe("现稿 C");
   });
 
+  it("挪开之后新建失败（磁盘满）、原处还空着：挪开的 C 原样放回原处，如实报错", async () => {
+    const { restoreFileInBook } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    const hook = async (point: string, path: string) => {
+      if (point === "after-precheck-before-open" && path === target()) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    };
+    await expect(restoreFileInBook(book, target(), "原稿 A", { label: "draft", expectTarget: sha("现稿 C"), aside: aside(), hook })).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await readFile(target(), "utf-8")).toBe("现稿 C");
+    expect((await lstat(target())).nlink).toBe(1);
+    await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("新建之前上级被换成书外软链：不往书外写内容，挪开的 C 留在 aside", async () => {
     const { restoreFileInBook } = await import("./safe-fs.js");
     await writeFile(target(), "现稿 C");
