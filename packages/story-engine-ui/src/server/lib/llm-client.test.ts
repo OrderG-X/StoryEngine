@@ -21,7 +21,7 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { __resetCapabilityMemoryForTests, buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, freezeModelChoices, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, unlearnedCapabilityCount } from "./llm-client.js";
+import { __resetCapabilityMemoryForTests, __setModelConfigReadGapHookForTests, buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, freezeModelChoices, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, serializeModelSecrets, unlearnedCapabilityCount, withModelConfigLock } from "./llm-client.js";
 
 import { runInOperation } from "./operations/context.js";
 
@@ -355,6 +355,60 @@ describe("开工时冻结的模型选择（写作版本 P2a 4.5）", () => {
     expect(frozen.tasks.qualityCheck).toEqual({ error: expect.stringMatching(/服务商不见了/u) });
     expect(frozen.fallback).toBeUndefined();
     expect(frozen.providers.gone).toBeUndefined();
+  });
+});
+
+describe("模型设置锁（Astra P2a 第 9 轮第 1 条）：解析模型时读的设置、密钥是同一次保存的", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-model-lock-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    __setModelConfigReadGapHookForTests(undefined);
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.clearAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("读完设置、读密钥之前有人保存（换地址 + 换密钥）：保存等这次读完，新密钥不会配旧地址；存完之后开工时冻住的那次如实停下", async () => {
+    const base = settingsWithoutTriage();
+    const at = (baseUrl: string): ModelSettingsLoadResult => ({ ...base, summary: { ...base.summary, providers: [{ ...base.summary.providers[0]!, baseUrl, apiKeyStatus: "present" }] } });
+    loadModelSettingsV0.mockResolvedValue(at("https://old.example.invalid/v1"));
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: null, corrupt: false });
+    await writeFile(join(dir, "model-secrets.json"), serializeModelSecrets({ main: "key-old" }), "utf-8");
+    const frozen = await freezeModelChoices();
+
+    // 设置页保存（另一个请求，在锁外起）：地址、密钥一起换，和路由一样在锁里写。解析读完设置、读密钥之前放它走。
+    let savedDone = false;
+    let startSave!: () => void;
+    const saveStarted = new Promise<void>((resolve) => { startSave = resolve; });
+    const saved = saveStarted.then(() => withModelConfigLock(async () => {
+      loadModelSettingsV0.mockResolvedValue(at("https://new.example.invalid/v1"));
+      await writeFile(join(dir, "model-secrets.json"), serializeModelSecrets({ main: "key-new" }), "utf-8");
+    })).then(() => { savedDone = true; });
+    __setModelConfigReadGapHookForTests(async () => {
+      startSave();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
+    const resolved = await resolveConfiguredChatModel("qualityCheck");
+    expect(resolved).toMatchObject({ provider: { baseUrl: "https://old.example.invalid/v1" }, apiKey: "key-old" });
+    expect(savedDone).toBe(false);
+    await saved;
+    __setModelConfigReadGapHookForTests(undefined);
+    expect(await resolveConfiguredChatModel("qualityCheck")).toMatchObject({ provider: { baseUrl: "https://new.example.invalid/v1" }, apiKey: "key-new" });
+    const inOp = runInOperation({ bookDir: "/tmp/book", opId: "op-1", runEpoch: 1, bookEpoch: "e", signal: new AbortController().signal, lane: "foreground", models: frozen }, () => resolveConfiguredChatModel("qualityCheck"));
+    await expect(inOp).rejects.toThrow(/服务商地址（或密钥来源）改了/u);
+  });
+
+  it("锁可重入：锁里再解析模型不卡住", async () => {
+    loadModelSettingsV0.mockResolvedValue(settingsWithoutTriage());
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: null, corrupt: false });
+    const resolved = await withModelConfigLock(() => resolveConfiguredChatModel("qualityCheck"));
+    expect(resolved.profile.id).toBe("fast");
   });
 });
 

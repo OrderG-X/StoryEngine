@@ -4,7 +4,9 @@
  */
 import { DEFAULT_READER_VARIANT, READER_CALL_MAX_SENDS, readerCheckCalls, readerRecheckCalls } from "../../editorial/checker.js";
 import { READER_MAX_CATCH_UP, READER_MAX_VOLUME_BUILDS } from "../../editorial/continuity/check-service.js";
+import { volumeBuildsBound } from "../../editorial/reader-window.js";
 import { MODEL_CALL_MAX_SENDS } from "../../lib/llm-client.js";
+import type { InspectMode } from "../inspect-service.js";
 
 /** 核账员当场补读那一步：章上限 × 每次 + 卷节点上限 × 每次。 */
 export const READER_NOTES_SENDS = (READER_MAX_CATCH_UP + READER_MAX_VOLUME_BUILDS) * READER_CALL_MAX_SENDS;
@@ -14,8 +16,6 @@ export const READER_CHECK_SENDS = Math.max(readerCheckCalls(DEFAULT_READER_VARIA
 
 /** 审稿、查 AI 味：各一次调用（draftReview 槽，主 + 备用）。 */
 export const SINGLE_CALL_SENDS = MODEL_CALL_MAX_SENDS;
-
-export type InspectMode = "continuity" | "quality" | "review" | "flavor";
 
 /** inspect.run 每一步最多发几次（不含兼容改参）。质检是确定性检查，0。 */
 export function inspectStepBudget(mode: InspectMode): Readonly<Record<string, number>> {
@@ -37,12 +37,18 @@ export function inspectTasks(mode: InspectMode): readonly ("qualityCheck" | "dra
   return [];
 }
 
-/** 后台补读：冻结的章数 × 每次 + 卷节点上限 × 每次（每一步一章；卷笔记按每步的上限算，见 background.backfill）。 */
-export function backfillBudget(chapters: number, volumeBuilds: number): number {
-  return (chapters + volumeBuilds) * READER_CALL_MAX_SENDS;
+/**
+ * 后台补读整次（Astra P2a 第 9 轮第 5 条）：每个角色冻结的章数 + 这段里最多新生成的卷节点（volumeBuildsBound：
+ * 窗口从写第 from 章那一刻涨到读完第 to 章；同一次里同一个卷节点只生成一次），× 每次。
+ */
+export function backfillBudget(ranges: readonly { readonly from: number; readonly to: number }[]): number {
+  return ranges.reduce((sum, range) => sum + (range.to - range.from + 1 + volumeBuildsBound(range.from - 1, range.to)) * READER_CALL_MAX_SENDS, 0);
 }
 
-/** 后台补读一步最多发几次：这一章的笔记 1 次 + 卷节点上限 × 每次（接着做时按它加额度）。 */
-export const BACKFILL_STEP_SENDS = (1 + READER_MAX_VOLUME_BUILDS) * READER_CALL_MAX_SENDS;
+/** 后台补读第 chapter 章那一步最多新生成几个卷节点（写它时的窗口 + 读完它的窗口）：这一步的上限，到了就是规划出了错。 */
+export const backfillStepVolumeBuilds = (chapter: number): number => volumeBuildsBound(chapter - 1, chapter);
+
+/** 后台补读第 chapter 章那一步最多发几次：这一章的笔记 1 次 + 这一步的卷节点上限（接着做时按它加额度）。 */
+export const backfillStepSends = (chapter: number): number => (1 + backfillStepVolumeBuilds(chapter)) * READER_CALL_MAX_SENDS;
 
 export const sumBudget = (steps: Readonly<Record<string, number>>): number => Object.values(steps).reduce((sum, value) => sum + value, 0);

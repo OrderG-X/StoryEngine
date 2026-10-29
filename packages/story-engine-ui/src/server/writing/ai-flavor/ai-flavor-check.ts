@@ -10,6 +10,7 @@
  */
 import { z } from "zod";
 import { detectAiFlavorRules } from "./ai-flavor-rules.js";
+import { rethrowIfStopped } from "../../lib/operations/context.js";
 
 const SEVERITY_RANK: Readonly<Record<AiFlavorViolation["severity"], number>> = { high: 3, medium: 2, low: 1 };
 
@@ -178,6 +179,7 @@ export async function runAiFlavorCheck(input: {
     const text = await input.callModel(buildAiFlavorCheckMessages(input.draftText, input.antiRules, input.establishedElements ?? []).map((m) => m.content).join("\n\n"));
     llm = parseAiFlavorReport(text, input.draftText, false);
   } catch (error) {
+    rethrowIfStopped(error);
     llm = { ok: false, summary: error instanceof Error ? error.message : String(error), violations: [], usedFallback: false };
   }
   return mergeAiFlavorReports(deterministic, llm);

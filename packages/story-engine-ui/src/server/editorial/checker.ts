@@ -16,6 +16,7 @@ import { describeTimelineForChapter, readStoryTimeline } from "../book/story-tim
 import { findEarlierPassages } from "../writing/earlier-passages.js";
 import { MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 import {
   containsQuote,
   dropLiteralEscapes,
@@ -541,6 +542,7 @@ async function lookupEarlierPassages(input: {
     });
     return { prefix: [...input.window, ask, { role: "assistant", content: reply }], passages: passagesMessage(passages) };
   } catch (error) {
+    rethrowIfStopped(error);
     const message = error instanceof Error ? error.message : String(error);
     return { prefix: input.window, failure: `翻原文那一轮没跑成（${message}），这次只按窗口核` };
   }
@@ -562,6 +564,11 @@ interface ReaderCheckInput {
   readonly earlier?: EarlierText;
   /** T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛）；缺省全关＝第 1 步的原样。产品默认见 DEFAULT_READER_VARIANT。 */
   readonly variant?: ReaderCheckVariant;
+  /**
+   * 前文笔记已经在前一步补过（写作版本 P2a inspect.run 的 notes 步，额度分开算）：这里不再当场补（缺了就照冷窗口核），
+   * 等读那一句按那一步的 waited 说。
+   */
+  readonly notesReady?: { readonly waited?: ReaderWaited };
 }
 
 /** 核之前备好的：读完前文的窗口（翻过原文的接在后面）、新稿那条消息（三遍用 / 自复核用）、设定本、前文原文。 */
@@ -589,21 +596,24 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
     // 等过了（笔记是谁补上的都算）由 ensureReaderWindow 带回 waited，回执如实说等了哪几章。
     const root = input.notesRoot ?? input.projectDir;
     const waiting = readerWaitingHandlers(root, role.id, input.chapter - 1);
+    // 笔记前一步补过：这里一章、一个卷节点都不补（缺了照冷窗口核），这一步的额度只算核。
+    const maxCatchUp = input.notesReady ? 0 : input.maxCatchUp;
+    const maxVolumeBuilds = input.notesReady ? 0 : input.maxVolumeBuilds;
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role,
       upTo: input.chapter - 1,
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
-      ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
-      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
+      ...(maxCatchUp !== undefined ? { maxCatchUp } : {}),
+      ...(maxVolumeBuilds !== undefined ? { maxVolumeBuilds } : {}),
       ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
       waitingAs: "核账",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
       onCatchUpEnd: waiting.onCatchUpEnd,
     }));
-    waited = ready.waited;
+    waited = input.notesReady ? input.notesReady.waited : ready.waited;
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：要补的笔记太多（后台补读还在跑）不再跳过——已有笔记 + 最近 K 章原文先核，范围如实带回执。
       const built = await buildColdReaderWindow({
@@ -620,6 +630,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
       foldedChapters = ready.foldedChapters;
     }
   } catch (error) {
+    rethrowIfStopped(error);
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成（上一稿的问题照带）。
     return { failure: `核账员读前文没成：${error instanceof Error ? error.message : String(error)}` };
   }
@@ -677,6 +688,7 @@ async function runReaderPasses(
   const passes: (readonly ContinuityIssueV2[])[] = [];
   const failures: string[] = [];
   settled.forEach((result, index) => {
+    if (result.status === "rejected") rethrowIfStopped(result.reason);
     if (result.status === "fulfilled") passes.push(result.value);
     else failures.push(`${plans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
@@ -760,6 +772,7 @@ async function selfReviewIssues(
       .filter((_, index) => rulingOf(index)?.verdict !== "no");
     return { issues };
   } catch (error) {
+    rethrowIfStopped(error);
     return { issues: [...candidates], failure: `自复核没跑成：${error instanceof Error ? error.message : String(error)}` };
   }
 }
@@ -1025,6 +1038,7 @@ export async function checkPlanByReader(input: {
       window = ready.messages;
     }
   } catch (error) {
+    rethrowIfStopped(error);
     return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.plan.chapter);
@@ -1035,6 +1049,7 @@ export async function checkPlanByReader(input: {
     ));
     return { problems: parsePlanProblems(text, input.plan, earlier), failures: [], ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   } catch (error) {
+    rethrowIfStopped(error);
     return { problems: [], failures: [`审章纲没跑成：${error instanceof Error ? error.message : String(error)}`] };
   }
 }

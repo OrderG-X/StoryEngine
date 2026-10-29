@@ -14,7 +14,7 @@ import { coreSnapshotFor } from "../lib/snapshot.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readEarlierChapters, type EarlierText } from "./continuity/check-chapter.js";
 import { collectPlanMaterials, OPENING_PLAN_NOTE, planMaterialBlocks } from "./plan-materials.js";
-import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
+import { buildColdReaderWindow, coldPausedNote, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers } from "./reader-progress.js";
 import { PLANNER_ROLE } from "./planner.js";
 import { CHECKER_ROLE, parsePlanProblems } from "./checker.js";
@@ -272,7 +272,7 @@ function coldText(who: string, cold: ColdCoverage, upTo: number): string {
     ...(cold.notedThrough > 0 ? ["已读笔记"] : []),
     ...(cold.rawTo > 0 ? [`第 ${cold.rawFrom}～${cold.rawTo} 章原文`] : []),
   ].join(" + ");
-  return `${who}还没读完全书（第 ${cold.notedThrough} / ${upTo} 章），这次按${basis}想的，更早的细节可能漏。`;
+  return `${who}还没读完全书（第 ${cold.notedThrough} / ${upTo} 章），这次按${basis}想的，更早的细节可能漏。${coldPausedNote(cold)}`;
 }
 
 /**

@@ -5,7 +5,7 @@ import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStoryProject } from "../../../book/project-store.js";
-import { CHECKER_ROLE, LEDGER_ROLE, PLANNER_ROLE, readReadersCatchUpStatus, type BrainCallModel } from "../../../editorial/index.js";
+import { buildColdReaderWindow, CHECKER_ROLE, ensureReaderWindow, LEDGER_ROLE, PLANNER_ROLE, readReadersCatchUpStatus, type BrainCallModel } from "../../../editorial/index.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
 import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../../lib/operations/live.js";
@@ -13,8 +13,8 @@ import { __resetOperationStoreForTests, listOperations, operationDir, readOperat
 import { BACKFILL_KIND, requestReaderBackfill, setReaderBackfillHandler } from "../../../lib/reader-backfill.js";
 import { __resetCatchUpQueuesForTests } from "../../../editorial/catch-up.js";
 import { __resetCatchUpLocksForTests } from "../../../editorial/reader-window.js";
-import { __drainOperationsForTests, __resetRecipesForTests, reconcileOperations, registerRecipe } from "../executor.js";
-import { BACKFILL_STEP_SENDS } from "../budgets.js";
+import { __drainOperationsForTests, __resetRecipesForTests, reconcileOperations, registerRecipe, resumeOperation } from "../executor.js";
+import { backfillStepSends } from "../budgets.js";
 import { createBackgroundBackfillRecipe, type BackfillResultBody } from "./background-backfill.js";
 import { __drainBackfillSubmissionsForTests, submitBackfill } from "./index.js";
 
@@ -110,7 +110,7 @@ describe("受理：冻结每个角色还差的章", () => {
     await submitBackfill(book, { upTo: 3 });
     const records = await quiet();
     expect(records[1]).toMatchObject({ state: "succeeded", params: { ranges: [{ role: LEDGER_ROLE.id, from: 1, to: 3 }, { role: PLANNER_ROLE.id, from: 1, to: 3 }] } });
-    expect(records[1]!.budget.limit).toBe(6 * BACKFILL_STEP_SENDS);
+    expect(records[1]!.budget.limit).toBe(2 * 3 * backfillStepSends(1)); // 两个角色各 3 章，10 章以内用不到卷笔记
     expect(records).toHaveLength(2);
     // 又定稿一章：只冻结新的那章。
     await commitChapters(4, 4);
@@ -220,7 +220,18 @@ describe("按角色排（Astra P2a 第 8 轮第 2、6 条）", () => {
     ]);
     expect(fresh.calls()).toBe(8); // 只有记账员、章纲员各 4 章；核账员一次都没重发
     expect((await readReadersCatchUpStatus(book)).roles.find((role) => role.role === CHECKER_ROLE.id)).toEqual({ role: CHECKER_ROLE.id, reading: false, done: 1, total: 4, paused: reason });
+    // 前台也不替它当场补（Astra P2a 第 9 轮第 3 条）：核账员缺 3 章，maxCatchUp 10 也一次不发，带上停着的那份；冷窗口如实标。
+    const before = fresh.calls();
+    const ready = await ensureReaderWindow({ projectDir: book, role: CHECKER_ROLE, upTo: 4, callModel: fresh.callModel, maxCatchUp: 10 });
+    expect(ready).toMatchObject({ missing: 3, built: 0, pausedBackfill: { opId: pausedId, reason } });
+    expect((await buildColdReaderWindow({ projectDir: book, role: CHECKER_ROLE, upTo: 4 })).coverage.pausedBackfill).toBe(pausedId);
+    expect(fresh.calls()).toBe(before);
+    // 作者点「接着做」：那份补读自己不被自己挡，接着读完，跑完再看一眼补上新定稿的第 4 章。
     stuck.resolve();
+    expect(await resumeOperation(book, pausedId)).toMatchObject({ ok: true });
+    await quiet();
+    expect(await notes(CHECKER_ROLE.id)).toHaveLength(4);
+    expect(fresh.calls()).toBe(before + 3);
   });
 });
 

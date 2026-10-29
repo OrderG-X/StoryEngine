@@ -73,6 +73,11 @@ export function runInOperation<T>(context: OperationContext, fn: () => T): T {
   return storage.run(context, fn);
 }
 
+/** 在操作外跑：在一次操作里另交一次操作时用（新的那次不带着交它的那次的身份、额度、栅栏）。 */
+export function outsideOperation<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 /** 进入一步：同一次执行、换步骤和执行号。 */
 export function runInStep<T>(stepId: string, exec: string, fn: () => T): T {
   const context = storage.getStore();

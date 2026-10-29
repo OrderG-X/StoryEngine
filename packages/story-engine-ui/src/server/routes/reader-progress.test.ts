@@ -78,9 +78,9 @@ describe("GET /api/reader-progress（R4.3 在读前文轻量轮询；写作版�
     });
   });
 
-  it("卷笔记分段的步骤号（<角色>:<章>:<段>）也认；排着还没跑：第一个角色在读、读到 from − 1", async () => {
+  it("在跑：读到当前那章的前一章；排着还没跑：第一个角色在读、读到 from − 1", async () => {
     const dir = await bookWithChapters("reader-progress-part-", 20);
-    await backfill(dir, [{ role: "planner", from: 5, to: 20 }], { currentStep: "planner:11:2" });
+    await backfill(dir, [{ role: "planner", from: 5, to: 20 }], { currentStep: "planner:11" });
     expect((await get(dir)).payload).toMatchObject({ reading: true, roles: [{ role: "checker", reading: false }, { role: "ledger", reading: false }, { role: "planner", reading: true, done: 10, total: 20 }] });
     const queued = await bookWithChapters("reader-progress-queued-", 20);
     await backfill(queued, [{ role: "ledger", from: 5, to: 20 }]);

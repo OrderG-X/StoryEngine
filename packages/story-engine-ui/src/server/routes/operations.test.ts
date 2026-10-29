@@ -45,6 +45,7 @@ beforeEach(async () => {
       return { schema: "operation-result/1", summary: `等完了，/Users/someone/书 里没动` };
     },
     stepBudget: () => 1,
+    modelTasks: () => [],
   });
 });
 afterEach(async () => {

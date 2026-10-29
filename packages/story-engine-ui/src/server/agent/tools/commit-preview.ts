@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { readCardsOrLegacy, readChapterPaper, type TruthBasis } from "@actalk/story-core";
 
-import { callConfiguredBrainModel, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
+import { callConfiguredBrainModel, COLD_PAUSED_TEXT, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
 import { requestReaderBackfill } from "../../lib/reader-backfill.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
@@ -295,6 +295,7 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
   if (preview.cold) {
     const raw = preview.cold.rawFrom > 0 ? `加第 ${preview.cold.rawFrom}～${preview.cold.rawTo} 章原文` : "";
     notes.push(`记账员还在读前文（笔记到第 ${preview.cold.notedThrough} 章），这次按已有笔记${raw}记的`);
+    if (preview.cold.pausedBackfill) notes.push(COLD_PAUSED_TEXT);
   }
   if (preview.waited) notes.push(describeReaderWait("ledger", preview.waited, "记账"));
   notes.push(...extraNotes);

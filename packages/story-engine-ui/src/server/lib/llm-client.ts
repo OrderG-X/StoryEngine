@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { loadModelSettingsV0 } from "./model-settings.js";
 import type { ModelSettingsLoadResult } from "../book/types.js";
 import { writeFileAtomic } from "./project-io.js";
@@ -57,6 +58,34 @@ export function globalModelSecretsPath(): string {
  */
 export async function loadGlobalModelSettings(): Promise<ModelSettingsLoadResult> {
   return loadModelSettingsV0(homedir(), { configPath: globalModelSettingsPath() });
+}
+
+/**
+ * 模型设置的进程内锁（Astra P2a 第 9 轮第 1 条）：设置、密钥、任务分配是几份文件，读的一方分几次读，
+ * 中间有人存了设置就会拿到新密钥配旧地址（或新档案配旧分配）。解析成一份可调用的模型、改这几份文件都在这把锁里，
+ * 读到的总是同一次保存之后的样子。只包读写文件那一小段，不包发请求。可重入（锁里再要锁直接跑）。
+ */
+const modelConfigHeld = new AsyncLocalStorage<{ held: boolean }>();
+let modelConfigTail: Promise<unknown> = Promise.resolve();
+export function withModelConfigLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (modelConfigHeld.getStore()?.held) return fn();
+  const run = modelConfigTail.then(async () => {
+    // 放锁后这份标记就失效：锁里起的异步活放锁之后再要锁照常排队，不算重入。
+    const token = { held: true };
+    try {
+      return await modelConfigHeld.run(token, fn);
+    } finally {
+      token.held = false;
+    }
+  });
+  modelConfigTail = run.catch(() => undefined);
+  return run;
+}
+
+/** 单测钩子：解析模型时读完设置、读密钥之前调一下（模拟这中间有人存了设置）。 */
+let modelConfigReadGapHook: (() => Promise<void>) | undefined;
+export function __setModelConfigReadGapHookForTests(hook: (() => Promise<void>) | undefined): void {
+  modelConfigReadGapHook = hook;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,10 +179,12 @@ export async function saveModelSecrets(input: {
   readonly providerApiKeys?: Readonly<Record<string, string>>;
   readonly activeProviderIds?: readonly string[];
 }): Promise<void> {
-  const existing = await readModelSecrets();
-  const nextProviderApiKeys = mergeProviderApiKeys(existing.providerApiKeys, input);
-  await mkdir(globalStoryEngineDir(), { recursive: true });
-  await writeFileAtomic(globalModelSecretsPath(), serializeModelSecrets(nextProviderApiKeys), { mode: 0o600 });
+  await withModelConfigLock(async () => {
+    const existing = await readModelSecrets();
+    const nextProviderApiKeys = mergeProviderApiKeys(existing.providerApiKeys, input);
+    await mkdir(globalStoryEngineDir(), { recursive: true });
+    await writeFileAtomic(globalModelSecretsPath(), serializeModelSecrets(nextProviderApiKeys), { mode: 0o600 });
+  });
 }
 
 export async function getSavedProviderApiKey(providerId: string): Promise<string> {
@@ -221,6 +252,7 @@ async function resolveProfileModel(
 
 /** 服务商已经定了：读密钥、自定义头（调用时读，不冻结）。缺密钥抛人话错误。 */
 async function resolveWithProvider(provider: ProviderSummary, profile: ModelProfile, thinking: boolean): Promise<ResolvedChatModel> {
+  await modelConfigReadGapHook?.();
   const apiKey = await resolveProviderApiKey(provider);
   if (provider.apiKeyStatus === "missing" && !apiKey) {
     throw new ModelSetupError(`「${provider.label || provider.id}」还没填密钥，去 设置 → 模型 填上就能用。`);
@@ -241,11 +273,13 @@ const warnedFallbackErrors = new Set<string>();
  * 备用模型（P10）：设置里选了就解析出来；没选回 undefined。解析不出来抛人话错误（体检用它露原因）。
  * 思考开关跟着主任务走（调用时由 streamChatModelToText 覆盖），这里先给默认开。
  */
-export async function resolveFallbackChatModel(): Promise<ResolvedChatModel | undefined> {
-  const settings = await loadGlobalModelSettings();
-  if (!settings.available) return undefined;
-  const { file } = await readTaskAssignments(homedir());
-  return resolveFallbackFrom(settings, file?.fallbackProfileId);
+export function resolveFallbackChatModel(): Promise<ResolvedChatModel | undefined> {
+  return withModelConfigLock(async () => {
+    const settings = await loadGlobalModelSettings();
+    if (!settings.available) return undefined;
+    const { file } = await readTaskAssignments(homedir());
+    return resolveFallbackFrom(settings, file?.fallbackProfileId);
+  });
 }
 
 async function resolveFallbackFrom(settings: ModelSettingsLoadResult, profileId: string | undefined): Promise<ResolvedChatModel | undefined> {
@@ -302,7 +336,12 @@ async function tryFallback(resolve: () => Promise<ResolvedChatModel | undefined>
   }
 }
 
-export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
+/** 某任务现在用的模型（在操作里按开工时冻结的那份）。设置、密钥、自定义头在模型设置锁里一次读齐。 */
+export function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
+  return withModelConfigLock(() => resolveConfiguredUnlocked(task));
+}
+
+async function resolveConfiguredUnlocked(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
   const settings = await loadGlobalModelSettings();
   if (!settings.available) {
     throw new ModelSetupError("还没接上 AI：去 设置 → 模型 接一家服务商、填上密钥就能用。");
@@ -394,7 +433,11 @@ export interface FrozenModels {
 const missingProviderMessage = (profile: ModelProfile): string =>
   `模型「${profile.label || profile.model || profile.id}」用的服务商不见了（可能删掉了），去 设置 → 模型 重新选一个。`;
 
-export async function freezeModelChoices(): Promise<FrozenModels> {
+export function freezeModelChoices(): Promise<FrozenModels> {
+  return withModelConfigLock(freezeModelChoicesUnlocked);
+}
+
+async function freezeModelChoicesUnlocked(): Promise<FrozenModels> {
   const settings = await loadGlobalModelSettings();
   const tasks: Partial<Record<ModelTaskProfileKey, { readonly profile: ModelProfile; readonly thinking: boolean } | { readonly error: string }>> = {};
   const providers: Record<string, FrozenProvider> = {};

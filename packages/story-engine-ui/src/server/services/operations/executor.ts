@@ -12,7 +12,7 @@
  */
 import { bookKey, readBookEpoch, withBookLock } from "@actalk/story-core";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
-import { freezeModelChoices, isFrozenModels, type FrozenModels } from "../../lib/llm-client.js";
+import { freezeModelChoices, frozenCompatAllowance, isFrozenModels, type FrozenModels, type ModelTaskProfileKey } from "../../lib/llm-client.js";
 import { readOperationInput } from "../../lib/operations/inputs.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { withUsageBook } from "../../lib/usage-scope.js";
@@ -94,6 +94,8 @@ export interface Recipe<P = unknown> {
   run(ctx: RecipeContext<P>): Promise<OperationResult>;
   /** 接着做时这一步从头做，额度加多少（这一步的最坏值）。 */
   stepBudget(stepId: string | undefined, params: P): number;
+  /** 这次要用到哪几个模型任务：接着做时按冻结的模型重算兼容改参的余量，和受理时同一口径（设计 4.5）。不调模型的给空。 */
+  modelTasks(params: P): readonly ModelTaskProfileKey[];
   /** 这一次执行收尾之后（记录已经换成终态或停着）调一次，拿到的是收尾后的记录（后台补读跑完再看一眼要不要再交一次）。不许抛。 */
   afterRun?(bookDir: string, record: OperationRecord): Promise<void>;
 }
@@ -317,6 +319,18 @@ export async function cancelOperation(bookDir: string, opId: string): Promise<{ 
   return record ? { record, cancelled } : undefined;
 }
 
+/**
+ * 接着做时额度加多少（设计 4.5，Astra P2a 第 9 轮第 5 条）：停下那一步从头做的最坏值 + 冻结的模型现在还没学到的兼容改参
+ * （和受理时同一口径，每次接着做都重算：学到的「不认」可能又被作者换模型清掉了）。手动、自动接着做都走这里。
+ */
+async function resumeAllowance(bookDir: string, record: OperationRecord, recipe: Recipe<unknown>): Promise<number> {
+  const step = recipe.stepBudget(record.currentStep, record.params);
+  const tasks = recipe.modelTasks(record.params);
+  if (tasks.length === 0) return step;
+  const models = await readOperationInput(bookDir, record.opId, "models");
+  return step + (isFrozenModels(models) ? await frozenCompatAllowance(models, tasks) : 0);
+}
+
 export type ResumeOutcome =
   | { readonly ok: true; readonly record: OperationRecord }
   | { readonly ok: false; readonly code: "not_paused" | "unknown_operation" | "absent"; readonly message: string };
@@ -332,7 +346,7 @@ export async function resumeOperation(bookDir: string, opId: string): Promise<Re
   const recipe = recipes.get(record.kind);
   if (!recipe) return { ok: false, code: "unknown_operation", message: "这类操作还没有。" };
   const settle = unsettledUnknowns(await listAttempts(bookDir, opId), record.settledUnknowns).map((attempt) => attempt.attemptId);
-  const started = await startOperation(bookDir, opId, { resume: { addBudget: recipe.stepBudget(record.currentStep, record.params), settle } });
+  const started = await startOperation(bookDir, opId, { resume: { addBudget: await resumeAllowance(bookDir, record, recipe), settle } });
   if (!started || started.state !== "running") return { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
   return { ok: true, record: started };
 }
@@ -368,7 +382,7 @@ export async function reconcileOperations(bookDir: string): Promise<{ readonly r
       }));
     });
     if (autoResume && recipe) {
-      const started = await startOperation(bookDir, record.opId, { resume: { addBudget: recipe.stepBudget(record.currentStep, record.params), settle: [] } });
+      const started = await startOperation(bookDir, record.opId, { resume: { addBudget: await resumeAllowance(bookDir, record, recipe), settle: [] } });
       if (started?.state === "running") resumed.push(record.opId);
     }
   }

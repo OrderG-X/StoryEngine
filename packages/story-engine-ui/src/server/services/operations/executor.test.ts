@@ -71,6 +71,7 @@ function twoSteps(options: { readonly hold?: Promise<void>; readonly autoResume?
       return { schema: "operation-result/1", summary: `算好了：${b.plus}`, body: b };
     },
     stepBudget: () => 2,
+    modelTasks: () => [],
   };
   registerRecipe(recipe);
   return calls;

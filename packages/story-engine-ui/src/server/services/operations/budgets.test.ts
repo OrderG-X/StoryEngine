@@ -5,7 +5,8 @@ import { DEFAULT_READER_VARIANT, READER_CALL_MAX_SENDS, readerCheckCalls, reader
 import { HEDGE_MAX_COPIES } from "../../editorial/continuity/check-chapter.js";
 import { READER_MAX_CATCH_UP, READER_MAX_VOLUME_BUILDS } from "../../editorial/continuity/check-service.js";
 import { MODEL_CALL_MAX_SENDS } from "../../lib/llm-client.js";
-import { backfillBudget, inspectStepBudget, inspectTasks, READER_CHECK_SENDS, READER_NOTES_SENDS, sumBudget } from "./budgets.js";
+import { volumeBuildsBound } from "../../editorial/reader-window.js";
+import { backfillBudget, backfillStepSends, inspectStepBudget, inspectTasks, READER_CHECK_SENDS, READER_NOTES_SENDS, sumBudget } from "./budgets.js";
 
 describe("额度算式", () => {
   it("核账员一次调用：对冲份数 × 每份（主 + 备用）", () => {
@@ -43,8 +44,22 @@ describe("额度算式", () => {
     expect(inspectTasks("quality")).toEqual([]);
   });
 
-  it("后台补读：冻结的章数 + 卷节点上限，各乘核账员一次调用的上限", () => {
-    expect(backfillBudget(5, READER_MAX_VOLUME_BUILDS)).toBe((5 + 2) * READER_CALL_MAX_SENDS);
-    expect(backfillBudget(0, 0)).toBe(0);
+  it("后台补读：冻结的章数 + 这段里最多新生成的卷节点，各乘核账员一次调用的上限", () => {
+    expect(backfillBudget([{ from: 1, to: 5 }])).toBe(5 * READER_CALL_MAX_SENDS); // 十章以内用不到卷笔记
+    expect(backfillBudget([])).toBe(0);
+    // 第 200 章：叶子 20 个 + 十块数 19、20 各自最多合并 18、19 次。
+    expect(backfillBudget([{ from: 200, to: 200 }])).toBe((1 + 20 + 18 + 19) * READER_CALL_MAX_SENDS);
+    expect(backfillStepSends(200)).toBe(backfillBudget([{ from: 200, to: 200 }]));
+    // 两个角色各算各的。
+    expect(backfillBudget([{ from: 1, to: 3 }, { from: 1, to: 3 }])).toBe(6 * READER_CALL_MAX_SENDS);
+  });
+
+  it("卷节点上界：B 个十块 = B 个叶子 + 每个不同的 B 最多 B-1 次合并", () => {
+    expect(volumeBuildsBound(0, 9)).toBe(0);
+    expect(volumeBuildsBound(9, 10)).toBe(1);
+    expect(volumeBuildsBound(10, 19)).toBe(1);
+    expect(volumeBuildsBound(19, 20)).toBe(2 + 1);
+    expect(volumeBuildsBound(0, 30)).toBe(3 + 1 + 2);
+    expect(volumeBuildsBound(25, 25)).toBe(2 + 1);
   });
 });

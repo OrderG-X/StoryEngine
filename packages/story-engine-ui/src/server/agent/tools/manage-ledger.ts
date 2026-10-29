@@ -9,7 +9,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
 import { MAX_DECISIONS_PER_CHANGE, planLedgerChange, proposal, type LedgerChangeRequest } from "../ledger-decisions.js";
-import { callConfiguredBrainModel, reviewOpenThreads, type BrainCallModel } from "../../editorial/index.js";
+import { callConfiguredBrainModel, coldPausedNote, reviewOpenThreads, type BrainCallModel } from "../../editorial/index.js";
 import { readProjectDirFromContext } from "../request-context.js";
 import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "../../lib/lenient-args.js";
 import { rememberBasis } from "../../lib/truth-basis-store.js";
@@ -89,7 +89,7 @@ async function runThreadReview(projectDir: string, callModel: BrainCallModel): P
     review.unproven.length > 5 ? `另有 ${review.unproven.length - 5} 条也是点不出原句，没列。` : "",
     review.suggestions.length > shown.length ? `一次最多记 ${MAX_DECISIONS_PER_CHANGE} 条，另有 ${review.suggestions.length - shown.length} 条下次再理。` : "",
     review.omitted > 0 ? `开着的太多，这次只看了 ${review.reviewed} 条，另有 ${review.omitted} 条没看。` : "",
-    review.cold ? `记账员还没读完全书（第 ${review.cold.notedThrough} 章），这次按已有笔记和最近几章原文判的，更早的可能漏。` : "",
+    review.cold ? `记账员还没读完全书（第 ${review.cold.notedThrough} 章），这次按已有笔记和最近几章原文判的，更早的可能漏。${coldPausedNote(review.cold)}` : "",
     ...review.failures.slice(0, 2).map((failure) => `（有一步没跑成：${failure}）`),
   ].filter(Boolean);
   const head = `理了 ${review.reviewed} 条开着的线索：`;

@@ -21,6 +21,7 @@ import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestio
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 import { rereadBlocker } from "../editorial/reread-state.js";
+import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import { cachedCheckContinuity } from "./tools/check-continuity.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
@@ -483,8 +484,8 @@ interface CheckContinuityLikeOutput {
   readonly maybe?: readonly unknown[];
   /** 只在「还在读、这次没核」时有：核账员读到第 done / total 章（区分「还在读」和「出错」用这个字段，别解析 failures 文字）。 */
   readonly pending?: { readonly done: number; readonly total: number };
-  /** 冷窗口：核账员还没读完全书，这次只对照了一部分。 */
-  readonly coverage?: unknown;
+  /** 冷窗口：核账员还没读完全书，这次只对照了一部分（pausedBackfill＝后台补读停着等作者）。 */
+  readonly coverage?: { readonly pausedBackfill?: string };
 }
 
 /**
@@ -495,7 +496,7 @@ export function afterDraftCheckLine(result: CheckContinuityLikeOutput, fixed = 0
   if (result.ok !== true) return undefined;
   const sure = Array.isArray(result.sure) ? result.sure.length : 0;
   const maybe = Array.isArray(result.maybe) ? result.maybe.length : 0;
-  const cold = result.coverage ? "（核账员还没读完全书，更早的细节可能漏）" : "";
+  const cold = result.coverage ? `（核账员还没读完全书，更早的细节可能漏${result.coverage.pausedBackfill ? `；${COLD_PAUSED_TEXT}` : ""}）` : "";
   // 稿纸上默认只画确定的；「可能」在核账卡上点开才画（2026-10-23 稿纸减噪），别说成画上了。
   const counts = sure > 0
     ? `确定对不上 ${sure} 处，画在稿纸上了${maybe > 0 ? `；另有可能 ${maybe} 处，在卡上点开看` : ""}`

@@ -9,6 +9,7 @@ import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
   checkPlanByReader,
+  coldPausedNote,
   describeReaderWait,
   planChapterByPlanner,
   revisePlanByPlanner,
@@ -66,7 +67,7 @@ async function planByEditorialRoom(input: {
         ...(planned.cold.notedThrough > 0 ? ["已读笔记"] : []),
         ...(planned.cold.rawTo > 0 ? [`第 ${planned.cold.rawFrom}～${planned.cold.rawTo} 章原文`] : []),
       ].join(" + ")
-    }拟的纲，更早的细节可能漏。`;
+    }拟的纲，更早的细节可能漏。${coldPausedNote(planned.cold)}`;
   }
   // 动笔前核账员先审章纲：它读过前文，找章纲里和前文对不上的要点（照片那种：第 5 章已带回家，章纲又安排来取）。
   const checkCallModel = input.planCheckReaderCallModel ?? callConfiguredBrainModel;
@@ -88,7 +89,7 @@ async function planByEditorialRoom(input: {
   let checkColdNote = "";
   if (checked.cold) {
     requestReaderBackfill(input.projectDir, { roles: ["checker"], upTo: input.chapter - 1 });
-    checkColdNote = `核账员还没读完全书（第 ${checked.cold.notedThrough} / ${input.chapter - 1} 章），这次按${coldBasis(checked.cold)}审的纲，更早的细节可能漏。`;
+    checkColdNote = `核账员还没读完全书（第 ${checked.cold.notedThrough} / ${input.chapter - 1} 章），这次按${coldBasis(checked.cold)}审的纲，更早的细节可能漏。${coldPausedNote(checked.cold)}`;
   }
   const coldNote = [planColdNote, checkColdNote].filter(Boolean).map((note) => `（${note}）`).join("");
   const waitNote = `${planWaitNote}${checkWaitNote}`;

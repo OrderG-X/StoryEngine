@@ -31,6 +31,7 @@ import {
   readModelSecrets,
   readProviderCustomHeaders,
   serializeModelSecrets,
+  withModelConfigLock,
 } from "../lib/llm-client.js";
 import { invalidateStoryAgent } from "../agent/story-agent.js";
 import { runModelCheckup } from "../lib/model-checkup.js";
@@ -69,10 +70,13 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
         return;
       }
       if (req.method === "GET") {
-        const result = await loadModelSettingsWithSecretStatus();
+        // 几份文件在模型设置锁里一起读：不会读到一半是保存前、一半是保存后。
+        const { result, settingsText, taFile } = await withModelConfigLock(async () => {
+          const loaded = await loadModelSettingsWithSecretStatus();
+          return { result: loaded, settingsText: await readModelSettingsText(loaded.status), taFile: (await readTaskAssignments(homedir())).file };
+        });
         // 脱敏回显：customHeaders 值视同机密（与 apiKeyStatus 只出状态不出值同口径）——rawText 里打码后再出 API。
-        const rawText = maskCustomHeadersInSettingsText(await readModelSettingsText(result.status));
-        const { file: taFile } = await readTaskAssignments(homedir());
+        const rawText = maskCustomHeadersInSettingsText(settingsText);
         const taskAssignments = buildTaskAssignmentsView(
           result.summary.taskProfiles as Record<string, string | undefined>,
           result.summary.defaultProfile,
@@ -84,141 +88,8 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
 
       if (req.method === "PUT") {
         const body = await readJsonBody(req);
-        const rawText = readStringAllowEmpty(body.rawText);
-        const providerApiKeys = readProviderApiKeys(body.providerApiKeys);
-        if (rawText === undefined) {
-          writeJson(res, 400, { ok: false, error: "模型设置内容不能为空。" });
-          return;
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(rawText) as unknown;
-        } catch (error) {
-          writeJson(res, 400, {
-            ok: false,
-            error: `JSON 格式错误：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
-          });
-          return;
-        }
-
-        // customHeaders 打码回显的逆操作：面板回传的打码哨兵先还原成磁盘上的真实值，再校验/落盘——
-        // 哨兵绝不写进设置文件；无旧值可还原的打码条目直接丢弃（用户想改头值就得重新填明文），
-        // 丢弃名单进响应 warnings 如实告知（绝不静默失败），只列键名不列值。
-        const droppedMaskedHeaders = restoreMaskedCustomHeaders(parsed, await readPreviousSettingsText());
-
-        const validation = validateModelSettingsV0(parsed, {
-          configPath: globalModelSettingsPath(),
-        });
-        const blockingIssue = validation.issues.find((issue) => issue.severity === "error" || issue.severity === "high");
-        if (blockingIssue) {
-          writeJson(res, 400, {
-            ok: false,
-            error: `模型设置未保存：${blockingIssue.message}`,
-          });
-          return;
-        }
-
-        // 任务分配（任务→{档案,思考}）存 UI 旁路 task-assignments.json（引擎零改）。无该字段则不写盘、保留现状。
-        const pickedTasks = pickTaskAssignmentsFromBody(body);
-        // 备用模型（P10）同在旁路文件里：body 带了就按它改，没带就保留原来的。
-        const pickedFallback = pickFallbackFromBody(body);
-        const existingAssignments = pickedTasks || pickedFallback.present ? await readTaskAssignments(homedir()) : null;
-        if (!pickedTasks && pickedFallback.present && existingAssignments?.corrupt) {
-          writeJson(res, 400, { ok: false, error: "模型设置未保存：任务分配文件坏了，请先在下面重新给各功能选一次模型。" });
-          return;
-        }
-        const configProfileIds = readProfileIdsFromConfig(parsed);
-        const fallbackDropped: string[] = [];
-        let fallbackProfileId = pickedFallback.present ? pickedFallback.profileId : existingAssignments?.file?.fallbackProfileId;
-        if (fallbackProfileId && !configProfileIds.has(fallbackProfileId)) {
-          if (pickedFallback.present) {
-            writeJson(res, 400, { ok: false, error: `模型设置未保存：备用模型的档案「${fallbackProfileId}」不在配置的 profiles 中。请重新选备用模型。` });
-            return;
-          }
-          // 没明说要改备用、只是它指的档案这次没了（换了服务商）→ 清掉并如实告知，不挡这次保存。
-          fallbackDropped.push(`备用模型「${fallbackProfileId}」已不在配置里，已改成不用备用。`);
-          fallbackProfileId = undefined;
-        }
-        const taskAssignments: TaskAssignmentsFile | null = pickedTasks || pickedFallback.present || fallbackDropped.length > 0
-          ? {
-            version: 1,
-            tasks: pickedTasks?.tasks ?? existingAssignments?.file?.tasks ?? {},
-            ...(fallbackProfileId ? { fallbackProfileId } : {}),
-          }
-          : null;
-        // 审查 #9：保存前交叉校验任务指定的 profileId 必须存在于本次配置的 profiles，否则明确报错、拒绝保存
-        //（不再放行到运行时静默回退第一个 profile）。
-        const invalidTask = taskAssignments ? findInvalidTaskProfile(taskAssignments, parsed) : null;
-        if (invalidTask) {
-          writeJson(res, 400, {
-            ok: false,
-            error: `模型设置未保存：任务「${invalidTask.task}」指定的模型档案「${invalidTask.profileId}」不在配置的 profiles 中。请重新为该任务选择模型。`,
-          });
-          return;
-        }
-
-        // 审查 #8：三文件（设置/密钥/任务分配）「全备齐再提交」，避免中途失败留下「新档案+旧 key+旧任务」混合态。
-        // 密钥先按「坏 JSON/IO 错就抛、绝不当空」的严格读法合并，再统一原子提交。
-        await mkdir(globalStoryEngineDir(), { recursive: true });
-        const previousSettings = await loadGlobalModelSettings();
-        const existingSecrets = await readModelSecrets();
-        const mergedSecrets = mergeProviderApiKeys(existingSecrets.providerApiKeys, {
-          providerApiKeys,
-          activeProviderIds: readProviderIdsFromConfig(parsed),
-        });
-        // R1b：已存密钥绑定已存 origin。改了接口地址（协议+主机+端口）却没附带新密钥 → 丢掉旧密钥，
-        // 避免「只改 baseUrl 再测连通」把旧 key 发到攻击者 URL。旧配置不可用则跳过，绝不误删。
-        if (previousSettings.available) {
-          const oldUrls = new Map(
-            previousSettings.summary.providers.map((p) => [p.id, p.baseUrl] as const),
-          );
-          const newUrls = readProviderBaseUrlsFromConfig(parsed);
-          for (const [id, newUrl] of newUrls) {
-            const oldUrl = oldUrls.get(id);
-            if (oldUrl === undefined) continue;
-            if (!sameHttpOrigin(oldUrl, newUrl) && !providerApiKeys[id]) {
-              delete mergedSecrets[id];
-            }
-          }
-        }
-        const entries: AtomicFileEntry[] = [
-          // customHeaders 值随本文件落盘（视同机密，API/日志全打码）→ 与 secrets 同口径 0600，
-          // 机密边界前后一致。读者均为本进程同用户（llm-client 直读/引擎 loadModelSettingsV0），无跨进程读假设。
-          { path: globalModelSettingsPath(), content: `${JSON.stringify(parsed, null, 2)}\n`, mode: 0o600 },
-          { path: globalModelSecretsPath(), content: serializeModelSecrets(mergedSecrets), mode: 0o600 },
-        ];
-        if (taskAssignments) {
-          entries.push({ path: taskAssignmentsPath(homedir()), content: `${JSON.stringify(taskAssignments, null, 2)}\n` });
-        }
-        await commitFilesAtomically(entries);
-        // M1：模型设置已落盘，让缓存的聊天 agent 失效——下一句聊天即用新模型/key/思考开关重建，不必重启服务。
-        invalidateStoryAgent();
-        const result = await loadModelSettingsWithSecretStatus();
-        const savedText = maskCustomHeadersInSettingsText(await readModelSettingsText(result.status));
-        const { file: taFile } = await readTaskAssignments(homedir());
-        const savedAssignments = buildTaskAssignmentsView(
-          result.summary.taskProfiles as Record<string, string | undefined>,
-          result.summary.defaultProfile,
-          taFile,
-        );
-        // 打码哨兵还原失败被丢弃的头如实进 warnings（保存本身成功，不阻断；只列 provider id + 键名，绝不含值）。
-        const warnings: string[] = [...fallbackDropped];
-        if (droppedMaskedHeaders.length > 0) {
-          const names = droppedMaskedHeaders.map((dropped) => `${dropped.providerId} 的 ${dropped.name}`).join("、");
-          warnings.push(
-            `${droppedMaskedHeaders.length} 个自定义请求头无法还原已丢弃（未保存）：${names}。` +
-              "如需保留请重新填写明文值后保存。",
-          );
-        }
-        writeJson(res, 200, {
-          ok: true,
-          result,
-          rawText: savedText,
-          taskAssignments: savedAssignments,
-          fallbackProfileId: taFile?.fallbackProfileId ?? null,
-          ...(warnings.length > 0 ? { warnings } : {}),
-        });
+        // 读旧设置 → 合并 → 几份文件一起落盘整段在模型设置锁里（Astra P2a 第 9 轮第 1 条）：同时解析模型的读不到一半新一半旧。
+        await withModelConfigLock(() => saveModelSettings(res, body));
         return;
       }
 
@@ -265,6 +136,145 @@ function sameHttpOrigin(a: string, b: string): boolean {
   }
 }
 
+/** PUT 保存：校验 → 合并密钥、任务分配 → 三文件一起提交（调用方持模型设置锁）。 */
+async function saveModelSettings(res: import("node:http").ServerResponse, body: Record<string, unknown>): Promise<void> {
+  const rawText = readStringAllowEmpty(body.rawText);
+  const providerApiKeys = readProviderApiKeys(body.providerApiKeys);
+  if (rawText === undefined) {
+    writeJson(res, 400, { ok: false, error: "模型设置内容不能为空。" });
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText) as unknown;
+  } catch (error) {
+    writeJson(res, 400, {
+      ok: false,
+      error: `JSON 格式错误：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
+    });
+    return;
+  }
+
+  // customHeaders 打码回显的逆操作：面板回传的打码哨兵先还原成磁盘上的真实值，再校验/落盘——
+  // 哨兵绝不写进设置文件；无旧值可还原的打码条目直接丢弃（用户想改头值就得重新填明文），
+  // 丢弃名单进响应 warnings 如实告知（绝不静默失败），只列键名不列值。
+  const droppedMaskedHeaders = restoreMaskedCustomHeaders(parsed, await readPreviousSettingsText());
+
+  const validation = validateModelSettingsV0(parsed, {
+    configPath: globalModelSettingsPath(),
+  });
+  const blockingIssue = validation.issues.find((issue) => issue.severity === "error" || issue.severity === "high");
+  if (blockingIssue) {
+    writeJson(res, 400, {
+      ok: false,
+      error: `模型设置未保存：${blockingIssue.message}`,
+    });
+    return;
+  }
+
+  // 任务分配（任务→{档案,思考}）存 UI 旁路 task-assignments.json（引擎零改）。无该字段则不写盘、保留现状。
+  const pickedTasks = pickTaskAssignmentsFromBody(body);
+  // 备用模型（P10）同在旁路文件里：body 带了就按它改，没带就保留原来的。
+  const pickedFallback = pickFallbackFromBody(body);
+  const existingAssignments = pickedTasks || pickedFallback.present ? await readTaskAssignments(homedir()) : null;
+  if (!pickedTasks && pickedFallback.present && existingAssignments?.corrupt) {
+    writeJson(res, 400, { ok: false, error: "模型设置未保存：任务分配文件坏了，请先在下面重新给各功能选一次模型。" });
+    return;
+  }
+  const configProfileIds = readProfileIdsFromConfig(parsed);
+  const fallbackDropped: string[] = [];
+  let fallbackProfileId = pickedFallback.present ? pickedFallback.profileId : existingAssignments?.file?.fallbackProfileId;
+  if (fallbackProfileId && !configProfileIds.has(fallbackProfileId)) {
+    if (pickedFallback.present) {
+      writeJson(res, 400, { ok: false, error: `模型设置未保存：备用模型的档案「${fallbackProfileId}」不在配置的 profiles 中。请重新选备用模型。` });
+      return;
+    }
+    // 没明说要改备用、只是它指的档案这次没了（换了服务商）→ 清掉并如实告知，不挡这次保存。
+    fallbackDropped.push(`备用模型「${fallbackProfileId}」已不在配置里，已改成不用备用。`);
+    fallbackProfileId = undefined;
+  }
+  const taskAssignments: TaskAssignmentsFile | null = pickedTasks || pickedFallback.present || fallbackDropped.length > 0
+    ? {
+      version: 1,
+      tasks: pickedTasks?.tasks ?? existingAssignments?.file?.tasks ?? {},
+      ...(fallbackProfileId ? { fallbackProfileId } : {}),
+    }
+    : null;
+  // 审查 #9：保存前交叉校验任务指定的 profileId 必须存在于本次配置的 profiles，否则明确报错、拒绝保存
+  //（不再放行到运行时静默回退第一个 profile）。
+  const invalidTask = taskAssignments ? findInvalidTaskProfile(taskAssignments, parsed) : null;
+  if (invalidTask) {
+    writeJson(res, 400, {
+      ok: false,
+      error: `模型设置未保存：任务「${invalidTask.task}」指定的模型档案「${invalidTask.profileId}」不在配置的 profiles 中。请重新为该任务选择模型。`,
+    });
+    return;
+  }
+
+  // 审查 #8：三文件（设置/密钥/任务分配）「全备齐再提交」，避免中途失败留下「新档案+旧 key+旧任务」混合态。
+  // 密钥先按「坏 JSON/IO 错就抛、绝不当空」的严格读法合并，再统一原子提交。
+  await mkdir(globalStoryEngineDir(), { recursive: true });
+  const previousSettings = await loadGlobalModelSettings();
+  const existingSecrets = await readModelSecrets();
+  const mergedSecrets = mergeProviderApiKeys(existingSecrets.providerApiKeys, {
+    providerApiKeys,
+    activeProviderIds: readProviderIdsFromConfig(parsed),
+  });
+  // R1b：已存密钥绑定已存 origin。改了接口地址（协议+主机+端口）却没附带新密钥 → 丢掉旧密钥，
+  // 避免「只改 baseUrl 再测连通」把旧 key 发到攻击者 URL。旧配置不可用则跳过，绝不误删。
+  if (previousSettings.available) {
+    const oldUrls = new Map(
+      previousSettings.summary.providers.map((p) => [p.id, p.baseUrl] as const),
+    );
+    const newUrls = readProviderBaseUrlsFromConfig(parsed);
+    for (const [id, newUrl] of newUrls) {
+      const oldUrl = oldUrls.get(id);
+      if (oldUrl === undefined) continue;
+      if (!sameHttpOrigin(oldUrl, newUrl) && !providerApiKeys[id]) {
+        delete mergedSecrets[id];
+      }
+    }
+  }
+  const entries: AtomicFileEntry[] = [
+    // customHeaders 值随本文件落盘（视同机密，API/日志全打码）→ 与 secrets 同口径 0600，
+    // 机密边界前后一致。读者均为本进程同用户（llm-client 直读/引擎 loadModelSettingsV0），无跨进程读假设。
+    { path: globalModelSettingsPath(), content: `${JSON.stringify(parsed, null, 2)}\n`, mode: 0o600 },
+    { path: globalModelSecretsPath(), content: serializeModelSecrets(mergedSecrets), mode: 0o600 },
+  ];
+  if (taskAssignments) {
+    entries.push({ path: taskAssignmentsPath(homedir()), content: `${JSON.stringify(taskAssignments, null, 2)}\n` });
+  }
+  await commitFilesAtomically(entries);
+  // M1：模型设置已落盘，让缓存的聊天 agent 失效——下一句聊天即用新模型/key/思考开关重建，不必重启服务。
+  invalidateStoryAgent();
+  const result = await loadModelSettingsWithSecretStatus();
+  const savedText = maskCustomHeadersInSettingsText(await readModelSettingsText(result.status));
+  const { file: taFile } = await readTaskAssignments(homedir());
+  const savedAssignments = buildTaskAssignmentsView(
+    result.summary.taskProfiles as Record<string, string | undefined>,
+    result.summary.defaultProfile,
+    taFile,
+  );
+  // 打码哨兵还原失败被丢弃的头如实进 warnings（保存本身成功，不阻断；只列 provider id + 键名，绝不含值）。
+  const warnings: string[] = [...fallbackDropped];
+  if (droppedMaskedHeaders.length > 0) {
+    const names = droppedMaskedHeaders.map((dropped) => `${dropped.providerId} 的 ${dropped.name}`).join("、");
+    warnings.push(
+      `${droppedMaskedHeaders.length} 个自定义请求头无法还原已丢弃（未保存）：${names}。` +
+        "如需保留请重新填写明文值后保存。",
+    );
+  }
+  writeJson(res, 200, {
+    ok: true,
+    result,
+    rawText: savedText,
+    taskAssignments: savedAssignments,
+    fallbackProfileId: taFile?.fallbackProfileId ?? null,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  });
+}
+
 /**
  * Provider 连通性测试（审查 #1·安全重写；R1 防御纵深）。
  *
@@ -302,40 +312,36 @@ async function handleModelTest(req: import("node:http").IncomingMessage, res: im
       let apiKey = inlineApiKey?.trim() ?? "";
       // 已存密钥与 customHeaders 都绑定已存 origin：仅当 inline URL 恰是该 providerId 已存 provider 的同源 URL
       // 才复用它们，绝不把密钥/自定义头（视同机密）发到客户端指定的任意 URL。
-      const settings = await loadGlobalModelSettings();
-      const saved = settings.available ? settings.summary.providers.find((p) => p.id === providerId) : undefined;
-      let customHeaders: Record<string, string> = {};
-      if (saved && sameHttpOrigin(saved.baseUrl, target.toString())) {
+      // 设置、密钥、自定义头在模型设置锁里一起读（同源判断和取密钥看的是同一次保存）。
+      const customHeaders = await withModelConfigLock(async () => {
+        const settings = await loadGlobalModelSettings();
+        const saved = settings.available ? settings.summary.providers.find((p) => p.id === providerId) : undefined;
+        if (!saved || !sameHttpOrigin(saved.baseUrl, target.toString())) return {};
         if (!apiKey) apiKey = await getSavedProviderApiKey(providerId);
-        customHeaders = await readProviderCustomHeaders(providerId);
-      }
+        return readProviderCustomHeaders(providerId);
+      });
       await runProviderTest(res, providerId, target.toString().replace(/\/+$/u, ""), apiKey, undefined, customHeaders);
       return;
     }
 
-    // 已存 provider：用可信的服务端保存配置解析 URL；密钥只取已存库，不读 env（R1a）。
-    const settings = await loadGlobalModelSettings();
-    if (!settings.available) {
-      writeJson(res, 400, { ok: false, error: "模型设置未加载或格式无效。" });
+    // 已存 provider：用可信的服务端保存配置解析 URL；密钥只取已存库，不读 env（R1a）。地址、密钥、自定义头在模型设置锁里一起读。
+    const resolved = await withModelConfigLock(async () => {
+      const settings = await loadGlobalModelSettings();
+      if (!settings.available) return { error: "模型设置未加载或格式无效。" } as const;
+      const provider = settings.summary.providers.find((p) => p.id === providerId);
+      if (!provider) return { error: "未找到指定的 Provider: " + providerId } as const;
+      const target = normalizeProviderTestUrl(provider.baseUrl);
+      if (!target) return { error: "已保存的接口地址无效（仅支持 http/https）。请在设置中修正后重试。" } as const;
+      return { provider, target, apiKey: await getSavedProviderApiKey(provider.id), customHeaders: await readProviderCustomHeaders(provider.id) } as const;
+    });
+    if ("error" in resolved) {
+      writeJson(res, 400, { ok: false, error: resolved.error });
       return;
     }
-
-    const provider = settings.summary.providers.find((p) => p.id === providerId);
-    if (!provider) {
-      writeJson(res, 400, { ok: false, error: "未找到指定的 Provider: " + providerId });
-      return;
-    }
-
-    const target = normalizeProviderTestUrl(provider.baseUrl);
-    if (!target) {
-      writeJson(res, 400, { ok: false, error: "已保存的接口地址无效（仅支持 http/https）。请在设置中修正后重试。" });
-      return;
-    }
-    const apiKey = await getSavedProviderApiKey(provider.id);
+    const { provider, target, apiKey, customHeaders } = resolved;
     const envKeyHint = !apiKey && provider.apiKeyEnv
       ? "出于安全，连通性测试不读取环境变量密钥；请在测试时输入 API Key，或先保存密钥再试。"
       : undefined;
-    const customHeaders = await readProviderCustomHeaders(provider.id);
 
     await runProviderTest(res, providerId, target.toString().replace(/\/+$/u, ""), apiKey, envKeyHint, customHeaders);
   } catch (error) {

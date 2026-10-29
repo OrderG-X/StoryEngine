@@ -7,6 +7,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { resolveGlobalDataDir } from "../lib/data-dirs.js";
+import { withModelConfigLock } from "../lib/llm-client.js";
 import {
   readJsonBody,
   guardProjectPath,
@@ -42,7 +43,12 @@ function isErrnoNotFound(error: unknown): boolean {
  * 仅 ENOENT 允许当新文件从 {} 起步；其它 IO / 坏 JSON / 非对象 → 抛错、绝不落盘，
  * 避免「读失败当空」写出只剩 budget、把 providers 冲光。写盘走原子写。
  */
-export async function updateChatHistoryBudgetTokens(budget: number): Promise<number> {
+export function updateChatHistoryBudgetTokens(budget: number): Promise<number> {
+  // 读改写 model-settings.json 在模型设置锁里：不和设置页保存互相盖掉，也不让解析模型读到写了一半的那份。
+  return withModelConfigLock(() => writeChatHistoryBudgetTokens(budget));
+}
+
+async function writeChatHistoryBudgetTokens(budget: number): Promise<number> {
   const settingsPath = join(resolveGlobalDataDir(), "model-settings.json");
   let settings: Record<string, unknown>;
   let text: string;
