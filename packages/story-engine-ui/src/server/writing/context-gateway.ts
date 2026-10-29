@@ -13,8 +13,8 @@ import {
   readThreadPool,
   readTimelineEvents,
 } from "../book/project-store.js";
-import { readDraftState, selectRelevant } from "@actalk/story-core";
-import { extractMarkdownTitle, readChapterTitles } from "../book/chapter-titles.js";
+import { parseDraftFile, readDraftState, selectRelevant } from "@actalk/story-core";
+import { readChapterTitles } from "../book/chapter-titles.js";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
@@ -358,10 +358,9 @@ async function readPreviousUncommittedDraftContext(
   // 前一章没定稿：它的工作稿当前情（不在真相依据里；换上前出稿服务按开写时拍的那份核，见 book/material-reads）。
   const draft = await readDraftState(projectDir, previousChapter).catch(() => undefined);
   if (!draft) return undefined;
-  const draftContent = draft.file?.text;
-  const body = stripMarkdownHeading(draftContent ?? "");
+  // 文件原文只经核心 parseDraftFile 拆一次（写作版本 P1 第 15 轮 AC2：自己写的正则会把正文开头的小节当章名吃掉）。
+  const { title, body } = parseDraftFile(draft.file?.text ?? "");
   if (!body.trim()) return undefined;
-  const title = extractMarkdownTitle(draftContent);
 
   return {
     kind: "working_draft_context",
@@ -396,9 +395,8 @@ async function readPreviousChapterContext(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  const body = stripMarkdownHeading(content);
+  const { title, body } = parseDraftFile(content);
   if (!body.trim()) return undefined;
-  const title = extractMarkdownTitle(content);
   const { text, truncated } = previousChapterExcerpt(body);
   return {
     kind: "previous_chapter_text",
@@ -427,10 +425,6 @@ function previousChapterExcerpt(body: string): { readonly text: string; readonly
 
 function padChapter(chapter: number): string {
   return String(chapter).padStart(4, "0");
-}
-
-function stripMarkdownHeading(content: string): string {
-  return content.replace(/^#{1,6}\s+.*(?:\r?\n){1,2}/u, "").trim();
 }
 
 function section(name: string, content: unknown, cachePolicy: "stable" | "dynamic"): ContextSection {

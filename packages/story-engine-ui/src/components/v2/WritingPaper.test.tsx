@@ -28,10 +28,10 @@ function proseMirrorEl(container: HTMLElement): HTMLElement | null {
 }
 
 describe("WritingPaper", () => {
-  it("renders read-only content when no onEdit", () => {
-    render(<WritingPaper draft={baseDraft} />);
+  it("renders read-only content when no onEdit：章名照 title，正文原样（开头的「# 某某」也是正文）", () => {
+    render(<WritingPaper draft={{ ...baseDraft, content: "# 小节\n\n这是一段测试正文。" }} />);
     expect(screen.getByRole("heading", { name: "第一章 · 测试" })).toBeDefined();
-    expect(screen.getByText("这是一段测试正文。")).toBeDefined();
+    expect(screen.getByText(/^# 小节\s+这是一段测试正文。$/u)).toBeDefined();
   });
 
   it("renders empty state when no content", () => {

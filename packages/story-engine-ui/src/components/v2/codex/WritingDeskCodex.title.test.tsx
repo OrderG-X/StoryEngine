@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 async function save(body: string): Promise<void> {
-  const outcome = await runCommand(book, draftSave, { chapter: 1, body, baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+  const outcome = await runCommand(book, draftSave, { chapter: 1, title: "", body, baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
   if (!outcome.ok) throw new Error(outcome.message);
 }
 

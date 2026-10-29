@@ -32,7 +32,7 @@ async function start(chapter = 1) {
 
 async function authorSaves(chapter: number, body: string): Promise<void> {
   const baseVersion = (await readDraft(book, chapter))?.version ?? null;
-  const outcome = await runCommand(book, draftSave, { chapter, body, baseVersion }, { caller: "author" });
+  const outcome = await runCommand(book, draftSave, { chapter, title: "", body, baseVersion }, { caller: "author" });
   if (!outcome.ok) throw new Error(outcome.message);
 }
 

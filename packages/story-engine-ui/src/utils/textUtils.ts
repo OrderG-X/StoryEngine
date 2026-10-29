@@ -94,7 +94,7 @@ export function countTextWords(text: string): number {
   if (!isRealDraftContent(text)) return 0;
   const body = text
     .replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u, "")
-    .replace(/^#.*$/gmu, "");
+    .replace(/^#.*$/gmu, ""); // 章名行白名单：字数口径
   return (body.match(/[\u3400-\u9fff]/gu) ?? []).length;
 }
 

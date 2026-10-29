@@ -700,10 +700,14 @@ export function chapterWorkspacePath(projectDir: string, chapter: number): strin
 export function extractDraftTitle(content: string | undefined): string | null {
   if (!content) return null;
   const heading = parseDraftFile(content).title;
-  if (!heading) return null;
+  return heading ? bareChapterTitle(heading) : null;
+}
+
+/** 章名去掉开头的「第 N 章 ·」只留名字（已经拆出来的章名用这个，不拼成文件再拆）；剩下是空的是 null。 */
+export function bareChapterTitle(title: string): string | null {
   // 不猜白名单：章节标题
-  const title = heading.replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
-  return title || null;
+  const bare = title.trim().replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
+  return bare || null;
 }
 
 export interface UiChapterFileState {

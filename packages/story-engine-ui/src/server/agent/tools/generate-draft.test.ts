@@ -690,7 +690,7 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     const added = "钥匙其实已经丢了。";
     const authorSave = async (body: string) => {
       const disk = await readDraft(projectDir, 1);
-      expect(await runCommand(projectDir, draftSave, { chapter: 1, body, baseVersion: disk?.version ?? null }, { caller: "author" })).toMatchObject({ ok: true });
+      expect(await runCommand(projectDir, draftSave, { chapter: 1, title: "", body, baseVersion: disk?.version ?? null }, { caller: "author" })).toMatchObject({ ok: true });
     };
     await authorSave(old);
     const writerClientModule = await import("../../writing/writer-client.js");
@@ -731,14 +731,14 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
   it("前一章没定稿、作者知情后提前写：写的途中前一章工作稿改了 → 照旧前情写的不换上、留候选（第 4 轮复核 R6）", async () => {
     const projectDir = await makeProject("前章工作稿依据", "林远");
     const old = "林远把唯一的钥匙交给老周，约定明天去海州。";
-    expect(await runCommand(projectDir, draftSave, { chapter: 1, body: old, baseVersion: null }, { caller: "author" })).toMatchObject({ ok: true });
+    expect(await runCommand(projectDir, draftSave, { chapter: 1, title: "", body: old, baseVersion: null }, { caller: "author" })).toMatchObject({ ok: true });
     const writerClientModule = await import("../../writing/writer-client.js");
     let writerSaw = "";
     const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockImplementation(async () => ({
       async generateDraft({ context }) {
         writerSaw = JSON.stringify(context.sections.find((section) => section.name === "previous_uncommitted_draft")?.content ?? null);
         const current = (await readDraft(projectDir, 1))!;
-        expect(await runCommand(projectDir, draftSave, { chapter: 1, body: "林远已经把唯一的钥匙熔了，不去海州了。", baseVersion: current.version }, { caller: "author" })).toMatchObject({ ok: true });
+        expect(await runCommand(projectDir, draftSave, { chapter: 1, title: "", body: "林远已经把唯一的钥匙熔了，不去海州了。", baseVersion: current.version }, { caller: "author" })).toMatchObject({ ok: true });
         return { title: "第2章", content: longBody("林远") };
       },
     }));

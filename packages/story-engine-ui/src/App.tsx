@@ -306,7 +306,7 @@ export function App() {
             onSelectionRewrite: workflow.handleSelectionRewrite,
             onSelectionRewriteCustom: workflow.handleSelectionRewriteCustom,
             onReroll: () => void workflow.handleRerollCandidates(),
-            onApplyCandidate: (content: string) => void workflow.handleApplyCandidate(content),
+            onApplyCandidate: (candidate) => void workflow.handleApplyCandidate(candidate),
             onCloseCandidates: workflow.handleCloseCandidates,
             onToggleTheme: toggleTheme,
             overview: currentOverview,

@@ -30,8 +30,8 @@ describe("另外几版卡", () => {
     expect(screen.getByText(/^第 3 版 · \d+ 字$/u)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "点开看" }));
     expect(useUiStore.getState().draftCandidates).toEqual([
-      { content: "第一版正文。", version: 1, originTarget: expect.objectContaining({ projectPath: "/books/镖路", chapter: 7, sessionId: "s1" }) },
-      { content: "第三版正文，长一些。", version: 3, originTarget: expect.objectContaining({ chapter: 7 }) },
+      { body: "第一版正文。", version: 1, originTarget: expect.objectContaining({ projectPath: "/books/镖路", chapter: 7, sessionId: "s1" }) },
+      { body: "第三版正文，长一些。", version: 3, originTarget: expect.objectContaining({ chapter: 7 }) },
     ]);
   });
 

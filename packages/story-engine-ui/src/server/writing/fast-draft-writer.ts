@@ -361,7 +361,7 @@ async function generateBySegments(input: {
   const firstRatio = Math.min(SEGMENT_RATIO_MAX, Math.max(SEGMENT_RATIO_MIN, countDraftChineseCharacters(firstBody) / Math.max(1, half)));
   const secondTarget = Math.round(Math.max(half, aim - countDraftChineseCharacters(firstBody)) / firstRatio);
   // 稿纸上：前半章（重写过就是用上的那版）+ 空行，后半章从这里往下流。
-  const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`;
+  const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`; // 章名行白名单：模型输出
   input.restream?.(firstVisible);
   const secondGoal = [
     input.rawChapterGoal,
@@ -435,7 +435,7 @@ async function generateBySegments(input: {
     return {
       generated: {
         ...first,
-        content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`,
+        content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`, // 章名行白名单：模型输出
       },
       info: { split, replayedFound: replays.length, retried, replayedRemaining, copiedFromPrevious: copied.length, copiedRemaining, ...(lengthRetry ? { lengthRetry } : {}) },
     };
@@ -1007,7 +1007,7 @@ function extractLeadingChapterTitle(content: string): string | undefined {
   const normalized = content.replace(/\r\n?/gu, "\n").trimStart();
   const firstLine = normalized.split("\n").find((line) => line.trim().length > 0)?.trim();
   if (!firstLine) return undefined;
-  if (isMarkdownChapterHeading(firstLine)) return firstLine.replace(/^#{1,6}\s+/u, "").trim();
+  if (isMarkdownChapterHeading(firstLine)) return firstLine.replace(/^#{1,6}\s+/u, "").trim(); // 章名行白名单：模型输出
   if (isPlainChapterHeading(firstLine)) return firstLine.trim();
   return undefined;
 }
@@ -1019,8 +1019,8 @@ function isGenericChapterTitle(title: string, chapter: number): boolean {
 }
 
 function isMarkdownChapterHeading(line: string): boolean {
-  if (!/^#{1,6}\s+\S/u.test(line)) return false;
-  const title = line.replace(/^#{1,6}\s+/u, "").trim();
+  if (!/^#{1,6}\s+\S/u.test(line)) return false; // 章名行白名单：模型输出
+  const title = line.replace(/^#{1,6}\s+/u, "").trim(); // 章名行白名单：模型输出
   if (!title) return false;
   // 不猜白名单开始：章节标题
   if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;

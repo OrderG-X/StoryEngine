@@ -51,7 +51,7 @@ const SENTENCE_END = /[。！？!?…”」』]$/u;
 const TITLE_LEAD = /^[\s:：·.．、,，\-—_]+/u;
 // 不猜白名单结束
 const ENGLISH_HEADING = /^chapter\s*\d+/iu;
-const MARKDOWN_HASHES = /^#{1,6}\s*/u;
+const MARKDOWN_HASHES = /^#{1,6}\s*/u; // 章名行白名单：导入切章
 
 type HeadingLine =
   | { readonly kind: "chapter"; readonly title: string; readonly heading: string }

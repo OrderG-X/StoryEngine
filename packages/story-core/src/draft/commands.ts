@@ -16,11 +16,14 @@ import type { PlanContext, WriteCommandSpec } from "../commands/types.js";
 import type { DraftStamp } from "../store/control.js";
 import { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readDraftStamp, type Draft } from "./draft.js";
 
-/** 三条命令同一份参数：都要说清是拿哪一版改 / 换的（这一章原来没有工作稿就是 null）。 */
+/**
+ * 三条命令同一份参数：一份拆开的整稿（章名必带，空串 = 没章名；正文一行都不再拆），说清是拿哪一版改 / 换的
+ * （这一章原来没有工作稿就是 null）。章名由调用方定（写作版本 P1 第 15 轮：命令里不再「没给就沿用盘上的」，两条路只剩一条）。
+ */
 export const DraftSaveArgs = z.object({
   chapter: z.number().int().min(1),
   body: z.string(),
-  title: z.string().optional(),
+  title: z.string(),
   baseVersion: z.string().min(1).nullable(),
 });
 export type DraftSaveArgs = z.infer<typeof DraftSaveArgs>;
@@ -69,20 +72,10 @@ function planWrite(context: PlanContext, chapter: number, nextText: string, curr
   };
 }
 
-/**
- * 章名：给了（空串也算给了，= 不要章名）就以它为准；没给（AI 写稿只管正文）就沿用盘上的。
- * body 是拆开的正文，一行都不再拆（写作版本 P1 第 14 轮：再拆一次会把开头的小节标题当章名吃掉）；
- * 稿纸上的字由存稿路由先过 paperDraft。
- */
-function nextDraftText(args: { readonly body: string; readonly title?: string }, currentText: string | undefined): string {
-  const title = args.title !== undefined ? args.title : currentText === undefined ? "" : parseDraftFile(currentText).title ?? "";
-  return composeDraftFile({ title, body: args.body });
-}
-
 async function planReplace(context: PlanContext, args: DraftSaveArgs, label: string) {
   const stamp = await readDraftStamp(context.bookDir, args.chapter);
   const currentText = await readRaw(context.bookDir, args.chapter);
-  const nextText = nextDraftText(args, currentText);
+  const nextText = composeDraftFile({ title: args.title, body: args.body });
   const conflict = await conflictIfMoved(context.bookDir, args.chapter, args.baseVersion, currentText, stamp, nextText);
   if (conflict) return conflict;
   return planWrite(context, args.chapter, nextText, currentText, stamp, label);

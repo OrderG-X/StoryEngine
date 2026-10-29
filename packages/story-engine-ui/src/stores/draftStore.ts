@@ -2,9 +2,9 @@
  * 稿纸（重构 P5）：工作稿只有这一个主人。
  *
  * - `body` 是作者眼前的字；`savedBody` 是盘上 `baseVersion` 那一版的字。
- * - **稿 = 章名 + 正文**（第 13、14 轮复核）：比对、存稿都按整份（核心 `draft-format`，前后端同一份）。`body` 是稿纸上的字：
- *   开头可能有作者打的「# 章名」行（只认一级，「#」一个字也没有 = 章名清空），章名就跟着那一行；从章名入口改章名，那一行也跟着换——
- *   两个来处说的始终是同一个。和盘上比、存稿都先过 `paperDraft`（那一行归章名），盘上读来的已经是拆开的，不再拆。
+ * - **稿 = 章名 + 正文**（第 13、14 轮复核）：比对、存稿都按整份（核心 `draft-format`，前后端同一份）。稿纸上就是拆开的稿：
+ *   `body` 是正文（编辑器里的字，开头打的「# 某某」也是正文），`title` 是章名（只从章名入口改）。盘上读来的、提示里换上的、
+ *   发出去存的都是这一份，谁都不再拆（第 15 轮 AC1：稿纸上的字再按章名行拆一次，正文开头的小节就被当成章名吃掉了）。
  * - **有没有没存的字只看改动号**（第 12 轮复核 Z3）：作者在稿纸上的每个动作（打字、改章名、在提示上选）都让 `rev` 加一；
  *   `cleanRev` 是盘上确认过的那一下（读盘时盘上就是这份、或存稿回执说存的就是这一下）。两者不一样就是没存，
  *   哪怕字改回了和底版一样——撞版本之后改回原稿也是作者的选择，要存（进工作稿或恢复稿），不能被重读换掉。
@@ -17,7 +17,7 @@
  * 存盘的调度在 `drafts/draftSync.ts`，这里只管状态。
  */
 import { create } from "zustand";
-import { leadingHeading, paperDraft, retitleText, sameDraft as sameDraftText } from "@actalk/story-core/draft-format";
+import { sameDraft as sameDraftText } from "@actalk/story-core/draft-format";
 import type { ChapterPaper, PendingDraft, WorkingDraft } from "../api/workingDraftClient.js";
 
 export interface PaperIncoming {
@@ -76,9 +76,9 @@ export interface DraftStoreState {
     paper: ChapterPaper,
     sync?: { readonly unsaved: boolean },
   ) => "unchanged" | "own" | "replaced" | "incoming" | "skipped";
-  /** 作者在稿纸上改字（正文开头有章名行就认它当章名）。 */
+  /** 作者在稿纸上改字（只是正文）。 */
   readonly edit: (body: string) => void;
-  /** 改章名：正文开头有章名行就一起换。 */
+  /** 改章名（正文不动）。 */
   readonly setTitle: (title: string) => void;
   readonly markSaving: () => void;
   /** 存成功：sentBody / sentTitle / sentRev 是这次发出去的那一下（发出后作者可能又动过，那就还是没存）。 */
@@ -218,15 +218,9 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
     return "incoming";
   },
 
-  edit: (body) => set((state) => {
-    const title = leadingHeading(body)?.title ?? state.title;
-    return body === state.body && title === state.title ? state : { body, title, rev: state.rev + 1 };
-  }),
+  edit: (body) => set((state) => (body === state.body ? state : { body, rev: state.rev + 1 })),
 
-  setTitle: (title) => set((state) => {
-    const body = retitleText(state.body, title);
-    return title === state.title && body === state.body ? state : { title, body, rev: state.rev + 1 };
-  }),
+  setTitle: (title) => set((state) => (title === state.title ? state : { title, rev: state.rev + 1 })),
 
   markSaving: () => set({ saveStatus: "saving", saveError: null }),
 
@@ -291,9 +285,9 @@ export function hasUnsavedEdits(state: Pick<DraftStoreState, "rev" | "cleanRev">
   return state.rev !== state.cleanRev;
 }
 
-/** 盘上那份（拆开的）和稿纸上的是不是同一份稿：稿纸那边先过 paperDraft（开头的章名行归章名），按整份比。 */
+/** 盘上那份和稿纸上的是不是同一份稿：两边都是拆开的，按整份比。 */
 function sameDraft(disk: { readonly body: string; readonly title?: string }, paper: Pick<DraftStoreState, "body" | "title">): boolean {
-  return sameDraftText(disk, paperDraft(paper.body, paper.title));
+  return sameDraftText(disk, { title: paper.title, body: paper.body });
 }
 
 /** 稿纸上的字和底版那一版不一样（核账、定稿按版本认结果时用：字一样就是同一版）。存不存看 hasUnsavedEdits。 */

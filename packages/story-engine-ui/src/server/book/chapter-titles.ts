@@ -51,6 +51,6 @@ export async function readChapterTitles(
 }
 
 /** 章节文件的章名（核心 parseDraftFile：第一行非空行是一级章名行）；没有是 undefined。 */
-export function extractMarkdownTitle(content: string | undefined): string | undefined {
+function extractMarkdownTitle(content: string | undefined): string | undefined {
   return content === undefined ? undefined : parseDraftFile(content).title;
 }

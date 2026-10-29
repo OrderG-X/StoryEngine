@@ -76,7 +76,7 @@ async function makeBook(): Promise<string> {
 
 async function save(book: string, chapter: number, body: string, title?: string): Promise<void> {
   const baseVersion = (await readDraftState(book, chapter)).version;
-  expect(await runCommand(book, draftSave, { chapter, body, baseVersion, ...(title ? { title } : {}) }, { caller: "author" })).toMatchObject({ ok: true });
+  expect(await runCommand(book, draftSave, { chapter, body, baseVersion, title: title ?? (await readDraft(book, chapter))?.title ?? "" }, { caller: "author" })).toMatchObject({ ok: true });
 }
 
 const prose = (line: string): string => Array(6).fill(`${line}林远沿着河岸走了很久，手里的账册越攥越紧。他还记得早上的约定，却不知道对方为什么迟迟没有露面。巷子尽头有人推开门，朝他招了招手，示意他先进去等一会儿。`).join("\n\n");

@@ -129,7 +129,7 @@ export function validateStreamedDraftBody(value: string): string | null {
   const body = value
     .replace(/```[\s\S]*?```/gu, "")
     // 不猜白名单：章节标题
-    .replace(/^#+\s*第[一二三四五六七八九十百\d]+章[^\n]*$/gmu, "")
+    .replace(/^#+\s*第[一二三四五六七八九十百\d]+章[^\n]*$/gmu, "") // 章名行白名单：模型输出
     .trim();
   const cjkCount = countCjkChars(body);
   const paragraphs = body.split(/\n{2,}/u).map((item) => item.trim()).filter(Boolean);

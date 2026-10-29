@@ -80,15 +80,11 @@ export function chapterBareTitle(title: string): string {
 }
 
 /**
- * 只读展示用：去掉正文开头的「# 第N章 …」标题行与成对的 **粗体** / __粗体__ 记号。
- * 只用于定稿只读视图——不回写、不改用户文件（生成侧已在引擎里同口径清洗，这里兜旧数据）。
+ * 只读展示用：去掉成对的 **粗体** / __粗体__ 记号。只用于定稿只读视图——不回写、不改用户文件。
+ * 传进来的是拆开的正文（章名另显示），一行都不拆：开头的「# 某某」也是正文（写作版本 P1 第 15 轮）。
  */
 export function cleanProseForDisplay(content: string): string {
-  const lines = content.replace(/\r\n?/gu, "\n").split("\n");
-  const first = lines.findIndex((line) => line.trim().length > 0);
-  // 不猜白名单：章节标题
-  if (first >= 0 && /^#{1,6}\s*第[0-9一二三四五六七八九十百零两]+章/u.test(lines[first].trim())) lines.splice(first, 1);
-  return lines.join("\n")
+  return content.replace(/\r\n?/gu, "\n")
     .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/gu, "$1")
     .replace(/__(?=\S)([^_\n]*?\S)__/gu, "$1")
     .trim();

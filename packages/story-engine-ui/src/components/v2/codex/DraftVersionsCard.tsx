@@ -19,8 +19,8 @@ export function openDraftVersions(data: DraftVersionsCardData): string | null {
   if (isPaperCommitted()) return `第 ${data.chapter} 章已定稿，换不了。`;
   const originTarget = { projectPath, chapter, sessionId: useChatStore.getState().activeSessionId, operationId: `draft-versions-${chapter}` };
   useUiStore.getState().setDraftCandidates(data.versions.map((version) => ({
-    // 只换正文：不带标题行，写稿时沿用盘上的章名（作者可能改过）。
-    content: version.body,
+    // 只换正文：不带章名，选用时沿用作者眼前的（作者可能改过）。
+    body: version.body,
     version: version.index,
     originTarget,
   })));

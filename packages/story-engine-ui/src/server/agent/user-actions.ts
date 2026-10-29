@@ -10,7 +10,7 @@ import type { RequestContext } from "@mastra/core/di";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { extractDraftTitle } from "../lib/project-io.js";
+import { bareChapterTitle } from "../lib/project-io.js";
 import { hasWorkingDraftText } from "../lib/working-draft-text.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
@@ -1000,7 +1000,7 @@ interface GenerateDraftLikeOutput {
  */
 export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): string {
   // 写手有时把「第 N 章 · 」也写进章名：前面已经说了第几章，书名号里只放章名。
-  const bare = typeof result.draftTitle === "string" ? extractDraftTitle(`# ${result.draftTitle.trim()}`) : null;
+  const bare = typeof result.draftTitle === "string" ? bareChapterTitle(result.draftTitle) : null;
   const title = bare ? `《${bare}》` : "";
   const actual = typeof result.draftLength?.actualLength === "number" ? result.draftLength.actualLength : undefined;
   const lower = typeof result.draftLength?.lowerBound === "number" ? result.draftLength.lowerBound : undefined;

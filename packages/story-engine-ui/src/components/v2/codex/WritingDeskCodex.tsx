@@ -111,7 +111,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const paperFontSize = useDisplaySettingsStore((s) => s.deskFontSize);
   const draft = useDraftPreview({ chapterNumber: props.workspace.currentChapter.chapterNumber, title: props.workspace.currentChapter.title });
   // 章名只有一个来处（写作版本 P1 第 14 轮复核 AB5）：稿纸读进了这一章，章节栏、面包屑就跟着稿纸上的章名走——
-  // 顶上改章名、在提示上换成别的那一版、正文开头的章名行，都只改稿纸，这里统一跟上。
+  // 顶上改章名、在提示上换成别的那一版，都只改稿纸，这里统一跟上。
   const paperTitle = useDraftStore((state) => (state.loaded && state.chapter === props.workspace.currentChapter.chapterNumber ? state.title.trim() : undefined));
   useEffect(() => {
     if (paperTitle !== undefined && paperTitle !== props.workspace.currentChapter.title) showChapterTitle(props.workspace.currentChapter.chapterNumber, paperTitle);
@@ -424,7 +424,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
         <DraftCandidatesPanel
           candidates={draftCandidates}
           busy={workspaceBusy || applyingCandidate}
-          onPick={(content) => props.onApplyCandidate?.(content)}
+          onPick={(candidate) => props.onApplyCandidate?.(candidate)}
           onClose={() => props.onCloseCandidates?.()}
         />
       ) : null}

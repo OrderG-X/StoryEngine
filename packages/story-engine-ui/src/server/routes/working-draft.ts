@@ -19,7 +19,7 @@
  *
  * 版本号是这章的工作稿代次 + 草稿文件全文的哈希（核心包 draft/draft.ts）。
  */
-import { chapterRetitle, draftAdoptCandidate, draftSave, paperDraft, parseDraftFile, readChapterPaper, readDraftState, runCommand, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
+import { chapterRetitle, draftAdoptCandidate, draftSave, parseDraftFile, readChapterPaper, readDraftState, runCommand, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -195,9 +195,9 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         if (!guardProjectPath(res, projectDir)) return;
         const chapter = requirePositiveBodyInteger(body.chapter, "章节不能为空。");
         if (typeof body.body !== "string") throw new Error("正文不能缺。");
-        // 稿纸带的是稿纸上的字（开头可能有作者打的章名行）：只在这里拆一次（核心 paperDraft），之后都是拆开的稿。
-        // 章名给了（空串 = 没章名）就以它为准；没给（旧页面）认那一行，再没有就沿用盘上的。
-        const paper = paperDraft(body.body, typeof body.title === "string" ? body.title : undefined);
+        // 稿纸带来的就是拆开的稿：正文一行都不拆（开头的「# 某某」也是正文，写作版本 P1 第 15 轮 AC1）。
+        // 章名给了（空串 = 没章名）就以它为准；没给（旧页面）沿用盘上的。
+        const paper = { body: body.body, ...(typeof body.title === "string" ? { title: body.title } : {}) };
         const baseVersion = readBaseVersion(body.baseVersion);
         const from = recoveryClientOf(body.client, body.seq);
         await assertStoryEngineProject(projectDir);

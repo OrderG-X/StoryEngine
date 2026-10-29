@@ -68,7 +68,8 @@ const eio = (what: string) => Object.assign(new Error(`测试注入：${what}`),
 
 async function save(chapter: number, body: string): Promise<string> {
   const baseVersion = (await readDraftState(book, chapter)).version;
-  const outcome = await runCommand(book, draftSave, { chapter, body, baseVersion }, { caller: "author" });
+  // 存稿命令章名必带：这里只换正文，章名照盘上的。
+  const outcome = await runCommand(book, draftSave, { chapter, title: (await readDraft(book, chapter))?.title ?? "", body, baseVersion }, { caller: "author" });
   if (!outcome.ok) throw new Error(outcome.message);
   return outcome.result.version;
 }
@@ -683,7 +684,7 @@ describe("稿纸不自己认底版、旧回执不复活提示（第 11 轮复核
     expect(await flushDraftSave()).toEqual({ ok: true });
     expect(useDraftStore.getState().incoming?.cause).toBe("conflict");
     // 盘上回到原稿（撤销那类）：版本号还是原来那个。
-    await runCommand(book, draftSave, { chapter: 1, body: "原稿 A。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+    await runCommand(book, draftSave, { chapter: 1, title: "", body: "原稿 A。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
     expect((await readDraftState(book, 1)).version).not.toBe(original);
     expect(await refreshPaper()).toBe("incoming");
     expect(useDraftStore.getState().incoming).toMatchObject({ cause: "update", body: "原稿 A。" });
@@ -1004,7 +1005,7 @@ describe("序号先落盘、后面一步失败（第 13 轮复核）", () => {
 describe("稿 = 章名 + 正文、选了那一版要存一笔核盘（第 13 轮复核）", () => {
   async function saveTitled(chapter: number, body: string, title?: string): Promise<string> {
     const baseVersion = (await readDraftState(book, chapter)).version;
-    const outcome = await runCommand(book, draftSave, { chapter, body, ...(title !== undefined ? { title } : {}), baseVersion }, { caller: "author" });
+    const outcome = await runCommand(book, draftSave, { chapter, body, title: title ?? (await readDraft(book, chapter))?.title ?? "", baseVersion }, { caller: "author" });
     if (!outcome.ok) throw new Error(outcome.message);
     return outcome.result.version;
   }
@@ -1075,19 +1076,20 @@ describe("稿 = 章名 + 正文、选了那一版要存一笔核盘（第 13 轮
     expect((await readDraft(book, 1))?.title).toBe("盘上章名");
   });
 
-  it("AA4：正文自带「# 章名」行，再从章名入口改名：那一行跟着换，盘上就是新章名", async () => {
+  it("AA4：正文开头打的「# 某某」是正文、不动章名；从章名入口改名，正文一个字不动（第 15 轮 AC1）", async () => {
+    await saveTitled(1, "这是正文。", "原章名");
     wireRoutesWith();
     await openPaper(book, 1);
-    editDraft("# 原章名\n\n这是正文。");
+    editDraft("# 正文第一节\n\n这是正文。");
     expect(useDraftStore.getState().title).toBe("原章名");
     expect(await flushDraftSave()).toEqual({ ok: true });
-    expect((await readDraft(book, 1))?.title).toBe("原章名");
+    expect(await readDraft(book, 1)).toMatchObject({ title: "原章名", body: "# 正文第一节\n\n这是正文。" });
     rename("作者的新章名");
-    expect(useDraftStore.getState().body).toBe("# 作者的新章名\n\n这是正文。");
+    expect(useDraftStore.getState().body).toBe("# 正文第一节\n\n这是正文。");
     expect(await flushDraftSave()).toEqual({ ok: true });
-    expect(await readDraft(book, 1)).toMatchObject({ title: "作者的新章名", body: "这是正文。" });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者的新章名", body: "# 正文第一节\n\n这是正文。" });
     expect(await refreshPaper()).toBe("unchanged");
-    expect(useDraftStore.getState()).toMatchObject({ title: "作者的新章名", savedTitle: "作者的新章名" });
+    expect(useDraftStore.getState()).toMatchObject({ title: "作者的新章名", savedTitle: "作者的新章名", body: "# 正文第一节\n\n这是正文。" });
   });
 
   it("章名清空也存得上：空章名 = 没章名，不沿用盘上那个", async () => {
@@ -1124,7 +1126,7 @@ describe("稿 = 章名 + 正文、选了那一版要存一笔核盘（第 13 轮
 describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () => {
   async function saveTitled(chapter: number, body: string, title?: string): Promise<string> {
     const baseVersion = (await readDraftState(book, chapter)).version;
-    const outcome = await runCommand(book, draftSave, { chapter, body, ...(title !== undefined ? { title } : {}), baseVersion }, { caller: "author" });
+    const outcome = await runCommand(book, draftSave, { chapter, body, title: title ?? (await readDraft(book, chapter))?.title ?? "", baseVersion }, { caller: "author" });
     if (!outcome.ok) throw new Error(outcome.message);
     return outcome.result.version;
   }
@@ -1134,7 +1136,8 @@ describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () 
   it("AB1b：作者存下章名 + 二级小节，AI 照盘上那份改正文：小节标题还在，章名不动", async () => {
     wireRoutesWith();
     await openPaper(book, 1);
-    editDraft("# 正章名\n\n## 正文第一节\n\n原句。");
+    useDraftStore.getState().setTitle("正章名");
+    editDraft("## 正文第一节\n\n原句。");
     expect(await flushDraftSave()).toEqual({ ok: true });
     expect(await readDraft(book, 1)).toMatchObject({ title: "正章名", body: "## 正文第一节\n\n原句。" });
     const draft = parseDraftFile(await readFile(join(book, draftPath(1)), "utf-8"));
@@ -1155,10 +1158,10 @@ describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () 
   it.each(["adopt", "dismiss"] as const)("AB1c：恢复稿只改了小节标题，旧指纹「%s」对不上（409）", async (decision) => {
     const base = await save(1, "A。");
     const current = await save(1, "B。");
-    expect((await put(base, "round14section", 1, "章名", "# 章名\n\n## 旧小节\n\n正文。")).status).toBe(409);
+    expect((await put(base, "round14section", 1, "章名", "## 旧小节\n\n正文。")).status).toBe(409);
     const seen = (await pendingDraftFor(book, 1))!;
     expect(seen).toMatchObject({ title: "章名", body: "## 旧小节\n\n正文。" });
-    expect((await put(base, "round14section", 2, "章名", "# 章名\n\n## 新小节\n\n正文。")).status).toBe(409);
+    expect((await put(base, "round14section", 2, "章名", "## 新小节\n\n正文。")).status).toBe(409);
     const changed = (await pendingDraftFor(book, 1))!;
     expect(changed.sha).not.toBe(seen.sha);
     const response = await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: seen.kind, id: seen.id, sha: seen.sha, decision, baseVersion: current });
@@ -1170,30 +1173,27 @@ describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () 
   it("AB1d：恢复稿还有小节标题，别处存上的只是后半截一样：不当已存清掉", async () => {
     const base = await save(1, "原稿。");
     const current = await save(1, "外部稿。");
-    const response = await put(base, "round14clear", 1, "章名", "# 章名\n\n## 作者第一节\n\n正文。");
+    const response = await put(base, "round14clear", 1, "章名", "## 作者第一节\n\n正文。");
     expect(response.status).toBe(409);
     const id = String(response.payload.recoveryId);
     expect((await put(current, "round14another", 1, "章名", "正文。")).status).toBe(200);
     expect(await readDraftRecovery(book, id)).toMatchObject({ settled: false, body: "## 作者第一节\n\n正文。" });
   });
 
-  it.each(["#", "# "])("AB2：稿纸上章名行只剩 %j：章名清空，盘上没章名", async (marker) => {
+  it.each(["#", "# "])("AB2：稿纸开头只剩 %j 一行也是正文：章名不动，存上读回来一行不少（第 15 轮）", async (marker) => {
+    await saveTitled(1, "正文。", "原章名");
     wireRoutesWith();
     await openPaper(book, 1);
-    editDraft("# 原章名\n\n正文。");
-    expect(await flushDraftSave()).toEqual({ ok: true });
     editDraft(`${marker}\n\n正文。`);
-    expect(useDraftStore.getState().title).toBe("");
+    expect(useDraftStore.getState().title).toBe("原章名");
     expect(await flushDraftSave()).toEqual({ ok: true });
-    expect(await readDraft(book, 1)).toMatchObject({ body: "正文。" });
-    expect((await readDraft(book, 1))?.title).toBeUndefined();
+    expect(await readDraft(book, 1)).toMatchObject({ title: "原章名", body: `${marker}\n\n正文。` });
   });
 
-  it("AB2 对照：「## 小节」不是章名行，章名照旧", async () => {
+  it("AB2 对照：「## 小节」开头，章名照旧", async () => {
+    await saveTitled(1, "正文。", "原章名");
     wireRoutesWith();
     await openPaper(book, 1);
-    editDraft("# 原章名\n\n正文。");
-    await flushDraftSave();
     editDraft("## 小节\n\n正文。");
     expect(useDraftStore.getState().title).toBe("原章名");
     expect(await flushDraftSave()).toEqual({ ok: true });
@@ -1226,6 +1226,67 @@ describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () 
     const response = await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "candidate", id: candidate.id, decision: "dismiss", baseVersion: null });
     expect(response.status).toBe(409);
     expect(await readDraftCandidate(book, candidate.id)).toMatchObject({ title: "后来更新的新名" });
+  });
+});
+
+// Astra 第 15 轮探针改写：一份稿只有两种样子（文件原文 / 拆开的稿），稿纸上就是拆开的稿——盘上读来的、提示里换上的、
+// 改章名的都不再按章名行拆，正文开头的「# 某某」一直是正文。
+describe("稿纸上就是拆开的稿（第 15 轮复核）", () => {
+  async function saveTitled(chapter: number, body: string, title: string): Promise<string> {
+    const baseVersion = (await readDraftState(book, chapter)).version;
+    const outcome = await runCommand(book, draftSave, { chapter, body, title, baseVersion }, { caller: "author" });
+    if (!outcome.ok) throw new Error(outcome.message);
+    return outcome.result.version;
+  }
+
+  it.each([
+    { label: "有章名", title: "原章名" },
+    { label: "没章名（盘上垫了「#」）", title: "" },
+  ])("AC1a：正文开头是「# 正文第一节」（$label）：换章再打开、只在末尾加字，章名和首节都还在", async ({ title }) => {
+    await saveTitled(1, "# 正文第一节\n\n正文。", title);
+    await saveTitled(2, "第二章。", "二");
+    wireRoutesWith();
+    await openPaper(book, 2);
+    await openPaper(book, 1);
+    expect(useDraftStore.getState()).toMatchObject({ title, body: "# 正文第一节\n\n正文。" });
+    editDraft("# 正文第一节\n\n正文。又写了一句。");
+    expect(useDraftStore.getState().title).toBe(title);
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    const disk = await readDraft(book, 1);
+    expect(disk?.body).toBe("# 正文第一节\n\n正文。又写了一句。");
+    expect(disk?.title ?? "").toBe(title);
+  });
+
+  it("AC1b：只改章名：正文首节不被当成章名换掉", async () => {
+    await saveTitled(1, "# 正文第一节\n\n正文。", "原章名");
+    wireRoutesWith();
+    await openPaper(book, 1);
+    useDraftStore.getState().setTitle("新章名");
+    scheduleDraftSave(0);
+    expect(useDraftStore.getState().body).toBe("# 正文第一节\n\n正文。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "新章名", body: "# 正文第一节\n\n正文。" });
+  });
+
+  it("AC1c：撞版本后选「换成那一版」、不再打字：紧接的核盘存稿把选的那份原样留在盘上（首节还在）", async () => {
+    await saveTitled(1, "作者原稿。", "原章名");
+    wireRoutesWith();
+    await openPaper(book, 1);
+    await saveTitled(1, "# 外面的第一节\n\n外面的正文。", "外面的章名");
+    editDraft("作者原稿。又写了。");
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState().incoming).toMatchObject({ cause: "conflict", title: "外面的章名", body: "# 外面的第一节\n\n外面的正文。" });
+    expect(await acceptPaperIncoming()).toEqual({ ok: true });
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect(useDraftStore.getState()).toMatchObject({ title: "外面的章名", body: "# 外面的第一节\n\n外面的正文。", incoming: null });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "外面的章名", body: "# 外面的第一节\n\n外面的正文。" });
+  });
+
+  it("旧页面存稿不带章名：正文原样（不拆开头那一行），章名照盘上的", async () => {
+    const base = await saveTitled(1, "正文。", "盘上章名");
+    const response = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, baseVersion: base, body: "# 正文第一节\n\n正文。" });
+    expect(response.status).toBe(200);
+    expect(await readDraft(book, 1)).toMatchObject({ title: "盘上章名", body: "# 正文第一节\n\n正文。" });
   });
 });
 

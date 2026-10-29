@@ -29,7 +29,7 @@ const OPENERS = new Set(["“", "「", "『", "‘"]);
 const QUOTE_CLOSERS = new Set(["”", "」", "』", "’"]);
 const PAIRS: readonly (readonly [string, string])[] = [["“", "”"], ["「", "」"], ["『", "』"], ["‘", "’"]];
 const isBlank = (char: string): boolean => char.trim() === "";
-const isHeading = (line: string): boolean => /^#{1,6}\s/u.test(line.trim());
+const isHeading = (line: string): boolean => /^#{1,6}\s/u.test(line.trim()); // 章名行白名单：正文小节
 // 不猜白名单结束
 
 /** 切一行：返回各句在这一行里的 [start, end)。 */

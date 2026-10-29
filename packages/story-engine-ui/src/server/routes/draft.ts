@@ -9,7 +9,6 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { resolveDraftLengthTarget } from "../writing/draft-length-control.js";
 import {
   assertStoryEngineProject,
-  extractDraftTitle,
   guardProjectPath,
   readJsonBody,
   readPositiveInteger,
@@ -23,7 +22,6 @@ import {
 import { withUiOverviewDetails } from "../services/ui-overview.js";
 import { createConfiguredWriterClient } from "../writing/writer-client.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { draftAdoptCandidate, draftPath as coreDraftPath, runCommand } from "@actalk/story-core";
 import { runWithLazySnapshot } from "../lib/snapshot.js";
@@ -87,12 +85,12 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
       writeJson(res, 422, { ok: false, error: candidate.issues?.[0] ?? "候选生成失败，请重试。" });
       return;
     }
-    const candidateTitle = candidate.title ?? `第${chapter}章`;
+    // 交回拆开的稿（写作版本 P1 第 15 轮 AC3）：章名、正文各一栏，不拼成文件让前端再拆。写手没起章名就不带，选用时沿用作者眼前的。
     writeJson(res, 200, {
       ok: true,
       report: candidate,
-      draftContent: `# ${candidateTitle}\n\n${candidate.draftBody.trim()}\n`,
-      draftTitle: candidateTitle,
+      draftBody: candidate.draftBody.trim(),
+      ...(candidate.title?.trim() ? { draftTitle: candidate.title.trim() } : {}),
       contextBudget: contextBudgetPayload(contextRanking),
       characterSelection,
       ...(planNote ? { planNote } : {}),
@@ -117,7 +115,10 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
-    const draftContent = requireBodyString(body.draftContent, "候选正文不能为空。");
+    // 选中的是一份拆开的整稿：章名必带（空串 = 没章名），正文一行都不拆（写作版本 P1 第 15 轮 AC3）。
+    const draftBody = requireBodyString(body.body, "候选正文不能为空。");
+    if (typeof body.title !== "string") throw new Error("章名不能缺（没有章名就传空串）。");
+    const title = body.title;
     // 作者眼前那份是哪一版（这一章原来没有工作稿就是 null）：盘上已经不是它就不换（写作版本 P1b，不再整份硬盖）。
     const baseVersion = body.baseVersion === null ? null
       : typeof body.baseVersion === "string" && body.baseVersion.trim() ? body.baseVersion.trim()
@@ -125,7 +126,7 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
     await assertStoryEngineProject(projectDir);
     // 作者点的「选这一版」：作者档命令，换上前在同一把书锁里存档、可撤销。
     const { result: outcome } = await runWithLazySnapshot(projectDir, (snapshot) =>
-      runCommand(projectDir, draftAdoptCandidate, { chapter, body: draftContent, baseVersion }, { caller: "author", snapshot }), `抽卡选用候选前快照：第${chapter}章`);
+      runCommand(projectDir, draftAdoptCandidate, { chapter, body: draftBody, title, baseVersion }, { caller: "author", snapshot }), `抽卡选用候选前快照：第${chapter}章`);
     if (!outcome.ok) {
       writeJson(res, outcome.code === "draft_conflict" ? 409 : 400, {
         ok: false,
@@ -133,14 +134,10 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
       });
       return;
     }
-    const draftPath = join(projectDir, coreDraftPath(chapter));
-    const written = { content: await readFile(draftPath, "utf-8") };
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }));
     writeJson(res, 200, {
       ok: true,
-      result: { applied: true, chapter, draftPath },
-      draftContent: written.content,
-      draftTitle: extractDraftTitle(draftContent) ?? `第${chapter}章`,
+      result: { applied: true, chapter, draftPath: join(projectDir, coreDraftPath(chapter)), version: outcome.result.version },
       overview,
     });
   } catch (error) {
