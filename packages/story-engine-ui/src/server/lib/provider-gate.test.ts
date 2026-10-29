@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createProviderGate } from "./provider-gate.js";
+import { runInOperation, type OperationContext } from "./operations/context.js";
 
 const URL_A = "https://api.example.com/v1/chat/completions";
 const noSleep = async () => undefined;
@@ -202,6 +203,26 @@ describe("provider-gate", () => {
     await (await fg).text();
     await (await bg).text();
     expect(started).toEqual(["bg", "fg"]);
+  });
+
+  it("没指定道：在后台操作里就走后台道", async () => {
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 2, maxLimit: 2 });
+    const holders = [streamingResponse(["a"]), streamingResponse(["b"])];
+    const held = await Promise.all(holders.map((holder) => gate.fetch(URL_A, undefined, { baseFetch: async () => holder.response })));
+    const started: string[] = [];
+    const fg = gate.fetch(URL_A, undefined, { baseFetch: async () => { started.push("fg"); return new Response("fg"); } });
+    const backfill: OperationContext = {
+      bookDir: "/书", opId: "op", runEpoch: 1, bookEpoch: "e", signal: new AbortController().signal, lane: "background",
+    };
+    const bg = runInOperation(backfill, () => gate.fetch(URL_A, undefined, { baseFetch: async () => { started.push("bg"); return new Response("bg"); } }));
+    holders[0]!.finish();
+    await held[0]!.text();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(started).toEqual(["bg"]);
+    holders[1]!.finish();
+    await held[1]!.text();
+    await (await fg).text();
+    await (await bg).text();
   });
 
   it("上限 1、两道都排队：轮流放", async () => {

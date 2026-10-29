@@ -156,6 +156,20 @@ describe("Model Settings V0", () => {
     expect(JSON.stringify(result)).not.toContain("secret-extra");
   });
 
+  it("accepts a provider quotaGroup (non-secret, echoed in the summary); rejects an empty one", async () => {
+    const ok = await loadModelSettingsV0(await writeSettings({
+      ...validSettings(),
+      providers: { main: { ...validSettings().providers.main, quotaGroup: "套餐甲" } },
+    }));
+    expect(ok.passed).toBe(true);
+    expect(ok.summary.providers[0]).toMatchObject({ id: "main", quotaGroup: "套餐甲" });
+    const bad = await loadModelSettingsV0(await writeSettings({
+      ...validSettings(),
+      providers: { main: { ...validSettings().providers.main, quotaGroup: " " } },
+    }));
+    expect(bad.issues).toContainEqual(expect.objectContaining({ code: "invalid_quota_group", path: "$.providers.main.quotaGroup" }));
+  });
+
   it("omits customHeaderNames when a provider has no customHeaders", async () => {
     const projectDir = await writeSettings(validSettings());
 

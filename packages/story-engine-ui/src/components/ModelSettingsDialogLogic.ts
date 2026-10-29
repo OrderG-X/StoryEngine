@@ -135,6 +135,7 @@ function parseSavedProviders(
       apiKeyStatus: ["present", "missing", "not_required"].includes(p.apiKeyStatus as string)
         ? (p.apiKeyStatus as "present" | "missing" | "not_required")
         : "missing",
+      ...(typeof p.quotaGroup === "string" && p.quotaGroup.trim() ? { quotaGroup: p.quotaGroup.trim() } : {}),
     }));
 }
 
@@ -258,6 +259,8 @@ export function buildModelSettingsConfig(
       type: preset?.type ?? "openai-compatible",
       baseUrl: prov.baseUrl,
       apiKeyEnv: prov.apiKeyEnv || preset?.apiKeyEnvSuggestion || undefined,
+      // 表单管额度组：清空了就不写（不留磁盘上的旧值）。
+      quotaGroup: prov.quotaGroup?.trim() || undefined,
     };
     seenProviders.add(prov.id);
   }

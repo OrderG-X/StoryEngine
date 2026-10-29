@@ -5,7 +5,7 @@
  * 一大半调用直接「没跑成」（考卷查全从约 36% 掉到 4%）。此前调模型的三条路都没有 429 处理。
  *
  * 做法（不认任何一家的错误文案，只看 HTTP 状态码）：
- * - 按额度组各一道闸（写作版本 P2a：模型 profile 上的 `quotaGroup`，默认 = 服务商地址的 origin；同一套餐的不同密钥、
+ * - 按额度组各一道闸（写作版本 P2a：服务商设置上的 `quotaGroup`，默认 = 服务商地址的 origin；同一套餐的不同密钥、
  *   不同入口由作者填成同一组），限同时在飞的请求数。许可一直占到响应体读完（流式也算），不是拿到响应头就放。
  * - 两道（写作版本 P2a）：前台（对话、按钮、对话 AI）和后台（补读、通读记账）。两边都排着队时后台至少 1 位（上限 ≥ 2）、
  *   前台至少 min(2, 上限 − 1) 位，上限是 1 就轮流；只有一边排队可以借满；在飞的不强杀。
@@ -16,6 +16,8 @@
  * - 排队和退避期间每隔几秒调一次 onWait：调用方拿它给自己的空闲计时器续命，
  *   免得「排队等许可」被误判成「连接静默」。
  */
+
+import { currentOperation } from "./operations/context.js";
 
 export interface ProviderGateOptions {
   readonly initialLimit?: number;
@@ -37,7 +39,7 @@ export interface GatedFetchOptions {
   readonly onSend?: () => void;
   /** 额度组（缺省 = 请求地址的 origin）。 */
   readonly quotaGroup?: string;
-  /** 走哪一道（缺省前台）。 */
+  /** 走哪一道（缺省：在操作里按操作的道，不在操作里 = 前台）。 */
   readonly lane?: GateLane;
 }
 
@@ -217,7 +219,7 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
     const gate = gateFor(origin);
     const signal = init?.signal ?? undefined;
     for (let attempt = 0; ; attempt += 1) {
-      const release = await withPulse(gate.acquire(opts.lane ?? "foreground", signal), opts.onWait);
+      const release = await withPulse(gate.acquire(opts.lane ?? currentOperation()?.lane ?? "foreground", signal), opts.onWait);
       let response: Response;
       try {
         opts.onSend?.();

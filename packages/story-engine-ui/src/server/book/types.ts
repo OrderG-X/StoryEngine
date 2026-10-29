@@ -195,6 +195,11 @@ export interface ProviderConfig {
    * 值视同机密：summary/API 输出只回键名（customHeaderNames），绝不回值。
    */
   readonly customHeaders?: Record<string, string>;
+  /**
+   * 额度组（写作版本 P2a）：同一套餐的不同密钥、不同入口填成同一组，限流闸的在途计数挂在组上。
+   * 非秘密；不填 = 接口地址的 origin。
+   */
+  readonly quotaGroup?: string;
 }
 
 export interface ModelProfile {
@@ -239,6 +244,7 @@ export interface ProviderConfigSummary {
   readonly apiKeyStatus: "not_required" | "present" | "missing";
   /** 自定义请求头的键名列表（脱敏：只出 key 名，绝不出值——值视同机密）。 */
   readonly customHeaderNames?: readonly string[];
+  readonly quotaGroup?: string;
 }
 
 export interface ModelProfileSummary {

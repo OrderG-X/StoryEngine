@@ -924,7 +924,11 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
         headers,
         body: JSON.stringify(requestBody),
         signal: idle.controller.signal,
-      }, { onWait: idle.kick, onSend: startThinkingTimer });
+      }, {
+        onWait: idle.kick,
+        onSend: startThinkingTimer,
+        ...(input.configured.provider.quotaGroup ? { quotaGroup: input.configured.provider.quotaGroup } : {}),
+      });
     let response = await postChat(body);
     if (!response.ok && response.status === 400) {
       const firstErrorText = await response.clone().text().catch(() => "");

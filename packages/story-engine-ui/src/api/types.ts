@@ -234,6 +234,7 @@ export interface ProviderConfigSummary {
   readonly baseUrl: string;
   readonly apiKeyEnv?: string;
   readonly apiKeyStatus: "not_required" | "present" | "missing";
+  readonly quotaGroup?: string;
 }
 
 export interface ModelProfileSummary {

@@ -78,6 +78,11 @@ export function ProviderForm(props: ProviderFormProps) {
                 <input className="ms-input" type="text" placeholder={envPlaceholder} value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
                 <span className="ms-field-hint">一般不用填：下面直接填密钥就行</span>
               </div>
+              <div className="ms-form-field">
+                <label className="ms-form-label">额度组</label>
+                <input className="ms-input" type="text" placeholder="不填按接口地址分" value={props.formQuotaGroup ?? ""} onChange={(e) => props.setFormQuotaGroup?.(e.target.value)} />
+                <span className="ms-field-hint">同一套餐的几个服务填同一个名字，一起排队</span>
+              </div>
             </div>
           </details>
         </>
@@ -128,6 +133,11 @@ export function ProviderForm(props: ProviderFormProps) {
               {props.selectedPreset && (
                 <span className="ms-field-hint">预设已填入默认地址，可按需修改</span>
               )}
+            </div>
+            <div className="ms-form-field">
+              <label className="ms-form-label">额度组</label>
+              <input className="ms-input" type="text" placeholder="不填按接口地址分" value={props.formQuotaGroup ?? ""} onChange={(e) => props.setFormQuotaGroup?.(e.target.value)} />
+              <span className="ms-field-hint">同一套餐的几个服务填同一个名字，一起排队</span>
             </div>
           </div>
         </details>
