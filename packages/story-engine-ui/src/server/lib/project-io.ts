@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve, join, isAbsolute, sep, win32 as win32Path } from "node:path";
-import { parseDraftFile, sameDraftBody } from "@actalk/story-core";
+import { bareChapterName, parseDraftFile, sameDraftBody } from "@actalk/story-core";
 import { resolveBooksRootDir } from "./data-dirs.js";
 import { noteUsageBook } from "./usage-scope.js";
 import type { StateOverview } from "../book/state-overview.js";
@@ -705,9 +705,7 @@ export function extractDraftTitle(content: string | undefined): string | null {
 
 /** 章名去掉开头的「第 N 章 ·」只留名字（已经拆出来的章名用这个，不拼成文件再拆）；剩下是空的是 null。 */
 export function bareChapterTitle(title: string): string | null {
-  // 不猜白名单：章节标题
-  const bare = title.trim().replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
-  return bare || null;
+  return bareChapterName(title) || null;
 }
 
 export interface UiChapterFileState {

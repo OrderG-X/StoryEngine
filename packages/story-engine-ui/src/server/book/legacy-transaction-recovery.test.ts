@@ -5,49 +5,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  COMMIT_TRANSACTION_ACTIVE_RETENTION,
-  COMMIT_TRANSACTION_ARCHIVE_RETENTION,
-  formatCommitRecoveryNotice,
-  listCommitRecoveryNotices,
-  recoverProjectCommitTransactions,
-  withProjectCommitLock,
-} from "./legacy-commit-recovery.js";
-import { buildStateOverview } from "./state-overview.js";
+  LEGACY_TX_ACTIVE_RETENTION,
+  LEGACY_TX_ARCHIVE_RETENTION,
+  listLegacyRecoveryNotices,
+  recoverBookTransactions,
+} from "@actalk/story-core";
+import { buildStateOverview, formatLegacyRecoveryNotice } from "./state-overview.js";
 import { createStoryProject } from "./project-store.js";
 
-// 老定稿链已删（重构 P7）；这里锁住的是老版本中途崩溃留下的事务残留怎么收。
+// 老定稿链已删（重构 P7）；这里锁住的是老版本中途崩溃留下的事务残留怎么收（P1 第 17 轮起归核心 recoverTransactions，和核心事务一起收）。
+
+/** 拿书锁收拾一遍（两种事务都收），只看收没收成。 */
+const recoverProjectCommitTransactions = async (projectDir: string): Promise<void> => {
+  await recoverBookTransactions(projectDir);
+};
 // 残留按老定稿链写盘的格式手工造：manifest.json（version 2）+ backups/ 下的原文件。
 
 describe("老定稿链事务残留的恢复", () => {
-  it.skipIf(process.platform === "win32")("软链别名和原路径共用一把锁", async () => {
-    const projectDir = await createFixtureProject();
-    const aliasDir = `${projectDir}-alias`;
-    await symlink(projectDir, aliasDir);
-    const entered: string[] = [];
-    const firstEntered = deferred<void>();
-    const releaseFirst = deferred<void>();
-    const first = withProjectCommitLock(projectDir, async () => {
-      entered.push("first");
-      firstEntered.resolve(undefined);
-      await releaseFirst.promise;
-    });
-    await firstEntered.promise;
-    const second = withProjectCommitLock(aliasDir, async () => {
-      entered.push("second");
-    });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(entered).toEqual(["first"]);
-    releaseFirst.resolve(undefined);
-    await Promise.all([first, second]);
-    expect(entered).toEqual(["first", "second"]);
-  });
-
-  it("锁可重入：持锁时再要同一本书的锁不会死等", async () => {
-    const projectDir = await createFixtureProject();
-    const result = await withProjectCommitLock(projectDir, () => withProjectCommitLock(projectDir, async () => "inner"));
-    expect(result).toBe("inner");
-  });
-
   it("staged 残留：能核对的备份还原，核不了的新建文件原地保留，标 recovered 放行", async () => {
     const projectDir = await createFixtureProject();
     // 老定稿链写过的人物现状文件（新建书不再有，这里按老书的样子手工放一份）。
@@ -136,9 +110,9 @@ describe("老定稿链事务残留的恢复", () => {
 
     await recoverProjectCommitTransactions(projectDir);
 
-    const notices = await listCommitRecoveryNotices(projectDir);
+    const notices = await listLegacyRecoveryNotices(projectDir);
     expect(notices).toEqual([expect.objectContaining({ chapter: 3, transactionId: "commit-chapter-0003" })]);
-    const text = formatCommitRecoveryNotice(notices[0]!);
+    const text = formatLegacyRecoveryNotice(notices[0]!);
     expect(text).toContain("transaction_recovered_partial");
     expect(text).toContain("第 3 章");
     expect(text).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
@@ -154,7 +128,7 @@ describe("老定稿链事务残留的恢复", () => {
     await recoverProjectCommitTransactions(projectDir);
 
     await expect(readTransactionStatus(projectDir, 5)).resolves.toBe("applied");
-    await expect(listCommitRecoveryNotices(projectDir)).resolves.toEqual([]);
+    await expect(listLegacyRecoveryNotices(projectDir)).resolves.toEqual([]);
   });
 
   it("超出保留窗口的干净事务原子归档；带分歧的和最近 N 章不归档", async () => {
@@ -176,14 +150,14 @@ describe("老定稿链事务残留的恢复", () => {
     const archived = JSON.parse(await readFile(join(txRoot, "archive", "commit-chapter-0001", "manifest.json"), "utf-8")) as { status: string };
     expect(archived.status).toBe("applied");
     await expect(access(join(txRoot, "archive", "commit-chapter-0003"))).resolves.toBeUndefined();
-    expect(COMMIT_TRANSACTION_ACTIVE_RETENTION).toBe(5);
+    expect(LEGACY_TX_ACTIVE_RETENTION).toBe(5);
   });
 
   it("归档区超过上限按章号删最旧的", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "story-engine-archive-prune-"));
     const archiveRoot = join(projectDir, ".story-engine-tx", "archive");
     await mkdir(archiveRoot, { recursive: true });
-    const total = COMMIT_TRANSACTION_ARCHIVE_RETENTION + 5;
+    const total = LEGACY_TX_ARCHIVE_RETENTION + 5;
     for (let chapter = 1; chapter <= total; chapter += 1) {
       const dir = join(archiveRoot, `commit-chapter-${String(chapter).padStart(4, "0")}`);
       await mkdir(join(dir, "backups"), { recursive: true });
@@ -194,8 +168,8 @@ describe("老定稿链事务残留的恢复", () => {
     await recoverProjectCommitTransactions(projectDir);
 
     const left = (await readdir(archiveRoot)).sort();
-    expect(left).toHaveLength(COMMIT_TRANSACTION_ARCHIVE_RETENTION);
-    expect(left[0]).toBe(`commit-chapter-${String(total - COMMIT_TRANSACTION_ARCHIVE_RETENTION + 1).padStart(4, "0")}`);
+    expect(left).toHaveLength(LEGACY_TX_ARCHIVE_RETENTION);
+    expect(left[0]).toBe(`commit-chapter-${String(total - LEGACY_TX_ARCHIVE_RETENTION + 1).padStart(4, "0")}`);
     expect(left.at(-1)).toBe(`commit-chapter-${String(total).padStart(4, "0")}`);
   });
 });
@@ -272,11 +246,6 @@ function validSnapshotOnlyManifest(chapter: number): Record<string, unknown> {
   };
 }
 
-function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
-}
 
 async function readTransactionStatus(projectDir: string, chapter: number): Promise<string> {
   const text = await readFile(

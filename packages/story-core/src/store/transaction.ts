@@ -19,6 +19,7 @@
 import { randomBytes } from "node:crypto";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
+import { hasPendingLegacyTransactions, recoverLegacyTransactions } from "./legacy-transaction.js";
 import { withBookLock } from "./lock.js";
 import { revisionWrite } from "./control.js";
 import { assertInsideBook, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
@@ -204,14 +205,14 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
   await rm(txDir, { recursive: true, force: true });
 }
 
-/** 有没有没收尾的事务（读的一方用：有就说明正在写或上次写断了）。 */
+/** 有没有没收尾的事务（读的一方用：有就说明正在写或上次写断了）。老格式（升级前崩溃留下的）没收拾的也算。 */
 export async function hasPendingTransactions(bookDir: string): Promise<boolean> {
   try {
-    return (await readdir(join(bookDir, TX_DIR))).length > 0;
+    if ((await readdir(join(bookDir, TX_DIR))).length > 0) return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  return hasPendingLegacyTransactions(bookDir);
 }
 
 type TxState =
@@ -256,9 +257,23 @@ async function keptCount(bookDir: string): Promise<number> {
   return (await listDir(join(bookDir, KEPT_TX_DIR)))?.length ?? 0;
 }
 
-/** 收拾上次没写完的事务。只在写锁里调（写命令开工前）。 */
+/**
+ * 收拾上次没写完的事务：先收老格式（`.story-engine-tx/`，老版本崩溃留下的），再收核心自己的。只在书锁里调（写命令开工前、
+ * 先读盘再定参数之前）。老格式收拾不了抛 `LegacyResidueError`（写命令照「残留」如实失败）。
+ */
 export async function recoverTransactions(givenBookDir: string): Promise<RecoveryReport> {
   const bookDir = await realBook(givenBookDir);
+  await recoverLegacyTransactions(bookDir);
+  return recoverCoreTransactions(bookDir);
+}
+
+/** 拿书锁收拾一遍（不在写命令里、要先把书收拾干净再看的：开书接上新核心、测试）。 */
+export async function recoverBookTransactions(givenBookDir: string): Promise<RecoveryReport> {
+  return withBookLock(givenBookDir, () => recoverTransactions(givenBookDir));
+}
+
+/** 只收核心自己的（留证时用：老格式的残留不归留证区管）。 */
+async function recoverCoreTransactions(bookDir: string): Promise<RecoveryReport> {
   const kept = await keptCount(bookDir);
   const report = (rolledBack: string[], cleaned: string[], problems: string[]): RecoveryReport => ({
     rolledBack,
@@ -310,7 +325,7 @@ export async function recoverTransactions(givenBookDir: string): Promise<Recover
 export async function setAsideBrokenTransactions(givenBookDir: string): Promise<{ readonly moved: readonly string[]; readonly kept: number; readonly keptOverLimit: boolean }> {
   const bookDir = await realBook(givenBookDir);
   return withBookLock(bookDir, async () => {
-    const recovery = await recoverTransactions(bookDir);
+    const recovery = await recoverCoreTransactions(bookDir);
     const moved: string[] = [];
     if (recovery.problems.length > 0) {
       await assertPlainDirs(bookDir, KEPT_TX_DIR);

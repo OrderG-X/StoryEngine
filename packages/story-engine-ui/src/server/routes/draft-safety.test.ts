@@ -7,10 +7,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readDraft, readDraftState, readTruthBasis, runCommand, setLegacyTxIoHookForTests, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, hasFailedUnsavedDraft, isOwnSavedVersion, keepPaperMine, openPaper, refreshPaper, saveDraftKeepalive, scheduleDraftSave, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
-import { setCommitIoTestHookForTests } from "../book/legacy-commit-recovery.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { createStoryProject } from "../book/project-store.js";
@@ -49,7 +48,7 @@ beforeEach(async () => {
   useDraftStore.getState().reset();
 });
 afterEach(async () => {
-  setCommitIoTestHookForTests(undefined);
+  setLegacyTxIoHookForTests(undefined);
   hooks.beforeRename = undefined;
   hooks.afterRename = undefined;
   __resetDraftSyncForTests();
@@ -502,9 +501,9 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     await writeFile(join(book, relative), "中断事务留下的 B。");
     const atRestore = barrier();
     const releaseRestore = barrier();
-    setCommitIoTestHookForTests(async (phase, target) => {
+    setLegacyTxIoHookForTests(async (phase, target) => {
       if (phase !== "after-precheck-before-open" || target !== join(book, relative)) return;
-      setCommitIoTestHookForTests(undefined);
+      setLegacyTxIoHookForTests(undefined);
       atRestore.release();
       await releaseRestore.promise;
     });

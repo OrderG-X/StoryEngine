@@ -108,6 +108,8 @@ function refusalReason(failure: RevisionOneShotFailure): string {
       return failure.detail ?? "改好了但没换上：写的途中稿子或前文改过，AI 这版留着，稿纸上可以换成它。";
     case "preview_stale":
       return "这份修改方案对不上现在的书了，稿子没动。请重新改一次。";
+    case "book_unsettled":
+      return failure.detail ?? "上次写到一半的记录收拾不了，稿子没动。";
   }
 }
 

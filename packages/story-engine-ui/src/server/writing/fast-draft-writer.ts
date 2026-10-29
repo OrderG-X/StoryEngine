@@ -1,5 +1,5 @@
 import type { ChapterPlan } from "../book/chapter-plan.js";
-import { cjkBigrams } from "@actalk/story-core";
+import { bareChapterName, cjkBigrams, hasChapterNumberPrefix } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -977,32 +977,16 @@ function stripLeadingMarkdownChapterHeading(content: string): string {
 }
 
 /**
- * 写手起的章名：正文开头的章名行、或写手另给的章名，不是光秃秃的「第N章」才算起了名。
- * 没起就是 undefined（写作版本 P1 第 16 轮 AD1）：一路带到接口都是「没起名」，由用的一方沿用作者的章名，不补「第N章」盖掉它。
+ * 写手起的章名：正文开头的章名行、或写手另给的章名，去掉章号还剩名字才算起了名（统一成「第N章 · 名字」，章号用本章的：
+ * 模型会写成「第九章」、还会数错）。没起就是 undefined（写作版本 P1 第 16 轮 AD1、第 17 轮 AE1）：一路带到接口都是「没起名」，
+ * 由用的一方沿用作者的章名，不补「第N章」盖掉它。认章名行、剥章号用核心同一条规则（`bareChapterName`）。
  */
 function chooseDraftTitle(chapter: number, title: string | undefined, content: string): string | undefined {
-  const modelHeadingTitle = extractLeadingChapterTitle(content);
-  const cleanTitle = title?.trim() ?? "";
-  if (modelHeadingTitle && !isGenericChapterTitle(modelHeadingTitle, chapter)) {
-    return normalizeModelChapterTitle(chapter, modelHeadingTitle);
+  for (const candidate of [extractLeadingChapterTitle(content), title]) {
+    const name = candidate ? bareChapterName(candidate) : "";
+    if (name) return `第${chapter}章 · ${name}`;
   }
-  if (cleanTitle && !isGenericChapterTitle(cleanTitle, chapter)) return cleanTitle;
   return undefined;
-}
-
-/**
- * 模型写的开头标题统一成「第N章 · 标题」（2026-10-14 编辑部 R7.7，报告第 5 节）：
- * 章号一律用代码里的本章章号（阿拉伯数字）——模型会写成「第九章」「第十章」，还会数错章；
- * 分隔符统一「 · 」。把模型自己写的第X章前缀（汉字/阿拉伯数字、带不带分隔符都认）剥掉后按规范重拼，
- * 纯确定性后处理，不改标题文字本身。剥完没有剩余（模型只写了「第九章」这类章号行）→ 只留「第N章」。
- */
-function normalizeModelChapterTitle(chapter: number, modelTitle: string): string {
-  const bare = modelTitle
-    .trim()
-    // 不猜白名单：章节标题
-    .replace(/^第[一二三四五六七八九十百千万〇零\d]+\s*章[\s·：:、\-—]*/u, "")
-    .trim();
-  return bare ? `第${chapter}章 · ${bare}` : `第${chapter}章`;
 }
 
 function extractLeadingChapterTitle(content: string): string | undefined {
@@ -1014,25 +998,21 @@ function extractLeadingChapterTitle(content: string): string | undefined {
   return undefined;
 }
 
-function isGenericChapterTitle(title: string, chapter: number): boolean {
-  const trimmed = title.trim();
-  // 不猜白名单：章节标题
-  return trimmed === `第${chapter}章` || /^第[一二三四五六七八九十百千万\d]+章$/u.test(trimmed);
-}
-
 function isMarkdownChapterHeading(line: string): boolean {
   if (!/^#{1,6}\s+\S/u.test(line)) return false; // 章名行白名单：模型输出
   const title = line.replace(/^#{1,6}\s+/u, "").trim(); // 章名行白名单：模型输出
   if (!title) return false;
-  // 不猜白名单开始：章节标题
-  if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;
+  if (hasChapterNumberPrefix(title)) return true;
+  // 不猜白名单：章节标题
   return title.length <= 40 && !/[。！？!?；;]/u.test(title);
-  // 不猜白名单结束
 }
 
+/** 不带 # 的章名行：开头是章号，后面的名字不长、不像句子。 */
 function isPlainChapterHeading(line: string): boolean {
+  if (!hasChapterNumberPrefix(line)) return false;
+  const name = bareChapterName(line);
   // 不猜白名单：章节标题
-  return /^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*[^。！？!?；;]{1,32})?$/u.test(line.trim());
+  return name.length <= 32 && !/[。！？!?；;]/u.test(name);
 }
 
 function unique(values: readonly string[]): string[] {

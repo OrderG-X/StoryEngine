@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createStoryProject } from "../book/project-store.js";
-import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
-import { withBookLock } from "@actalk/story-core";
+import { recoverBookTransactions, withBookLock } from "@actalk/story-core";
 import { buildRestoreReceipt } from "./snapshot-changes.js";
 import {
   CHAT_SESSIONS_EXCLUDE_LINE,
@@ -789,7 +788,7 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
 });
 
 // P1-6：崩溃残留的 staged 事务（新建文件无法自证为事务写入内容）不许砖住撤销线。
-// restoreSnapshot 第一道门就是 recoverProjectCommitTransactions——修复前 recover 对这类残留
+// restoreSnapshot 第一道门就是收拾事务（核心 recoverTransactions，老格式先收）——修复前 recover 对这类残留
 // 永久抛错，导致快照/撤销/预览全线 500，用户只能手工删 .story-engine-tx。修复后 recover 标记
 // recovered 放行（新建文件原地保留、绝不误删用户数据），撤销照常可用。
 describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () => {
@@ -829,7 +828,7 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
 
     // 修复前：这一步直接 reject（撤销线第一道门就死）。修复后：标 recovered 放行，
     // 无法自证的新建文件绝不被事务回滚误删——原地保留，等后续提交自然覆盖。
-    await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
+    await expect(recoverBookTransactions(projectDir)).resolves.toMatchObject({ problems: [] });
     await expect(readFile(chapterPath, "utf-8")).resolves.toBe("崩溃残留的半章正文");
     await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
       .resolves.toMatch(/"status":\s*"recovered"/u);

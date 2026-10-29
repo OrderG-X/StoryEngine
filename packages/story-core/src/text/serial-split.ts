@@ -10,6 +10,7 @@
  *  - 段落：每个非空行一段，去掉行首尾的空白（含全角空格），段与段之间空一行。
  * 几个文件按文件名排（里面的数字按大小比），再依次切。
  */
+import { CHAPTER_NUMERAL } from "./chapter-title.js";
 
 export interface SerialFile {
   readonly name: string;
@@ -43,7 +44,7 @@ export interface SerialSplit {
 export const SERIAL_HEADING_MAX_CHARS = 40;
 
 // 不猜白名单开始：章节标题
-const NUMERAL = "[0-9０-９零〇一二三四五六七八九十百千万两]+";
+const NUMERAL = CHAPTER_NUMERAL;
 const CHAPTER_HEADING = new RegExp(`^(?:正文\\s*)?第\\s*${NUMERAL}\\s*[章回节]`, "u");
 const VOLUME_HEADING = new RegExp(`^(?:正文\\s*)?第\\s*${NUMERAL}\\s*[卷部集]`, "u");
 const SPECIAL_HEADING = /^(?:(?:楔子|序章|序幕|引子|尾声|终章|后记)(?=$|[\s:：·.．、,，\-—_（(【[])|番外|外传)/u;

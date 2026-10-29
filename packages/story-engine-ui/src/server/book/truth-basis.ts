@@ -10,7 +10,7 @@
  * 改设定卡只涨版本号、不同步镜像，也在这里补上。同步没成（写盘失败）如实说、不给依据。
  * 取到之后真相再变，依据就对不上，产物照依据作废——不用管镜像后来怎样。
  */
-import { listChapterLedgers, readHead, readTruthBasis, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { listChapterLedgers, readHead, readTruthBasis, withBookLock, withSettledBook, type TruthBasis } from "@actalk/story-core";
 import { readMirrorVersion, syncLegacyMirror } from "./mirror/sync.js";
 
 export const MIRROR_LAG_MESSAGE = "按账整理的时间线和线索还没跟上刚改的账（同步没成），这次没做。稍后再试一次";
@@ -34,11 +34,13 @@ async function mirrorInStep(projectDir: string): Promise<boolean> {
 }
 
 /** 书锁里：镜像落后就同步一次，跟上了给依据；同步没成返回 undefined。 */
-function basisInStep(projectDir: string): Promise<TruthBasis | undefined> {
-  return withBookLock(projectDir, async () => {
+async function basisInStep(projectDir: string): Promise<TruthBasis | undefined> {
+  // 先收拾写到一半的事务（P1 第 17 轮）：依据取的是收拾过的书，镜像也照它同步。收拾不了 = 拿不到依据。
+  const settled = await withSettledBook(projectDir, async () => {
     if (!(await mirrorInStep(projectDir))) await syncLegacyMirror(projectDir).catch(() => undefined);
     return (await mirrorInStep(projectDir)) ? readTruthBasis(projectDir) : undefined;
   });
+  return settled.ok ? settled.value : undefined;
 }
 
 /**

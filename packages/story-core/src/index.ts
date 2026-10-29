@@ -86,6 +86,7 @@ export {
 export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
 
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteFromText, quoteInText } from "./text/quote.js";
+export { bareChapterName, CHAPTER_NUMERAL, hasChapterNumberPrefix } from "./text/chapter-title.js";
 export {
   applyUnitEdits,
   dropNeighborEcho,
@@ -151,10 +152,20 @@ export { bumpRevision, revisionWrite } from "./store/revision.js";
 export { draftStampOf, freshDraftGensWrite, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
+export {
+  LEGACY_TX_ACTIVE_RETENTION,
+  LEGACY_TX_ARCHIVE_RETENTION,
+  LEGACY_TX_DIR,
+  LegacyResidueError,
+  listLegacyRecoveryNotices,
+  setLegacyTxIoHookForTests,
+  type LegacyRecoveryNotice,
+} from "./store/legacy-transaction.js";
 export { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, TX_DIR } from "./store/paths.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,
+  recoverBookTransactions,
   recoverTransactions,
   setAsideBrokenTransactions,
   type RecoveryReport,

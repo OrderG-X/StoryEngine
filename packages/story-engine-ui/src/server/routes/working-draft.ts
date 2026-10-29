@@ -19,7 +19,7 @@
  *
  * 版本号是这章的工作稿代次 + 草稿文件全文的哈希（核心包 draft/draft.ts）。
  */
-import { chapterRetitle, draftAdoptCandidate, draftSave, parseDraftFile, readChapterPaper, readDraftState, runCommand, withBookLock, withSettledBook, type DraftConflictDetails } from "@actalk/story-core";
+import { chapterRetitle, draftAdoptCandidate, draftSave, parseDraftFile, readChapterPaper, readDraftState, runCommand, withSettledBook, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -127,7 +127,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         const sha = typeof body.sha === "string" ? body.sha : undefined;
         const from = recoveryClientOf(body.client, body.seq);
         // 查那一份、换上、清掉它，整段在书锁里（写作版本 P1b 第 3 轮复核）：查过之后别的存稿改了它，就不会拿旧的换上、再把新的删了。
-        const reply = await withBookLock(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
+        // 先收拾写到一半的事务（P1 第 17 轮）：字数统计、换上都对着收拾过的书。
+        const settledReply = await withSettledBook(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
           const entry = kind === "candidate" ? await readDraftCandidate(projectDir, id) : await readDraftRecovery(projectDir, id);
           // 还等着作者选的：候选是 AI 写了字的那份；恢复稿看有没有清过（只起了章名的也算，第 13 轮复核 AA5）。
           const waiting = entry && entry.chapter === chapter && ("settled" in entry ? !entry.settled : entry.body.trim().length > 0);
@@ -175,6 +176,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           else await consumeDraftRecovery(projectDir, live as DraftRecovery);
           return { status: 200, payload: { ok: true, version: outcome.result.version, ...(snapshotId ? { snapshotId } : {}) } };
         });
+        const reply = settledReply.ok ? settledReply.value : { status: 400, payload: { ok: false, code: settledReply.code, error: settledReply.message } };
         writeJson(res, reply.status, reply.payload);
         return;
       }
@@ -202,7 +204,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         const from = recoveryClientOf(body.client, body.seq);
         await assertStoryEngineProject(projectDir);
         // 存稿和撞版本时留恢复稿在同一把书锁里（写作版本 P1b 第 3 轮复核）：两笔存稿不会交错着写恢复稿，找回也切不进中间。
-        // 先收拾完上次没写完的事务再读盘（第 16 轮 AD3）：沿用的章名、认接着写的盘上版本，读的都是收拾过的那份。
+        // 先收拾完上次没写完的事务（老格式、新核心都收，第 16 轮 AD3、第 17 轮 AE2）再读盘：沿用的章名、认接着写的盘上版本，读的都是收拾过的那份。
         const settled = await withSettledBook(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
           const mark = from ? await readSaveMark(projectDir, chapter, from.client) : undefined;
           if (from && mark && from.seq <= mark.seq) return { status: 409, payload: { ok: false, code: "stale_save", error: "这个窗口后来又存过，这笔旧的没写。" } };

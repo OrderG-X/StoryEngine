@@ -3,8 +3,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
-import { bumpRevision, recoverTransactions as recoverCoreTransactions, REVISION_PATH, withBookLock } from "@actalk/story-core";
+import { bumpRevision, recoverTransactions, REVISION_PATH, withBookLock } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
@@ -198,7 +197,7 @@ async function createSnapshotUnlocked(projectDir: string, label: string): Promis
 /** 写入前调用：把当前全部状态存为一个快照。 */
 export async function createSnapshot(projectDir: string, label: string): Promise<SnapshotEntry> {
   return withProjectLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
+    await recoverTransactions(projectDir);
     await ensureRepoUnlocked(projectDir);
     return createSnapshotUnlocked(projectDir, label);
   });
@@ -222,7 +221,7 @@ export async function runWithSnapshot<T>(
   fn: (snapshotId: string) => Promise<T>,
 ): Promise<{ readonly snapshot: SnapshotEntry; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
+    await recoverTransactions(projectDir);
     await ensureRepoUnlocked(projectDir);
     const snapshot = await createSnapshotUnlocked(projectDir, label);
     const result = await fn(snapshot.id);
@@ -251,7 +250,7 @@ export async function runWithLazySnapshot<T>(
   return withProjectLock(projectDir, async () => {
     // 老格式事务（升级前崩溃留下的）先收拾，再进核心命令：收拾会换写入代次，核心随后核依据就对得上真相；
     // 留到要打存档点才收拾，核心已经照没收拾的半截真相核过依据了（第 4 轮复核 R9）。
-    await recoverProjectCommitTransactions(projectDir);
+    await recoverTransactions(projectDir);
     let taken: SnapshotEntry | undefined;
     const result = await fn(async (label, command) => {
       if (taken) return;
@@ -300,9 +299,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     // Recovery must happen before git add/commit/checkout; otherwise a partial
     // formal transaction becomes part of the pre-restore history and may be
     // resurrected by a later undo.
-    await recoverProjectCommitTransactions(projectDir);
-    // 新核心的写盘事务同理：先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
-    await recoverCoreTransactions(projectDir);
+    // 老格式和新核心的写盘事务都先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
+    await recoverTransactions(projectDir);
     await ensureRepoUnlocked(projectDir);
     // 先解析目标：失败即抛，不污染历史
     const target = parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`, id]));
@@ -908,7 +906,7 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
   const keep = clampPruneKeep(options.keep);
   const dryRun = options.dryRun !== false;
   return withProjectLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
+    await recoverTransactions(projectDir);
     await ensureRepoUnlocked(projectDir);
     const branch = await assertRepoHealthyForPrune(projectDir);
 

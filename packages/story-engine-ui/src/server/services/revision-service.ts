@@ -46,7 +46,7 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { parseDraftFile, readDraftFile, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { parseDraftFile, readDraftFile, withSettledBook, type TruthBasis } from "@actalk/story-core";
 import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
 import { applyAiDraft, oneAiWriterPerChapter, type AiDraftOutcome } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
@@ -143,7 +143,9 @@ export type RevisionFailureCode =
   /** 改好了，但写的途中稿子或前文变了、写盘出错，没换上：留成候选（detail 是给作者看的一句）。 */
   | "draft_kept"
   /** 两步改稿的预览没带生成时的依据（旧预览、服务重启后记录不在了）：不认。 */
-  | "preview_stale";
+  | "preview_stale"
+  /** 上次写到一半的事务收拾不了：书不动（detail 是核心的原话）。 */
+  | "book_unsettled";
 
 export interface RevisionFailure {
   readonly ok: false;
@@ -524,7 +526,11 @@ export async function applyRevision(input: {
   const draftPath = defaultDraftPath(projectDir, chapter);
   // #9：读稿→算稿→写盘整段在书锁里（不调模型，一瞬间）——两笔并发 apply 不会交错出「各自基于旧稿、最后写者赢」。
   // 同一章别的 AI 改稿（模型跑着、不占书锁）也排在一起，换上时都在上一笔的结果上。
-  return oneAiWriterPerChapter(projectDir, chapter, () => withBookLock(projectDir, () => applyRevisionLocked(input, draftPath)));
+  // 先收拾写到一半的事务再读稿（P1 第 17 轮）：对着马上要回滚的半截稿改，换上时版本对不上，白改一遍。
+  return oneAiWriterPerChapter(projectDir, chapter, async () => {
+    const settled = await withSettledBook(projectDir, () => applyRevisionLocked(input, draftPath));
+    return settled.ok ? settled.value : { ok: false as const, code: "book_unsettled" as const, detail: settled.message };
+  });
 }
 
 async function applyRevisionLocked(

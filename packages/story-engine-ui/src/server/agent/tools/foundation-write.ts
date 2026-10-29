@@ -21,7 +21,7 @@ import {
   RULE_SCALAR_LABELS,
   readCardsOrLegacy,
   splitForAi,
-  withBookLock,
+  withSettledBook,
 } from "@actalk/story-core";
 import type { SettingCardsFile } from "@actalk/story-core";
 
@@ -189,7 +189,9 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
 
   // 整批在一把书锁里做完（没有模型调用，很快）：先记依据、再读设定卡分批（第 8 轮复核 V4 同类：材料在依据之后读），
   // 读到的卡、AI 这批写、写完的依据、按钮上的试算是同一个样子，中间插不进作者的改动。
-  return withBookLock(input.projectDir, () => writeLocked(input.projectDir, valid, notDone));
+  // 先收拾写到一半的事务再读（P1 第 17 轮）：对着马上要回滚的半截设定分批、试算按钮，作者看到的不是书真正的样子。
+  const settled = await withSettledBook(input.projectDir, () => writeLocked(input.projectDir, valid, notDone));
+  return settled.ok ? settled.value : { ok: false, applied: [], notDone: [...notDone, settled.message], summary: `设定没改：${settled.message}` };
 }
 
 async function writeLocked(projectDir: string, valid: readonly CardOp[], notDone: string[]): Promise<FoundationWriteOutput> {

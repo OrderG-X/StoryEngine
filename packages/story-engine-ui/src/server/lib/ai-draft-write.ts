@@ -4,7 +4,7 @@
  *
  * 规矩：AI 写好的一份先存成候选（draft-candidates.ts，「在写」），再试着换上；只在两样都对得上时换上——
  *  - 工作稿还是开工时那一版（baseVersion）：模型跑着的几十秒到几分钟里作者存了稿、撤销或恢复过，就不换；
- *  - 书还是开工时那样（开工时读的真相依据，runner 在书锁里、收拾完写到一半的事务之后核）：前文、设定、作者裁定改过，
+ *  - 书还是开工时那样（开工时读的真相依据和写的时候用过的材料，在书锁里、收拾完写到一半的事务之后核）：前文、设定、作者裁定改过，
  *    这版是照旧的写的，也不换。
  * 换上了删这份候选（只删这一份：别的没处理的候选不动）；没换上（上面两样对不上、写盘出错）这份标成「写好了」留着，
  * 如实告诉作者，稿纸上可以「换成 AI 这版」。白跑的几分钟不丢，作者那份也不被盖掉。
@@ -14,7 +14,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { draftApplyGenerated, draftPath, runCommand, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { draftApplyGenerated, draftPath, runCommand, withSettledBook, type TruthBasis } from "@actalk/story-core";
 import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
 import { MIRROR_FILES } from "../book/mirror/build.js";
 import { MIRROR_MARKER } from "../book/mirror/sync.js";
@@ -134,14 +134,16 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
   };
   let outcome: AiDraftOutcome | "aborted";
   try {
-    outcome = await withBookLock(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
+    // 先收拾写到一半的事务（老格式、新核心都收），再在同一把书锁里核材料、依据、底版（P1 第 17 轮 AE3）：
+    // 写手读材料时正赶上别的写断在半路，读到的是马上要回滚的那份；先核后收拾，回滚后的书和这版对不上也看不出来。
+    const settled = await withSettledBook(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
       // 作者喊停之后后到的稿不落盘，也不留候选（锁里再问一次：等锁的工夫也可能停了）。
       if (turnAborted()) return "aborted";
       const movedMaterial = await firstMovedMaterial(projectDir, input.materials);
       if (movedMaterial) return keep("basis_moved", describeMovedMaterial(movedMaterial));
       // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
       const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
-      // 依据交给 runner 核：它先收拾写到一半的事务（回滚会换代次），再在同一把锁里比，途中读到的半截真相一律对不上。
+      // 依据交给 runner 核（事务已在上面收拾过，回滚会换代次），途中读到的半截真相一律对不上。
       const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
         runCommand(projectDir, draftApplyGenerated, {
           chapter: input.chapter,
@@ -158,6 +160,7 @@ export async function applyAiDraft(projectDir: string, input: AiDraftInput): Pro
       const content = await readFile(path, "utf-8");
       return { applied: true, path, content, version: result.result.version, unchanged: result.result.unchanged, ...(snapshotId ? { snapshotId } : {}) };
     });
+    outcome = settled.ok ? settled.value : await keep("apply_failed", settled.message);
   } catch (error) {
     if (error instanceof AiDraftWriteError) throw error;
     // 存档点、写盘这些出了意外：工作稿没动（核心事务回滚），AI 这版留着。

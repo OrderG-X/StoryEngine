@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { projectBook } from "../index.js";
 import type { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readHead } from "../store/book.js";
 import { draftPath, TX_DIR } from "../store/paths.js";
-import { setAsideBrokenTransactions } from "../store/transaction.js";
+import { hasPendingTransactions, setAsideBrokenTransactions } from "../store/transaction.js";
 import { chapterCommit, type ChapterCommitResult } from "./chapter-commit.js";
 import { chapterRetitle } from "./chapter-retitle.js";
 import { readDraft } from "../draft/draft.js";
@@ -178,6 +179,31 @@ describe("定稿命令", () => {
     const run = vi.fn(async () => "读了");
     expect(await withSettledBook(book, run)).toMatchObject({ ok: false, code: "transaction_residue" });
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("老格式事务（升级前崩溃留下的）一起收拾（第 17 轮 AE2）：withSettledBook 读到的是回滚后的；没收拾时读的一方看得出没收尾", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const legacy = join(book, ".story-engine-tx", "commit-chapter-0001");
+    await mkdir(join(legacy, "backups", "chapters"), { recursive: true });
+    await writeFile(join(legacy, "backups", "chapters", "0001.md"), CH1);
+    await writeFile(join(legacy, "manifest.json"), JSON.stringify({
+      version: 2, chapter: 1, createdAt: "2026-07-13T00:00:00.000Z", files: ["chapters/0001.md"],
+      backups: [{ relativePath: "chapters/0001.md", existed: true, backupPath: "backups/chapters/0001.md", sha256: createHash("sha256").update(CH1, "utf-8").digest("hex") }],
+      status: "staged",
+    }));
+    await writeFile(join(book, "chapters/0001.md"), "老版本写了一半的正文");
+    expect(await hasPendingTransactions(book)).toBe(true);
+    expect(await withSettledBook(book, () => readFile(join(book, "chapters/0001.md"), "utf-8"))).toEqual({ ok: true, value: CH1 });
+    expect(await hasPendingTransactions(book)).toBe(false);
+
+    // 收拾不了（清单坏了）：写命令、withSettledBook 都如实失败、不开工。
+    await mkdir(join(book, ".story-engine-tx", "commit-chapter-0002"), { recursive: true });
+    await writeFile(join(book, ".story-engine-tx", "commit-chapter-0002", "manifest.json"), "{坏");
+    expect(await hasPendingTransactions(book)).toBe(true);
+    const run = vi.fn(async () => "读了");
+    expect(await withSettledBook(book, run)).toMatchObject({ ok: false, code: "transaction_residue" });
+    expect(run).not.toHaveBeenCalled();
+    expect(await runCommand(book, chapterRetitle, { chapter: 1, title: "新名" }, author("k-retitle"))).toMatchObject({ ok: false, code: "transaction_residue" });
   });
 
   it("参数不对如实报，不写", async () => {

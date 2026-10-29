@@ -4,13 +4,21 @@
  * - AD1 写手没起名就是没起名：「另写几版」不带章名，选用时沿用作者的，不补「第N章」盖掉它。
  * - AD2 章名里的换行（含单独的 \r）收成空格，不串进正文。
  * - AD3 存稿先收拾完上次没写完的事务再读盘：旧页面沿用的章名是回滚后的。
+ * - AE1 只写了章号（换个写法：「第1章：」「第 1 章」「第一〇一章」……）也算没起名（第 17 轮）。
+ * - AE2 存稿连升级前的老格式事务一起先收拾（第 17 轮）。
+ * - AE3 AI 换稿先收拾事务、再核写的时候用过的材料（第 17 轮）。
  */
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composeDraftFile, draftSave, readDraft, readDraftState, runCommand } from "@actalk/story-core";
+import { bareChapterName, composeDraftFile, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand } from "@actalk/story-core";
+import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { readMaterialWorld } from "../book/material-reads.js";
+import { applyAiDraft } from "../lib/ai-draft-write.js";
+import { readDraftCandidate, readDraftRecovery } from "../lib/draft-candidates.js";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
@@ -120,5 +128,105 @@ describe("AD3 存稿先收拾完上次没写完的事务再读盘", () => {
     const out = await call("/api/working-draft", { projectPath: book, chapter: 1, body, baseVersion, ...(explicit ? { title: "作者原章名" } : {}) }, "PUT");
     expect(out.status).toBe(200);
     expect(await readDraft(book, 1)).toMatchObject({ title: "作者原章名", body });
+  });
+});
+
+describe("AE1 只写了章号，换个写法也算没起名", () => {
+  it.each(["# 第1章：", "# 第1章 ·", "# 第一章—", "# 第1 章", "# 第零一章", "# 第一〇一章", "# 第 1 章", "第 1 章"])("%j：不起名、作者的章名留着", async (heading) => {
+    await save("作者的章名");
+    model.text = `${heading}\n\n${model.text}`;
+    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
+    expect(generated.status).toBe(200);
+    expect(generated.payload.draftTitle).toBeUndefined();
+    expect(String(generated.payload.draftBody)).not.toMatch(/^第|^#/u);
+    const before = (await readDraft(book, 1))!;
+    const applied = await call("/api/draft/apply-candidate", { projectPath: book, chapter: 1, title: (generated.payload.draftTitle as string | undefined) ?? before.title ?? "", body: generated.payload.draftBody, baseVersion: before.version });
+    expect(applied.status).toBe(200);
+    expect((await readDraft(book, 1))?.title).toBe("作者的章名");
+  });
+
+  it.each([
+    ["# 第1章：雨夜", "第1章 · 雨夜"],
+    ["# 第 1 章 雨夜", "第1章 · 雨夜"],
+    ["# 第九章 · 雨夜", "第1章 · 雨夜"],
+    ["# 雨夜", "第1章 · 雨夜"],
+    ["# 第三章的秘密", "第1章 · 第三章的秘密"],
+  ])("%j：起了名，统一成本章章号", async (heading, expected) => {
+    model.text = `${heading}\n\n${model.text}`;
+    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
+    expect(generated.payload.draftTitle).toBe(expected);
+  });
+
+  it("核心同一条规则：剥章号、连着几次的也剥", () => {
+    expect(bareChapterName("第1章 · 第1章 · 雨夜")).toBe("雨夜");
+    expect(bareChapterName("第１２章｜雨夜")).toBe("雨夜");
+    expect(bareChapterName("第两百章")).toBe("");
+    expect(bareChapterName("第三章的秘密")).toBe("第三章的秘密");
+  });
+});
+
+/** 照老定稿链写盘的格式造一份没写完的事务：备份了工作稿原样，清单 staged。 */
+async function writeLegacyResidue(previous: string): Promise<void> {
+  const relativePath = draftPath(1);
+  const tx = join(book, ".story-engine-tx", "commit-chapter-0001");
+  const backupPath = join("backups", relativePath);
+  await mkdir(join(tx, backupPath, ".."), { recursive: true });
+  await writeFile(join(tx, backupPath), previous, "utf-8");
+  await writeFile(join(tx, "manifest.json"), JSON.stringify({
+    version: 2,
+    chapter: 1,
+    createdAt: "2026-07-13T00:00:00.000Z",
+    files: [relativePath],
+    backups: [{ relativePath, existed: true, backupPath, sha256: createHash("sha256").update(previous, "utf-8").digest("hex") }],
+    status: "staged",
+  }), "utf-8");
+}
+
+describe("AE2 存稿连老格式事务一起先收拾", () => {
+  it.each([
+    ["稿已换成没写完的那版", true],
+    ["备份写了、稿还没换", false],
+  ])("%s：存的这笔撞版本留成恢复稿，之后开书回滚也丢不了", async (_label, swapped) => {
+    await save("作者原章名", "原正文 A。");
+    const baseVersion = (await readDraftState(book, 1)).version;
+    const original = await readFile(join(book, draftPath(1)), "utf-8");
+    await writeLegacyResidue(original);
+    if (swapped) await writeFile(join(book, draftPath(1)), composeDraftFile({ title: "没写完的章名", body: "没写完的正文 B。" }));
+
+    const out = await call("/api/working-draft", { projectPath: book, chapter: 1, title: "作者原章名", body: "作者新写的 C。", baseVersion }, "PUT");
+    expect(out.status).toBe(409);
+    expect(await readDraftRecovery(book, String(out.payload.recoveryId))).toMatchObject({ body: "作者新写的 C。" });
+    expect(await readDraft(book, 1)).toMatchObject({ title: "作者原章名", body: "原正文 A。" });
+    // 之后开书再收拾一遍：没有要回滚的了，作者那笔照样在恢复稿里。
+    await ensureBookOnCore(book);
+    expect(await readDraft(book, 1)).toMatchObject({ body: "原正文 A。" });
+    expect(await readDraftRecovery(book, String(out.payload.recoveryId))).toMatchObject({ body: "作者新写的 C。" });
+  });
+});
+
+describe("AE3 AI 换稿先收拾事务，再核写的时候用过的材料", () => {
+  it("前一章正写断在半路（工作稿事务，不换真相代次）：照半截那版写的不换上、留成候选", async () => {
+    await save("", "口令是白鹤。");
+    // 造一份被杀进程留下的前一章存稿事务：工作稿代次、工作稿都已换上，清单还是 prepared。
+    const paths = ["store-control/drafts.json", draftPath(1)];
+    const original = await Promise.all(paths.map((path) => readFile(join(book, path), "utf-8")));
+    const tx = join(book, ".story-core-tx", "killed-save");
+    await mkdir(join(tx, "backup"), { recursive: true });
+    await mkdir(join(tx, "staged"), { recursive: true });
+    for (const [slot, text] of original.entries()) await writeFile(join(tx, "backup", String(slot)), text);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "killed-save", createdAt: new Date().toISOString(), status: "prepared", files: paths.map((path, slot) => ({ path, slot: String(slot), existed: true })) }));
+    const gens = JSON.parse(original[0]!) as { chapters: Record<string, string> };
+    gens.chapters["1"] = "killed-save-gen";
+    await writeFile(join(book, paths[0]!), JSON.stringify(gens));
+    await writeFile(join(book, paths[1]!), composeDraftFile({ title: "", body: "口令是青鹭。" }));
+
+    // 写手开工：依据、材料都照半截那版读。
+    const basis = await readTruthBasis(book);
+    const materials = await readMaterialWorld(book, 2);
+    const outcome = await applyAiDraft(book, { chapter: 2, title: "", body: "他报出口令：青鹭。", baseVersion: null, basis, materials, source: "draft" });
+    expect(outcome).toMatchObject({ applied: false, reason: "basis_moved" });
+    expect(await readDraft(book, 1)).toMatchObject({ body: "口令是白鹤。" });
+    expect(await readDraft(book, 2)).toBeUndefined();
+    if (!outcome.applied) expect(await readDraftCandidate(book, outcome.candidateId)).toMatchObject({ body: "他报出口令：青鹭。" });
   });
 });

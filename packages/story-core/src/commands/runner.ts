@@ -16,6 +16,7 @@ import { BookFileError, readHead, readTruthBasis } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
 import { draftGensWrite, readDraftGens, revisionWrite } from "../store/control.js";
 import { draftChapterOfPath, HEAD_PATH, receiptPath } from "../store/paths.js";
+import { LegacyResidueError } from "../store/legacy-transaction.js";
 import { commitFiles, recoverTransactions, type RecoveryReport, type TxWrite } from "../store/transaction.js";
 import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec, WritePlan } from "./types.js";
 
@@ -53,6 +54,9 @@ async function settleTransactions(bookDir: string): Promise<CommandFailure | { r
   try {
     recovery = await recoverTransactions(bookDir);
   } catch (error) {
+    if (error instanceof LegacyResidueError) {
+      return fail("transaction_residue", "升级之前写到一半的记录收拾不了，先不动这本书，免得丢数据。", { legacy: error.code });
+    }
     return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
   }
   if (recovery.problems.length > 0) {
