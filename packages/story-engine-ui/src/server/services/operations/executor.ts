@@ -137,6 +137,8 @@ export interface Recipe<P = unknown> {
   readonly lane: GateLane;
   /** 后台配方：进程没了、开书时自动接着跑（没有结果不明的调用时）。 */
   readonly autoResume?: boolean;
+  /** 这类最新的那次记录清理时不清（别的文件照清）：状态要一直从它读的（通读记账停着就一直挡着定稿）。 */
+  readonly keepLatest?: boolean;
   /** 归一、校验参数，算写位和额度（设计 4.5 的算式，跟模型有关的项按这次冻结的模型选择算）；不受理返回失败。 */
   prepare(bookDir: string, input: { readonly mode?: string; readonly params: unknown; readonly origin: OperationOrigin; readonly models: FrozenModels }): Promise<PrepareOutcome<P>>;
   run(ctx: RecipeContext<P>): Promise<OperationResult>;
@@ -604,7 +606,8 @@ export async function reconcileOperations(bookDir: string): Promise<{ readonly r
       if (started?.state === "running") resumed.push(record.opId);
     }
   }
-  await withBookLock(bookDir, () => pruneOperations(bookDir, (record) => summaryLine(record), new Date(), (opId) => clearPublishedKeys(bookDir, opId))).catch((error) => {
+  const keepLatestOf = new Set([...recipes.values()].filter((recipe) => recipe.keepLatest).map((recipe) => recipe.kind));
+  await withBookLock(bookDir, () => pruneOperations(bookDir, (record) => summaryLine(record), new Date(), (opId) => clearPublishedKeys(bookDir, opId), keepLatestOf)).catch((error) => {
     console.warn("[operations] 清理过期的操作没成（不影响开书）", error);
   });
   return { resumed };

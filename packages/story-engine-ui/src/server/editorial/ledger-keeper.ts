@@ -48,6 +48,9 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 2;
+
 /** 交账单的要求（通用写法，绝不写进具体书名、人名）。 */
 export const KEEPER_SPEC: readonly string[] = [
   "把这一章引起的变化列成一份账单。题材中立：只记正文真实写到的，不臆造、不补剧情、不预设走向。",

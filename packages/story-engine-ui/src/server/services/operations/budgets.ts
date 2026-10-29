@@ -6,6 +6,8 @@ import { DEFAULT_READER_VARIANT, READER_CALL_MAX_SENDS, readerCheckCalls, reader
 import { READER_MAX_CATCH_UP, READER_MAX_VOLUME_BUILDS } from "../../editorial/continuity/check-service.js";
 import { volumeBuildsBound } from "../../editorial/reader-window.js";
 import { PROPOSE_CALLS } from "../../editorial/brainstorm.js";
+import { KEEPER_MAX_CALLS } from "../../editorial/ledger-keeper.js";
+import { REREAD_ATTEMPTS } from "../../editorial/reread.js";
 import { PLANNER_MAX_CATCH_UP } from "../../editorial/plan-chapter.js";
 import { PLANNER_DRAFT_CALLS, PLANNER_REVISE_CALLS, PLANNER_THINKING_CALL_MAX_SENDS } from "../../editorial/planner.js";
 import { MODEL_CALL_MAX_SENDS, type ModelTaskProfileKey } from "../../lib/llm-client.js";
@@ -59,6 +61,13 @@ export const backfillStepVolumeBuilds = (chapter: number): number => volumeBuild
 
 /** 后台补读第 chapter 章那一步最多发几次：这一章的笔记 1 次 + 这一步的卷节点上限（接着做时按它加额度）。 */
 export const backfillStepSends = (chapter: number): number => (1 + backfillStepVolumeBuilds(chapter)) * READER_CALL_MAX_SENDS;
+
+/**
+ * 通读记账第 chapter 章读的那一步最多发几次（片 3D）：记账员试满 REREAD_ATTEMPTS 次 × 每次的调用，
+ * 加上读到上一章要补的笔记（上一章刚记上账，笔记照后台补读一步的上限算：1 章 + 卷节点）。
+ */
+export const rereadReadSends = (chapter: number): number =>
+  REREAD_ATTEMPTS * KEEPER_MAX_CALLS * READER_CALL_MAX_SENDS + (chapter > 1 ? backfillStepSends(chapter - 1) : 0);
 
 export const sumBudget = (steps: Readonly<Record<string, number>>): number => Object.values(steps).reduce((sum, value) => sum + value, 0);
 

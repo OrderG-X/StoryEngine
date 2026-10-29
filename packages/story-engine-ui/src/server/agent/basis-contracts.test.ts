@@ -28,8 +28,7 @@ import { normalizeChapterPlan, writeChapterPlan } from "../book/chapter-plan.js"
 import { confirmChapterCommit, fileTicketStore, memoryTicketStore, prepareChapterCommit, type PrepareInput } from "../editorial/commit-flow.js";
 import { planBasisOf, resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
 import * as readers from "../editorial/reader-window.js";
-import { readRereadState } from "../editorial/reread-state.js";
-import { beginReread, runReread } from "../editorial/reread.js";
+import { readRereadState, REREAD_KIND } from "../editorial/reread-state.js";
 import { settleApplyArgs } from "../editorial/settle/apply-args.js";
 import type { SettleProposal } from "../editorial/settle/propose.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
@@ -43,6 +42,7 @@ import { __resetOperationStoreForTests, readOperation } from "../lib/operations/
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../services/operations/executor.js";
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
+import { createBackgroundRereadRecipe } from "../services/operations/recipes/background-reread.js";
 
 /** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
 const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
@@ -87,20 +87,29 @@ describe("依据安全契约", () => {
       facts: [], fields: [], committed: [{ chapter: 1, textSha256: sha256(original) }],
       drafts: [], searched: [1], missed: [], reviewDropped: [], failures: [], basis: await readTruthBasis(book),
     };
-    await beginReread(book, 1);
     let changed = false;
-    await runReread(book, {
+    __resetOperationStoreForTests();
+    registerRecipe(createBackgroundRereadRecipe({
+      modelProblem: () => undefined,
       callModel: async (messages, options) => {
         if (!options?.json) return "笔记。";
         const sees = messages.at(-1)?.content.includes("李四") ? "李四" : "张三";
         if (!changed) {
           changed = true;
           // 记账员还在想：作者在别处确认了一条定论，正文里的张三改成了李四。
-          ok(await runCommand(book, settleApply, await settleApplyArgs(book, correction, new Set()), { ...author("fix-name"), basis: correction.basis }));
+          // 依据现取：交通读时老书先接上新核心（搬设定卡），那也是一次写。
+          const fix = { ...correction, basis: await readTruthBasis(book) };
+          ok(await runCommand(book, settleApply, await settleApplyArgs(book, fix, new Set()), { ...author("fix-name"), basis: fix.basis }));
         }
         return JSON.stringify({ summary: { text: `${sees}交出钥匙后离开`, quote: "他离开了" } });
       },
-    });
+    }));
+    try {
+      ok(await submitOperation(book, { kind: REREAD_KIND, params: { total: 1 }, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString(), origin: { kind: "button" } }));
+      await __drainOperationsForTests();
+    } finally {
+      __resetRecipesForTests();
+    }
     const text = await readFile(join(book, "chapters/0001.md"), "utf-8");
     const ledger = await readChapterLedger(book, 1);
     expect(text).toContain("李四");

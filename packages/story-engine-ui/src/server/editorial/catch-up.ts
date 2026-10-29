@@ -5,14 +5,14 @@
  * 一章一步、有额度、能停、进程没了开书自动接着做。这里只剩两件：
  *   - 进度：从这本书在跑的 background.backfill 的冻结范围和当前步骤算（原来的 agents/<角色>/progress.json 删了），
  *     加上核账 / 拟纲 / 记账当场补笔记的进度（只在内存，reader-progress.ts）和「谁在等它读完」（waiting-registry.ts）；
- *   - 每本书一条共用队列（2026-10-12 R1）：后台补读的每一步和导入后的通读记账排在同一条队上，不同时并发打模型服务商。
+ *   - 每本书一条共用队列（2026-10-12 R1）：后台补读的每一步和导入后通读记账（background.reread）的每一步排在同一条队上，不同时并发打模型服务商。
  */
 import { listOperations, type OperationRecord, type PauseReason } from "../lib/operations/store.js";
 import { BACKFILL_KIND, parseBackfillStep, readBackfillParams, type BackfillRange } from "../lib/reader-backfill.js";
 import { countCommittedChapters } from "./reader-window.js";
 import { readInPlaceProgress } from "./reader-progress.js";
 import { readerWaitingActions } from "./waiting-registry.js";
-import { readRereadState, rereadEtaMinutes } from "./reread-state.js";
+import { readRereadProgress } from "./reread-state.js";
 
 /** 编辑部三个跟读角色的 id（跟 index.ts 的 readerRoles() 同序：checker → ledger → planner）。 */
 export const READER_ROLE_IDS: readonly string[] = ["checker", "ledger", "planner"];
@@ -114,11 +114,10 @@ export async function readReadersCatchUpStatus(notesRoot: string, roleIds: reado
     return { role: roleId, reading: false, done: 0, total: 0 };
   });
   const reading = backfills.active.length > 0 || roles.some((role) => role.reading);
-  // P8：通读记账没记完时，记账员那一行按通读状态显示。
-  const reread = await readRereadState(notesRoot);
+  // P8：通读记账没记完时，记账员那一行按通读状态显示（片 3D 起从这本书最新那次 background.reread 的记录算）。
+  const reread = await readRereadProgress(notesRoot);
   if (!reread || reread.status === "done") return { reading, roles };
   const withReread = roles.map((role) => (role.role === LEDGER_ROLE_ID ? { role: role.role, reading: reread.status === "running", done: reread.done, total: reread.total } : role));
-  const eta = rereadEtaMinutes(reread);
   return {
     reading: reading || withReread.some((role) => role.reading),
     roles: withReread,
@@ -126,7 +125,7 @@ export async function readReadersCatchUpStatus(notesRoot: string, roleIds: reado
       status: reread.status,
       done: reread.done,
       total: reread.total,
-      ...(eta !== undefined ? { etaMinutes: eta } : {}),
+      ...(reread.etaMinutes !== undefined ? { etaMinutes: reread.etaMinutes } : {}),
       ...(reread.stoppedReason ? { stoppedReason: reread.stoppedReason } : {}),
     },
   };

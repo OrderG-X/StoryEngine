@@ -5,6 +5,7 @@
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import type { OperationOrigin, OperationRecord, OperationState, PauseReason } from "../../lib/operations/store.js";
 import { BACKFILL_KIND } from "../../lib/reader-backfill.js";
+import { REREAD_KIND } from "../../editorial/reread-state.js";
 import { OPERATION_RESULT_SCHEMA, summaryLine, type OperationResult } from "./executor.js";
 
 export interface OperationView {
@@ -102,6 +103,7 @@ const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
 };
 const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",
+  [REREAD_KIND]: "通读记账",
   "inspect.run": "检查",
   "draft.change": "写稿",
   "draft.adopt": "换上 AI 稿",

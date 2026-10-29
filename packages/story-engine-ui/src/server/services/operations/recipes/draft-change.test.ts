@@ -9,7 +9,8 @@ import { chapterCommit, draftSave, readDraft, readDraftState, runCommand } from 
 import { readChapterPlan } from "../../../book/chapter-plan.js";
 import { createStoryProject } from "../../../book/project-store.js";
 import { __resetCatchUpLocksForTests } from "../../../editorial/reader-window.js";
-import { REREAD_STATE_SCHEMA, writeRereadState } from "../../../editorial/reread-state.js";
+import { REREAD_KIND } from "../../../editorial/reread-state.js";
+import { seedOperation } from "../../../lib/operations/test-helpers.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
 import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
 import { __resetLiveForTests, onLive, type LiveEvent } from "../../../lib/operations/live.js";
@@ -83,8 +84,7 @@ describe("受理前挡下：不受理、不调模型", () => {
   });
 
   it("导入的书还在通读记账 → rereading", async () => {
-    const now = new Date().toISOString();
-    await writeRereadState(book, { schema: REREAD_STATE_SCHEMA, status: "running", run: "r1", total: 2, done: 0, recorded: 0, skipped: 0, startedAt: now, updatedAt: now, resumedAt: now, doneAtResume: 0 });
+    await seedOperation(book, { kind: REREAD_KIND, params: { total: 2, chapters: [1, 2] } });
     expect(await submitDraftChange(book, "write", { chapter: 1 }, fakeDraftDeps({ writerClient: untouchable }))).toMatchObject({ ok: false, code: "rereading" });
   });
 

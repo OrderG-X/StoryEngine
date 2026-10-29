@@ -530,6 +530,7 @@ export function tombstoneExpired(stone: Pick<OperationTombstone, "issuedAt" | "a
 /**
  * 开书时（书锁里）清：结束超 30 天、或每本书超 200 次的操作目录，留墓碑；墓碑过了期限（tombstoneExpired）的删。
  * summaryOf 给墓碑写一句结果（操作结果的投影，executor 给）。
+ * keepLatestOf 里的几类，每类最新的那次（按受理时间）留着记录、只清别的文件（状态要一直从它读，见配方 keepLatest）。
  */
 export async function pruneOperations(
   bookDir: string,
@@ -537,6 +538,7 @@ export async function pruneOperations(
   now: Date = new Date(),
   /** 清掉这次操作在书里留的发布键（改句记录、出稿统计、候选墓碑）：先墓碑、再删目录、再清键，同一次持锁。 */
   clearPublished?: (opId: string) => Promise<void>,
+  keepLatestOf: ReadonlySet<string> = new Set(),
 ): Promise<{ readonly cleared: readonly string[] }> {
   let names: string[];
   try {
@@ -547,6 +549,7 @@ export async function pruneOperations(
   }
   const finished: OperationRecord[] = [];
   const cleared: string[] = [];
+  const latestOfKind = new Map<string, OperationRecord>();
   for (const name of names) {
     const stored = await readOperation(bookDir, name);
     if (stored.kind === "tombstone") {
@@ -554,13 +557,20 @@ export async function pruneOperations(
       if (tombstoneExpired(stored.tombstone, now)) await rm(operationDir(bookDir, name), { recursive: true, force: true });
       else await removeAllButRecord(bookDir, name);
       await clearPublished?.(stored.tombstone.opId);
-    } else if (stored.kind === "record" && isTerminal(stored.record.state)) {
-      finished.push(stored.record);
+    } else if (stored.kind === "record") {
+      const record = stored.record;
+      const latest = latestOfKind.get(record.kind);
+      if (keepLatestOf.has(record.kind) && (!latest || record.createdAt > latest.createdAt)) latestOfKind.set(record.kind, record);
+      if (isTerminal(record.state)) finished.push(record);
     }
   }
   finished.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   for (const [index, record] of finished.entries()) {
     if (index < OPERATION_KEEP_COUNT && ageDays(record.updatedAt, now) <= OPERATION_KEEP_DAYS) continue;
+    if (latestOfKind.get(record.kind)?.opId === record.opId) {
+      await removeAllButRecord(bookDir, record.opId);
+      continue;
+    }
     const stone: OperationTombstone = {
       schema: OPERATION_SCHEMA,
       tombstone: true,

@@ -13,10 +13,8 @@ import { DEFAULT_READER_VARIANT, checkerRoleFor } from "./checker.js";
 import { LEDGER_ROLE } from "./ledger-keeper.js";
 import { PLANNER_ROLE } from "./planner.js";
 import { countCommittedChapters, type BrainCallModel, type ReaderRole } from "./reader-window.js";
-import { beginReread, runReread } from "./reread.js";
 import { readRereadState } from "./reread-state.js";
 import { requestReaderBackfill, submitReaderBackfill } from "../lib/reader-backfill.js";
-import { withUsageBook } from "../lib/usage-scope.js";
 
 export {
   CHECKER_ROLE,
@@ -50,8 +48,8 @@ export {
   type ReadersCatchUpStatus,
   type RereadStatus,
 } from "./catch-up.js";
-export { isRereadActive, REREAD_ATTEMPTS } from "./reread.js";
-export { formatRereadEta, readRereadState, rereadBlocker, rereadEtaMinutes, type RereadState } from "./reread-state.js";
+export { REREAD_ATTEMPTS } from "./reread.js";
+export { formatRereadEta, readRereadProgress, readRereadState, REREAD_KIND, rereadBlocker, type RereadState } from "./reread-state.js";
 export {
   describeReaderWait,
   readerWaitingHandlers,
@@ -123,36 +121,17 @@ export function warmUpReaders(projectDir: string, chapter: number): void {
 }
 
 /**
- * 打开书（state-overview）时：导入的书还在通读记账（进程重启前在记）→ 接着记，记完它自己交后台补读；停下的等作者点「接着记」。
- * 其余交一次后台补读到已定稿的最后一章，等交上再返回（开书概况带得上「在读」）。三个专员都读齐了就不受理、什么都不起。永不抛错。
+ * 打开书（state-overview）时：导入的书还没通读记完（在记的由开书对账接着做，停着的等作者点「接着记」）就不补读——
+ * 记完它自己交后台补读。其余交一次后台补读到已定稿的最后一章，等交上再返回（开书概况带得上「在读」）。
+ * 三个专员都读齐了就不受理、什么都不起。永不抛错。
  */
-export async function resumeBackgroundReading(projectDir: string, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
+export async function resumeBackgroundReading(projectDir: string): Promise<void> {
   try {
     const reread = await readRereadState(projectDir);
-    if (reread && reread.status !== "done") {
-      if (reread.status === "running") void runBookReread(projectDir, options);
-      return;
-    }
+    if (reread && reread.status !== "done") return;
     const total = await countCommittedChapters(projectDir);
     if (total > 0) await submitReaderBackfill(projectDir, { upTo: total });
   } catch (error) {
     console.warn("[brain] 看要不要后台补读时出错（不影响开书）", error);
   }
-}
-
-/**
- * 跑（或接着跑）导入的书的通读记账（P8）。记完排三个专员的后台补读（记账员只差最后一章的笔记，核账员、章纲员从头读）。
- * 永不抛错，调用方放心 `void`。
- */
-export function runBookReread(projectDir: string, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
-  return withUsageBook(projectDir, () => runReread(projectDir, {
-    ...options,
-    onDone: (total) => requestReaderBackfill(projectDir, { upTo: total }),
-  }));
-}
-
-/** 导入后开一轮新的通读：先落状态（开书那次概况就带得上进度），再在后台跑。 */
-export async function startBookReread(projectDir: string, total: number, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
-  await beginReread(projectDir, total);
-  void runBookReread(projectDir, options);
 }
