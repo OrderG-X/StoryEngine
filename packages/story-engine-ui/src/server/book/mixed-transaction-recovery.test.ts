@@ -6,9 +6,10 @@
  * - C181 读侧和恢复用同一份判断：恢复收拾不了的老残留，读侧不报稳定。
  * - C182 开书时核心有收拾不了的残留，不报接好了。
  * - 第 19 轮 AG1～AG3：要盖掉的不是那份事务写的先另存；哪份退不下去就整轮挡住；两份代次只往前走。
+ * - 第 20 轮 AH1～AH4：另存只认存妥了的；去重分事务实例；老格式只碰工作稿代次也换新纪元；老清单收尾整份换上。
  */
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -23,6 +24,8 @@ import {
   readDraftState,
   recoverBookTransactions,
   runCommand,
+  setLegacyTxIoHookForTests,
+  settleSavedCopy,
   withSettledBook,
 } from "@actalk/story-core";
 import { createStoryProject } from "./project-store.js";
@@ -42,6 +45,7 @@ beforeEach(async () => {
   expect((await runCommand(book, draftSave, { chapter: 1, title: "作者原名", body: "作者成功保存的 A。", baseVersion: null }, { caller: "author" })).ok).toBe(true);
 });
 afterEach(async () => {
+  setLegacyTxIoHookForTests(undefined);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -294,5 +298,146 @@ describe("AG 第 19 轮：恢复不毁唯一副本、失败就挡住、代次只
     expect(await recoverBookTransactions(book)).toMatchObject({ rolledBack: ["own-write"] });
     expect(await readDraft(book, 1)).toMatchObject({ body: "作者成功保存的 A。" });
     expect(await savedCopies()).toEqual([]);
+  });
+});
+
+describe("AH 第 20 轮：另存只认存妥了的、分事务实例；老格式代次换新纪元；清单整份换上", () => {
+  const c = composeDraftFile({ title: "作者后来的名 C", body: "作者后来存下的整份 C。" });
+  const a = (): Promise<string> => read(DRAFT);
+  const savedDir = (): string => join(book, ".story-core-saved");
+  const savedNames = async (): Promise<string[]> => (await readdir(savedDir()).catch(() => [] as string[])).filter((name) => name.endsWith(".json"));
+  const keptC = async (): Promise<boolean> => (await listSavedDrafts(book, 1)).some((copy) => copy.title === "作者后来的名 C" && copy.body === "作者后来存下的整份 C。");
+
+  /** 一份比现在的稿旧的残留（备份 A），盘上是之后存下的 C。同样的参数造出来的是同一份事务实例。 */
+  async function staleResidue(kind: "core" | "legacy", previous: string): Promise<string> {
+    let tx: string;
+    if (kind === "legacy") tx = await legacyResidue(previous, "2026-10-18T00:00:00.000Z");
+    else {
+      tx = join(book, ".story-core-tx", "stale-core");
+      await mkdir(join(tx, "backup"), { recursive: true });
+      await mkdir(join(tx, "staged"), { recursive: true });
+      await writeFile(join(tx, "backup", "0"), previous);
+      await writeFile(join(tx, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "stale-core", createdAt: "2026-10-18T00:00:00.000Z", status: "prepared", files: [{ path: DRAFT, slot: "0", existed: true }] }));
+    }
+    await writeFile(join(book, DRAFT), c);
+    return tx;
+  }
+
+  /** 先真跑一遍，记下这份副本落在哪个号；再把书摆回恢复前（同一份事务实例、同样的 C），另存区清空。 */
+  async function primaryName(kind: "core" | "legacy"): Promise<string> {
+    const previous = await a();
+    await staleResidue(kind, previous);
+    await recoverBookTransactions(book);
+    const [name] = await savedNames();
+    expect(name).toMatch(/^kept-[0-9a-f]{20}\.json$/u);
+    await rm(savedDir(), { recursive: true, force: true });
+    await staleResidue(kind, previous);
+    return name!;
+  }
+
+  it.each((["core", "legacy"] as const).flatMap((kind) => (["目录", "坏 JSON", "断了的软链", "原文对不上"] as const).map((obstacle) => [kind, obstacle] as const)))(
+    "AH1 %s：号被%s占着，不当存过——另起一个号存下 C，退回 A",
+    async (kind, obstacle) => {
+      const name = await primaryName(kind);
+      const target = join(savedDir(), name);
+      await mkdir(savedDir(), { recursive: true });
+      if (obstacle === "目录") await mkdir(target);
+      else if (obstacle === "坏 JSON") await writeFile(target, "{");
+      else if (obstacle === "断了的软链") await symlink(join(root, "不在的副本"), target);
+      else await writeFile(target, JSON.stringify({ schema: "story-core-saved/1", id: name.slice(0, -5), path: DRAFT, content: "错位的另一份。", sha: sha(c), from: "x", savedAt: "2026-10-20T00:00:00.000Z" }));
+
+      expect(await recoverBookTransactions(book)).toMatchObject({ problems: [] });
+      expect(await readDraft(book, 1)).toMatchObject({ body: "作者成功保存的 A。" });
+      expect(await keptC()).toBe(true);
+      expect(await hasPendingTransactions(book)).toBe(false);
+    },
+  );
+
+  it.each(["core", "legacy"] as const)("AH1 %s：同一份事务实例存妥了的，重来不存第二份", async (kind) => {
+    const previous = await a();
+    await staleResidue(kind, previous);
+    await recoverBookTransactions(book);
+    const first = await savedNames();
+    // 被杀在换回之前：事务还在、盘上还是 C、副本已存。
+    await staleResidue(kind, previous);
+    await recoverBookTransactions(book);
+    expect(await savedNames()).toEqual(first);
+    expect(await keptC()).toBe(true);
+  });
+
+  it.each(["core", "legacy"] as const)("AH3 %s：上一回作者「不要了」的那份不吞掉这一回的 C（同一份清单也不行）", async (kind) => {
+    const previous = await a();
+    await staleResidue(kind, previous);
+    await recoverBookTransactions(book);
+    const [copy] = await listSavedDrafts(book, 1);
+    await settleSavedCopy(book, copy!.id);
+    expect(await keptC()).toBe(false);
+
+    await staleResidue(kind, previous);
+    await recoverBookTransactions(book);
+    expect(await readDraft(book, 1)).toMatchObject({ body: "作者成功保存的 A。" });
+    expect(await keptC()).toBe(true);
+  });
+
+  it("AH3 老格式按章号起名，同一章的新一份残留（开工时间不同）另算一份", async () => {
+    const previous = await a();
+    const tx = await staleResidue("legacy", previous);
+    await recoverBookTransactions(book);
+    const [copy] = await listSavedDrafts(book, 1);
+    await settleSavedCopy(book, copy!.id);
+
+    const manifest = JSON.parse(await readFile(join(tx, "manifest.json"), "utf-8")) as Record<string, unknown>;
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({ ...manifest, createdAt: "2026-10-25T00:00:00.000Z", status: "staged" }));
+    await writeFile(join(book, DRAFT), c);
+    await recoverBookTransactions(book);
+    expect(await keptC()).toBe(true);
+  });
+
+  it("AH2 老格式清单只有工作稿代次：退完整本换新纪元，恢复前的版本存不上", async () => {
+    const gens = await read(GENS);
+    const tx = join(book, ".story-engine-tx", "commit-chapter-0001");
+    await mkdir(join(tx, "backups", "store-control"), { recursive: true });
+    await writeFile(join(tx, "backups", GENS), gens);
+    await writeFile(join(tx, "manifest.json"), JSON.stringify({
+      version: 2, chapter: 1, createdAt: "2026-10-18T00:00:00.000Z", files: [GENS],
+      backups: [{ relativePath: GENS, existed: true, backupPath: join("backups", GENS), sha256: sha(gens) }],
+      status: "staged",
+    }));
+    const interrupted = JSON.parse(gens) as Record<string, unknown>;
+    await writeFile(join(book, GENS), JSON.stringify({ ...interrupted, epoch: "写到一半的纪元" }));
+    const before = (await readDraftState(book, 1)).version;
+
+    await recoverBookTransactions(book);
+    expect((await readDraftState(book, 1)).version).not.toBe(before);
+    const stale = await runCommand(book, draftSave, { chapter: 1, title: "迟到", body: "恢复前的旧存稿。", baseVersion: before }, { caller: "author" });
+    expect(stale).toMatchObject({ ok: false, code: "draft_conflict" });
+    expect(await readDraft(book, 1)).toMatchObject({ body: "作者成功保存的 A。" });
+  });
+
+  it("AH4 老清单收尾换上前失败：清单还是整份 staged（不清空），没留临时文件，重来收尾成", async () => {
+    const tx = await staleResidue("legacy", await a());
+    const manifestPath = join(tx, "manifest.json");
+    const before = await readFile(manifestPath, "utf-8");
+    setLegacyTxIoHookForTests((phase, target) => {
+      if (phase === "after-open-before-verify" && target === manifestPath) throw Object.assign(new Error("写到一半被打断"), { code: "EIO" });
+    });
+    expect(await recoverBookTransactions(book).catch((error: unknown) => error)).toBeInstanceOf(LegacyResidueError);
+    expect(await readFile(manifestPath, "utf-8")).toBe(before);
+    expect((await readdir(tx)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(await hasPendingTransactions(book)).toBe(true);
+
+    setLegacyTxIoHookForTests(undefined);
+    await recoverBookTransactions(book);
+    expect(JSON.parse(await readFile(manifestPath, "utf-8"))).toMatchObject({ status: "recovered" });
+    expect(await hasPendingTransactions(book)).toBe(false);
+    expect(await keptC()).toBe(true);
+  });
+
+  it("AH4 被杀时留下的临时清单不挡下一次恢复", async () => {
+    const tx = await staleResidue("legacy", await a());
+    await writeFile(join(tx, ".manifest.json.0123456789ab.tmp"), "{");
+    await recoverBookTransactions(book);
+    expect(JSON.parse(await readFile(join(tx, "manifest.json"), "utf-8"))).toMatchObject({ status: "recovered" });
+    expect(await hasPendingTransactions(book)).toBe(false);
   });
 });

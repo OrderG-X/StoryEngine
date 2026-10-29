@@ -8,11 +8,11 @@
  * 退回一份（`undoLegacyTransaction`：要盖掉的先另存、退不下去整份抛）、标成收拾过（`markLegacyTransactionRecovered`）、
  * 收尾（`tidyLegacyTransactions`：删空目录壳、归档）。调用方必须已持书锁。
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, rmdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { draftChapterOfPath, isControlPath } from "./paths.js";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { DRAFT_GENS_PATH, draftChapterOfPath, isControlPath } from "./paths.js";
 
 /** 老定稿链的事务目录。 */
 export const LEGACY_TX_DIR = ".story-engine-tx";
@@ -109,13 +109,24 @@ export async function scanLegacyTransactions(bookDir: string): Promise<readonly 
   });
 }
 
-/** 退回时要盖掉 / 删掉的文件，现在的内容不是这份事务写的（老格式核不了）：先交给它另存（P1 第 19 轮 AG3）。另存不下要抛。 */
-export type KeepCurrent = (relativePath: string, content: string) => Promise<void>;
+/**
+ * 退回时要盖掉 / 删掉的文件，现在的内容不是这份事务写的（老格式核不了）：先交给它另存（P1 第 19 轮 AG3）。另存不下要抛。
+ * `instance` 是这一份事务的实例号（目录名 + 清单指纹，P1 第 20 轮 AH3）：老格式按章号起目录名，同一章重定稿会复用，
+ * 只拿目录名去重会把上一回的另存（作者可能已经「不要了」）当成这一回的。
+ */
+export type KeepCurrent = (input: { readonly instance: string; readonly path: string; readonly content: string }) => Promise<void>;
 
-/** 退回一份做了什么：换没换过文件、碰了哪几章工作稿（调用方据此换代次）。 */
+/** 退回一份做了什么：换没换过文件、碰了哪几章工作稿、碰没碰工作稿代次（调用方据此换代次）。 */
 export interface LegacyUndoResult {
   readonly changed: boolean;
   readonly draftChapters: readonly number[];
+  /** 清单里有工作稿代次（AH2）：只碰了它、说不清哪章的，调用方整本换新纪元。 */
+  readonly gensTouched: boolean;
+}
+
+/** 一份老格式事务的实例号：目录名 + 清单指纹。被杀了重来清单没变，号不变；同名的新一份清单不同，号就不同。 */
+function legacyInstance(name: string, manifest: CommitTransactionManifest): string {
+  return `${name}@${sha256Text(jsonText(manifest)).slice(0, 16)}`;
 }
 
 /**
@@ -128,8 +139,9 @@ export async function undoLegacyTransaction(bookDir: string, name: string, keep:
   return asResidue(async () => {
     const txDir = legacyTxDir(bookDir, name);
     const manifest = await pendingLegacyManifest(bookDir, txDir, name);
-    if (!manifest) return { changed: false, draftChapters: [] };
-    const issues = await restoreCommitTransactionBackups(bookDir, txDir, manifest.backups, keep);
+    if (!manifest) return { changed: false, draftChapters: [], gensTouched: false };
+    const instance = legacyInstance(name, manifest);
+    const issues = await restoreCommitTransactionBackups(bookDir, txDir, manifest.backups, (path, content) => keep({ instance, path, content }));
     if (issues.length > 0) throw taggedError("TX_ROLLBACK_INCOMPLETE", `Legacy commit transaction ${name} could not be fully rolled back: ${issues.join("; ")}`);
     return {
       changed: manifest.backups.length > 0,
@@ -137,6 +149,7 @@ export async function undoLegacyTransaction(bookDir: string, name: string, keep:
         const chapter = draftChapterOfPath(backup.relativePath);
         return chapter === undefined ? [] : [chapter];
       }))],
+      gensTouched: manifest.backups.some((backup) => normalize(backup.relativePath) === DRAFT_GENS_PATH),
     };
   });
 }
@@ -532,7 +545,7 @@ async function restoreCommitTransactionBackups(
   projectDir: string,
   txDir: string,
   backups: readonly CommitTransactionBackup[],
-  keep: KeepCurrent,
+  keep: (relativePath: string, content: string) => Promise<void>,
 ): Promise<string[]> {
   const issues: string[] = [];
   for (const backup of [...backups].reverse()) {
@@ -703,6 +716,12 @@ async function ensureSafeDirectory(
   }
 }
 
+/**
+ * 不跟软链地整份换上（P1 第 20 轮 AH4）：同目录先写临时文件（O_EXCL | O_NOFOLLOW，核过真在书里、是自己新建的普通文件）、落盘，
+ * 再核目标（不在，或是没有别的硬链接的普通文件、不是软链），一次 rename 换上、目录落盘。被杀在任何一步，目标要么是原来的整份、
+ * 要么是新的整份——以前原地清空再写，清空后被杀留下空清单，之后每次开书都读不出、整本书一直不能写。
+ * 原来有的文件沿用它的权限；原来没有的按 0600 建。
+ */
 async function writeTextNoFollow(
   projectDir: string,
   targetPath: string,
@@ -711,26 +730,57 @@ async function writeTextNoFollow(
 ): Promise<void> {
   await assertSafeProjectPath(projectDir, targetPath, true, label);
   await commitIoTestHook?.("after-precheck-before-open", targetPath);
-  // Deliberately omit O_TRUNC here. Opening an existing file must not mutate a
-  // byte until its parent realpath and the opened inode have both been proven
-  // to be the same contained file. If O_CREAT races into an attacker-swapped
-  // empty location, the only possible residue before rejection is an empty
-  // file; existing outside data is never truncated or overwritten.
+  const temporary = join(dirname(targetPath), `.${basename(targetPath)}.${randomBytes(6).toString("hex")}.tmp`);
   const handle = await open(
-    targetPath,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
+    temporary,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
     0o600,
   );
+  let replaced = false;
   try {
-    await commitIoTestHook?.("after-open-before-verify", targetPath);
-    await verifyOpenedProjectFile(projectDir, targetPath, handle, label);
-    await handle.truncate(0);
-    await handle.writeFile(content, "utf-8");
+    try {
+      await commitIoTestHook?.("after-open-before-verify", targetPath);
+      await verifyOpenedProjectFile(projectDir, temporary, handle, label);
+      const mode = await replaceableTargetMode(projectDir, targetPath, label);
+      if (mode !== undefined) await handle.chmod(mode);
+      await handle.writeFile(content, "utf-8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await replaceableTargetMode(projectDir, targetPath, label);
+    await rename(temporary, targetPath);
+    replaced = true;
+  } finally {
+    if (!replaced) await rm(temporary, { force: true }).catch(() => undefined);
+  }
+  await syncDirectory(dirname(targetPath));
+  await assertSafeProjectPath(projectDir, targetPath, false, label);
+}
+
+/** 要被整份换掉的目标：不在是 undefined；是没有别的硬链接的普通文件返回它的权限位；软链、目录、多链接的拒绝。 */
+async function replaceableTargetMode(projectDir: string, targetPath: string, label: string): Promise<number | undefined> {
+  let stats;
+  try {
+    stats = await lstat(targetPath);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+  const rel = relative(resolve(projectDir), targetPath);
+  if (stats.isSymbolicLink() || !stats.isFile()) throw taggedError("UNSAFE_NOT_A_FILE", `Unsafe ${label}: ${rel} is not a real file.`);
+  if (stats.nlink !== 1) throw taggedError("UNSAFE_HARDLINK", `Unsafe ${label}: hard-linked targets are not allowed (${rel}).`);
+  return stats.mode & 0o7777;
+}
+
+/** 目录落盘（rename 换上的那一项被杀也还在）。 */
+async function syncDirectory(directoryPath: string): Promise<void> {
+  const handle = await open(directoryPath, fsConstants.O_RDONLY);
+  try {
     await handle.sync();
   } finally {
     await handle.close();
   }
-  await assertSafeProjectPath(projectDir, targetPath, false, label);
 }
 
 async function verifyOpenedProjectFile(

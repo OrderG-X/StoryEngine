@@ -201,7 +201,7 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
     // 备份已经不在 = 上次回滚到一半时已经换回去了，不再动它。
     if (file.existed && !(await exists(backup))) continue;
     const restore = file.existed ? await readFile(backup, "utf-8") : undefined;
-    await keepForeignCurrent(bookDir, { from: manifest.id, path, ...(file.wrote !== undefined ? { wrote: file.wrote } : {}), ...(restore !== undefined ? { restore } : {}) });
+    await keepForeignCurrent(bookDir, { from: coreInstance(manifest), path, ...(file.wrote !== undefined ? { wrote: file.wrote } : {}), ...(restore !== undefined ? { restore } : {}) });
     if (!file.existed) await rm(target, { force: true });
     else await rename(backup, target);
   }
@@ -346,6 +346,11 @@ interface CoreScan {
 
 const digest = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex");
 
+/** 一份核心事务的实例号（另存去重用，P1 第 20 轮 AH3）：事务号 + 清单指纹。回滚中清单不改，被杀了重来号不变。 */
+function coreInstance(manifest: Manifest): string {
+  return `${manifest.id}@${digest(JSON.stringify(manifest)).slice(0, 16)}`;
+}
+
 /** 核心事务逐个看清（只读）：要回滚的（prepared）带上它会换回哪些文件；坏的记进 problems；没清单 / applied 的只清目录。 */
 async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
   const root = join(bookDir, TX_DIR);
@@ -455,8 +460,8 @@ export async function recoverTransactions(givenBookDir: string): Promise<Recover
     if (undo.format === "legacy") {
       // 退不下去、另存不下、换不了代次：整轮停、抛「残留」（不标收拾过，下次照样挡着；比它先开工的一份都不退）。
       try {
-        const undone = await undoLegacyTransaction(bookDir, undo.name, (path, content) => saveCopyBeforeRestore(bookDir, { from: undo.name, path, content }));
-        if (undone.changed) await advanceEpochs(bookDir, { chapters: undone.draftChapters, gensTouched: false });
+        const undone = await undoLegacyTransaction(bookDir, undo.name, ({ instance, path, content }) => saveCopyBeforeRestore(bookDir, { from: instance, path, content }));
+        if (undone.changed) await advanceEpochs(bookDir, { chapters: undone.draftChapters, gensTouched: undone.gensTouched });
         await markLegacyTransactionRecovered(bookDir, undo.name);
       } catch (error) {
         throw error instanceof LegacyResidueError ? error : new LegacyResidueError(error);
