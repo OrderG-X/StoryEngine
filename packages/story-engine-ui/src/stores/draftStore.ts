@@ -55,9 +55,15 @@ export interface DraftStoreState {
   readonly loadPaper: (projectPath: string, paper: ChapterPaper) => void;
   /**
    * 盘上来了新版本：作者手上没有没存的字就换上，有就提示（谁改的都一样，撤销也不直接盖）。
-   * 返回怎么处理的：unchanged 盘上没变；own 盘上就是作者手上的字；replaced 换上了；incoming 出了提示；skipped 不是这一章。
+   * 「没存的字」看存稿调度的统一待存状态（`unsaved`：没落定、没存上、或手上和盘上不一样），不只比手上和底版（第 10 轮复核 X2）。
+   * `isOwn`：盘上这个版本是不是这个窗口自己存的。
+   * 返回怎么处理的：unchanged 盘上没变；own 盘上是作者自己的字（手上那份以它为底接着存）；replaced 换上了；incoming 出了提示；skipped 不是这一章。
    */
-  readonly receivePaper: (projectPath: string, paper: ChapterPaper) => "unchanged" | "own" | "replaced" | "incoming" | "skipped";
+  readonly receivePaper: (
+    projectPath: string,
+    paper: ChapterPaper,
+    sync?: { readonly unsaved: boolean; readonly isOwn: (version: string | null) => boolean },
+  ) => "unchanged" | "own" | "replaced" | "incoming" | "skipped";
   /** 作者在稿纸上改字。 */
   readonly edit: (body: string, title?: string) => void;
   /** 改章名（不动正文）。 */
@@ -139,11 +145,11 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
     });
   },
 
-  receivePaper: (projectPath, paper) => {
+  receivePaper: (projectPath, paper, sync) => {
     const state = get();
     if (state.projectPath !== projectPath || state.chapter !== paper.chapter) return "skipped";
     const disk = diskText(paper);
-    const dirty = isDraftDirty(state);
+    const dirty = (sync?.unsaved ?? false) || isDraftDirty(state);
     // 版本号是盘上全文的哈希：一样 = 盘上没变（只有定稿那份可能变了）。没有工作稿时按字比。
     const unchanged = disk.version !== null
       ? disk.version === state.baseVersion
@@ -155,6 +161,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
     // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突。
     if (dirty && sameText(disk.body, state.body)) {
       set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
+      return "own";
+    }
+    // 手上的字还没落定、盘上是这个窗口自己早先存成的那版（迟到的回执没定下这一章）：不是别处改的，不提示、不换；
+    // 以它为底，手上的字接着存（第 10 轮复核 X2）。
+    if (dirty && sync?.isOwn(disk.version)) {
+      set({ baseVersion: disk.version, savedBody: disk.body, savedTitle: disk.title ?? "", committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
       return "own";
     }
     if (!dirty) {

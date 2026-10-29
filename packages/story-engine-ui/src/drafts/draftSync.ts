@@ -133,9 +133,11 @@ function decides(sent: SentPaper, seqSent: number): boolean {
     && live.projectPath === sent.projectPath && live.chapter === sent.chapter;
 }
 
+/** 这一章最后那笔没存上：记下，过一会儿自动再试（普通存稿、关窗补发都走这里，第 10 轮复核 X1）。 */
 function markFailed(sent: SentPaper, seqSent: number, message: string): DraftFlushResult {
   sync = { projectPath: sent.projectPath, chapter: sent.chapter, lastSeq: seqSent, pending: false, failed: true, error: message };
   useDraftStore.getState().markSaveError(message);
+  if (timer === null) scheduleDraftSave(DRAFT_RETRY_MS);
   return { ok: false, error: message };
 }
 
@@ -202,11 +204,8 @@ export async function saveDraftNow(): Promise<DraftFlushResult> {
     const request = send(false);
     if (!request) return { ok: true };
     const result = await request;
-    if (!result.ok) {
-      // 没存上：字还在稿纸上，过一会儿再试（这期间作者再打字也会重新排）。
-      if (timer === null) scheduleDraftSave(DRAFT_RETRY_MS);
-      return result;
-    }
+    // 没存上：字还在稿纸上，markFailed 已经排好过一会儿再试（这期间作者再打字也会重新排）。
+    if (!result.ok) return result;
   }
 }
 
@@ -337,10 +336,12 @@ export async function refreshPaper(options: { readonly chapter?: number } = {}):
     // 读的期间发过存稿：读回来的可能比刚存的旧，迟到了也不能拿它盖（第 6 轮复核 T1）。再读。
     if (read.saves !== savesSent || requests.size > 0) continue;
     shownTicket = read.ticket;
-    const outcome = useDraftStore.getState().receivePaper(projectPath, paper);
+    // 有没有没存的字看统一待存状态（第 10 轮复核 X2）：最后那笔没存上时手上的字可能正好等于底版，只比字会把它当成存好了换掉。
+    const live = useDraftStore.getState();
+    const outcome = live.receivePaper(projectPath, paper, { unsaved: needsSave(live), isOwn: isOwnSavedVersion });
     if (outcome === "own") rememberOwnVersion(useDraftStore.getState().baseVersion);
-    // 盘上变了、作者手上还有没存的字：马上存一笔（撞版本，服务端存成恢复稿），别只留在页面里。
-    if (outcome === "incoming") scheduleDraftSave(0);
+    // 盘上变了、作者手上还有没存的字：马上存一笔（撞版本，服务端存成恢复稿；盘上是自己的那版就顺着存上），别只留在页面里。
+    if (outcome === "incoming" || (outcome === "own" && needsSave(useDraftStore.getState()))) scheduleDraftSave(0);
     return outcome;
   }
   // 作者一直在存：不重读了，盘上要是别处改过，下一笔存稿撞版本自会提示。

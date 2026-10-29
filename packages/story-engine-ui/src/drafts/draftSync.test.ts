@@ -124,6 +124,17 @@ describe("稿纸状态", () => {
     expect(useDraftStore.getState()).toMatchObject({ title: "", savedTitle: "", baseVersion: "a" });
   });
 
+  it("手上的字等于底版、但最后那笔没存上：盘上别处的新版只出提示；盘上是自己存的那版就以它为底接着存（第 10 轮复核 X2）", () => {
+    const own = (version: string | null) => version === "b";
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "AI 的 C。", version: "c" }), { unsaved: true, isOwn: own })).toBe("incoming");
+    expect(useDraftStore.getState()).toMatchObject({ body: "A。", baseVersion: "a", incoming: { body: "AI 的 C。", version: "c" } });
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "A。", version: "a" }));
+    expect(useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "自己的 B。", version: "b" }), { unsaved: true, isOwn: own })).toBe("own");
+    expect(useDraftStore.getState()).toMatchObject({ body: "A。", baseVersion: "b", savedBody: "自己的 B。", incoming: null });
+    expect(isDraftDirty(useDraftStore.getState())).toBe(true);
+  });
+
   it("别的章、别的书的新版本不收", () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "一。", version: "a" }));
     useDraftStore.getState().receivePaper(PROJECT, paper(2, { body: "二。", version: "x" }));

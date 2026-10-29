@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave, hasFailedUnsavedDraft, openPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave, hasFailedUnsavedDraft, openPaper, refreshPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { setCommitIoTestHookForTests } from "../book/legacy-commit-recovery.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
@@ -424,6 +424,69 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect(puts()).toBe(1);
     expect((await readDraft(book, 1))?.body).toBe("最新 B。");
   });
+
+  it("真稿纸：补发 B 落盘回执压着、改回 A 重存写盘失败、B 的回执迟到：重读不把 A 换成 B，A 接着存上（第 10 轮 X2）", async () => {
+    await save(1, "原稿 A。");
+    const keepaliveLanded = barrier();
+    const releaseKeepalive = barrier();
+    let keepaliveAnswered = false;
+    let keepalives = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const nth = init?.keepalive ? (keepalives += 1) : 0;
+      // 第二笔补发（改回的 A）：换工作稿文件那一下写盘失败一次（服务端回滚，盘上还是 B）。
+      if (nth === 2) {
+        hooks.beforeRename = async (_from, to) => {
+          if (to !== join(book, draftPath(1))) return;
+          hooks.beforeRename = undefined;
+          throw eio("换工作稿文件");
+        };
+      }
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      if (nth === 1) {
+        keepaliveLanded.release();
+        await releaseKeepalive.promise;
+        keepaliveAnswered = true;
+      }
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    editDraft("关窗补发 B。");
+    saveDraftKeepalive();
+    await keepaliveLanded.promise;
+    expect((await readDraft(book, 1))?.body).toBe("关窗补发 B。");
+    editDraft("原稿 A。");
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(useDraftStore.getState().saveStatus).toBe("error"));
+    releaseKeepalive.release();
+    await vi.waitFor(() => expect(keepaliveAnswered).toBe(true));
+    // 这时手上 A = 底版，最后那笔没存上；AI 工具结果之类触发重读。
+    expect(hasFailedUnsavedDraft()).toBe(true);
+    expect(await refreshPaper()).toBe("own");
+    expect(useDraftStore.getState().body).toBe("原稿 A。");
+    expect(useDraftStore.getState().incoming ?? null).toBeNull();
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.body).toBe("原稿 A。");
+    expect(hasFailedUnsavedDraft()).toBe(false);
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
+  it("真稿纸：只有关窗补发那笔、它写盘失败，页面还在：5 秒后自动再试、存上（第 10 轮 X1）", async () => {
+    await save(1, "原稿 A。");
+    const { puts } = wireRealRoutes();
+    await openPaper(book, 1);
+    editDraft("作者 B。");
+    hooks.beforeRename = async (_from, to) => {
+      if (to !== join(book, draftPath(1))) return;
+      hooks.beforeRename = undefined;
+      throw eio("换工作稿文件");
+    };
+    saveDraftKeepalive();
+    await vi.waitFor(() => expect(hasFailedUnsavedDraft()).toBe(true));
+    expect(puts()).toBe(1);
+    await vi.waitFor(() => expect(puts()).toBe(2), { timeout: 8000, interval: 100 });
+    await vi.waitFor(() => expect(hasFailedUnsavedDraft()).toBe(false));
+    expect((await readDraft(book, 1))?.body).toBe("作者 B。");
+  }, 15000);
 
   it("开书收拾升级前的老格式事务时作者存稿：等收拾完再存，撞了版本进恢复稿，回执之后的字不被回滚盖掉（第 9 轮 W3）", async () => {
     await save(1, "崩溃前的稿 A。");
