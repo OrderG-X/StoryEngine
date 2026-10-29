@@ -66,6 +66,17 @@ describe("草稿文件拆拼", () => {
     expect(sameDraft({ title: "章名", body: "## 第一节\n原句。" }, { title: "章名", body: "原句。" })).toBe(false);
   });
 
+  it("章名里的换行（\\n、单独的 \\r、\\r\\n、U+2028 / U+2029）收成空格：拼回文件再读回来章名完整、正文一个字不多（第 16 轮 AD2）", () => {
+    for (const title of ["前半\n后半", "前半\r\n后半", "前半\r后半", "前半\u2028后半", "前半\u2029后半", "前半 \r \n 后半"]) {
+      const file = composeDraftFile({ title, body: "# 正文第一节\n\n原正文。" });
+      expect(file).toBe("# 前半 后半\n\n# 正文第一节\n\n原正文。\n");
+      expect(parseDraftFile(file)).toEqual({ title: "前半 后半", body: "# 正文第一节\n\n原正文。" });
+      expect(sameDraft({ title, body: "原正文。" }, { title: "前半 后半", body: "原正文。" })).toBe(true);
+    }
+    // 盘上的章名行里本来就夹着 U+2028：照样认成章名，不掉进正文。
+    expect(parseDraftFile("# 前半\u2028后半\n\n正文。\n")).toEqual({ title: "前半\u2028后半", body: "正文。" });
+  });
+
 });
 
 describe("作者存稿（draft.save）", () => {

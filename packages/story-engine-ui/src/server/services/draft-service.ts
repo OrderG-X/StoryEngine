@@ -1332,8 +1332,9 @@ async function runGenerateDraftWithPlan(
   }
 
   // 首稿先存成候选（写作版本 P1b）：补写、去味、核账改都在内存里做，最后一次换上工作稿；进程半路没了，这版也找得回。
-  // 整份稿的章名开工时就定下：新写的用 AI 起的，接着写的沿用开写时那份的（候选晚换上也不借那时盘上的）。
-  const draftTitle = continueFrom ? start.title : finalReport?.title ?? `第${chapter}章`;
+  // 整份稿的章名开工时就定下：新写的用 AI 起的，AI 没起名、接着写的都沿用开写时那份的（候选晚换上也不借那时盘上的；
+  // 写作版本 P1 第 16 轮 AD1：不补「第N章」盖掉作者的章名，原本没章名的照旧没有）。
+  const draftTitle = continueFrom ? start.title : finalReport?.title ?? start.title;
   const source = continueFrom ? "continue" as const : "draft" as const;
   let finalDraftContent = "";
   const keepProgress = async (): Promise<void> => {

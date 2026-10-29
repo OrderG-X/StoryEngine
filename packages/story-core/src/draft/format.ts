@@ -13,7 +13,7 @@
  * 作者在稿纸开头打的「# 某某」也是正文（第 15 轮：稿纸上的字不再认章名行，章名只从章名入口改）。
  */
 
-const TITLE_LINE = /^#(?:[ \t]+(.*))?$/u; // 章名行白名单：文件原文
+const TITLE_LINE = /^#(?:[ \t]+(.*))?$/su; // 章名行白名单：文件原文
 
 /** 拆开的稿：title 缺省或空串都是没有章名。 */
 export interface DraftText {
@@ -22,6 +22,12 @@ export interface DraftText {
 }
 
 const unixLines = (text: string): string => text.replace(/\r\n?/gu, "\n");
+
+/**
+ * 章名只占一行：带进来的换行（\n、单独的 \r、\r\n，以及 U+2028 / U+2029）收成空格，不然拼回文件再读回来，章名后半截成了正文
+ * （第 16 轮 AD2：读回时单独的 \r 也当换行）。拼文件和比两份稿都按它。
+ */
+const oneLineTitle = (title: string | undefined): string => title?.replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim() ?? "";
 
 /** 开头的章名行：第几行、章名（只有「#」的章名是空串）。第一行非空行不是章名行就是 undefined。 */
 function leadingHeading(text: string): { readonly line: number; readonly title: string } | undefined {
@@ -52,8 +58,7 @@ export function parseDraftFile(fileText: string): DraftText {
  * 拆开的稿拼回文件、再读回来，还是同一份（`sameDraft`）。
  */
 export function composeDraftFile(draft: DraftText): string {
-  // 章名只占一行：带进来的换行收成空格，不然再读回来，章名后半截成了正文。
-  const title = draft.title?.replace(/\s*\n\s*/gu, " ").trim() ?? "";
+  const title = oneLineTitle(draft.title);
   const body = unixLines(draft.body).trim();
   if (!title) {
     if (!body) return "";
@@ -70,5 +75,5 @@ export function sameDraftBody(a: string, b: string): boolean {
 
 /** 两份拆开的稿是不是同一份：章名一样（缺省 = 空）、正文按 sameDraftBody 一样。不拆任何一边。 */
 export function sameDraft(a: DraftText, b: DraftText): boolean {
-  return (a.title?.trim() ?? "") === (b.title?.trim() ?? "") && sameDraftBody(a.body, b.body);
+  return oneLineTitle(a.title) === oneLineTitle(b.title) && sameDraftBody(a.body, b.body);
 }

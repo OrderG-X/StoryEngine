@@ -47,6 +47,33 @@ async function readReceipt(bookDir: string, key: string): Promise<CommandReceipt
   return parsed.success && parsed.data.key === key ? parsed.data : undefined;
 }
 
+/** 收拾上次没写完的事务（在书锁里调）：读不了、有收拾不了的残留如实失败；回滚过的带在 notice 里。 */
+async function settleTransactions(bookDir: string): Promise<CommandFailure | { readonly notice: { readonly recovered?: RecoveryReport } }> {
+  let recovery: RecoveryReport;
+  try {
+    recovery = await recoverTransactions(bookDir);
+  } catch (error) {
+    return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
+  }
+  if (recovery.problems.length > 0) {
+    return fail("transaction_residue", "上次写到一半的记录读不了，先不动这本书，免得丢数据。作者确认后可以把它挪到一边留证，再继续写。", recovery);
+  }
+  return { notice: recovery.rolledBack.length > 0 || recovery.keptOverLimit ? { recovered: recovery } : {} };
+}
+
+/**
+ * 在书锁里、先收拾完上次没写完的事务再做 run（写作版本 P1 第 16 轮 AD3）：要先读盘才定得下写命令参数的（存稿沿用盘上的章名、
+ * 按盘上版本认是不是接着写），读到的必须是收拾过的书——不然读到的是被杀的进程写了一半、马上要回滚的那份。
+ * 收拾不了和写命令一样如实失败。run 里再调 runCommand 照常（书锁可重入，事务已收拾过）。
+ */
+export async function withSettledBook<T>(bookDir: string, run: () => Promise<T>): Promise<{ readonly ok: true; readonly value: T } | CommandFailure> {
+  return withBookLock(bookDir, async () => {
+    const settled = await settleTransactions(bookDir);
+    if (isFailure(settled)) return settled;
+    return { ok: true as const, value: await run() };
+  });
+}
+
 export async function runCommand<A, R>(
   bookDir: string,
   spec: WriteCommandSpec<A, R>,
@@ -65,16 +92,9 @@ export async function runCommand<A, R>(
   }
 
   return withBookLock(bookDir, async () => {
-    let recovery: RecoveryReport;
-    try {
-      recovery = await recoverTransactions(bookDir);
-    } catch (error) {
-      return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
-    }
-    if (recovery.problems.length > 0) {
-      return fail("transaction_residue", "上次写到一半的记录读不了，先不动这本书，免得丢数据。作者确认后可以把它挪到一边留证，再继续写。", recovery);
-    }
-    const notice = recovery.rolledBack.length > 0 || recovery.keptOverLimit ? { recovered: recovery } : {};
+    const settled = await settleTransactions(bookDir);
+    if (isFailure(settled)) return settled;
+    const { notice } = settled;
     const argsHash = argsHashOf(options.intent !== undefined ? options.intent : parsed.data);
     if (key) {
       const receipt = await readReceipt(bookDir, key);

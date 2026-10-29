@@ -19,7 +19,7 @@
  *
  * 版本号是这章的工作稿代次 + 草稿文件全文的哈希（核心包 draft/draft.ts）。
  */
-import { chapterRetitle, draftAdoptCandidate, draftSave, parseDraftFile, readChapterPaper, readDraftState, runCommand, withBookLock, type DraftConflictDetails } from "@actalk/story-core";
+import { chapterRetitle, draftAdoptCandidate, draftSave, parseDraftFile, readChapterPaper, readDraftState, runCommand, withBookLock, withSettledBook, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -202,7 +202,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         const from = recoveryClientOf(body.client, body.seq);
         await assertStoryEngineProject(projectDir);
         // 存稿和撞版本时留恢复稿在同一把书锁里（写作版本 P1b 第 3 轮复核）：两笔存稿不会交错着写恢复稿，找回也切不进中间。
-        const reply = await withBookLock(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
+        // 先收拾完上次没写完的事务再读盘（第 16 轮 AD3）：沿用的章名、认接着写的盘上版本，读的都是收拾过的那份。
+        const settled = await withSettledBook(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
           const mark = from ? await readSaveMark(projectDir, chapter, from.client) : undefined;
           if (from && mark && from.seq <= mark.seq) return { status: 409, payload: { ok: false, code: "stale_save", error: "这个窗口后来又存过，这笔旧的没写。" } };
           // 序号先落盘、再写稿（第 12 轮复核 Z4）：它是挡迟到旧笔的那道闸，记不下来这笔就不写、如实说没存上（稿纸过一会儿再试）。
@@ -254,6 +255,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             return { status: 503, payload: { ok: false, code: "recovery_failed", error: "别处刚改过这一章，你这段也没能另存下来（写盘没成功）。字还在稿纸上，稍后自动再试。" } };
           }
         });
+        const reply = settled.ok ? settled.value : { status: 400, payload: { ok: false, code: settled.code, error: settled.message } };
         writeJson(res, reply.status, reply.payload);
         return;
       }

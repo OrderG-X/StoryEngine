@@ -12,7 +12,7 @@ import { chapterRetitle } from "./chapter-retitle.js";
 import { readDraft } from "../draft/draft.js";
 import { decisionRecord } from "./decision-record.js";
 import { BookEventHub } from "./events.js";
-import { runCommand } from "./runner.js";
+import { runCommand, withSettledBook } from "./runner.js";
 import type { BookEvent, CommandOutcome, CommandSuccess } from "./types.js";
 
 let book: string;
@@ -160,6 +160,24 @@ describe("定稿命令", () => {
     expect((await setAsideBrokenTransactions(book)).moved).toEqual(["bad"]);
     const after = expectOk(await runCommand(book, chapterCommit, { chapter: 3, text: CH2, entries: [] }, author("k3")));
     expect(after.recovered).toBeUndefined();
+  });
+
+  it("withSettledBook：先收拾完上次写断的事务再读盘（第 16 轮 AD3）；清单坏了和写命令一样不开工", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const stranded = join(book, TX_DIR, "t1");
+    await mkdir(join(stranded, "staged"), { recursive: true });
+    await writeFile(join(book, "chapters/0001.md"), "写了一半的正文");
+    await mkdir(join(stranded, "backup"), { recursive: true });
+    await writeFile(join(stranded, "backup", "0"), CH1);
+    await writeFile(join(stranded, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "t1", createdAt: "x", status: "prepared", files: [{ path: "chapters/0001.md", existed: true, slot: "0" }] }));
+    const read = await withSettledBook(book, () => readFile(join(book, "chapters/0001.md"), "utf-8"));
+    expect(read).toEqual({ ok: true, value: CH1 });
+
+    await mkdir(join(book, TX_DIR, "bad"), { recursive: true });
+    await writeFile(join(book, TX_DIR, "bad", "manifest.json"), "{坏");
+    const run = vi.fn(async () => "读了");
+    expect(await withSettledBook(book, run)).toMatchObject({ ok: false, code: "transaction_residue" });
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("参数不对如实报，不写", async () => {

@@ -48,7 +48,8 @@ export interface WriterClient {
     readonly context: WriterContextEnvelope;
     readonly maxOutputTokens: number;
   }) => Promise<{
-    readonly title: string;
+    /** 写手起的章名；写手只回正文就不带（写作版本 P1 第 16 轮 AD1：没起名就是没起名，不补「第N章」）。 */
+    readonly title?: string;
     readonly content: string;
     readonly tokenUsage?: TokenUsage;
     readonly cacheMetrics?: CacheMetrics;
@@ -762,7 +763,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         }
         : {}),
     });
-    const normalizedGenerated = { ...generated, title: generatedTitle, content: draftBody };
+    const normalizedGenerated = { content: draftBody };
     // 出稿后确定性保真核对：用户/agent 指定的必命中要点里的具体锚点（编号/数字+量词+名物）漏了就软警告（不阻塞）。
     const beatFidelity = input.mustHitBeats && input.mustHitBeats.length > 0
       ? checkDraftBeatFidelity({ draftContent: normalizedGenerated.content, mustHitBeats: input.mustHitBeats })
@@ -782,7 +783,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       return withFastDraftDiagnostics(input.projectDir, {
         chapter: input.chapter,
         passed: false,
-        title: generatedTitle,
+        ...(generatedTitle ? { title: generatedTitle } : {}),
         contextStats,
         promptFingerprint,
         draftLength,
@@ -801,7 +802,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       chapter: input.chapter,
       passed: true,
       draftBody: normalizedGenerated.content.trim(),
-      title: generatedTitle,
+      ...(generatedTitle ? { title: generatedTitle } : {}),
       contextStats,
       promptFingerprint,
       draftLength,
@@ -892,15 +893,12 @@ function buildContextStats(context: WriterContextEnvelope): FastDraftReport["con
 
 function validateDraft(
   generated: {
-    readonly title: string;
     readonly content: string;
   },
   context: WriterContextEnvelope,
 ): string[] {
   const issues: string[] = [];
-  const title = generated.title.trim();
   const content = generated.content.trim();
-  if (!title) issues.push("Draft title is required.");
   if (!content) issues.push("Draft content is required.");
   if (content && looksLikeToolOrJsonArtifact(content)) {
     issues.push("Draft content looks like JSON or a tool-call artifact.");
@@ -978,14 +976,18 @@ function stripLeadingMarkdownChapterHeading(content: string): string {
   return nextLines.join("\n").trim();
 }
 
-function chooseDraftTitle(chapter: number, title: string, content: string): string {
+/**
+ * 写手起的章名：正文开头的章名行、或写手另给的章名，不是光秃秃的「第N章」才算起了名。
+ * 没起就是 undefined（写作版本 P1 第 16 轮 AD1）：一路带到接口都是「没起名」，由用的一方沿用作者的章名，不补「第N章」盖掉它。
+ */
+function chooseDraftTitle(chapter: number, title: string | undefined, content: string): string | undefined {
   const modelHeadingTitle = extractLeadingChapterTitle(content);
-  const cleanTitle = title.trim();
+  const cleanTitle = title?.trim() ?? "";
   if (modelHeadingTitle && !isGenericChapterTitle(modelHeadingTitle, chapter)) {
     return normalizeModelChapterTitle(chapter, modelHeadingTitle);
   }
   if (cleanTitle && !isGenericChapterTitle(cleanTitle, chapter)) return cleanTitle;
-  return `第${chapter}章`;
+  return undefined;
 }
 
 /**

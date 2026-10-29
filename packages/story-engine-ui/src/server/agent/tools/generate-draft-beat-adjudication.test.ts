@@ -220,7 +220,7 @@ describe("generate_draft × beats 判漏 AI 复核（多候选：评分吃裁决
     });
     // 优胜者=干净稿并落盘；summary 如实说「要点全中」
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${cleanReworded}\n`);
+    expect(onDisk).toBe(`${cleanReworded}\n`); // 写手没起名：不出章名行（P1 第 16 轮 AD1）
     expect(out.summary).toContain("已生成 2 个候选并选出第 1 个（要点全中、字数达标、无 AI 腔命中）");
     // 输出 beatFidelity 也是裁决后结果：无残留漏报 + 被摘条目可追溯
     expect(out.beatFidelity).toEqual({

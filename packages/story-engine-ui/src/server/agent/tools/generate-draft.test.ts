@@ -650,6 +650,31 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     }
   });
 
+  it("重写一章、写手没起名：沿用作者的章名，不补「第N章」盖掉它（写作版本 P1 第 16 轮 AD1）", async () => {
+    const projectDir = await makeProject("重写留章名", "林远");
+    const draftPath = defaultDraftPath(projectDir, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, "# 作者起的章名\n\n旧稿。", "utf-8");
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue({
+      async generateDraft() {
+        return { content: longBody("林远") };
+      },
+    });
+    try {
+      const requestContext = buildProjectRequestContext(projectDir, 1);
+      markUserConfirmedTool(requestContext, "generate_draft");
+      const out = await execute({}, { requestContext } as unknown as ToolExecutionContext) as { ok: boolean; draftTitle?: string };
+      expect(out.ok).toBe(true);
+      expect(out.draftTitle).toBeUndefined();
+      const file = await readFile(draftPath, "utf-8");
+      expect(file.startsWith("# 作者起的章名\n\n林远在走廊尽头停下脚步")).toBe(true);
+      expect(file).not.toContain("旧稿。");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("接着往下写（P13）：已写的一个字不动、从最后一句接；稿纸先推已写的；不用作者点按钮；标题沿用", async () => {
     const projectDir = await makeProject("接着写", "林远");
     const draftPath = defaultDraftPath(projectDir, 1);
@@ -1587,9 +1612,9 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
 
     expect(out.ok).toBe(true);
     expect(out.draftPath).toBe(defaultDraftPath(projectDir, 1));
-    // 只有优胜者（第 2 个）落盘，格式与 candidates=1 完全一致（# 标题行 + 正文）
+    // 只有优胜者（第 2 个）落盘，格式与 candidates=1 完全一致（有章名才有章名行）
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
     expect(out.draftBody).toBe(clean);
     // 逐候选透明报告：得分/AI 腔计数/字数/中选/原因
     expect(out.candidatesReport).toHaveLength(3);
@@ -1669,7 +1694,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: true });
     expect(out.summary).toContain("已生成 3 个候选并选出第 3 个");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
   });
 
   // 真机验收：落选稿 persist:false 不落盘、candidatesReport 只有分数，用户完全读不到落选稿长什么样 →
@@ -1803,7 +1828,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport).toHaveLength(2);
     expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
   });
 
   it("execute 端到端接线：candidates:3 → 3 个 writer 的 temperature 依次错开（基准/+0.15/封顶 1.0），不走单候选 writer、不接流式 sink", async () => {
@@ -1852,7 +1877,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
       expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
       expect(out.summary).toContain("已生成 3 个候选并选出第 2 个");
       const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-      expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+      expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
     } finally {
       spyResolve.mockRestore();
       spyCreate.mockRestore();
@@ -1905,7 +1930,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
       expect(out.candidatesReport?.map((entry) => entry.temperature)).toEqual([1.0, 0.85, 0.7]);
       expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
       const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
-      expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+      expect(onDisk).toBe(`${clean}\n`); // 写手只写了正文、没起名：文件里不出章名行（P1 第 16 轮 AD1）
     } finally {
       spyResolve.mockRestore();
       spyCreate.mockRestore();
