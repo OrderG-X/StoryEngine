@@ -9,7 +9,7 @@ import type { CommandOutcome, CommandSuccess } from "../commands/types.js";
 import { cardWrite } from "../bible/commands.js";
 import { readCards } from "./book.js";
 import { canonicalJson, diffTruthBasis } from "./basis.js";
-import { readBookSnapshot, readTruthBasis, readWithStableBasis } from "./book.js";
+import { readBookSnapshot, readTruthBasis } from "./book.js";
 import { bumpRevision } from "./revision.js";
 
 let book: string;
@@ -77,17 +77,6 @@ describe("真相依据", () => {
     expect(diffTruthBasis(basis, now)).toEqual([{ kind: "revision" }]);
     const stale = await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "钟停了" }] }, { ...author("d1"), basis });
     expect(stale).toMatchObject({ ok: false, code: "basis_changed", details: { changes: [{ kind: "revision" }] } });
-  });
-
-  it("稳读：读材料的中途有写（哪怕写回原样）不给依据；没写给读之前那份", async () => {
-    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("c1")));
-    const quiet = await readWithStableBasis(book, async () => "材料");
-    expect(quiet).toEqual({ value: "材料", basis: await readTruthBasis(book) });
-    const busy = await readWithStableBasis(book, async () => {
-      await bumpRevision(book);
-      return "材料";
-    });
-    expect(busy).toEqual({ value: "材料" });
   });
 
   it("什么都不用改的请求也留回执：迟到重发不会把这之间别人改的盖回去", async () => {

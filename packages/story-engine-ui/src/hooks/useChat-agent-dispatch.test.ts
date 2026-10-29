@@ -1408,6 +1408,8 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
   });
 
   it("撤销请求发出后作者又打了字 → 字留着，盘上那版挂成提示（第 4 轮复核 R7）", async () => {
+    // 存稿防抖不在这条测的范围里：机器忙时真时钟可能先让它到点（撞版本另存，提示条就成了「撞了」）。
+    vi.useFakeTimers();
     scriptAgentStream((handlers) => {
       editDraft("撤销请求发出后作者刚打的字");
       writeDisk(3, { draft: "撤销后盘上那版" });
@@ -1415,10 +1417,13 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
+    try {
+      await act(async () => { await result.current.handleSendMessage("撤销"); });
 
-    await act(async () => { await result.current.handleSendMessage("撤销"); });
-
-    expect(useDraftStore.getState()).toMatchObject({ body: "撤销请求发出后作者刚打的字", incoming: { cause: "update", body: "撤销后盘上那版" } });
+      expect(useDraftStore.getState()).toMatchObject({ body: "撤销请求发出后作者刚打的字", incoming: { cause: "update", body: "撤销后盘上那版" } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("存稿明确失败后撤销 → 没存上的字不被盘上旧稿盖掉（第 4 轮复核 R7）", async () => {
@@ -1476,6 +1481,7 @@ describe("useChat AI 改稿撞上作者没存的字", () => {
   });
 
   it("AI 改稿落盘时作者正在打字 → 作者的字留着，盘上那版挂成提示；回复完整", async () => {
+    vi.useFakeTimers(); // 同上一组：存稿防抖不在这条测的范围里
     scriptAgentStream((handlers) => {
       handlers.onToolCall({ toolName: "revise_draft", toolCallId: "r1" });
       useDraftStore.getState().edit("AI 改稿期间作者自己打的字。");
@@ -1486,13 +1492,17 @@ describe("useChat AI 改稿撞上作者没存的字", () => {
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
-    await act(async () => { await result.current.handleSendMessage("把第三章开头改紧一点"); });
+    try {
+      await act(async () => { await result.current.handleSendMessage("把第三章开头改紧一点"); });
 
-    const paper = useDraftStore.getState();
-    expect(paper.body).toBe("AI 改稿期间作者自己打的字。");
-    expect(paper.incoming).toMatchObject({ cause: "update" });
-    expect(lastAssistant()?.content).toBe("改好了，换不换你来定。");
-    expect(useChatStore.getState().chatLoading).toBe(false);
+      const paper = useDraftStore.getState();
+      expect(paper.body).toBe("AI 改稿期间作者自己打的字。");
+      expect(paper.incoming).toMatchObject({ cause: "update" });
+      expect(lastAssistant()?.content).toBe("改好了，换不换你来定。");
+      expect(useChatStore.getState().chatLoading).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("作者在回合里打了字、停笔过了存稿时间 → 回合里照存；AI 那版换不上留成候选，回执到了稿纸出提示，作者的字不丢（写作版本 P1b）", async () => {

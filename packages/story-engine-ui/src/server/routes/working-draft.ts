@@ -211,8 +211,11 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             baseVersion: lineage ? diskVersion : baseVersion,
           }, { caller: "author" });
           // 记号没写上不影响这笔（存上的照样算存上）：只是这之后迟到的旧笔挡不住、补发的那笔接不上（撞版本，进恢复稿）。
+          // 只有这笔真写出了新版本才接进这个窗口的那一串；和盘上一样的空写只推序号——盘上那版可能是撤销、AI、别的窗口写的，
+          // 不能因为字碰巧一样就认成这个窗口的（第 8 轮复核 V3）。
           if (from && (outcome.ok || outcome.code === "draft_conflict")) {
-            await writeSaveMark(projectDir, { chapter, from, ...(outcome.ok ? { saved: { base: baseVersion, version: outcome.result.version } } : {}) })
+            const created = outcome.ok && !outcome.result.unchanged;
+            await writeSaveMark(projectDir, { chapter, from, ...(created ? { saved: { base: baseVersion, version: outcome.result.version } } : {}) })
               .catch((error: unknown) => console.warn(`[working-draft] 第 ${chapter} 章存稿记号没写上：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`));
           }
           if (outcome.ok) {

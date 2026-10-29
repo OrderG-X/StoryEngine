@@ -1,7 +1,7 @@
 // @vitest-environment node
 // 界面服务端取真相依据只走 book/truth-basis.ts（第 7 轮复核 U3）：挂到产物上的依据，取的时候镜像必须正是这一版的。
-// 别处直接调核心的 readTruthBasis / readWithStableBasis 会绕过镜像核对，照旧镜像读的材料挂上新依据。
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+// 别处直接调核心的 readTruthBasis 会绕过书锁和镜像核对，照旧镜像读的材料挂上新依据。
+import { mkdtemp, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
@@ -27,7 +27,7 @@ it("界面服务端只有 truth-basis.ts 直接调核心读依据", async () => 
   for (const file of await sourceFiles(SERVER)) {
     const rel = relative(SERVER, file).split("\\").join("/");
     if (rel === "book/truth-basis.ts") continue;
-    if (/\b(readTruthBasis|readWithStableBasis)\s*[(,}]/u.test(await readFile(file, "utf8"))) offenders.push(rel);
+    if (/\breadTruthBasis\s*[(,}]/u.test(await readFile(file, "utf8"))) offenders.push(rel);
   }
   expect(offenders).toEqual([]);
 });
@@ -67,4 +67,12 @@ it("改了设定卡（只涨版本号、不同步镜像）：开工时补上镜�
   expect(await readMirrorVersion(book)).not.toBe(head);
   await readTruthBasisForWork(book);
   expect(await readMirrorVersion(book)).toBe(head);
+});
+
+it("书挪走了（删进回收站也在书锁里）：镜像同步不在原处建出目录（第 8 轮起镜像同步在书锁里）", async () => {
+  const book = await makeBook();
+  await commit(book, "林远推门走了出去。", "c1");
+  await rename(book, `${book}-moved`);
+  expect(await syncLegacyMirror(book)).toMatchObject({ ok: false, code: "gone" });
+  await expect(stat(book)).rejects.toMatchObject({ code: "ENOENT" });
 });

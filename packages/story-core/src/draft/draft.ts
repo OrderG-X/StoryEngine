@@ -82,7 +82,10 @@ export function sameDraftBody(a: string, b: string): boolean {
  * 要拿「我是在哪一版上改的」去比的地方都用这里的 version，别拿 `readDraft(...)?.version ?? null`：那样「没有稿」永远是 null。
  */
 export async function readDraftState(bookDir: string, chapter: number): Promise<{ readonly file?: { readonly text: string; readonly version: string }; readonly version: string | null }> {
-  const stamp = await readDraftStamp(bookDir, chapter);
+  return stateWithStamp(bookDir, chapter, await readDraftStamp(bookDir, chapter));
+}
+
+async function stateWithStamp(bookDir: string, chapter: number, stamp: DraftStamp): Promise<{ readonly file?: { readonly text: string; readonly version: string }; readonly version: string | null }> {
   let text: string;
   try {
     text = await readFile(join(bookDir, draftPath(chapter)), "utf-8");
@@ -92,6 +95,14 @@ export async function readDraftState(bookDir: string, chapter: number): Promise<
   }
   const version = draftVersionOf(text, stamp);
   return { file: { text, version }, version };
+}
+
+/** 几章工作稿此刻的版本号，和 readDraftState 一样算，代次表只读一次（大书整本拍材料快照用，第 8 轮复核的性能观察）。 */
+export async function readDraftVersions(bookDir: string, chapters: readonly number[]): Promise<ReadonlyMap<number, string | null>> {
+  const gens = await readDraftGens(bookDir);
+  const versions = new Map<number, string | null>();
+  for (const chapter of chapters) versions.set(chapter, (await stateWithStamp(bookDir, chapter, draftStampOf(gens, chapter))).version);
+  return versions;
 }
 
 /** 一章工作稿的原样全文和版本号（一起读，版本号就是这份全文的）；没有文件就是 undefined。 */

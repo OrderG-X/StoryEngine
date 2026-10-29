@@ -177,7 +177,7 @@ async function checkByReader(input: {
 /**
  * 核账的输入读一次：前文、账本、设定本、时间线。核账记忆的键从这份算——核账员看得到的都进键（时间线表也进，
  * 作者改了哪天要重核）。有一样读不了，键就是 undefined：不复用上次的，这次的结果也不存（读不了时核出来的不算全）。
- * 材料夹在两次读依据之间读（readWithStableBasis）：中途书上有写（哪怕又改回原样），键也是 undefined。
+ * 材料夹在两次读依据之间读（readWithStableBasisForWork，两次都在书锁里取）：中途书上有写（哪怕又改回原样），键也是 undefined。
  */
 export async function readCheckInputs(projectDir: string, chapter: number): Promise<{
   readonly earlier: EarlierText;

@@ -1,4 +1,5 @@
 // @vitest-environment node
+
 /**
  * 依据安全契约（写作版本 P1a 复核，Astra 2026-10-29 的七个探针 R1～R7 转成的回归测试）：
  * 旧依据算出来的东西不许执行、不许被当成新的复用，也不许报假成功。模型全是假的（确定性返回）。
@@ -23,7 +24,7 @@ import {
 } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
-import { confirmChapterCommit, fileTicketStore, memoryTicketStore, prepareChapterCommit } from "../editorial/commit-flow.js";
+import { confirmChapterCommit, fileTicketStore, memoryTicketStore, prepareChapterCommit, type PrepareInput } from "../editorial/commit-flow.js";
 import { planBasisOf, resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
 import * as readers from "../editorial/reader-window.js";
 import { readRereadState } from "../editorial/reread-state.js";
@@ -39,6 +40,9 @@ import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
 import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, planLedgerChange } from "./ledger-decisions.js";
 import { foundationWriteLogic } from "./tools/foundation-write.js";
+
+/** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
+const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
 
 let sandbox: string;
 let book: string;
@@ -124,7 +128,7 @@ describe("依据安全契约", () => {
     const snapshot = await createSnapshot(book, "before-ch2");
     const ticketDir = join(book, "ledger/.preview");
     const tickets = fileTicketStore(ticketDir);
-    const preview = ok(await prepareChapterCommit({ bookDir: book, chapter: 2, text, tickets, callModel: model }));
+    const preview = ok(await prepareNow({ bookDir: book, chapter: 2, text, tickets, callModel: model }));
     ok(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets }));
     await restoreSnapshot(book, snapshot.id);
     expect((await projectBook(book)).chapters).toHaveLength(1);
@@ -154,7 +158,7 @@ describe("依据安全契约", () => {
     const tickets = memoryTicketStore();
     const text = "# 二\n\n第二天，他交了钥匙。";
     let sawB = false;
-    const preview = ok(await prepareChapterCommit({
+    const preview = ok(await prepareNow({
       bookDir: book, chapter: 2, text, tickets, callModel: async (messages) => {
         if (!messages.at(-1)?.content.includes("交这一章的账单")) return "他是李四。";
         sawB = messages.some((message) => message.content.includes("他叫李四"));
@@ -234,7 +238,7 @@ describe("依据安全契约", () => {
       return original(input);
     });
     const tickets = memoryTicketStore();
-    const preview = ok(await prepareChapterCommit({
+    const preview = ok(await prepareNow({
       bookDir: book, chapter: 2, text, tickets, callModel: async (messages, options) => {
         if (!options?.json) return "笔记。";
         expect(messages.at(-1)?.content).toContain("他叫李四");

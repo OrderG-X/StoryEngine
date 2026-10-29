@@ -169,7 +169,7 @@ export interface CommitPreview {
   readonly waited?: ReaderWaited;
 }
 
-export type PrepareFailureCode = "book_unsettled" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
+export type PrepareFailureCode = "book_unsettled" | "basis_changed" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
 
 export interface PrepareFailure {
   readonly ok: false;
@@ -437,6 +437,11 @@ export interface PrepareInput {
   readonly text: string;
   readonly callModel: BrainCallModel;
   readonly tickets: TicketStore;
+  /**
+   * 调用方读字数下限、人物名单这些材料之前取的依据（book/truth-basis.ts，第 8 轮复核 V4），记进票里。
+   * 这里读到的真相和它对不上（取完之后书上有写）就不出票，请调用方重新预览。
+   */
+  readonly basis: TruthBasis;
   /** 设定卡上已有的人名（还没在账单里出场过的也算认识，不当新面孔）。 */
   readonly knownNames?: readonly string[];
   readonly notesRoot?: string;
@@ -450,6 +455,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   if (input.text.trim().length === 0) return { ok: false, code: "empty_text", reason: "正文是空的，没有可定稿的" };
   const snapshot = await readBookSnapshot(input.bookDir);
   if (snapshot.unsettled) return { ok: false, code: "book_unsettled", reason: "这本书正在写盘，稍等几秒再定稿" };
+  if (snapshot.basis.digest !== input.basis.digest) return { ok: false, code: "basis_changed", reason: "预览的途中书里有地方改过，请重新预览一次" };
   const committed = snapshot.ledgers.map((ledger) => ledger.chapter);
   // 有定稿正文却一份账单都没有 = 老书还没导入：先导入，不然导入会因为「已经有账单」做不了。
   if (committed.length === 0 && snapshot.textHashes.size > 0) {
@@ -512,7 +518,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     entries,
     reviewIndexes: plan.review.map((item) => position.get(item.index) ?? -1),
     optInIndexes: plan.review.filter(optIn).map((item) => position.get(item.index) ?? -1),
-    basis: snapshot.basis,
+    basis: input.basis,
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
   await input.tickets.put(ticket);

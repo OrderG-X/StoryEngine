@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { canonicalJson, chapterFromFileName, LEDGER_DIR, readDraftState, sha256 } from "@actalk/story-core";
+import { canonicalJson, chapterFromFileName, LEDGER_DIR, readDraftVersions, sha256 } from "@actalk/story-core";
 import { chapterPlanPath, readChapterPlan, type ChapterPlan } from "./chapter-plan.js";
 import { MIRROR_MARKER } from "./mirror/sync.js";
 
@@ -109,7 +109,7 @@ export async function readMaterialWorld(projectDir: string, except: number): Pro
     chaptersIn(join(projectDir, PLAN_DIR), /^chapter-(\d{4})\.json$/u, except),
     otherFiles(projectDir),
   ]);
-  const versions = await Promise.all(drafts.map(async (chapter) => [String(chapter), (await readDraftState(projectDir, chapter)).version] as const));
+  const versions = [...(await readDraftVersions(projectDir, drafts))].map(([chapter, version]) => [String(chapter), version] as const);
   const planFiles = await Promise.all(plans.map(async (chapter) => [String(chapter), sha256(await readFile(chapterPlanPath(projectDir, chapter), "utf-8"))] as const));
   return [
     { kind: "drafts", except, versions: Object.fromEntries(versions) },

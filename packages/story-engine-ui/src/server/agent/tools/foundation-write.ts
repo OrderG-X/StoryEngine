@@ -187,8 +187,16 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     else notDone.push(describeIssue(index, raw, parsed.error.issues[0]));
   });
 
+  // 整批在一把书锁里做完（没有模型调用，很快）：先记依据、再读设定卡分批（第 8 轮复核 V4 同类：材料在依据之后读），
+  // 读到的卡、AI 这批写、写完的依据、按钮上的试算是同一个样子，中间插不进作者的改动。
+  return withBookLock(input.projectDir, () => writeLocked(input.projectDir, valid, notDone));
+}
+
+async function writeLocked(projectDir: string, valid: readonly CardOp[], notDone: string[]): Promise<FoundationWriteOutput> {
+  // 一处能做的都没有就不记依据（不写依据库）。
+  const startBasis = valid.length > 0 ? await rememberCurrentBasis(projectDir) : "";
   const at = new Date().toISOString();
-  const base = await readCardsOrLegacy(input.projectDir, at);
+  const base = await readCardsOrLegacy(projectDir, at);
   const split = splitForAi(base, valid, at);
   const direct = split.direct;
   notDone.push(...split.invalid.map((item) => item.reason));
@@ -198,24 +206,17 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   // 认定中间只有 AI 自己这批写，接不上就留前一个的依据（点了如实说过期）。
   let applied: readonly string[] = [];
   let snapshotId: string | undefined;
-  let basisFrom = "";
-  let basis = "";
-  const basisNeeded = split.needsAuthor.length > 0 || split.direct.length > 0;
+  const basisFrom = startBasis;
+  let basis = startBasis;
   if (split.direct.length > 0) {
-    await withBookLock(input.projectDir, async () => {
-      basisFrom = await rememberCurrentBasis(input.projectDir);
-      const outcome = await writeCards(input.projectDir, { by: "ai", ops: split.direct });
-      if (outcome.ok) {
-        applied = outcome.lines;
-        snapshotId = outcome.snapshotId;
-      } else {
-        notDone.push(outcome.message);
-      }
-      basis = await rememberCurrentBasis(input.projectDir);
-    });
-  } else if (basisNeeded) {
-    basis = await rememberCurrentBasis(input.projectDir);
-    basisFrom = basis;
+    const outcome = await writeCards(projectDir, { by: "ai", ops: split.direct });
+    if (outcome.ok) {
+      applied = outcome.lines;
+      snapshotId = outcome.snapshotId;
+    } else {
+      notDone.push(outcome.message);
+    }
+    basis = await rememberCurrentBasis(projectDir);
   }
 
   // 要作者点头的：按作者身份在「AI 那批改完之后」的样子上试一遍，拿到按钮上的人话；作者身份都做不了的如实列进没改成。
@@ -223,7 +224,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   let pending: readonly string[] = [];
   if (split.needsAuthor.length > 0) {
     const ops = split.needsAuthor.map((item) => item.op);
-    const after = await readCardsOrLegacy(input.projectDir, at);
+    const after = await readCardsOrLegacy(projectDir, at);
     const dry = applyCardOps(after, ops, { by: "author", at });
     if (dry.ok && dry.lines.length > 0) {
       pending = dry.lines;
@@ -238,7 +239,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   let accept: FoundationWriteOutput["foundationAccept"];
   if (applied.length > 0 && !confirm) {
     const ops = acceptOpsFor(direct, base);
-    const after = ops.length > 0 ? await readCardsOrLegacy(input.projectDir, at) : undefined;
+    const after = ops.length > 0 ? await readCardsOrLegacy(projectDir, at) : undefined;
     const dry = after ? applyCardOps(after, ops, { by: "author", at }) : undefined;
     if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops, basis), input: { ops }, label: "刚写的这几处", basis, basisFrom };
   }

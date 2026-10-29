@@ -9,18 +9,17 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
-import { useDraftStore } from "../../stores/draftStore.js";
-import * as overviewModule from "../book/state-overview.js";
+import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
+import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { createStoryProject } from "../book/project-store.js";
 import { applyAiDraft } from "../lib/ai-draft-write.js";
 import { freshRevision } from "../lib/book-backup.js";
 import { writeCards } from "../lib/card-write.js";
-import { pendingDraftFor, readDraftRecovery } from "../lib/draft-candidates.js";
+import { pendingDraftFor, readDraftRecovery, readSaveMark } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
 import { applyRevision, previewRevision, reviseDraftOneShot } from "../services/revision-service.js";
-import * as contextModule from "../writing/writing-context-pack.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
 
 const hooks = vi.hoisted(() => ({
@@ -311,6 +310,83 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect(useDraftStore.getState().incoming ?? null).toBeNull();
   });
 
+  it.each([["补发那笔先落盘", "keepalive"], ["在路上那笔先落盘", "first"]] as const)("真稿纸：补发之后页面没关、作者又改回原文：%s，盘上是作者最后的字（第 8 轮 V1）", async (_name, landsFirst) => {
+    await save(1, "原稿 A。");
+    const firstArrived = barrier();
+    const releaseFirst = barrier();
+    const keepaliveDone = barrier();
+    let normalPuts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const first = init?.method === "PUT" && !init.keepalive && (normalPuts += 1) === 1;
+      // 「补发先落盘」：在路上那笔还没到服务端；「在路上那笔先落盘」：它到了、写了，只是回执迟迟没回来。
+      if (first && landsFirst === "keepalive") { firstArrived.release(); await releaseFirst.promise; }
+      const result = await call(init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined);
+      if (first && landsFirst === "first") { firstArrived.release(); await releaseFirst.promise; }
+      if (init?.keepalive) keepaliveDone.release();
+      return new Response(JSON.stringify(result.payload), { status: result.status, headers: { "content-type": "application/json" } });
+    }));
+    await openPaper(book, 1);
+    editDraft("在途 B。");
+    const saving = flushDraftSave();
+    await firstArrived.promise;
+    editDraft("关窗补发 C。");
+    saveDraftKeepalive();
+    await keepaliveDone.promise;
+    // 页面没关（离页被取消、从页面缓存回来），作者撤回原文。
+    editDraft("原稿 A。");
+    releaseFirst.release();
+    expect(await saving).toEqual({ ok: true });
+    expect(await flushDraftSave()).toEqual({ ok: true });
+    expect((await readDraft(book, 1))?.body).toBe("原稿 A。");
+    expect(isDraftDirty(useDraftStore.getState())).toBe(false);
+    expect(useDraftStore.getState().incoming ?? null).toBeNull();
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
+  it("撤销换了纪元、迟到的同文空写不把撤销后的版本认成这个窗口的：之后照撤销前发的旧笔撞版本进恢复稿（第 8 轮 V3）", async () => {
+    const original = await save(1, "撤销回的 R。");
+    const snapshot = await createSnapshot(book, "撤销目标 R");
+    const client = "round8window01";
+    const first = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, client, seq: 1, baseVersion: original, body: "后来写的 A。" });
+    expect(first.status).toBe(200);
+    // 两笔都在撤销前发出、撤销后才到。
+    const queuedNoop = { projectPath: book, chapter: 1, client, seq: 2, baseVersion: original, body: "撤销回的 R。" };
+    const queuedEdit = { projectPath: book, chapter: 1, client, seq: 3, baseVersion: first.payload.version, body: "撤销前发出的 B。" };
+    await restoreSnapshot(book, snapshot.id);
+    expect((await call("PUT", "/api/working-draft", queuedNoop)).payload).toMatchObject({ ok: true, unchanged: true });
+    expect((await readSaveMark(book, 1, client))?.seq).toBe(2);
+    const late = await call("PUT", "/api/working-draft", queuedEdit);
+    expect(late.status).toBe(409);
+    expect((await readDraft(book, 1))?.body).toBe("撤销回的 R。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: queuedEdit.body });
+  });
+
+  it("撤销之后没有同文空写穿插：旧串上的新序号照样撞版本进恢复稿（对照）", async () => {
+    const original = await save(1, "R。");
+    const snapshot = await createSnapshot(book, "撤销目标");
+    const request = { projectPath: book, chapter: 1, client: "round8window02", baseVersion: original };
+    expect((await call("PUT", "/api/working-draft", { ...request, seq: 1, body: "A。" })).status).toBe(200);
+    await restoreSnapshot(book, snapshot.id);
+    expect((await call("PUT", "/api/working-draft", { ...request, seq: 2, body: "B。" })).status).toBe(409);
+    expect((await readDraft(book, 1))?.body).toBe("R。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: "B。" });
+  });
+
+  it("AI 换了稿、迟到的同文空写不把 AI 的版本收进这个窗口那一串：之后的旧笔不盖 AI 稿（第 8 轮 V3a）", async () => {
+    const original = await save(1, "R。");
+    const client = "round8window03";
+    const first = await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, client, seq: 1, baseVersion: original, body: "A。" });
+    expect(first.status).toBe(200);
+    const queuedNoop = { projectPath: book, chapter: 1, client, seq: 2, baseVersion: original, body: "碰巧一样的 B。" };
+    const queuedEdit = { projectPath: book, chapter: 1, client, seq: 3, baseVersion: first.payload.version, body: "AI 写之前发出的 C。" };
+    expect(await applyAiDraft(book, { chapter: 1, body: "碰巧一样的 B。", basis: await readTruthBasis(book), baseVersion: (await readDraftState(book, 1)).version, materials: [], source: "revise" })).toMatchObject({ applied: true });
+    expect((await call("PUT", "/api/working-draft", queuedNoop)).payload).toMatchObject({ ok: true, unchanged: true });
+    const late = await call("PUT", "/api/working-draft", queuedEdit);
+    expect(late.status).toBe(409);
+    expect((await readDraft(book, 1))?.body).toBe("碰巧一样的 B。");
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: queuedEdit.body });
+  });
+
   it("恢复稿已被别的窗口找回、清空了：本窗口后来的「不要了」照样推进序号，在路上的旧笔到了不再写回来（第 5 轮 S10）", async () => {
     const base = await save(1, "原稿。");
     const changed = await save(1, "AI 工作稿。");
@@ -442,56 +518,85 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     }
   });
 
-  it("改稿服务读到了事务中途的设定、事务回滚：改出来的不换上（B8-service）", async () => {
+  it("改稿开工正赶上设定写到一半、那次写失败回滚：等收尾之后才取依据读材料，读的是回滚后的设定（B8-service，第 8 轮起）", async () => {
     await save(1, "他推开门。");
     expect(await runCommand(book, cardWrite, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "海州" }] }, { caller: "author", idempotencyKey: "seed-card-a" })).toMatchObject({ ok: true });
     const revisionSwapped = barrier();
-    const allowCard = barrier();
-    const cardSwapped = barrier();
-    const failRest = barrier();
+    const allowRest = barrier();
     hooks.afterRename = async (from, to) => {
-      if (!from.includes("/staged/")) return;
-      if (to === join(book, "store-control/revision.json")) { revisionSwapped.release(); await allowCard.promise; }
-      if (to === join(book, "ledger/cards.json")) { cardSwapped.release(); await failRest.promise; }
+      if (from.includes("/staged/") && to === join(book, "store-control/revision.json")) { revisionSwapped.release(); await allowRest.promise; }
     };
     hooks.beforeRename = async (from, to) => {
       if (from.includes("/staged/") && to.includes("/ledger/receipts/")) throw eio("设定已换、回执写盘失败");
     };
     const failedWrite = runCommand(book, cardWrite, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }] }, { caller: "author", idempotencyKey: "failed-card-b" });
-    const originalOverview = overviewModule.buildStateOverview;
-    const originalContext = contextModule.buildWritingContextPack;
-    // 两个材料构建器在读完开工依据之后才进来：只加调度屏障，材料照真的读。
-    vi.spyOn(overviewModule, "buildStateOverview").mockImplementation(async (...args) => {
-      allowCard.release();
-      await cardSwapped.promise;
-      return originalOverview(...args);
-    });
-    vi.spyOn(contextModule, "buildWritingContextPack").mockImplementation(async (...args) => {
-      allowCard.release();
-      await cardSwapped.promise;
-      return originalContext(...args);
-    });
+    let prompt = "";
     try {
       await revisionSwapped.promise;
-      const outcome = await reviseDraftOneShot({
+      const revising = reviseDraftOneShot({
         projectDir: book,
         chapter: 1,
         targetText: "他推开门。",
         revisionGoal: "点明籍贯",
-        callModel: async (prompt) => {
-          expect(prompt).toContain("京城");
-          failRest.release();
-          expect(await failedWrite).toMatchObject({ ok: false });
-          return JSON.stringify({ beforeText: "他推开门。", afterText: "京城来的张三推开门。" });
+        callModel: async (input) => {
+          prompt = input;
+          return JSON.stringify({ beforeText: "他推开门。", afterText: "海州来的张三推开门。" });
         },
       });
-      expect(await readFile(join(book, "ledger/cards.json"), "utf-8")).toContain("海州");
-      expect(outcome.ok).toBe(false);
-      expect((await readDraft(book, 1))?.body).toBe("他推开门。");
+      // 写到一半时改稿取不到依据（等书锁），进不了模型。
+      await new Promise((done) => setTimeout(done, 50));
+      expect(prompt).toBe("");
+      allowRest.release();
+      expect(await failedWrite).toMatchObject({ ok: false });
+      expect(await revising).toMatchObject({ ok: true, applied: true });
+      expect(prompt).toContain("海州");
+      expect(prompt).not.toContain("京城");
+      expect((await readDraft(book, 1))?.body).toBe("海州来的张三推开门。");
     } finally {
-      allowCard.release();
-      failRest.release();
+      allowRest.release();
       await failedWrite;
+    }
+  });
+
+  it("改稿开工正赶上定稿写到一半（真相写了、版本号还没换）：等那条命令写完、镜像同步了才取依据，读到的是新账（第 8 轮 V2）", async () => {
+    const commit = (value: string) => runCommand(book, chapterCommit, {
+      chapter: 1,
+      text: `# 第一章\n\n保险柜的口令是${value}。`,
+      entries: [{ kind: "fact", review: "author", nature: "hard", subject: "保险柜", attribute: "口令", value, text: `保险柜的口令是${value}。`, quote: `保险柜的口令是${value}。` }],
+    }, { caller: "author", idempotencyKey: value });
+    expect(await commit("红松")).toMatchObject({ ok: true });
+    expect((await syncLegacyMirror(book)).ok).toBe(true);
+    await save(2, "林远看着保险柜。");
+    const atHead = barrier();
+    const finishHead = barrier();
+    hooks.beforeRename = async (_from, to) => {
+      if (to === join(book, "ledger/head.json")) { hooks.beforeRename = undefined; atHead.release(); await finishHead.promise; }
+    };
+    const writing = commit("白鹤");
+    let prompt = "";
+    try {
+      await atHead.promise;
+      const revising = reviseDraftOneShot({
+        projectDir: book,
+        chapter: 2,
+        targetText: "林远看着保险柜。",
+        revisionGoal: "补上账本里记的口令",
+        callModel: async (input) => {
+          prompt = input;
+          return JSON.stringify({ beforeText: "林远看着保险柜。", afterText: "林远输入白鹤，打开了保险柜。" });
+        },
+      });
+      await new Promise((done) => setTimeout(done, 50));
+      expect(prompt).toBe("");
+      finishHead.release();
+      expect(await writing).toMatchObject({ ok: true });
+      expect(await revising).toMatchObject({ ok: true, applied: true });
+      expect(prompt).toContain("白鹤");
+      expect(prompt).not.toContain("红松");
+      expect(await pendingDraftFor(book, 2)).toBeUndefined();
+    } finally {
+      finishHead.release();
+      await writing;
     }
   });
 });

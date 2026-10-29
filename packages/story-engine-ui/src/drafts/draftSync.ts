@@ -15,6 +15,9 @@
  *   也按「开读比已换上的那份晚」才用：迟到的旧读数不盖后来读到、已经显示的新稿（第 7 轮复核 U1）。
  * - 一笔在路上时「要不要存」按在路上那份比（它落盘后盘上就是它）：改回原样也算要存，关窗时 keepalive 补发（第 7 轮复核 U2）。
  *   补发的那笔和在路上那笔是同一个底版，服务端按窗口号和序号认出是同一窗口接着写的，顺着接上；序号旧的那笔后到不写。
+ * - **只有这个窗口最后发出的那笔的回执能定「存上了」**（第 8 轮复核 V1）：一笔回来时这个窗口后来又发过（关窗补发之后页面没关），
+ *   这笔存上了、被顶掉了、撞了都说明不了盘上现在是什么——手上的字再存一笔（服务端顺着接，盘上就是手上这份时是空写），
+ *   以那笔的回执为准。补发的那笔回来时还是最后一笔，也再存一笔（它的回执没照常处理）。
  */
 import { decidePendingDraft, fetchChapterPaper, saveWorkingDraft, type ChapterPaper } from "../api/workingDraftClient.js";
 import { isDraftDirty, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
@@ -67,6 +70,11 @@ function rememberOwnVersion(version: string | null): void {
 export function isOwnSavedVersion(version: string | null): boolean {
   return version !== null && ownVersions.includes(version);
 }
+/** 这一章的回执说明不了盘上现在是什么（见文件头）：手上的字不管和底版一不一样，都要再存一笔。 */
+let reassert: { readonly projectPath: string; readonly chapter: number } | null = null;
+const reassertFor = (state: Pick<DraftStoreState, "projectPath" | "chapter">): boolean =>
+  reassert !== null && reassert.projectPath === state.projectPath && reassert.chapter === state.chapter;
+
 /** 上一笔撞了版本的那份（同一份字、同一底版不再重发，免得来回打转）。 */
 let rejected: { readonly projectPath: string; readonly chapter: number; readonly body: string; readonly title: string; readonly baseVersion: string | null } | null = null;
 
@@ -84,6 +92,7 @@ const paperOpen = (state: DraftStoreState): boolean => Boolean(state.projectPath
 /** 有要发的字：打开了一章、和盘上不一样（一笔在路上就和那笔比：它落盘后盘上就是它）、这份没被拒过。 */
 function needsSave(state: DraftStoreState): boolean {
   if (!paperOpen(state)) return false;
+  if (reassertFor(state)) return true;
   if (sending && sending.projectPath === state.projectPath && sending.chapter === state.chapter) return state.body !== sending.body || state.title !== sending.title;
   return isDraftDirty(state);
 }
@@ -116,6 +125,8 @@ async function sendOnce(): Promise<DraftFlushResult> {
   state.markSaving();
   savesSent += 1;
   sending = sent;
+  if (reassertFor(state)) reassert = null;
+  const sender = nextSender();
   try {
     const result = await saveWorkingDraft({
       projectPath: sent.projectPath,
@@ -123,13 +134,18 @@ async function sendOnce(): Promise<DraftFlushResult> {
       body: sent.body,
       ...(sent.title.trim() ? { title: sent.title.trim() } : {}),
       baseVersion: sent.baseVersion,
-      ...nextSender(),
+      ...sender,
     });
     sending = null;
     const live = useDraftStore.getState();
     if (live.projectPath !== sent.projectPath || live.chapter !== sent.chapter) return { ok: true };
-    // 这个窗口后发的一笔（关窗时的 keepalive）先到了：这笔旧的服务端没写，字以后来那笔为准。还有没存的照常接着存。
-    if ("superseded" in result) return { ok: true };
+    // 这笔之后这个窗口又发过（关窗补发）、或服务端说被自己后来那笔顶掉了：这笔的回执说明不了盘上现在是什么，
+    // 手上的字再存一笔，以那笔为准（见文件头）。
+    if (sender.seq !== seq || "superseded" in result) {
+      if (result.ok) rememberOwnVersion(result.version);
+      reassert = { projectPath: sent.projectPath, chapter: sent.chapter };
+      return { ok: true };
+    }
     if (result.ok) {
       rejected = null;
       failedUnsaved = false;
@@ -203,14 +219,23 @@ export function saveDraftKeepalive(): void {
   const state = useDraftStore.getState();
   if (!state.projectPath || !needsSave(state)) return;
   clearTimer();
+  const paper = { projectPath: state.projectPath, chapter: state.chapter };
+  savesSent += 1;
+  if (reassertFor(state)) reassert = null;
+  const sender = nextSender();
   void saveWorkingDraft({
     projectPath: state.projectPath,
     chapter: state.chapter,
     body: state.body,
     ...(state.title.trim() ? { title: state.title.trim() } : {}),
     baseVersion: state.baseVersion,
-    ...nextSender(),
-  }, { keepalive: true }).catch(() => undefined);
+    ...sender,
+  }, { keepalive: true }).then(() => undefined, () => undefined).then(() => {
+    // 页面没关（离页被取消、从页面缓存回来）、这笔还是最后一笔：它的回执没照常处理，再存一笔定下盘上是什么（第 8 轮复核 V1）。
+    if (sender.seq !== seq) return;
+    reassert = paper;
+    scheduleDraftSave(0);
+  });
 }
 
 /**
@@ -410,6 +435,7 @@ export function __resetDraftSyncForTests(): void {
   clearTimer();
   inFlight = null;
   sending = null;
+  reassert = null;
   readTickets = 0;
   shownTicket = 0;
   rejected = null;

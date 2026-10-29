@@ -1,5 +1,6 @@
 // @vitest-environment node
-// 确认改账拿着书锁、真相写完还没同步镜像时开写（第 7 轮复核 U3a）：开写先把镜像补上，写手读到的是新账。
+// 确认改账拿着书锁、真相写完还没同步镜像时开写（第 7 轮复核 U3a）：开写在书锁里取依据（第 8 轮起），
+// 等改账连同镜像同步做完才开写，写手读到的是新账。
 // 真确认改账服务 + 真出稿服务 + 真核心写盘，只替换模型和出稿后的质量复核；镜像同步前插一道闸，卡在「真相写完、镜像没同步」那一刻。
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -52,7 +53,7 @@ const packOf = (context: { readonly sections: readonly { readonly name: string; 
 const prose = (line: string): string => Array(6).fill(`${line}林远沿着河岸走了很久，手里的账册越攥越紧。他还记得早上的约定，却不知道对方为什么迟迟没有露面。巷子尽头有人推开门，朝他招了招手，示意他先进去等一会儿。`).join("\n\n");
 const policies = { lengthPolicy: "annotate", aiFlavorRecheck: false } as const;
 
-it("确认改账拿着书锁、还没同步镜像时开写：写手读到的也是新账（第 7 轮 U3a）", async () => {
+it("确认改账拿着书锁、还没同步镜像时开写：等改账做完才开写，写手读到的是新账（第 7 轮 U3a）", async () => {
   const book = await makeBook();
   await commitKey(book, "保险柜的口令是红松。", "红松");
   expect((await syncLegacyMirror(book)).ok).toBe(true);
@@ -69,7 +70,7 @@ it("确认改账拿着书锁、还没同步镜像时开写：写手读到的也�
   await entered;
   let consumed = "";
   try {
-    const result = await runGenerateDraft({
+    const drafting = runGenerateDraft({
       projectDir: book,
       chapter: 2,
       plannerCallModel: async () => { throw new Error("应沿用作者章纲"); },
@@ -77,13 +78,16 @@ it("确认改账拿着书锁、还没同步镜像时开写：写手读到的也�
       writerClient: {
         async generateDraft({ context }) {
           consumed = packOf(context);
-          // 写手读完才放作者那边去同步：换上要等作者放开书锁。
-          release();
           return { title: "开柜", content: prose("林远输入白鹤，打开了保险柜。") };
         },
       },
     });
+    // 改账还拿着书锁：开写取不到依据，写手不开工。
+    await new Promise((done) => setTimeout(done, 50));
+    expect(consumed).toBe("");
+    release();
     expect((await author).ok).toBe(true);
+    const result = await drafting;
     expect(consumed).toContain("白鹤");
     expect(consumed).not.toContain("红松");
     expect(result.ok).toBe(true);

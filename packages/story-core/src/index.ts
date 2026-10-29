@@ -144,7 +144,6 @@ export {
   readDecisions,
   readHead,
   readTruthBasis,
-  readWithStableBasis,
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
@@ -219,7 +218,7 @@ export {
   type SerialPart,
   type SerialSplit,
 } from "./text/serial-split.js";
-export { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
+export { absentDraftVersion, composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftState, readDraftStamp, readDraftVersions, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
 export { draftAdoptCandidate, draftApplyGenerated, DraftSaveArgs, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
 export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";
