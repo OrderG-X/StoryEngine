@@ -993,14 +993,22 @@ function extractLeadingChapterTitle(content: string): string | undefined {
   const normalized = content.replace(/\r\n?/gu, "\n").trimStart();
   const firstLine = normalized.split("\n").find((line) => line.trim().length > 0)?.trim();
   if (!firstLine) return undefined;
-  if (isMarkdownChapterHeading(firstLine)) return firstLine.replace(/^#{1,6}\s+/u, "").trim(); // 章名行白名单：模型输出
+  if (isMarkdownChapterHeading(firstLine)) return markdownHeadingText(firstLine);
   if (isPlainChapterHeading(firstLine)) return firstLine.trim();
   return undefined;
 }
 
+/**
+ * Markdown 标题行里的字：去掉开头的 `#`，也去掉结尾的闭合 `#`（`# 第一章 #`、`## 第 1 章 ##`，P1 第 18 轮 AF3）——
+ * 闭合的井号前面得有空格（或整行只有井号），名字中间、贴着字的 `#` 是名字的一部分，留着。
+ */
+function markdownHeadingText(line: string): string {
+  return line.replace(/^#{1,6}\s+/u, "").replace(/(?:^|\s+)#+\s*$/u, "").trim(); // 章名行白名单：模型输出
+}
+
 function isMarkdownChapterHeading(line: string): boolean {
   if (!/^#{1,6}\s+\S/u.test(line)) return false; // 章名行白名单：模型输出
-  const title = line.replace(/^#{1,6}\s+/u, "").trim(); // 章名行白名单：模型输出
+  const title = markdownHeadingText(line);
   if (!title) return false;
   if (hasChapterNumberPrefix(title)) return true;
   // 不猜白名单：章节标题

@@ -65,6 +65,8 @@ describe("多文件事务", () => {
     expect(await read("chapters/0001.md")).toBe("旧正文");
     await expect(read("ledger/chapters/0001.json")).rejects.toThrow();
     expect(await read("ledger/head.json")).toBe("旧版本");
+    // 书被这次写动过：换回原样之后换一个新代次（这次写没写代次都换）。
+    expect(JSON.parse(await read(REVISION_PATH))).toMatchObject({ schema: "store-revision/1" });
     expect(await hasPendingTransactions(book)).toBe(false);
   });
 

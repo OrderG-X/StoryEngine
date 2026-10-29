@@ -7,6 +7,7 @@
  * - AE1 只写了章号（换个写法：「第1章：」「第 1 章」「第一〇一章」……）也算没起名（第 17 轮）。
  * - AE2 存稿连升级前的老格式事务一起先收拾（第 17 轮）。
  * - AE3 AI 换稿先收拾事务、再核写的时候用过的材料（第 17 轮）。
+ * - AF3 Markdown 标题的闭合井号（`# 第一章 #`）不算章名，名字中间、贴着字的井号留着（第 18 轮）。
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -155,6 +156,32 @@ describe("AE1 只写了章号，换个写法也算没起名", () => {
     model.text = `${heading}\n\n${model.text}`;
     const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
     expect(generated.payload.draftTitle).toBe(expected);
+  });
+
+  it.each(["# 第一章 #", "## 第 1 章 ##", "# 第１２章： ###", "### 第1章 #"])("AF3 闭合井号 %j：不起名、作者的章名留着", async (heading) => {
+    await save("作者保留的章名");
+    model.text = `${heading}\n\n${model.text}`;
+    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
+    expect(generated.status).toBe(200);
+    expect(generated.payload.draftTitle).toBeUndefined();
+    expect(String(generated.payload.draftBody)).not.toMatch(/^第|^#/u);
+    const before = (await readDraft(book, 1))!;
+    const applied = await call("/api/draft/apply-candidate", { projectPath: book, chapter: 1, title: (generated.payload.draftTitle as string | undefined) ?? before.title ?? "", body: generated.payload.draftBody, baseVersion: before.version });
+    expect(applied.status).toBe(200);
+    expect((await readDraft(book, 1))?.title).toBe("作者保留的章名");
+  });
+
+  it.each([
+    ["# 第1章 雨夜 #", "第1章 · 雨夜"],
+    ["## 雨夜 ##", "第1章 · 雨夜"],
+    ["# 第1章 · 门后的 # 号", "第1章 · 门后的 # 号"],
+    ["# 第1章 · 井号#", "第1章 · 井号#"],
+    ["# C# 入门", "第1章 · C# 入门"],
+  ])("AF3 %j：闭合井号去掉，名字里的井号留着", async (heading, expected) => {
+    model.text = `${heading}\n\n${model.text}`;
+    const generated = await call("/api/draft/generate", { projectPath: book, chapter: 1, persist: false, selectedCharacters: ["林远"], requestedDraftLength: 500 });
+    expect(generated.payload.draftTitle).toBe(expected);
+    expect(String(generated.payload.draftBody)).not.toMatch(/^#/u);
   });
 
   it("核心同一条规则：剥章号、连着几次的也剥", () => {
