@@ -360,6 +360,25 @@ async function retireHeld(root: string, aside: string, held: FileHandle, expect:
 }
 
 /**
+ * 自己的固定名字上留下的东西（上次被杀留下的半份、被换成的软链 / 硬链）要腾开（第 25 轮）：软链只摘名字（不碰它指向的东西）；
+ * 普通文件不删，挪进留证区（它可能是谁的唯一副本）；是目录如实失败。
+ */
+export async function retireLeftover(root: string, path: string, label: string): Promise<void> {
+  const found = await lstatOrUndefined(path);
+  if (!found) return;
+  await plainDirIdentity(root, dirname(path), label);
+  if (found.isSymbolicLink()) {
+    await unlink(path);
+    return;
+  }
+  if (!found.isFile()) throw unsafe("UNSAFE_NOT_A_FILE", `Unsafe ${label}: ${relative(root, path)} is not a real file.`);
+  const dir = await displacedDir(root, label);
+  await rename(path, join(dir, `${Date.now()}-${randomBytes(8).toString("hex")}-${basename(path).replace(/[^\w.-]/gu, "_")}`));
+  await syncDirectory(dir);
+  await syncDirectory(dirname(path));
+}
+
+/**
  * 摘掉刚 link 上的目标名字：它和源路径上的（源换成软链的，macOS 的 link 跟着链放的是链指向的那个）还是同一个文件才摘——
  * 东西还在源那个名字下，不丢。
  */

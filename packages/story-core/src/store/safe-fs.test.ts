@@ -324,6 +324,26 @@ describe("回滚 / 恢复盖掉、删掉别人可能动过的那份：先挪开�
     expect((await recoverTransactions(book)).kept).toBe(0);
   });
 
+  it("自己名字上留下的东西腾开（第 25 轮）：普通文件挪进留证区不删（可能是谁的唯一副本）；软链只摘名字、不碰它指向的；目录如实失败", async () => {
+    const { retireLeftover } = await import("./safe-fs.js");
+    const leftover = join(dirname(aside()), "restore-0");
+    await writeFile(leftover, "只剩这一个名字的 X");
+    await retireLeftover(book, leftover, "stage");
+    await expect(lstat(leftover)).rejects.toMatchObject({ code: "ENOENT" });
+    const dir = join(book, ".story-core-kept", "displaced");
+    expect(await Promise.all((await readdir(dir)).map((name) => readFile(join(dir, name), "utf-8")))).toEqual(["只剩这一个名字的 X"]);
+    const outside = join(await realpath(tmpdir()), `outside-${process.pid}-${Date.now()}`);
+    await writeFile(outside, "书外的");
+    await symlink(outside, leftover);
+    await retireLeftover(book, leftover, "stage");
+    await expect(lstat(leftover)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(outside, "utf-8")).toBe("书外的");
+    await rm(outside, { force: true });
+    await mkdir(leftover);
+    await expect(retireLeftover(book, leftover, "stage")).rejects.toMatchObject({ code: "UNSAFE_NOT_A_FILE" });
+    await retireLeftover(book, join(dirname(aside()), "never-there"), "stage");
+  });
+
   it("removeFileInBook：内容核不上不删；挪开前原位写成 X（inode 没变）：X 放回原处不删；核得上的删掉；不在当删过了", async () => {
     const { removeFileInBook } = await import("./safe-fs.js");
     await writeFile(target(), "作者 C");
