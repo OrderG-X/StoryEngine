@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cardWrite, chapterCommit, draftPath, draftSave, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftPath, draftSave, readBookEpoch, readDraft, readDraftState, readTruthBasis, runCommand, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper, saveDraftKeepalive, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
@@ -404,8 +404,11 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
 
   it("书从备份 / 回收站搬回来：稿纸上照原来那版发的存稿对不上", async () => {
     const base = await save(1, "搬走前的稿。");
+    const epoch = await readBookEpoch(book);
     await freshRevision(book);
     expect((await readDraft(book, 1))?.version).not.toBe(base);
+    // 书的纪元也换了（写作版本 P2a）：搬走之前受理的操作不能再写这本书。
+    expect(await readBookEpoch(book)).not.toBe(epoch);
     expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "旧窗口的字。", baseVersion: base })).status).toBe(409);
     expect((await readDraft(book, 1))?.body).toBe("搬走前的稿。");
   });

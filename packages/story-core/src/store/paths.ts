@@ -20,6 +20,11 @@ export const REVISION_PATH = "store-control/revision.json";
  * 和写入代次一样不进存档点：撤销把稿子换回原样，版本号也不会回到原样（store/draft-gens.ts）。
  */
 export const DRAFT_GENS_PATH = "store-control/drafts.json";
+/**
+ * 书的纪元（写作版本 P2a）：只在整本恢复、从备份 / 回收站搬回时换。操作受理时记下它，应用前核：换了 = 这本书已经不是那本书了，
+ * 旧操作一律不能再写。和写入代次（每次写真相都换）、工作稿纪元（撤销也换）分开。不进存档点。
+ */
+export const BOOK_EPOCH_PATH = "store-control/epoch.json";
 export const TX_DIR = ".story-core-tx";
 /** 收拾不了的坏事务挪到这里留证（作者确认后挪，不删）。 */
 export const KEPT_TX_DIR = ".story-core-kept";
@@ -47,6 +52,23 @@ export function draftChapterOfPath(path: string): number | undefined {
   if (!match) return undefined;
   const chapter = Number(match[1]);
   return Number.isInteger(chapter) && chapter >= 1 ? chapter : undefined;
+}
+
+/** 章纲（写作版本 P2a 起由核心命令 plan.save 写），沿用老书路径。 */
+export function planPath(chapter: number): string {
+  return `drafts/plans/chapter-${pad(chapter)}.json`;
+}
+
+const UNDOABLE_DIRS = ["chapters/", "ledger/chapters/", "drafts/fast/", "drafts/plans/"] as const;
+const UNDOABLE_FILES: readonly string[] = [DECISIONS_PATH, CARDS_PATH];
+
+/**
+ * 撤销、整本恢复管的范围（写作版本 P2a）：正文、账单、裁定、设定卡、工作稿、章纲。回执只给这个范围里的文件记前后哈希。
+ * 候选、恢复稿、回执、控制文件、head 不在里面：撤销不把它们翻回去。
+ */
+export function isUndoablePath(path: string): boolean {
+  const plain = path.split(sep).join("/");
+  return UNDOABLE_FILES.includes(plain) || UNDOABLE_DIRS.some((dir) => plain.startsWith(dir) && plain.length > dir.length && !plain.slice(dir.length).includes("/"));
 }
 
 export function receiptPath(keyHash: string): string {

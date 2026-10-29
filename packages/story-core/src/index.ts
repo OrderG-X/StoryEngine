@@ -148,16 +148,20 @@ export {
   type BookSnapshot,
 } from "./store/book.js";
 export { bumpRevision, revisionWrite } from "./store/revision.js";
-export { draftStampOf, freshDraftGensWrite, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
+export { bookEpochWrite, draftStampOf, freshDraftGensWrite, readBookEpoch, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
-export { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, TX_DIR } from "./store/paths.js";
+export { BOOK_EPOCH_PATH, CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, isUndoablePath, KEPT_TX_DIR, LEDGER_DIR, planPath, REVISION_PATH, TX_DIR } from "./store/paths.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,
   recoverTransactions,
   setAsideBrokenTransactions,
+  sha256Bytes,
   type RecoveryReport,
+  type TxChange,
+  type TxDelete,
+  type TxEffect,
 } from "./store/transaction.js";
 
 export { DEFAULT_STALE_AFTER, project, type ProjectionInput, type ProjectionOptions } from "./projection/project.js";
@@ -205,6 +209,7 @@ export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from ".
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { decisionRecord, DecisionRecordArgs, MAX_DECISIONS_PER_RECORD, type DecisionRecordResult } from "./commands/decision-record.js";
 export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
+export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
 export { bookImportText, BookImportTextArgs, TEXT_IMPORT_MAX_CHAPTERS, type BookImportTextResult } from "./import/text-import.js";

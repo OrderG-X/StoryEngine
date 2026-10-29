@@ -93,8 +93,20 @@ export type CommandOutcome<R> = CommandSuccess<R> | CommandFailure;
 export interface RunOptions {
   readonly caller: Caller;
   readonly idempotencyKey?: string;
-  /** 写前打快照（git 快照在服务端，核心只管在对的时机调它）。第二个参数是命令名，服务端据此给操作历史分类。 */
-  readonly snapshot?: (label: string, command: string) => Promise<void>;
+  /**
+   * 写前打快照（git 快照在服务端，核心只管在对的时机调它）。第二个参数是命令名，服务端据此给操作历史分类。
+   * 返回那份存档的树号就记进回执（撤销取前像用）。
+   */
+  readonly snapshot?: (label: string, command: string) => Promise<string | void>;
+  /**
+   * 哪次操作的哪一步（写作版本 P2a）：没给幂等键时，键就是 `op:<opId>:<stepId>`（同一步只应用一次，再来回放回执）；回执记下这两个号。
+   */
+  readonly op?: { readonly opId: string; readonly stepId: string };
+  /**
+   * 书锁里、回放回执之后、核依据和 plan 之前跑（写作版本 P2a 的栅栏）：返回失败就不写、原样返回它。
+   * 回执已在的照常回放（回放什么都不写）。
+   */
+  readonly precondition?: () => Promise<CommandFailure | undefined>;
   /** 写成功后推事件。 */
   readonly emit?: (event: BookEvent) => void;
   readonly now?: () => Date;

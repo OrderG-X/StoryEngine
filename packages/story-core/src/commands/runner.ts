@@ -1,22 +1,23 @@
 /**
  * 写命令的执行器：所有写操作都从这里过，命令自己不碰盘。
  *
- * 顺序固定：查权限 → 校参数 → 加书锁 → 收拾上次没写完的事务 → 有回执就回放（同键换参数就拒绝）→ 核依据 → plan →
- * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 写入代次 + 版本号，版本号最后写；工作稿不动版本号和写入代次，
+ * 顺序固定：查权限 → 校参数 → 加书锁 → 收拾上次没写完的事务 → 有回执就回放（同键换参数就拒绝）→ 栅栏（precondition）→
+ * 核依据 → plan → 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 写入代次 + 版本号，版本号最后写；工作稿不动版本号和写入代次，
  * 写了哪章工作稿就在同一个事务里换那章的工作稿代次）→ 推事件。
+ * 回执记下撤销范围里每个文件换之前、换之后的哈希（effects）和写之前那份存档的树号（写作版本 P2a）。
  * 什么都不用改的也留回执（带了防重复标记的话）：不然这次请求迟到重发，会把这之间别人改的盖回去。
  * 任何一步不成都如实返回失败，书保持原样。
  */
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, readFile } from "node:fs/promises";
+import { join, sep } from "node:path";
 import { BOOK_HEAD_SCHEMA, COMMAND_RECEIPT_SCHEMA, CommandReceipt } from "../schema/book.js";
 import { canonicalJson, diffTruthBasis } from "../store/basis.js";
 import { BookFileError, readHead, readTruthBasis } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
 import { draftGensWrite, readDraftGens, revisionWrite } from "../store/control.js";
-import { draftChapterOfPath, HEAD_PATH, receiptPath } from "../store/paths.js";
-import { commitFiles, recoverTransactions, type RecoveryReport, type TxWrite } from "../store/transaction.js";
+import { assertInsideBook, draftChapterOfPath, HEAD_PATH, isUndoablePath, receiptPath } from "../store/paths.js";
+import { commitFiles, recoverTransactions, sha256Bytes, type RecoveryReport, type TxEffect, type TxWrite } from "../store/transaction.js";
 import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec, WritePlan } from "./types.js";
 
 export function fail(code: string, message: string, details?: unknown): CommandFailure {
@@ -33,6 +34,23 @@ function keyHash(key: string): string {
 
 function argsHashOf(args: unknown): string {
   return createHash("sha256").update(canonicalJson(args), "utf-8").digest("hex");
+}
+
+/** 撤销范围里这几个文件换之前、换之后的哈希（换之前按盘上原始字节算；不存在是 null）。 */
+async function undoableEffects(bookDir: string, writes: readonly TxWrite[]): Promise<TxEffect[]> {
+  const effects: TxEffect[] = [];
+  for (const write of writes) {
+    const path = assertInsideBook(write.path);
+    if (!isUndoablePath(path)) continue;
+    let before: string | null = null;
+    try {
+      if ((await lstat(join(bookDir, path))).isFile()) before = sha256Bytes(await readFile(join(bookDir, path)));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    effects.push({ path: path.split(sep).join("/"), before, after: sha256Bytes(write.content) });
+  }
+  return effects;
 }
 
 async function readReceipt(bookDir: string, key: string): Promise<CommandReceipt | undefined> {
@@ -56,7 +74,7 @@ export async function runCommand<A, R>(
   if (spec.tier === "author" && options.caller !== "author") {
     return fail("author_only", "这一步只能由你在界面上点按钮来做，AI 不能替你做。");
   }
-  const key = options.idempotencyKey?.trim();
+  const key = options.idempotencyKey?.trim() || (options.op ? `op:${options.op.opId}:${options.op.stepId}` : undefined);
   if (spec.idempotent && !key) return fail("missing_idempotency_key", "这一步缺少防重复的标记，没有执行。");
   const parsed = spec.args.safeParse(rawArgs);
   if (!parsed.success) {
@@ -86,6 +104,10 @@ export async function runCommand<A, R>(
         return { ok: true, result: receipt.result as R, version: receipt.version, changed: receipt.changed, replayed: true, ...notice };
       }
     }
+    if (options.precondition) {
+      const blocked = await options.precondition();
+      if (blocked) return blocked;
+    }
     if (options.basis) {
       let changes;
       try {
@@ -108,15 +130,20 @@ export async function runCommand<A, R>(
     if (isFailure(planned)) return planned;
     const head = await readHead(bookDir);
     const at = now.toISOString();
-    const receiptOf = (version: number, changed: WritePlan<R>["changed"]): TxWrite => {
-      const receipt: CommandReceipt = { schema: COMMAND_RECEIPT_SCHEMA, key: key as string, command: spec.name, version, at, changed, result: planned.result, argsHash };
+    const receiptOf = (version: number, changed: WritePlan<R>["changed"], effects: readonly TxEffect[], snapshotTree?: string): TxWrite => {
+      const receipt: CommandReceipt = {
+        schema: COMMAND_RECEIPT_SCHEMA, key: key as string, command: spec.name, version, at, changed, result: planned.result, argsHash,
+        ...(options.op ? { opId: options.op.opId, stepId: options.op.stepId } : {}),
+        effects: [...effects],
+        ...(snapshotTree ? { snapshotTree } : {}),
+      };
       return { path: receiptPath(keyHash(key as string)), content: `${JSON.stringify(receipt, null, 2)}\n` };
     };
     if (planned.writes.length === 0) {
       // 不用改也留回执：同一请求迟到重发时回放这次的结果，不会照那时的参数再执行一遍。
       if (key) {
         try {
-          await commitFiles(bookDir, [receiptOf(head.version, {})]);
+          await commitFiles(bookDir, [receiptOf(head.version, {}, [])]);
         } catch (error) {
           return fail("write_failed", "写盘没成功，书保持原样。", error instanceof Error ? error.message : String(error));
         }
@@ -124,9 +151,10 @@ export async function runCommand<A, R>(
       return { ok: true, result: planned.result, version: head.version, changed: {}, replayed: false, ...notice };
     }
 
+    let snapshotTree: string | undefined;
     if (spec.snapshot && options.snapshot) {
       try {
-        await options.snapshot(planned.label, spec.name);
+        snapshotTree = (await options.snapshot(planned.label, spec.name)) || undefined;
       } catch (error) {
         return fail("snapshot_failed", "没能先存撤销点，这次没有写。", error instanceof Error ? error.message : String(error));
       }
@@ -149,7 +177,15 @@ export async function runCommand<A, R>(
       }
     }
     const writes: TxWrite[] = [...(bumps ? [revisionWrite(now)] : []), ...gens, ...planned.writes];
-    if (key) writes.push(receiptOf(version, planned.changed));
+    if (key) {
+      let effects: TxEffect[];
+      try {
+        effects = await undoableEffects(bookDir, planned.writes);
+      } catch (error) {
+        return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
+      }
+      writes.push(receiptOf(version, planned.changed, effects, snapshotTree));
+    }
     if (bumps) writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
     try {
       await commitFiles(bookDir, writes);

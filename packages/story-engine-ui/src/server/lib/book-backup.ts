@@ -8,7 +8,7 @@
  */
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { freshDraftGensWrite, revisionWrite, withBookLock } from "@actalk/story-core";
+import { bookEpochWrite, freshDraftGensWrite, revisionWrite, withBookLock } from "@actalk/story-core";
 import { readBookMeta, safeFileName } from "./book-info.js";
 import { resolveBooksRootDir, resolveGlobalDataDir } from "./data-dirs.js";
 import { isRecord, isSafeProjectPath, writeFileAtomic } from "./project-io.js";
@@ -149,9 +149,10 @@ export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date())
  * 解出来 / 搬回来的书换一个新的写入代次（写作版本 P1a 第 2 轮复核）：备份、回收站里的代次是那时候的，
  * 书回到原路径时，读过原路径上后来那一版的预览、缓存不能因为代次一样就当成没变。书露面之前就换好。
  * 工作稿代次跟着换新纪元（P1b 第 3 轮复核）：还开着的稿纸照原路径后来那一版发的存稿，对不上、不盖回去。
+ * 书的纪元也换（写作版本 P2a）：书删掉之前受理的操作，书搬回来以后一律不能再写。
  */
 export async function freshRevision(bookDir: string, now: Date = new Date()): Promise<void> {
-  for (const write of [revisionWrite(now), freshDraftGensWrite()]) {
+  for (const write of [revisionWrite(now), freshDraftGensWrite(), bookEpochWrite(now)]) {
     await mkdir(dirname(join(bookDir, write.path)), { recursive: true });
     await writeFileAtomic(join(bookDir, write.path), write.content);
   }

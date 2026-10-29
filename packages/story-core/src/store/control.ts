@@ -1,5 +1,5 @@
 /**
- * `store-control/` 下的两份代次（都不进存档点，撤销 / 恢复不会把它们翻回去）：
+ * `store-control/` 下的代次（都不进存档点，撤销 / 恢复不会把它们翻回去）：
  *  - 写入代次 revision.json（写作版本 P1a）：每次写真相都换新的；依据（basis.ts）靠它认出「中间写过」。
  *  - 工作稿代次 drafts.json（写作版本 P1b 第 3 轮复核）：一个纪元 + 每章一个号。工作稿每写一次，那一章换一个新号；
  *    撤销 / 恢复 / 从备份、回收站搬回来，换一个新纪元（各章的号清空）。工作稿版本号 = 纪元 + 这章的号 + 全文的哈希
@@ -10,10 +10,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DRAFT_GENS_PATH, REVISION_PATH } from "./paths.js";
-import type { TxWrite } from "./transaction.js";
+import { BOOK_EPOCH_PATH, DRAFT_GENS_PATH, REVISION_PATH } from "./paths.js";
+import type { TxTextWrite } from "./transaction.js";
 
-export function revisionWrite(now: Date): TxWrite {
+export function revisionWrite(now: Date): TxTextWrite {
   return { path: REVISION_PATH, content: `${JSON.stringify({ schema: "store-revision/1", id: randomUUID(), at: now.toISOString() }, null, 2)}\n` };
 }
 
@@ -64,17 +64,45 @@ export function draftStampOf(gens: DraftGens, chapter: number): DraftStamp {
   return gen === undefined ? { epoch: gens.epoch } : { epoch: gens.epoch, gen };
 }
 
-function gensWrite(gens: DraftGens): TxWrite {
+function gensWrite(gens: DraftGens): TxTextWrite {
   const chapters = Object.fromEntries(Object.entries(gens.chapters).sort(([a], [b]) => Number(a) - Number(b)));
   return { path: DRAFT_GENS_PATH, content: `${JSON.stringify({ schema: DRAFT_GENS_SCHEMA, epoch: gens.epoch, chapters }, null, 2)}\n` };
 }
 
 /** 这几章的工作稿这次写了：各换成 gen。 */
-export function draftGensWrite(gens: DraftGens, chapters: readonly number[], gen: string): TxWrite {
+export function draftGensWrite(gens: DraftGens, chapters: readonly number[], gen: string): TxTextWrite {
   return gensWrite({ epoch: gens.epoch, chapters: { ...gens.chapters, ...Object.fromEntries(chapters.map((chapter) => [String(chapter), gen])) } });
 }
 
 /** 撤销 / 恢复后：换新纪元，各章的号清空（每一章的版本号都和恢复前对不上）。 */
-export function freshDraftGensWrite(): TxWrite {
+export function freshDraftGensWrite(): TxTextWrite {
   return gensWrite({ epoch: randomUUID(), chapters: {} });
+}
+
+export const BOOK_EPOCH_SCHEMA = "book-epoch/1" as const;
+
+/**
+ * 书的纪元（paths.ts 的 BOOK_EPOCH_PATH）。文件不在 = 还没换过（空串）；坏了拿内容的哈希当纪元
+ * （和坏之前对不上：旧操作一律不能再写，比放过去安全），下一次换纪元换成好的。
+ */
+export async function readBookEpoch(bookDir: string): Promise<string> {
+  let raw: string;
+  try {
+    raw = await readFile(join(bookDir, BOOK_EPOCH_PATH), "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+  try {
+    const value = JSON.parse(raw) as { schema?: unknown; epoch?: unknown };
+    if (value.schema === BOOK_EPOCH_SCHEMA && typeof value.epoch === "string" && value.epoch.length > 0) return value.epoch;
+  } catch {
+    // 落到下面。
+  }
+  return `invalid-${createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 16)}`;
+}
+
+/** 换一个新纪元（整本恢复、搬回备份时和别的写放进同一个事务）。 */
+export function bookEpochWrite(now: Date): TxTextWrite {
+  return { path: BOOK_EPOCH_PATH, content: `${JSON.stringify({ schema: BOOK_EPOCH_SCHEMA, epoch: randomUUID(), at: now.toISOString() }, null, 2)}\n` };
 }

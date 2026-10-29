@@ -29,6 +29,8 @@ export const ChangeSet = z.object({
   cards: z.boolean().optional(),
   /** 工作稿变了的章。 */
   drafts: z.array(z.number().int().min(1)).optional(),
+  /** 章纲变了的章（写作版本 P2a）。 */
+  plans: z.array(z.number().int().min(1)).optional(),
 });
 export type ChangeSet = z.infer<typeof ChangeSet>;
 
@@ -36,11 +38,22 @@ export const CommandReceipt = z.object({
   schema: z.literal(COMMAND_RECEIPT_SCHEMA),
   key: z.string().min(1),
   command: z.string().min(1),
-  version: z.number().int().min(1),
+  /** 写完时书的版本号。不动版本号的命令（存稿、章纲）在还没定稿过的书上是 0。 */
+  version: z.number().int().min(0),
   at: z.string().min(1),
   changed: ChangeSet,
   result: z.unknown(),
   /** 当时的参数（键排好序）的 sha256：同一个键换了参数再来，不回放、如实拒绝（写作版本 P1a；老回执没有这栏）。 */
   argsHash: z.string().optional(),
+  /** 哪次操作的哪一步写的（写作版本 P2a；不是操作写的没有）。 */
+  opId: z.string().min(1).optional(),
+  stepId: z.string().min(1).optional(),
+  /**
+   * 撤销范围里（paths.ts 的 isUndoablePath）这次写的每个文件换之前、换之后的 sha256（null = 不存在）。
+   * 写作版本 P2a 起的回执才有；没有 = 升级之前的写，撤销不了，只能整本恢复。
+   */
+  effects: z.array(z.object({ path: z.string().min(1), before: z.string().nullable(), after: z.string().nullable() })).optional(),
+  /** 写之前那份存档的树号（撤销时从这里取前像；树经提交链重写、裁剪后仍可读）。没打存档的没有。 */
+  snapshotTree: z.string().min(1).optional(),
 });
 export type CommandReceipt = z.infer<typeof CommandReceipt>;
