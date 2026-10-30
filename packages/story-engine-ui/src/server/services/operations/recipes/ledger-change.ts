@@ -9,7 +9,7 @@
  * - 作者在线索板 / 梗概上直接点的（author，只认按钮）：`plan` → `apply`，不再停下问。
  * 改前存档、可撤销；记完顺手重生成老格式镜像（没成下次取依据时补）。
  */
-import { decisionRecord, projectBook, type BasisChange, type DecisionInput, type TruthBasis } from "@actalk/story-core";
+import { decisionRecord, projectBook, type BasisChange, type CommandReceipt, type DecisionInput, type TruthBasis } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, coldPausedNote, LEDGER_ROLE, reviewOpenThreads, type BrainCallModel, type ThreadReviewOutcome } from "../../../editorial/index.js";
@@ -20,7 +20,7 @@ import { prepareReaderNotes } from "../../../editorial/prepare-notes.js";
 import { rereadBlocker } from "../../../editorial/reread-state.js";
 import { MAX_REVIEW_THREADS } from "../../../editorial/thread-review.js";
 import { frozenCompatAllowance, frozenModelProblem, type FrozenModels, type ModelTaskProfileKey } from "../../../lib/llm-client.js";
-import { runCommandInOperation } from "../../../lib/operations/command.js";
+import { replayedOutcome, runCommandInOperation } from "../../../lib/operations/command.js";
 import { OperationObsolete, rethrowIfStopped } from "../../../lib/operations/context.js";
 import { submitReaderBackfill } from "../../../lib/reader-backfill.js";
 import { coded } from "../../draft-change/steps.js";
@@ -159,6 +159,12 @@ async function applyDecisions(bookDir: string, decisions: readonly DecisionInput
   return { applied: decisions.length, ...(snapshotId ? { snapshotId } : {}) };
 }
 
+/** 上次已经记上了（崩在记完、记检查点之前，ctx.apply 照回执回放）。 */
+function decisionsRecorded(receipt: CommandReceipt, decisions: readonly DecisionInput[]): { readonly applied: number } {
+  replayedOutcome(receipt, decisionRecord);
+  return { applied: decisions.length };
+}
+
 function succeeded(lines: readonly string[], notes: readonly string[], snapshotId: string | undefined): OperationResult {
   const body: LedgerChangeBody = { kind: LEDGER_CHANGE_KIND, applied: lines, notes, ...(snapshotId ? { snapshotId } : {}) };
   return { schema: "operation-result/1", summary: `账改好了：${trimStop(lines.join("；"))}（可撤销）。${notes.join("")}`, body };
@@ -195,7 +201,7 @@ export function createLedgerChangeRecipe(deps: LedgerChangeDeps = DEFAULT_DEPS):
           const preview: LedgerConfirmPreview = { lines: plan.lines, notes };
           await ctx.waitForAuthor({ actionId: LEDGER_CONFIRM_ACTION, kind: LEDGER_CONFIRM_KIND, decisions: ["apply"], preview });
         }
-        const applied = await ctx.apply("apply", { decisions: plan.decisions }, () => applyDecisions(bookDir, plan.decisions, plan.basis));
+        const applied = await ctx.apply("apply", { decisions: plan.decisions }, () => applyDecisions(bookDir, plan.decisions, plan.basis), async (receipt) => decisionsRecorded(receipt, plan.decisions));
         return succeeded(plan.lines, notes, applied.snapshotId);
       }
 
@@ -238,7 +244,7 @@ export function createLedgerChangeRecipe(deps: LedgerChangeDeps = DEFAULT_DEPS):
       }
       const preview: LedgerConfirmPreview = { lines: plan.lines, notes: [plan.head, ...plan.notes] };
       await ctx.waitForAuthor({ actionId: LEDGER_CONFIRM_ACTION, kind: LEDGER_CONFIRM_KIND, decisions: ["apply"], preview });
-      const applied = await ctx.apply("apply", { decisions: plan.decisions }, () => applyDecisions(bookDir, plan.decisions, basis));
+      const applied = await ctx.apply("apply", { decisions: plan.decisions }, () => applyDecisions(bookDir, plan.decisions, basis), async (receipt) => decisionsRecorded(receipt, plan.decisions));
       return succeeded(plan.lines, plan.notes, applied.snapshotId);
     },
 

@@ -14,13 +14,13 @@
  * - 记完：重生成一次老格式镜像（写作上下文还读它；中途不生成，几百章每章一次太费）、交三个专员的后台补读。
  * - 最新那次的记录清理时不清（keepLatest）：停着的一直挡着核账 / 定稿（rereadBlocker）。
  */
-import { readAllLedgers, ledgerReread, readBookSnapshot } from "@actalk/story-core";
+import { readAllLedgers, ledgerReread, readBookSnapshot, type LedgerRereadResult } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { callConfiguredBrainModel, runInReaderCatchUpQueue, type BrainCallModel } from "../../../editorial/index.js";
 import { awaitsReread, BASIS_RETRIES, rereadChapter, rereadFailure, rereadInputDigest, type RereadChapterOutcome } from "../../../editorial/reread.js";
 import { parseRereadStep, readRereadParams, REREAD_KIND, rereadApplyStep, rereadReadStep, type RereadParams } from "../../../editorial/reread-state.js";
 import { frozenCompatAllowance, frozenModelProblem, type FrozenModels } from "../../../lib/llm-client.js";
-import { runCommandInOperation } from "../../../lib/operations/command.js";
+import { replayedOutcome, runCommandInOperation } from "../../../lib/operations/command.js";
 import { requestReaderBackfill } from "../../../lib/reader-backfill.js";
 import { rereadReadSends } from "../budgets.js";
 import type { OperationResult, Recipe } from "../executor.js";
@@ -33,6 +33,8 @@ const REREAD_TASKS = ["qualityCheck"] as const;
 
 /** 落账那一步的输出：记上几条、命令没收几条；changed = 途中书变了，这回没记。 */
 type ApplyOutput = { readonly recorded: number; readonly rejected: number } | { readonly changed: true };
+
+const recordedOf = (result: LedgerRereadResult): ApplyOutput => ({ recorded: result.recorded, rejected: result.rejected.length });
 
 export interface RereadResultBody {
   readonly total: number;
@@ -105,10 +107,10 @@ export function createBackgroundRereadRecipe(deps: RereadDeps = DEFAULT_DEPS): R
               basis: snapshot.basis,
               intent: { chapter },
             });
-            if (result.ok) return { recorded: result.result.recorded, rejected: result.result.rejected.length };
+            if (result.ok) return recordedOf(result.result);
             if (result.code === "basis_changed") return { changed: true };
             throw rereadFailure(`第 ${chapter} 章没记上：${result.message}`);
-          });
+          }, async (receipt) => recordedOf(replayedOutcome<LedgerRereadResult>(receipt, ledgerReread).result));
           if ("changed" in applied) continue;
           recorded += applied.recorded;
           skipped += read.skipped + applied.rejected;

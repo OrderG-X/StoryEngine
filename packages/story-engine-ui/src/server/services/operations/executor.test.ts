@@ -3,11 +3,12 @@
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bookEpochWrite } from "@actalk/story-core";
+import { bookEpochWrite, planSave, type PlanSaveResult } from "@actalk/story-core";
 import { createStoryProject } from "../../book/project-store.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { beforeSend, listAttempts } from "../../lib/operations/attempts.js";
-import { __resetExecutionsForTests, currentOperation } from "../../lib/operations/context.js";
+import { replayedOutcome, runCommandInOperation } from "../../lib/operations/command.js";
+import { __resetExecutionsForTests, currentOperation, OperationStopped } from "../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../lib/operations/live.js";
 import { __resetOperationStoreForTests, operationDir, readOperation, type OperationRecord } from "../../lib/operations/store.js";
 import { SETTLED_STATES, untilOperation } from "../../lib/operations/test-helpers.js";
@@ -220,6 +221,47 @@ describe("开书对账、接着做", () => {
   });
 });
 
+describe("应用一步回放回执（Astra 第 12 轮第 2 条、第 13 轮第 2、3 条）", () => {
+  it("核心命令写成了、记检查点之前断了：接着做不跑这一步（它照盘上现状核的会否掉已经写成的），照回执回放", async () => {
+    const calls = { apply: 0, replay: 0 };
+    let crash = true;
+    registerRecipe({
+      kind: "test.replay",
+      version: 1,
+      lane: "foreground",
+      async prepare(_bookDir, input) {
+        return { ok: true, params: input.params, writeScope: { chapters: [1] }, budget: 0 };
+      },
+      async run(ctx) {
+        const out = await ctx.apply("apply", { n: 1 }, async () => {
+          calls.apply += 1;
+          const { result } = await runCommandInOperation(ctx.bookDir, planSave, { chapter: 1, content: "{}\n" }, { what: "章纲", caller: "ai" });
+          if (!result.ok) throw new Error(result.message);
+          if (crash) {
+            crash = false;
+            throw new OperationStopped("operation_stopped", "进程没了");
+          }
+          return { unchanged: result.result.unchanged, replayed: false };
+        }, async (receipt) => {
+          calls.replay += 1;
+          return { unchanged: replayedOutcome<PlanSaveResult>(receipt, planSave).result.unchanged, replayed: true };
+        });
+        return { schema: "operation-result/1", summary: "好了", body: out };
+      },
+      stepBudget: () => 0,
+      modelTasks: () => [],
+    });
+    const first = await submitOperation(book, { kind: "test.replay", params: {}, requestKey: "button:r1", issuedAt: new Date().toISOString(), origin: { kind: "button", messageId: "button:r1" } });
+    if (!first.ok || !("record" in first)) throw new Error("没受理");
+    expect(await settled(first.record.opId)).toMatchObject({ state: "paused", pauseReason: "interrupted" });
+    expect(await resumeOperation(book, first.record.opId)).toMatchObject({ ok: true });
+    const done = await settled(first.record.opId, ["succeeded", "failed", "cancelled", "obsolete"]);
+    expect(done).toMatchObject({ state: "succeeded", result: { body: { unchanged: false, replayed: true } } });
+    expect(calls).toEqual({ apply: 1, replay: 1 });
+    expect(done.appliedEffects?.map((effect) => effect.stepId)).toEqual(["apply"]);
+  });
+});
+
 describe("配方换过版本（Astra P2a 第 10 轮第 5 条）", () => {
   async function pausedUnderV1(): Promise<string> {
     const inB = deferred();
@@ -273,6 +315,8 @@ describe("等作者点按钮（设计 6.6）", () => {
           if (ctx.params.n < 0) throw new OperationObsolete("draft_moved", "稿子在这期间改过，没换上。");
           await ctx.apply("apply", { draft }, async () => {
             calls.apply += 1;
+          }, async () => {
+            throw new Error("这一步不走核心命令，不会有回执。");
           });
           return { schema: "operation-result/1", summary: `换上了${draft}` };
         }

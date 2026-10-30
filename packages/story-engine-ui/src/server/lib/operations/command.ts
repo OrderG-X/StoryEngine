@@ -4,7 +4,7 @@
  * 改设定卡、记裁定、定论改齐、通读记账都走这一条，不各抄一份栅栏码表。
  */
 import { resolve } from "node:path";
-import { opCommandKey, readCommandReceipt, runCommand, type CommandFailure, type CommandOutcome, type CommandReceipt, type TruthBasis, type WriteCommandSpec } from "@actalk/story-core";
+import { runCommand, type CommandFailure, type CommandOutcome, type CommandReceipt, type CommandSuccess, type TruthBasis, type WriteCommandSpec } from "@actalk/story-core";
 import { runWithLazySnapshot } from "../snapshot.js";
 import { currentOperation, OperationStopped, type OperationContext } from "./context.js";
 import { checkFence } from "./fence.js";
@@ -30,12 +30,14 @@ export function operationStep(projectDir: string, what: string): { readonly oper
 }
 
 /**
- * 这一步的核心命令已经写成了（崩在写完、记检查点之前，接着做又跑到这一步）：它的回执。配方在照盘上现状算参数、核前提之前先看这个——
- * 写成了就照回执报，不拿崩了之后盘上的新样子再核一遍（Astra 第 12 轮：定稿续跑先核正文，把已经定了的报成「没定稿」）。
+ * 应用一步回放（ctx.apply 的 replay）用：这一步的回执当成这条命令「回放回执」的结果（和核心回放给的一样），配方照常路那套把结果说出来。
+ * 回执不是这几条命令写的（防重复标记撞了）如实失败。
  */
-export async function stepReceipt(projectDir: string, what: string): Promise<CommandReceipt | undefined> {
-  const { operation, stepId } = operationStep(projectDir, what);
-  return readCommandReceipt(projectDir, opCommandKey({ opId: operation.opId, stepId }));
+export function replayedOutcome<R>(receipt: CommandReceipt, ...specs: readonly { readonly name: string }[]): CommandSuccess<R> {
+  if (!specs.some((spec) => spec.name === receipt.command)) {
+    throw Object.assign(new Error("这一步的防重复标记被别的命令用过了，没有执行。"), { code: "idempotency_key_reused" });
+  }
+  return { ok: true, result: receipt.result as R, version: receipt.version, changed: receipt.changed, replayed: true };
 }
 
 export async function runCommandInOperation<A, R>(

@@ -4,8 +4,8 @@
  *
  * 存档点由核心在真要写盘时、在书锁里打：指错了卡、没变化、按钮点第二次都不打（撤销不会插进中间）。
  */
-import { cardFill, cardWrite, runCommand, type CardOp, type TruthBasis } from "@actalk/story-core";
-import { runCommandInOperation } from "./operations/command.js";
+import { cardFill, cardWrite, runCommand, type CardOp, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
+import { replayedOutcome, runCommandInOperation } from "./operations/command.js";
 import { runWithLazySnapshot } from "./snapshot.js";
 
 export type CardWriteOutcome =
@@ -56,4 +56,9 @@ export async function writeCardsInOperation(
     ...(input.basis ? { basis: input.basis } : {}),
   });
   return outcomeOf(result, snapshotId);
+}
+
+/** 改设定这一步上次已经写成了（崩在写完、记检查点之前，ctx.apply 照回执回放）：照回执报。 */
+export function cardsWritten(receipt: CommandReceipt): CardWriteOutcome {
+  return outcomeOf(replayedOutcome<{ lines: readonly string[] }>(receipt, cardWrite, cardFill), undefined);
 }

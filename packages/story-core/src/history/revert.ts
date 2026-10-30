@@ -116,66 +116,125 @@ export const BOOK_START_KEYS = {
 
 const BOOK_START_KEY_SET: ReadonlySet<string> = new Set(Object.values(BOOK_START_KEYS));
 
-/** 一个文件的一份内容：哪张回执写的（排第几；-1 = 回执之前就在的那份）、照着哪一份来（谱系）。 */
+/**
+ * 一个文件的一份内容：哪张回执写的（排第几；undefined = 不是回执写的：回执之前就在的那份、在回执之外改成的那份）、
+ * 写的时候盘上是哪一份（base）、谱系上照着哪一份来（from：普通的写 = base；撤销 / 恢复换回去的 = 内容一样的那份）。
+ */
 interface FileVersion {
-  readonly index: number;
+  readonly writer: number | undefined;
   readonly hash: string | null;
+  readonly base: FileVersion | undefined;
   readonly from: FileVersion | undefined;
+  /** 在回执之外改成的（作者存稿不留回执、在别处改了文件）：发现它时排到第几张回执（现在 = 回执总数）。 */
+  readonly outside?: number;
+}
+
+/** 「撤销上一步」撤哪次；unsure = 往前找的时候跳过了在回执之外又改过的文件上的那几次（在不在说不准），撤之前要作者点。 */
+export interface UndoChoice {
+  readonly target: RevertTarget;
+  readonly unsure?: readonly string[];
 }
 
 /**
  * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次**现在还在**的改动——书里某个文件现在这份内容的谱系里有它写的那份。
- * 谱系按回执排：普通的写照着那个文件前一份来；撤销 T 照着 T 第一次写那个文件之前那份来（撤掉的那几份不在谱系里）；
+ * 谱系按回执排：普通的写照着那个文件写之前那份来；撤销 T 照着 T 第一次写那个文件之前那份来（撤掉的那几份不在谱系里）；
  * 整本恢复照着它换回去的那份来（按内容哈希认最近那份）。所以：被撤过的、被别的撤销「全撤」顺带整个退掉的不在了，跳过；
  * 撤销被撤回来，被它撤掉的又在了；整本恢复还在就是上一次（撤它 = 回到恢复之前），被撤过、被全撤退掉了就跳过
  * （Astra 第 11 轮第 3 条、第 12 轮第 1 条：只看「谁撤了谁」会把被撤回来的撤销、被全撤退掉的恢复算错）。
  * 只退了一部分的还在，照常算，撤它服从整组规则。撤销本身不算（撤销的撤销走「撤回来」带号）。
+ *
+ * 回执之外的写（作者存稿不留回执、在别处改了文件）：回执记的写前跟谱系上前一份对不上就是中间有过，当成照当时盘上那份改的
+ * （作者存稿核过版本，确实是）；撤销 / 恢复换回去的内容对不上任何一份记过的，再往前接不上。current（撤销范围里现在每个文件
+ * 的哈希）给了就把最后一张回执之后的也这样认出来。被跳过的那次写过的文件之后有过回执之外的写（比如原样放回了它那份），
+ * 它在不在就说不准：照样往前找，找到的带上 unsure，撤之前停下给作者看、点了才撤，不自动去撤别章（Astra 第 13 轮第 1 条）。
+ *
  * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS）就停。
  * 没有返回 undefined。receipts 按写的先后排好。
  */
-export function lastUndoable(receipts: readonly CommandReceipt[]): RevertTarget | undefined {
+export function lastUndoable(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): UndoChoice | undefined {
   const ids = receipts.map((receipt) => targetId(targetOf(receipt)));
-  // 每次（按号）改过的文件 → 它第一次写那个文件的回执排第几。
-  const firstWrite = new Map<string, Map<string, number>>();
-  receipts.forEach((receipt, index) => {
-    const paths = firstWrite.get(ids[index] as string) ?? new Map<string, number>();
-    for (const effect of receipt.effects ?? []) if (!paths.has(effect.path)) paths.set(effect.path, index);
-    firstWrite.set(ids[index] as string, paths);
-  });
   const versions = new Map<string, FileVersion[]>();
+  // 每次（按号）第一次写每个文件写出来的那份。
+  const firstWrite = new Map<string, Map<string, FileVersion>>();
+  /** 盘上这一刻是 hash：跟前一份对得上就是它；对不上 = 中间有回执之外的写，记一份照前一份改的。 */
+  const onDisk = (list: FileVersion[], hash: string | null, at: number): FileVersion => {
+    const prev = list.at(-1) as FileVersion;
+    if (prev.hash === hash) return prev;
+    const outside: FileVersion = { writer: undefined, hash, base: prev, from: prev, outside: at };
+    list.push(outside);
+    return outside;
+  };
+  /** 撤销 / 恢复换回去的那份：该是的那份（candidate）对得上就是它；对不上按内容认最近一份；都没有 = 接不上（记一份回执之外的、再往前没有）。 */
+  const sameAs = (list: FileVersion[], candidate: FileVersion | undefined, hash: string | null, at: number): FileVersion => {
+    if (candidate && candidate.hash === hash) return candidate;
+    const same = [...list].reverse().find((version) => version.hash === hash);
+    if (same) return same;
+    const outside: FileVersion = { writer: undefined, hash, base: undefined, from: undefined, outside: at };
+    list.push(outside);
+    return outside;
+  };
   receipts.forEach((receipt, index) => {
     const result = receipt.result as { readonly kind?: unknown; readonly target?: unknown } | null | undefined;
     const history = receipt.command === HISTORY_APPLY_COMMAND;
     const undone = history && result?.kind !== "restore" ? revertTargetOf(result?.target) : undefined;
+    const mine = firstWrite.get(ids[index] as string) ?? new Map<string, FileVersion>();
     for (const effect of receipt.effects ?? []) {
-      const list = versions.get(effect.path) ?? [{ index: -1, hash: effect.before, from: undefined }];
-      let from: FileVersion | undefined;
-      if (!history) from = list.at(-1);
-      else if (undone) {
-        const at = firstWrite.get(targetId(undone))?.get(effect.path);
-        from = at === undefined ? undefined : list.filter((version) => version.index < at).at(-1);
-      } else from = [...list].reverse().find((version) => version.hash === effect.after);
-      list.push({ index, hash: effect.after, from });
+      const list = versions.get(effect.path) ?? [{ writer: undefined, hash: effect.before, base: undefined, from: undefined }];
       versions.set(effect.path, list);
+      const base = onDisk(list, effect.before, index);
+      const from = !history
+        ? base
+        : sameAs(list, undone ? firstWrite.get(targetId(undone))?.get(effect.path)?.base : undefined, effect.after, index);
+      const version: FileVersion = { writer: index, hash: effect.after, base, from };
+      list.push(version);
+      if (!mine.has(effect.path)) mine.set(effect.path, version);
     }
+    firstWrite.set(ids[index] as string, mine);
   });
   const present = new Set<string>();
-  for (const list of versions.values()) {
-    for (let version = list.at(-1); version; version = version.from) if (version.index >= 0) present.add(ids[version.index] as string);
+  for (const [path, list] of versions) {
+    if (current) onDisk(list, current.get(path) ?? null, receipts.length);
+    for (let version = list.at(-1); version; version = version.from) if (version.writer !== undefined) present.add(ids[version.writer] as string);
   }
+  // 文件 → 最后一次回执之外的写是在第几张回执之前发现的。
+  const lastOutside = new Map<string, number>();
+  for (const [path, list] of versions) {
+    for (const version of list) if (version.outside !== undefined) lastOutside.set(path, Math.max(lastOutside.get(path) ?? -1, version.outside));
+  }
+  const unsure = new Set<string>();
+  const skip = (receipt: CommandReceipt, index: number): void => {
+    for (const effect of receipt.effects ?? []) if (index < (lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
+  };
+  const choose = (receipt: CommandReceipt): UndoChoice => ({ target: targetOf(receipt), ...(unsure.size > 0 ? { unsure: [...unsure].sort() } : {}) });
   for (let index = receipts.length - 1; index >= 0; index -= 1) {
     const receipt = receipts[index] as CommandReceipt;
     const id = ids[index] as string;
     if (receipt.command === HISTORY_APPLY_COMMAND) {
       const result = receipt.result as { readonly kind?: unknown } | null | undefined;
-      if (result?.kind === "restore" && (receipt.effects ?? []).length > 0 && present.has(id)) return targetOf(receipt);
+      if (result?.kind !== "restore" || (receipt.effects ?? []).length === 0) continue;
+      if (present.has(id)) return choose(receipt);
+      skip(receipt, index);
       continue;
     }
     if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
-    if (receipt.effects === undefined) return targetOf(receipt);
-    if (receipt.effects.length > 0 && present.has(id)) return targetOf(receipt);
+    if (receipt.effects === undefined) return choose(receipt);
+    if (receipt.effects.length === 0) continue;
+    if (present.has(id)) return choose(receipt);
+    skip(receipt, index);
   }
   return undefined;
+}
+
+/** 「撤销上一步」撤哪次，照书里现在的样子核（撤销范围里每个文件现在的哈希一起交给 lastUndoable）。 */
+export async function lastUndoableIn(bookDir: string, receipts: readonly CommandReceipt[]): Promise<UndoChoice | CommandFailure | undefined> {
+  let files: Map<string, Buffer>;
+  try {
+    files = await readUndoableFiles(bookDir);
+  } catch (error) {
+    if (error instanceof HistoryFileError) return fail(error.code, error.message, { path: error.path });
+    throw error;
+  }
+  return lastUndoable(receipts, new Map([...files].map(([path, bytes]) => [path, sha256Bytes(bytes)])));
 }
 
 const chapterOfTextPath = (path: string): number | undefined =>

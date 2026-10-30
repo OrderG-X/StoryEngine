@@ -16,7 +16,7 @@ import {
   draftChapterOfPath,
   HISTORY_APPLY_COMMAND,
   historyApply,
-  lastUndoable,
+  lastUndoableIn,
   ledgerChapterOfPath,
   planChapterOfPath,
   planRestore,
@@ -26,13 +26,14 @@ import {
   CARDS_PATH,
   DECISIONS_PATH,
   type HistoryApplyArgs,
+  type CommandReceipt,
   type HistoryApplyResult,
   type ImpactItem,
   type RevertTarget,
 } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { withGitHistoryReader } from "../../../lib/history-reader.js";
-import { runCommandInOperation, stepReceipt } from "../../../lib/operations/command.js";
+import { replayedOutcome, runCommandInOperation } from "../../../lib/operations/command.js";
 import { OperationObsolete } from "../../../lib/operations/context.js";
 import { isOperationId, isTerminal, readOperation } from "../../../lib/operations/store.js";
 import { humanizeHistoryLabel } from "../../../lib/snapshot-changes.js";
@@ -176,12 +177,16 @@ interface UndoTarget {
   readonly what: string;
   /** 撤的是一次撤销 / 整本恢复（结论换个说法：它退回去了，那几处回到它之前）。 */
   readonly ofHistory: boolean;
+  /** 往前找「上一步」时跳过了在操作之外又改过的这几个文件上的那几次：撤之前停下给作者看。 */
+  readonly unsure?: readonly string[];
 }
 
 async function resolveUndoTarget(bookDir: string, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<UndoTarget | undefined> {
   const receipts = await readReceipts(bookDir);
-  const target: RevertTarget | undefined = params.target ?? lastUndoable(receipts);
-  if (!target) return undefined;
+  const choice = params.target ? { target: params.target } : await lastUndoableIn(bookDir, receipts);
+  if (!choice) return undefined;
+  if ("ok" in choice) throw coded(choice.code, choice.message);
+  const { target, unsure } = choice;
   const receipt = receipts.find((item) => ("opId" in target ? item.opId === target.opId : item.key === target.receiptKey));
   const opId = "opId" in target ? target.opId : undefined;
   if (opId) {
@@ -191,7 +196,12 @@ async function resolveUndoTarget(bookDir: string, params: Extract<HistoryChangeP
       throw coded("target_active", `「${operationWhat(stored.record.kind, stored.record.mode, operationChapter(stored.record))}」还没做完，先等它做完或停掉，再撤。`);
     }
   }
-  return { target, what: await whatOf(bookDir, opId, receipt?.command ?? ""), ofHistory: receipt?.command === HISTORY_APPLY_COMMAND };
+  return {
+    target,
+    what: await whatOf(bookDir, opId, receipt?.command ?? ""),
+    ofHistory: receipt?.command === HISTORY_APPLY_COMMAND,
+    ...(unsure && unsure.length > 0 ? { unsure } : {}),
+  };
 }
 
 type UndoCheck =
@@ -230,16 +240,13 @@ async function runApply(bookDir: string, args: HistoryApplyArgs, caller: "author
   });
 }
 
-/** 这一步的回执已经在了（崩在写完、记检查点之前）：照回执报，不再算、不再写。 */
-async function replayed(bookDir: string, what: string): Promise<{ readonly paths: readonly string[] } | undefined> {
-  const receipt = await stepReceipt(bookDir, what);
-  return receipt ? { paths: (receipt.result as Partial<HistoryApplyResult> | null)?.paths ?? [] } : undefined;
+/** 这一步的回执已经在了（崩在写完、记检查点之前，ctx.apply 照回执回放）：照回执报，不再算、不再写。 */
+function appliedPaths(receipt: CommandReceipt): readonly string[] {
+  return replayedOutcome<HistoryApplyResult>(receipt, historyApply).result.paths;
 }
 
 /** 撤销的应用一步：书锁里重算；影响变了（或第一次算没有、这次有了）交回去重新问；照算好的写回，写的时候算好之后又改过就重算。 */
 async function applyUndo(bookDir: string, undo: UndoTarget, confirmed: string | null, caller: "author" | "ai"): Promise<UndoCheck> {
-  const done = await replayed(bookDir, "撤销");
-  if (done) return { kind: "done", paths: done.paths };
   for (let attempt = 0; attempt < MAX_APPLY_TRIES; attempt += 1) {
     const plan = await planUndo(bookDir, undo.target);
     if (plan.impact.length > 0 && plan.impactDigest !== confirmed) {
@@ -259,6 +266,7 @@ async function applyUndo(bookDir: string, undo: UndoTarget, confirmed: string | 
 }
 
 const UNDO_NOTES = ["全撤会把这几处一起退回这次之前的样子：之后那几次在这几处的改动也跟着没了。"];
+const UNSURE_NOTE = "往前找「上一步」时这几处说不准之前那几次还在不在，找到的是这一次；点了才撤。";
 
 async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<OperationResult> {
   const { bookDir } = ctx;
@@ -272,16 +280,20 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
   let confirmed: string | null = null;
   let impact: readonly string[] = first.impact;
   let digest = first.impactDigest;
+  // 往前找的时候跳过了在操作之外又改过的文件上的那几次：找到的这次对不对说不准，第一回就停下给作者看（Astra 第 13 轮第 1 条）。
+  const unsure = (resolved.unsure ?? []).map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`);
   for (let round = 1; round <= MAX_UNDO_ROUNDS; round += 1) {
-    if (impact.length > 0) {
+    if (impact.length > 0 || (round === 1 && unsure.length > 0)) {
+      const notes = impact.length > 0 ? UNDO_NOTES : [UNSURE_NOTE];
       const preview: HistoryConfirmPreview = {
-        lines: impact,
-        notes: round === 1 ? [`要撤的是「${resolved.what}」。`, ...UNDO_NOTES] : ["算好之后书又改过，这是重新算的。", ...UNDO_NOTES],
+        lines: round === 1 ? [...impact, ...unsure] : impact,
+        notes: round === 1 ? [`要撤的是「${resolved.what}」。`, ...notes] : ["算好之后书又改过，这是重新算的。", ...notes],
       };
       await ctx.waitForAuthor({ actionId: round === 1 ? UNDO_CONFIRM_ACTION : `${UNDO_CONFIRM_ACTION}-${round}`, kind: UNDO_CONFIRM_KIND, decisions: ["apply"], preview });
       confirmed = digest;
     }
-    const outcome = await ctx.apply(round === 1 ? "apply" : `apply-${round}`, { target: resolved.target, confirmed }, () => applyUndo(bookDir, resolved, confirmed, caller));
+    const outcome = await ctx.apply(round === 1 ? "apply" : `apply-${round}`, { target: resolved.target, confirmed }, () => applyUndo(bookDir, resolved, confirmed, caller),
+      async (receipt): Promise<UndoCheck> => ({ kind: "done", paths: appliedPaths(receipt) }));
     if (outcome.kind === "done") {
       const summary = outcome.paths.length === 0
         ? `「${resolved.what}」改的那几处现在已经是那之前的样子，没什么要撤的。`
@@ -300,16 +312,15 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
 /*  整本恢复                                                            */
 /* ------------------------------------------------------------------ */
 
-async function applyRestore(bookDir: string, snapshot: string): Promise<{ readonly paths: readonly string[]; readonly snapshotId?: string; readonly label: string }> {
+const SNAPSHOT_GONE = "这个存档已经不在了（裁剪过操作历史会换号），刷新操作历史再挑。";
+
+async function applyRestore(bookDir: string, snapshot: string, label: string): Promise<{ readonly paths: readonly string[]; readonly snapshotId?: string }> {
   const info = await snapshotInfoOf(bookDir, snapshot);
-  if (!info) throw coded("snapshot_gone", "这个存档已经不在了（裁剪过操作历史会换号），刷新操作历史再挑。");
-  const label = humanizeHistoryLabel(info.label);
-  const done = await replayed(bookDir, "整本恢复");
-  if (done) return { ...done, label };
+  if (!info) throw coded("snapshot_gone", SNAPSHOT_GONE);
   for (let attempt = 0; attempt < MAX_APPLY_TRIES; attempt += 1) {
     const plan = await withBookLock(bookDir, () => withGitHistoryReader(bookDir, (reader) => planRestore(bookDir, info.tree, reader)));
     if (!plan.ok) throw coded(plan.code, plan.message);
-    if (plan.changes.length === 0) return { paths: [], label };
+    if (plan.changes.length === 0) return { paths: [] };
     const outcome = await runApply(bookDir, {
       kind: "restore",
       label: `恢复到「${label}」之前`,
@@ -317,16 +328,23 @@ async function applyRestore(bookDir: string, snapshot: string): Promise<{ readon
       changes: plan.changes.map((change) => ({ ...change })),
       rangeDigest: plan.rangeDigest,
     }, "author");
-    if (outcome.done) return { ...outcome.done, label };
+    if (outcome.done) return outcome.done;
   }
   throw coded("keeps_changing", "书一直在改，恢复算不稳，这次没恢复。过一会儿再点。");
 }
 
 async function runRestore(ctx: RecipeContext<HistoryChangeParams>, params: Extract<HistoryChangeParams, { mode: "restore" }>): Promise<OperationResult> {
-  const done = await ctx.apply("apply", { snapshot: params.snapshot }, () => applyRestore(ctx.bookDir, params.snapshot));
+  // 存档叫什么先记下：恢复写成了、崩在记检查点之前，之后存档被裁掉换了号，接着做照回执报时还说得出恢复到哪（Astra 第 13 轮第 3 条）。
+  const { label } = await ctx.step("snapshot", { snapshot: params.snapshot }, async () => {
+    const info = await snapshotInfoOf(ctx.bookDir, params.snapshot);
+    if (!info) throw coded("snapshot_gone", SNAPSHOT_GONE);
+    return { label: humanizeHistoryLabel(info.label) };
+  });
+  const done = await ctx.apply("apply", { snapshot: params.snapshot }, () => applyRestore(ctx.bookDir, params.snapshot, label),
+    async (receipt) => ({ paths: appliedPaths(receipt) }));
   const summary = done.paths.length > 0
-    ? `已恢复到「${done.label}」之前（${pathsText(done.paths)}）。`
-    : `书现在就是「${done.label}」之前的样子，没什么要恢复的。`;
+    ? `已恢复到「${label}」之前（${pathsText(done.paths)}）。`
+    : `书现在就是「${label}」之前的样子，没什么要恢复的。`;
   return succeeded("restore", summary, done.paths, done.snapshotId);
 }
 

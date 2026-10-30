@@ -10,7 +10,7 @@
  * - **开书对账**（6.5）：本进程调度表里的不碰；其余 queued / running：有没处理的结果不明 → paused:attempt_unknown，
  *   后台配方登记了自动续 → 接着跑，其余 → paused:interrupted；配方版本对不上 → obsolete。
  */
-import { bookKey, canonicalJson, opCommandKey, readBookEpoch, readCommandReceipt, sha256, withBookLock } from "@actalk/story-core";
+import { bookKey, canonicalJson, opCommandKey, readBookEpoch, readCommandReceipt, sha256, withBookLock, type CommandReceipt } from "@actalk/story-core";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
 import { clearCandidateTombstones } from "../../lib/draft-candidates.js";
 import { clearFixLogKeys } from "../../lib/fix-log.js";
@@ -89,8 +89,11 @@ export interface RecipeContext<P> {
    * 应用一步（设计第三节、6.4）：写真相的那一笔（applyAiDraft、核心命令），一步只走一个核心命令。步骤语义同 step；
    * 里面的核心命令带 `op:{opId, stepId}`（幂等键 = opId:stepId，有回执就回放、不再写）和栅栏 precondition。
    * 开始前记「在应用」，做完按回执记进 appliedEffects（崩在中间：这次执行一结束按回执补记）。
+   * 这一步的核心命令已经写成了（崩在写完、记检查点之前，接着做又到这一步）：不跑 fn，按 replay(回执) 报——fn 里照盘上现状
+   * 核前提、算参数的那些不会把写成了的否掉（Astra 第 12 轮第 2 条、第 13 轮第 2、3 条：定稿、通读记账、整本恢复续跑都栽在这）。
+   * replay 只照回执说写成了什么、补做按键幂等的收尾，不再写真相。
    */
-  apply<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T>;
+  apply<T>(id: string, input: unknown, fn: () => Promise<T>, replay: (receipt: CommandReceipt) => Promise<NoInfer<T>>): Promise<T>;
   /**
    * 发布一步不进核心事务的产物（候选、改句记录、出稿统计以外别的按键发布的）：fn 拿着书锁、过了栅栏才跑，
    * 必须按 key（`opId:stepId`）幂等：键在就不再写。输出落盘了才算发布完。
@@ -347,7 +350,7 @@ async function execute(bookDir: string, record: OperationRecord): Promise<void> 
 function contextFor(record: OperationRecord, operation: OperationContext): RecipeContext<unknown> {
   const { bookDir, opId, runEpoch } = operation;
   let currentExec = `${runEpoch}:`;
-  const runStep = async <T>(id: string, input: unknown, fn: () => Promise<T>, kind: "step" | "apply" | "publish"): Promise<T> => {
+  const runStep = async <T>(id: string, input: unknown, fn: () => Promise<T>, kind: "step" | "apply" | "publish", replay?: (receipt: CommandReceipt) => Promise<T>): Promise<T> => {
     const inputHash = inputHashOf(input);
     const saved = await readCheckpoint(bookDir, opId, id);
     if (saved && saved.inputHash === inputHash) return saved.output as T;
@@ -360,7 +363,8 @@ function contextFor(record: OperationRecord, operation: OperationContext): Recip
       return current.currentStep !== id || "applying" in applying ? { ...current, currentStep: id, ...applying } : undefined;
     });
     emitLive(bookDir, opId, { type: "step", step: id, exec });
-    const output = await runInStep(id, exec, fn);
+    const receipt = replay ? await readCommandReceipt(bookDir, opCommandKey({ opId, stepId: id })) : undefined;
+    const output = await runInStep(id, exec, receipt && replay ? () => replay(receipt) : fn);
     if (operation.signal.aborted) throw stoppedError(operation);
     await withFence(operation, async () => {
       await writeCheckpoint(bookDir, opId, { schema: "operation-step/1", stepId: id, inputHash, exec, output: output ?? null, finishedAt: new Date().toISOString() });
@@ -377,8 +381,8 @@ function contextFor(record: OperationRecord, operation: OperationContext): Recip
     step<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T> {
       return runStep(id, input, fn, "step");
     },
-    apply<T>(id: string, input: unknown, fn: () => Promise<T>): Promise<T> {
-      return runStep(id, input, fn, "apply");
+    apply<T>(id: string, input: unknown, fn: () => Promise<T>, replay: (receipt: CommandReceipt) => Promise<T>): Promise<T> {
+      return runStep(id, input, fn, "apply", replay);
     },
     publish<T>(id: string, input: unknown, fn: (key: string) => Promise<T>): Promise<T> {
       return runStep(id, input, () => withFence(operation, () => fn(`${opId}:${id}`)), "publish");

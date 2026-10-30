@@ -68,7 +68,7 @@ function applyRecipe(hooks: { beforeApply?: () => Promise<void>; afterApply?: ()
         basis: await readTruthBasis(ctx.bookDir),
         baseVersion: (await readDraft(ctx.bookDir, 1))?.version ?? null,
       }));
-      const outcome = await ctx.apply("apply", bundle, async () => {
+      const apply = async () => {
         await hooks.beforeApply?.();
         const written = await applyAiDraft(ctx.bookDir, {
           chapter: 1,
@@ -83,7 +83,8 @@ function applyRecipe(hooks: { beforeApply?: () => Promise<void>; afterApply?: ()
         outcomes.push(written);
         await hooks.afterApply?.();
         return written;
-      });
+      };
+      const outcome = await ctx.apply("apply", bundle, apply, apply);
       if (hooks.publish) await ctx.publish("note", { n: 1 }, async (key) => ({ key }));
       return { schema: "operation-result/1", summary: outcome.applied ? "换上了" : "留成候选", body: outcome };
     },

@@ -15,7 +15,7 @@ import { sha256Bytes } from "../store/transaction.js";
 import { historyApply } from "./apply.js";
 import { refsOfDecision, refsOfEntry, Resolver } from "./references.js";
 import { planRestore } from "./restore.js";
-import { BOOK_START_KEYS, lastUndoable, planRevert, readReceipts, type RevertPlan } from "./revert.js";
+import { BOOK_START_KEYS, lastUndoable, lastUndoableIn, planRevert, readReceipts, type RevertPlan, type UndoChoice } from "./revert.js";
 import { readUndoableFiles, type HistoryReader } from "./store.js";
 
 let book: string;
@@ -359,24 +359,24 @@ describe("「撤销上一步」撤哪次", () => {
   it("最近一次写过的；撤销本身、被撤过的跳过；撤销被撤了又算；真换了东西的整本恢复就是上一次，恢复被撤了接着往前", async () => {
     await write("A", chapter(1, [open(1, 1, "铜钥匙")]));
     await write("B", chapter(2, []));
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "B" });
     expect(await applyRevert("B", await revert("B"), "U1")).toMatchObject({ ok: true });
     // 撤过 B：下一次是 A（撤销 U1 本身跳过）。
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "A" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "A" });
     // 撤回来（撤 U1）：B 又算没被撤，上一次是 B。
     const redo = await planRevert(book, { opId: "U1" }, git);
     if (!redo.ok) throw new Error(redo.message);
     expect(await runCommand(book, historyApply, { kind: "revert", label: "撤销", target: { opId: "U1" }, changes: redo.changes.map((change) => ({ ...change })) }, options("U2"))).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "B" });
     // 整本恢复（换了东西）就是上一次：撤它 = 回到恢复之前；恢复被撤了，接着往前算（又是 C）。
     const tree = await git.capture();
     await write("C", chapter(3, []));
     const plan = await planRestore(book, tree, git);
     if (!plan.ok) throw new Error(plan.message);
     expect(await runCommand(book, historyApply, { kind: "restore", label: "恢复", target: { tree }, changes: plan.changes.map((change) => ({ ...change })), rangeDigest: plan.rangeDigest }, options("R"))).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "R" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "R" });
     expect(await applyRevert("R", await revert("R"), "U3")).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "C" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "C" });
   });
 
   it("撤 A 时「全撤」顺带整个退掉的 B 不再算「上一次」；撤回来之后 B 又算（Astra 第 11 轮第 3 条）", async () => {
@@ -387,12 +387,12 @@ describe("「撤销上一步」撤哪次", () => {
     expect(plan.impact.map((item) => [item.path, item.by.map((by) => by.opId)])).toEqual([[chapterTextPath(1), ["B"]], [chapterLedgerPath(1), ["B"]]]);
     expect(await applyRevert("A", plan, "U1")).toMatchObject({ ok: true });
     // B 改的只有第 1 章，撤 A 把它换回 A 写之前：B 已经不在了，上一次是 P。
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "P" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "P" });
     // 撤回来（撤 U1）：A、B 都回来了，上一次是 B。
     const redo = await planRevert(book, { opId: "U1" }, git);
     if (!redo.ok) throw new Error(redo.message);
     expect(await runCommand(book, historyApply, { kind: "revert", label: "撤销", target: { opId: "U1" }, changes: redo.changes.map((change) => ({ ...change })) }, options("U2"))).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "B" });
   });
 
   it("撤 B、全撤 A、再撤回「撤 B」：B 又在了，上一次是 B，不往前跳去撤别章（Astra 第 12 轮第 1 条）", async () => {
@@ -401,10 +401,10 @@ describe("「撤销上一步」撤哪次", () => {
     await write("B", chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" }));
     expect(await applyRevert("B", await revert("B"), "U1")).toMatchObject({ ok: true });
     expect(await applyRevert("A", await revert("A"), "U2")).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "X" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "X" });
     expect(await applyRevert("U1", await revert("U1"), "U3")).toMatchObject({ ok: true });
     expect(await read(chapterTextPath(1))).toBe(TEXT(1, "，第二版"));
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "B" });
   });
 
   it("A → B → 整本恢复到 B 之前 → 全撤 A：恢复和 B 都被退掉了，不再算上一次（Astra 第 12 轮第 1 条）", async () => {
@@ -415,29 +415,77 @@ describe("「撤销上一步」撤哪次", () => {
     const restore = await planRestore(book, tree, git);
     if (!restore.ok) throw new Error(restore.message);
     expect(await runCommand(book, historyApply, { kind: "restore", label: "恢复", target: { tree }, changes: restore.changes.map((change) => ({ ...change })), rangeDigest: restore.rangeDigest }, options("R"))).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "R" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "R" });
     expect(await applyRevert("A", await revert("A"), "U1")).toMatchObject({ ok: true });
     expect(await exists(chapterTextPath(1))).toBe(false);
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "X" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "X" });
   });
 
   it("后来那次只被「全撤」退了一部分：照常算「上一次」", async () => {
     await write("A", chapter(1, []));
     await write("B", [...chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" }), ...chapter(2, [])]);
     expect(await applyRevert("A", await revert("A"), "U1")).toMatchObject({ ok: true });
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "B" });
+  });
+
+  /** 不走命令、直接改盘上的文件（回执之外的改写）。 */
+  async function outside(files: { path: string; content: string }[]): Promise<void> {
+    for (const file of files) {
+      await mkdir(join(book, file.path, ".."), { recursive: true });
+      await writeFile(join(book, file.path), file.content, "utf-8");
+    }
+  }
+
+  it("A → B → 全撤 A → 回执之外原样放回 B → C → 撤 C：往前找跳过了之后在回执之外改过的第 1 章，找到别章那次带上「说不准」，不自动撤（Astra 第 13 轮第 1 条）", async () => {
+    const second = chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" });
+    await write("X", chapter(9, []));
+    await write("A", chapter(1, []));
+    await write("B", second);
+    expect(await applyRevert("A", await revert("A"), "U1")).toMatchObject({ ok: true });
+    await outside(second);
+    await write("C", chapter(1, [], { text: TEXT(1, "，第三版"), stamp: "stamp-1c" }));
+    // C 还在：照常是上一次，不带「说不准」（C 是照盘上那份写的）。
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "C" } });
+    expect(await applyRevert("C", await revert("C"), "U2")).toMatchObject({ ok: true });
+    expect(await read(chapterTextPath(1))).toBe(TEXT(1, "，第二版"));
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "X" }, unsure: [chapterTextPath(1), chapterLedgerPath(1)] });
+  });
+
+  it("作者存稿不留回执：照当时盘上那份改的，AI 那次还在、照常是上一次；撤了 AI 那次之后作者又写，再往前找带「说不准」", async () => {
+    await write("X", chapter(9, []));
+    await write("A", [{ path: draftPath(1), content: "AI 写的。" }]);
+    await outside([{ path: draftPath(1), content: "作者接着改的。" }]);
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "A" } });
+    await write("B", [{ path: draftPath(1), content: "AI 又改的。" }]);
+    expect(await applyRevert("B", await revert("B"), "U1")).toMatchObject({ ok: true });
+    expect(await read(draftPath(1))).toBe("作者接着改的。");
+    // 撤了 B，回到作者那一版：它是照 A 改的，A 还在。
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "A" } });
+    expect(await applyRevert("A", { ...(await revert("A")) }, "U2")).toMatchObject({ ok: true });
+    await outside([{ path: draftPath(1), content: "作者自己从头写的。" }]);
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "X" }, unsure: [draftPath(1)] });
+  });
+
+  it("最后一张回执之后才在回执之外改的：照现在的样子认出来（只读回执认不出）", async () => {
+    await write("X", chapter(9, []));
+    await write("A", [{ path: draftPath(1), content: "AI 写的。" }]);
+    expect(await applyRevert("A", await revert("A"), "U1")).toMatchObject({ ok: true });
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "X" } });
+    await outside([{ path: draftPath(1), content: "作者自己写的。" }]);
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "X" }, unsure: [draftPath(1)] });
+    expect(lastUndoable(await readReceipts(book))).toEqual({ target: { opId: "X" } });
   });
 
   it("建书、导入那几笔是起点：到它就停；升级之前、没留存档的写照样算一次（撤的时候如实说只能整本恢复）", async () => {
     const outcome = await runCommand(book, rawWrite, { files: chapter(1, []) }, { caller: "author", idempotencyKey: BOOK_START_KEYS.create, now });
     expect(outcome.ok).toBe(true);
-    expect(lastUndoable(await readReceipts(book))).toBeUndefined();
+    expect(await lastUndoableIn(book, await readReceipts(book))).toBeUndefined();
     const untracked = await runCommand(book, rawWrite, { files: chapter(2, []) }, { caller: "author", idempotencyKey: "old-write", now });
     expect(untracked.ok).toBe(true);
-    expect(lastUndoable(await readReceipts(book))).toEqual({ receiptKey: "old-write" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ receiptKey: "old-write" });
     expect(await planRevert(book, { receiptKey: "old-write" }, git)).toMatchObject({ ok: false, code: "no_tree" });
     await write("A", chapter(3, []));
-    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "A" });
+    expect((await lastUndoableIn(book, await readReceipts(book)) as UndoChoice | undefined)?.target).toEqual({ opId: "A" });
   });
 });
 

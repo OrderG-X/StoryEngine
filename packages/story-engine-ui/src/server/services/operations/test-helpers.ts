@@ -20,7 +20,8 @@ const recipe: Recipe<AiDraftInput> = {
     return { ok: true, params, writeScope: { chapters: [params.chapter] }, budget: 0 };
   },
   async run(ctx) {
-    const outcome = await ctx.apply("apply", ctx.params, () => applyAiDraft(ctx.bookDir, ctx.params));
+    const apply = () => applyAiDraft(ctx.bookDir, ctx.params);
+    const outcome = await ctx.apply("apply", ctx.params, apply, apply);
     return { schema: "operation-result/1", summary: outcome.applied ? "换上了" : "留成候选", body: outcome };
   },
   stepBudget: () => 0,

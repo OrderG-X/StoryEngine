@@ -12,10 +12,10 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cardWrite, draftSave, opBookEpoch, readBookEpoch, readDraft, readTruthBasis, runCommand } from "@actalk/story-core";
+import { cardWrite, draftSave, opBookEpoch, readBookEpoch, readDraft, readDraftState, readTruthBasis, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../../../book/project-store.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
-import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
+import { __resetExecutionsForTests, OperationStopped } from "../../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, listOperations, type OperationRecord } from "../../../lib/operations/store.js";
 import { SETTLED_STATES, untilOperation } from "../../../lib/operations/test-helpers.js";
@@ -27,6 +27,19 @@ import { HISTORY_CHANGE_KIND, historyChangeRecipe, PRUNE_CONFIRM_ACTION, PRUNE_C
 
 const execFileAsync = promisify(execFile);
 
+const hook = vi.hoisted(() => ({ afterHistoryApply: undefined as undefined | (() => Promise<void>) }));
+vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
+  return {
+    ...actual,
+    runCommandInOperation: async (...args: Parameters<typeof actual.runCommandInOperation>) => {
+      const outcome = await actual.runCommandInOperation(...args);
+      if (args[1].name === "history.apply") await hook.afterHistoryApply?.();
+      return outcome;
+    },
+  };
+});
+
 let root: string;
 let book: string;
 
@@ -35,6 +48,7 @@ beforeEach(async () => {
   __resetExecutionsForTests();
   __resetLiveForTests();
   __resetRecipesForTests();
+  hook.afterHistoryApply = undefined;
   root = await makeHomeTempDir("history-change-");
   vi.stubEnv("SE_DATA_DIR", join(root, "data"));
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "撤回", genre: "悬疑", protagonistName: "林远" }));
@@ -126,6 +140,26 @@ describe("撤销上一步", () => {
     expect(await bodyOf(1)).toBeUndefined();
   });
 
+  it("AI 那次撤了、作者之后自己又写：再往前找到别章那次，说不准，停下给作者看，点了才撤（Astra 第 13 轮第 1 条）", async () => {
+    await aiWrites(9, "第九章。");
+    await aiWrites(1, "AI 写的。");
+    await undoInOperation(book);
+    expect(await bodyOf(1)).toBeUndefined();
+    // 撤销删了稿子、换了工作稿纪元：作者重新开这一章，照盘上现在的版本存。
+    const saved = await runCommand(book, draftSave, { chapter: 1, title: "", body: "作者自己从头写的。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+    expect(saved.ok).toBe(true);
+    const waiting = await submit("undo", {}, "chat");
+    expect(waiting.state).toBe("waiting_author");
+    const preview = operationView(waiting).pendingActions[0]?.preview as { lines: string[]; notes: string[] };
+    expect(preview.lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
+    expect(preview.notes[0]).toContain("要撤的是");
+    expect(await bodyOf(9)).toBe("第九章。");
+    const done = await answer(waiting);
+    expect(done.state).toBe("succeeded");
+    expect(await bodyOf(9)).toBeUndefined();
+    expect(await bodyOf(1)).toBe("作者自己从头写的。");
+  });
+
   it("上一次是升级之前、没留存档的写：如实说撤不了、指去「历史」，不说「没有能撤的」", async () => {
     const outcome = await runCommand(book, cardWrite, { ops: [{ op: "card.create", kind: "character", name: "沈舟" }] }, { caller: "author", idempotencyKey: "old-write" });
     if (!outcome.ok) throw new Error(outcome.message);
@@ -176,6 +210,32 @@ describe("整本恢复", () => {
     await undoInOperation(book);
     expect(await bodyOf(1)).toBe("作者改了第一章。");
     expect(await bodyOf(2)).toBe("第二章。");
+  });
+
+  it("恢复写成了、记检查点之前进程没了，之后裁剪换了存档号：接着做照回执报「已恢复」，不说存档不在（Astra 第 13 轮第 3 条）", async () => {
+    await aiWrites(1, "第一章。");
+    const snapshot = await createSnapshot(book, "写第二章前");
+    await aiWrites(2, "第二章。");
+    // 写成了、记检查点之前这次执行断了（当成进程没了：停在「中断」，等作者接着做）。
+    hook.afterHistoryApply = async () => {
+      hook.afterHistoryApply = undefined;
+      throw new OperationStopped("operation_stopped", "进程没了");
+    };
+    const interrupted = await submit("restore", { snapshot: snapshot.id }, "button");
+    expect(interrupted).toMatchObject({ state: "paused", pauseReason: "interrupted" });
+    expect(await bodyOf(2)).toBeUndefined();
+    const opId = interrupted.opId;
+    for (let i = 0; i < 30; i += 1) await execFileAsync("git", ["-C", book, "commit", "--allow-empty", "-m", `快照 ${i + 1}`]);
+    const pruned = await submit("prune", { keep: 5 }, "button");
+    expect(pruned.state).toBe("succeeded");
+    expect((await listSnapshots(book)).some((item) => item.id === snapshot.id)).toBe(false);
+    expect(await resumeOperation(book, opId)).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const done = (await listOperations(book)).find((record) => record.opId === opId);
+    expect(done?.state).toBe("succeeded");
+    expect(done && operationView(done).conclusion).toContain("已恢复到「写第二章前」之前");
+    expect(await bodyOf(1)).toBe("第一章。");
+    expect(await bodyOf(2)).toBeUndefined();
   });
 
   it("对话里交的整本恢复不受理；存档号不在的如实失败", async () => {

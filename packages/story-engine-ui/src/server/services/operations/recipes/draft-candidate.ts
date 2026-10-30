@@ -47,7 +47,9 @@ function candidateRecipe(kind: CandidateDecisionKind): Recipe<CandidateDecisionP
       }
       const candidate = await ctx.step("candidate", pick, () => readAdoptable(bookDir, pick));
       const baseVersion = params.baseVersion ?? null;
-      const adopted = await ctx.apply("apply", { ...pick, baseVersion }, () => adoptCandidateInOperation(bookDir, { ...pick, ...candidate, baseVersion }));
+      // 换上候选那条路本身先回放回执（核心命令在最前面，回放之后才核候选），回放也走它：字数按键补发、候选清掉。
+      const adopt = () => adoptCandidateInOperation(bookDir, { ...pick, ...candidate, baseVersion });
+      const adopted = await ctx.apply("apply", { ...pick, baseVersion }, adopt, adopt);
       const hint = adopted.basisMoved ? "这一版写好之后前文或设定改过，可以再核一遍账。" : "";
       return {
         schema: "operation-result/1",

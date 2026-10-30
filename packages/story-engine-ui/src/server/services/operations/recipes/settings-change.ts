@@ -10,7 +10,7 @@
  */
 import { applyCardOps, MAX_OPS_PER_CHANGE, readCardsOrLegacy, splitForAi, withSettledBook, type BasisChange, type CardOp, type TruthBasis } from "@actalk/story-core";
 import { describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
-import { writeCardsInOperation, type CardWriteOutcome } from "../../../lib/card-write.js";
+import { cardsWritten, writeCardsInOperation, type CardWriteOutcome } from "../../../lib/card-write.js";
 import { readCheckpoint } from "../../../lib/operations/checkpoints.js";
 import { OperationObsolete, rethrowIfStopped } from "../../../lib/operations/context.js";
 import { readOperation } from "../../../lib/operations/store.js";
@@ -169,7 +169,7 @@ export const settingsChangeRecipe: Recipe<SettingsChangeParams> = {
         if (!plan) throw new OperationObsolete("stale_button", "这个「认下」按钮旧了（那次改设定的记录已经清掉了），要认下请让 AI 再写一次。");
         return plan;
       });
-      const outcome = await ctx.apply("apply", { ops: accept.ops }, () => writeCardsInOperation(bookDir, { by: "author", ops: accept.ops, basis: accept.basis }));
+      const outcome = await ctx.apply("apply", { ops: accept.ops }, () => writeCardsInOperation(bookDir, { by: "author", ops: accept.ops, basis: accept.basis }), async (receipt) => cardsWritten(receipt));
       throwIfFailed(outcome, "AI 写完");
       const body: SettingsChangeBody = { kind: SETTINGS_CHANGE_KIND, applied: outcome.lines, notDone: [], ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}) };
       return { schema: "operation-result/1", summary: outcome.lines.length > 0 ? `${outcome.lines.join("；")}。` : "这几处已经是你写的了。", body };
@@ -180,7 +180,7 @@ export const settingsChangeRecipe: Recipe<SettingsChangeParams> = {
       if (plan.lines.length === 0) throw nothingDone(plan.notDone);
       const preview: SettingsConfirmPreview = { lines: plan.lines, notes: plan.notDone.length > 0 ? [notDoneLine(plan.notDone)] : [] };
       await ctx.waitForAuthor({ actionId: SETTINGS_CONFIRM_ACTION, kind: SETTINGS_CONFIRM_KIND, decisions: ["apply"], preview });
-      const outcome = await ctx.apply("apply", { ops: plan.ops }, () => writeCardsInOperation(bookDir, { by: "author", ops: plan.ops, basis: plan.basis }));
+      const outcome = await ctx.apply("apply", { ops: plan.ops }, () => writeCardsInOperation(bookDir, { by: "author", ops: plan.ops, basis: plan.basis }), async (receipt) => cardsWritten(receipt));
       throwIfFailed(outcome, "提议");
       const body: SettingsChangeBody = { kind: SETTINGS_CHANGE_KIND, applied: outcome.lines, notDone: plan.notDone, ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}) };
       if (outcome.lines.length === 0) throw nothingDone(plan.notDone);
@@ -188,7 +188,7 @@ export const settingsChangeRecipe: Recipe<SettingsChangeParams> = {
     }
 
     if (plan.ops.length === 0) throw nothingDone(plan.notDone);
-    const outcome = await ctx.apply("apply", { ops: plan.ops }, () => writeCardsInOperation(bookDir, { by: "ai", ops: plan.ops, basis: plan.basis }));
+    const outcome = await ctx.apply("apply", { ops: plan.ops }, () => writeCardsInOperation(bookDir, { by: "ai", ops: plan.ops, basis: plan.basis }), async (receipt) => cardsWritten(receipt));
     throwIfFailed(outcome, "提议");
     if (outcome.lines.length === 0) throw nothingDone(plan.notDone);
     const accept = await ctx.step("accept", { ops: plan.acceptOps }, () => planAccept(bookDir, plan.acceptOps, plan.at));

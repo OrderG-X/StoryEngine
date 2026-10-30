@@ -18,7 +18,7 @@ import { callConfiguredBrainModel, callConfiguredPlannerModel, type BrainCallMod
 import { READER_ROLE_LABELS } from "../../../editorial/reader-progress.js";
 import { rereadBlocker } from "../../../editorial/reread-state.js";
 import { applyAiDraft } from "../../../lib/ai-draft-write.js";
-import { savePlanInOperation } from "../../../lib/ai-plan-write.js";
+import { planSavedBefore, savePlanInOperation } from "../../../lib/ai-plan-write.js";
 import { frozenCompatAllowance, frozenModelProblem, resolveConfiguredChatModel, type FrozenModels, type ModelTaskProfileKey } from "../../../lib/llm-client.js";
 import { currentOperation, rethrowIfStopped } from "../../../lib/operations/context.js";
 import { pauseOperation, stoppedError } from "../../../lib/operations/fence.js";
@@ -243,7 +243,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
       const usedPlan = continuing ? materials.continuePlan : planned?.plan;
       const planToSave = planned?.save ? planned.plan : undefined;
       const planSaved = planToSave
-        ? await ctx.apply("plan-save", { digest: planDigest(planToSave) }, () => savePlanInOperation(bookDir, planToSave))
+        ? await ctx.apply("plan-save", { digest: planDigest(planToSave) }, () => savePlanInOperation(bookDir, planToSave), async (receipt) => planSavedBefore(receipt))
         : undefined;
 
       const count = versionCount(mode, params);
@@ -371,7 +371,8 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
 
       // 换上：照哪份章纲写的、开写时别的材料，换上前在书锁里核；对不上就留成候选，作者那份不动。
       const materialReads = [planMaterial(chapter, usedPlan, materials.startPlan), ...materials.world];
-      const applied = await ctx.apply("apply", { body: finalBody, title, baseVersion: materials.baseVersion, basis: materials.basis.digest, fixes: fix.changes.length }, async (): Promise<DraftApplied> => {
+      // 换上 AI 稿那条路本身先回放回执（核心命令在最前面，回放之后才核材料），回放也走它：字数、改句记录按键补发。
+      const apply = async (): Promise<DraftApplied> => {
         ctx.progress("在换上工作稿");
         const outcome = await applyAiDraft(bookDir, {
           chapter,
@@ -394,7 +395,8 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
           ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}),
           ...(outcome.warnings ? { warnings: outcome.warnings } : {}),
         };
-      });
+      };
+      const applied = await ctx.apply("apply", { body: finalBody, title, baseVersion: materials.baseVersion, basis: materials.basis.digest, fixes: fix.changes.length }, apply, apply);
 
       return buildDraftChangeResult({
         mode,

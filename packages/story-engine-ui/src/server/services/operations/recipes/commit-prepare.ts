@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, chapterTextPath, readCardsOrLegacy, type BasisChange, type ChapterCommitResult, type TruthBasis } from "@actalk/story-core";
+import { chapterCommit, chapterTextPath, readCardsOrLegacy, type BasisChange, type ChapterCommitResult, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { describeBasisChanges, MirrorLagError, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
@@ -23,7 +23,7 @@ import type { BrainCallModel } from "../../../editorial/reader-window.js";
 import { rereadBlocker } from "../../../editorial/reread-state.js";
 import { autoBackupAfterCommit } from "../../../lib/book-backup.js";
 import { frozenCompatAllowance, frozenModelProblem, type FrozenModels, type ModelTaskProfileKey } from "../../../lib/llm-client.js";
-import { runCommandInOperation, stepReceipt } from "../../../lib/operations/command.js";
+import { replayedOutcome, runCommandInOperation } from "../../../lib/operations/command.js";
 import { OperationObsolete } from "../../../lib/operations/context.js";
 import type { OperationRecord } from "../../../lib/operations/store.js";
 import { defaultDraftPath } from "../../../lib/project-io.js";
@@ -170,12 +170,6 @@ const DRAFT_CHANGED = "清单出来之后正文又改过，这份清单是照改
 async function commit(bookDir: string, preview: CommitPreview, choices: { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number }): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   const { ticket, chapter } = preview;
   const what = `定稿：第 ${chapter} 章`;
-  // 上次已经定了（崩在定完、记检查点之前）：照回执报，不再核工作稿（作者之后存的新稿不算「改过」）。
-  const receipt = await stepReceipt(bookDir, what);
-  if (receipt) {
-    const committed = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8").catch(() => "");
-    return { done: await doneOf(bookDir, chapter, committed, receipt.result as ChapterCommitResult) };
-  }
   const text = await readDraft(bookDir, chapter);
   if (text === undefined) throw new OperationObsolete("draft_missing", `第 ${chapter} 章的工作稿没了，没定稿。`);
   const fingerprint = draftFingerprint(text);
@@ -202,6 +196,13 @@ async function commit(bookDir: string, preview: CommitPreview, choices: { readon
     throw coded(result.code, result.message);
   }
   return { done: await doneOf(bookDir, chapter, text, result.result), ...(snapshotId ? { snapshotId } : {}) };
+}
+
+/** 上次已经定了（崩在定完、记检查点之前，ctx.apply 照回执回放）：照回执报，不再核工作稿（作者之后存的新稿不算「改过」）。 */
+async function committed(bookDir: string, chapter: number, receipt: CommandReceipt): Promise<{ readonly done: CommitDone }> {
+  const outcome = replayedOutcome<ChapterCommitResult>(receipt, chapterCommit);
+  const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8").catch(() => "");
+  return { done: await doneOf(bookDir, chapter, text, outcome.result) };
 }
 
 /** 定完：老代码还在读老格式文件，按新账重生成一遍（没成不影响定稿本身，下次取依据时补，但要如实说）；照盘上的账算回执。 */
@@ -265,7 +266,7 @@ export function createCommitPrepareRecipe(deps: CommitPrepareDeps = DEFAULT_DEPS
         ...(decision.values.day !== undefined ? { day: decision.values.day } : {}),
         ...(decision.values.dayEnd !== undefined ? { dayEnd: decision.values.dayEnd } : {}),
       };
-      const applied = await ctx.apply("commit", { excluded: decision.excluded, values: decision.values }, () => commit(bookDir, preview, choices));
+      const applied = await ctx.apply("commit", { excluded: decision.excluded, values: decision.values }, () => commit(bookDir, preview, choices), (receipt) => committed(bookDir, chapter, receipt));
       const body: CommitPrepareBody = { kind: COMMIT_PREPARE_KIND, chapter, committed: true, done: applied.done, ...(applied.snapshotId ? { snapshotId: applied.snapshotId } : {}) };
       return { schema: "operation-result/1", summary: applied.done.summary, body };
     },

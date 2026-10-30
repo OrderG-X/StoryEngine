@@ -376,7 +376,8 @@ export async function runDraftEdit(ctx: RecipeContext<unknown>, params: DraftEdi
   const title = draft.title ?? "";
   const editedText = outcome.text;
   const fixes = mode === "fix" ? outcome.changes : undefined;
-  const applied = await ctx.apply("apply", { text: editedText, baseVersion: materials.baseVersion, basis: materials.basis.digest }, async (): Promise<DraftApplied> => {
+  // 换上 AI 稿那条路本身先回放回执（核心命令在最前面，回放之后才核材料），回放也走它：字数、改句记录按键补发。
+  const apply = async (): Promise<DraftApplied> => {
     ctx.progress("在换上工作稿");
     const written = await applyAiDraft(bookDir, {
       chapter,
@@ -399,6 +400,7 @@ export async function runDraftEdit(ctx: RecipeContext<unknown>, params: DraftEdi
       ...(written.snapshotId ? { snapshotId: written.snapshotId } : {}),
       ...(written.warnings ? { warnings: written.warnings } : {}),
     };
-  });
+  };
+  const applied = await ctx.apply("apply", { text: editedText, baseVersion: materials.baseVersion, basis: materials.basis.digest }, apply, apply);
   return buildDraftEditResult({ params, outcome, title, applied });
 }

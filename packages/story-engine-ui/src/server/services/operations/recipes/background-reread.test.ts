@@ -15,15 +15,28 @@ import { readRereadProgress, readRereadState, REREAD_KIND, rereadBlocker } from 
 import { awaitsReread, REREAD_ATTEMPTS } from "../../../editorial/reread.js";
 import { ModelCallError } from "../../../lib/ai-errors.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
-import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
+import { __resetExecutionsForTests, OperationStopped } from "../../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, listOperations, pruneOperations, readOperation, type OperationRecord } from "../../../lib/operations/store.js";
 import { seedOperation } from "../../../lib/operations/test-helpers.js";
 import { setReaderBackfillHandler, type ReaderBackfillRequest } from "../../../lib/reader-backfill.js";
 import { coreSnapshotFor } from "../../../lib/snapshot.js";
-import { __drainOperationsForTests, __resetRecipesForTests, reconcileOperations, registerRecipe, submitOperation } from "../executor.js";
+import { __drainOperationsForTests, __resetRecipesForTests, reconcileOperations, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
 import { createBackgroundRereadRecipe, type RereadResultBody } from "./background-reread.js";
 import { continueReread, migrateLegacyRereadState } from "./index.js";
+
+const hook = vi.hoisted(() => ({ afterReread: undefined as undefined | (() => Promise<void>) }));
+vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
+  return {
+    ...actual,
+    runCommandInOperation: async (...args: Parameters<typeof actual.runCommandInOperation>) => {
+      const outcome = await actual.runCommandInOperation(...args);
+      if (args[1].name === "ledger.reread") await hook.afterReread?.();
+      return outcome;
+    },
+  };
+});
 
 const CHAPTERS = [
   { title: "钟停", body: "钟停在三点十五分。沈青禾推开钟楼的门，老周没有拦她。" },
@@ -82,6 +95,7 @@ function resetProcess(): void {
 
 beforeEach(async () => {
   resetProcess();
+  hook.afterReread = undefined;
   root = await makeHomeTempDir("reread-");
   process.env.SE_DATA_DIR = join(root, "data");
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "钟楼" }));
@@ -257,6 +271,26 @@ describe("进度从操作记录读", () => {
 });
 
 describe("进程没了", () => {
+  it("一章落了账、记检查点之前断了：接着做照回执算上这章，不把自己刚落的账当成书变了（Astra 第 13 轮第 2 条）", async () => {
+    const keeper = fakeKeeper();
+    useRecipe(keeper.callModel);
+    hook.afterReread = async () => {
+      hook.afterReread = undefined;
+      throw new OperationStopped("operation_stopped", "进程没了");
+    };
+    await start();
+    const [interrupted] = await quiet();
+    expect(interrupted).toMatchObject({ state: "paused", pauseReason: "interrupted" });
+    expect((await readChapterLedger(book, 1))?.entries.length).toBeGreaterThan(0);
+    expect(await resumeOperation(book, interrupted!.opId)).toMatchObject({ ok: true });
+    const [record] = await quiet();
+    expect(record).toMatchObject({ state: "succeeded" });
+    const onDisk = await Promise.all([1, 2, 3].map(async (n) => (await readChapterLedger(book, n))?.entries.length ?? 0));
+    expect(((record!.result as { body?: RereadResultBody } | undefined)?.body)?.recorded).toBe(onDisk.reduce((sum, n) => sum + n, 0));
+    // 第 1 章的账单只交过一次（读那一步落了检查点，接着做零调用）。
+    expect(keeper.ledgerChapters.filter((chapter) => chapter === 1)).toHaveLength(1);
+  });
+
   it("开书对账自动接着做：记完的章零调用，从停下那章接着记", async () => {
     const first = fakeKeeper({ holdChapter: 2, hold: new Promise<void>(() => undefined) });
     useRecipe(first.callModel);
