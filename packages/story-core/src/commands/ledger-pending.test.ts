@@ -108,8 +108,9 @@ describe("重记一章时编号沿用（carry）", () => {
     expect(pending?.ledger.previous?.carry.entries.map((entry) => entry.id)).toEqual(ids);
     expect((await projectBook(book)).dangling).toEqual([{ kind: "thread", ref: "t1-1", chapter: 2, source: "c2-1" }]);
 
-    // 补账：同样的声明 → 原来的编号、线索号。
-    const filled = expectOk(await runCommand(book, ledgerComplete, { chapter: 1, ledgerSha256: pending!.sha256, entries: CH1_ENTRIES }, author("k4")));
+    // 补账：同样的声明、线索写明旧号（记账员拿到这章上次开的线索和编号）→ 原来的编号、线索号。
+    const reopened = CH1_ENTRIES.map((entry) => (entry.kind === "thread" ? { ...entry, thread: "t1-1" } : entry));
+    const filled = expectOk(await runCommand(book, ledgerComplete, { chapter: 1, ledgerSha256: pending!.sha256, entries: reopened }, author("k4")));
     expect(filled.result).toMatchObject({ chapter: 1, ledgerStatus: "ready", recorded: 4, orphanedThreads: [] });
     const after = await readChapterLedger(book, 1);
     expect(after!.entries.map((entry) => entry.id)).toEqual(ids);
@@ -137,10 +138,18 @@ describe("重记一章时编号沿用（carry）", () => {
     expect((await projectBook(book)).dangling).toEqual([{ kind: "thread", ref: "t1-1", chapter: 2, source: "c2-1" }]);
   });
 
-  it("标题和原句都一样、没写旧号的：照旧沿用线索号", async () => {
-    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
-    const { thread: _thread, ...sameOpen } = CH1_ENTRIES[3] as Extract<EntryInput, { kind: "thread" }>;
-    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: [{ ...sameOpen, quote: "钟停在三点十五分。" }] }, author("k2")));
+  it("只认写明的旧线索号：同一句里的另一件事、标题原句都一样但没写旧号的，一律发新号（出口复核第 1 条第 2 轮）", async () => {
+    const BOTH = "# 第1章 · 钥匙\n\n甲家的铜钥匙丢了，乙家的银钥匙丢了。";
+    const open = (quote: string, thread?: string): EntryInput => ({ kind: "thread", review: "auto", op: "open", type: "question", title: "钥匙在哪", note: quote, quote, ...(thread ? { thread } : {}) });
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: BOTH, entries: [open("甲家的铜钥匙丢了")] }, author("k1")));
+    // 同一句里的另一件事、同标题、没写旧号 → 新号。
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${BOTH}\n`, entries: [open("乙家的银钥匙丢了")] }, author("k2")));
+    expect((await readChapterLedger(book, 1))!.entries[0]).toMatchObject({ threadRef: { id: "t1-2" } });
+    // 标题、原句和最初那条一样，也没写旧号 → 还是新号（不拿回 t1-1）。
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: BOTH, entries: [open("甲家的铜钥匙丢了")] }, author("k3")));
+    expect((await readChapterLedger(book, 1))!.entries[0]).toMatchObject({ threadRef: { id: "t1-3" } });
+    // 写明旧号 → 沿用。
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${BOTH}\n`, entries: [open("甲家的铜钥匙丢了", "t1-1")] }, author("k4")));
     expect((await readChapterLedger(book, 1))!.entries[0]).toMatchObject({ threadRef: { id: "t1-1" } });
   });
 

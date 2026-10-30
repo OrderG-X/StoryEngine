@@ -9,12 +9,10 @@
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
 import {
-  chapterSource,
   checkEntries,
   classifyForReview,
   declarationOf,
   declarationsOf,
-  entryKey,
   knownEntries,
   ledgerOf,
   nameKey,
@@ -322,16 +320,10 @@ function keepLastOpens(
   before: BookProjection,
 ): { readonly accepted: Accepted; readonly rejected: Rejected; readonly lost: readonly string[] } {
   const lastOpens = previous.flatMap((entry) => (entry.kind === "thread" && entry.op === "open" ? [entry] : []));
-  // 这次沿用了哪些：和核心分编号同一个口径（写了旧号，或标题一样且原句在这版正文的同一句；只同标题不算，P2b 出口复核第 1 条）。
-  const source = chapterSource(chapter, text);
+  // 这次沿用了哪些：和核心分编号同一个口径，只认记账员写明的旧线索号（标题、原句一样都不算，P2b 出口复核第 1 条）。
   const covered = new Set<string>();
   for (const { entry } of checked.accepted) {
-    if (entry.kind !== "thread" || entry.op !== "open") continue;
-    if (entry.thread) covered.add(entry.thread);
-    for (const last of lastOpens) {
-      const declared = declarationOf(last, previous);
-      if (declared && entryKey(declared, source) === entryKey(entry, source)) covered.add(threadOf(last));
-    }
+    if (entry.kind === "thread" && entry.op === "open" && entry.thread) covered.add(entry.thread);
   }
   const later = new Set(ledgers
     .filter((ledger) => ledger.chapter > chapter)

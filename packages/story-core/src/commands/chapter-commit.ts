@@ -98,7 +98,7 @@ export async function buildChapterLedger(
   const checked = pending ? { accepted: [], rejected: [] } : checkEntries(input.entries, input.text, before);
   const accepted = checked.accepted.map((item) => item.entry);
   const source = chapterSource(input.chapter, input.text);
-  const assigned = assignIds(input.chapter, previous, accepted, source);
+  const assigned = assignIds(input.chapter, previous, accepted);
   const entries = accepted.flatMap((entry, index) => storeEntry(entry, assigned.ids[index]!, source));
   const carried = previousOf(previous, file?.sha256);
 

@@ -114,8 +114,9 @@ describe("定稿命令", () => {
       entries: [{ kind: "thread", review: "auto", op: "advance", thread: "t1-1", note: "想起钟停那天", quote: "沈青禾想起钟停那天" }],
     }, author("k2")));
 
-    // 重定稿第 1 章：线索还在（标题一样）→ 编号不变。
-    const recommit = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: [...CH1_ENTRIES].reverse() }, author("k3")));
+    // 重定稿第 1 章：线索还在（记账员写明旧线索号）→ 编号不变。
+    const reopened = CH1_ENTRIES.map((entry) => (entry.kind === "thread" && entry.op === "open" ? { ...entry, thread: "t1-1" } : entry));
+    const recommit = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: [...reopened].reverse() }, author("k3")));
     expect(recommit.result).toMatchObject({ recommitted: true, orphanedThreads: [] });
     const second = await readChapterLedger(book, 1);
     expect(second?.entries.find((entry) => entry.kind === "thread")).toMatchObject({ id: threadId, threadRef: { id: "t1-1" } });
