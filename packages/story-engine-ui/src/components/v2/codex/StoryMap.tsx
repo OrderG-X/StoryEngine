@@ -21,8 +21,8 @@ const UNSURE_BASIS: Partial<Record<StoryMapChapter["basis"], string>> = {
 };
 
 export function dayLabel(row: StoryMapChapter): string {
-  if (row.ledgerPending) return "账待记";
-  if (row.day === undefined || row.dayEnd === undefined) return "不知道";
+  if (row.ledgerShort === "pending") return "账待记";
+  if (row.day === undefined || row.dayEnd === undefined) return row.ledgerShort === "partial" ? "账没记全" : "不知道";
   return row.dayEnd > row.day ? `第 ${row.day}～${row.dayEnd} 天` : `第 ${row.day} 天`;
 }
 

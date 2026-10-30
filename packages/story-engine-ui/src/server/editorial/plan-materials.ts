@@ -16,6 +16,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findRecurringPhrases, parseDraftFile } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
+import { shortChapters, shortChaptersText } from "../book/ledger-short.js";
 import { readStoryViews, type StoryViews } from "../book/story-views.js";
 import { readChapterPlan, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
 import { unknownDayOf } from "../book/story-timeline.js";
@@ -34,6 +35,8 @@ export interface PlanChapterMaterials {
   readonly foundation?: string;
   readonly previousChapter?: { readonly chapter: number; readonly text: string };
   readonly recentChapters: readonly string[];
+  /** 前面账没记全的章（写作版本 P2b，出口复核第 2 条）：如实说账里缺那几章，以正文为准。没有就不给。 */
+  readonly ledgerShort?: string;
   readonly openThreads: readonly string[];
   readonly openGoals: readonly string[];
   /** 设定本里的人物 + 账里出场过、还没建卡的人（名字）。 */
@@ -146,11 +149,13 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     .filter((event) => event.chapter < chapter)
     .sort((a, b) => a.chapter - b.chapter)
     .slice(-RECENT_CHAPTER_SUMMARIES)
-    .map((event) => `第 ${event.chapter} 章：${event.summary.slice(0, 120)}`);
+    .map((event) => `第 ${event.chapter} 章：${event.summary.slice(0, 120) || "（账里没有这章的梗概）"}`);
+  const short = shortChapters(views?.projection.chapters ?? [], chapter);
   return {
     ...(foundation ? { foundation: foundationMessage(foundation) } : {}),
     ...(previousChapter ? { previousChapter } : {}),
     recentChapters,
+    ...(short.length > 0 ? { ledgerShort: `${shortChaptersText(short)}：那几章的事、线索、天数账里没有或不全，以正文为准，别当成什么都没发生。` } : {}),
     openThreads,
     openGoals,
     characters: characterNames,
@@ -212,6 +217,7 @@ export function planMaterialBlocks(
     direction?.trim() ? `【作者这章的方向】${direction.trim()}` : "【作者这章的方向】没有特别指定，按故事现状自然往下推进。",
     materials.openGoals.length > 0 ? `【目标】\n${materials.openGoals.join("\n")}` : "",
     materials.openThreads.length > 0 ? `【开着的线索】\n${materials.openThreads.join("\n")}` : "",
+    materials.ledgerShort ? `【账没记全的章】${materials.ledgerShort}` : "",
     ...(options.withoutRecentSummaries ? [] : [materials.recentChapters.length > 0 ? `【前面几章发生了什么】\n${materials.recentChapters.join("\n")}` : ""]),
     materials.characters.length > 0 ? `【已有人物（身份、年龄见设定本，别用错人、别算错年代）】${materials.characters.join("、")}` : "",
     materials.foundation ?? "",

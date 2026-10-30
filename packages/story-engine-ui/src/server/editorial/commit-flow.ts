@@ -9,10 +9,12 @@
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
 import {
+  chapterSource,
   checkEntries,
   classifyForReview,
   declarationOf,
   declarationsOf,
+  entryKey,
   knownEntries,
   ledgerOf,
   nameKey,
@@ -25,6 +27,7 @@ import {
   type ChapterLedger,
   type ClassifiedEntry,
   type EntryInput,
+  type EntryKind,
   type LedgerEntry,
   type ReviewReason,
   type ThreadInput,
@@ -123,6 +126,8 @@ export interface CommitPreview {
   readonly omittedFacts: number;
   /** 第一遍有原句对不上、请记账员重摘过一次（几条、救回几条）。 */
   readonly quoteRepair?: QuoteRepair;
+  /** 补摘那一步没成、因此没记上的条目是哪几类（定稿时账记成「没记全」、写明缺这几类）；没成却一条都没拒 = 不给，当全部没记全。 */
+  readonly missingKinds?: readonly EntryKind[];
   readonly cold?: ColdCoverage;
   readonly waited?: ReaderWaited;
 }
@@ -317,11 +322,16 @@ function keepLastOpens(
   before: BookProjection,
 ): { readonly accepted: Accepted; readonly rejected: Rejected; readonly lost: readonly string[] } {
   const lastOpens = previous.flatMap((entry) => (entry.kind === "thread" && entry.op === "open" ? [entry] : []));
+  // 这次沿用了哪些：和核心分编号同一个口径（写了旧号，或标题一样且原句在这版正文的同一句；只同标题不算，P2b 出口复核第 1 条）。
+  const source = chapterSource(chapter, text);
   const covered = new Set<string>();
   for (const { entry } of checked.accepted) {
     if (entry.kind !== "thread" || entry.op !== "open") continue;
     if (entry.thread) covered.add(entry.thread);
-    for (const last of lastOpens) if (nameKey(last.title ?? "") === nameKey(entry.title ?? "")) covered.add(threadOf(last));
+    for (const last of lastOpens) {
+      const declared = declarationOf(last, previous);
+      if (declared && entryKey(declared, source) === entryKey(entry, source)) covered.add(threadOf(last));
+    }
   }
   const later = new Set(ledgers
     .filter((ledger) => ledger.chapter > chapter)
@@ -466,6 +476,9 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const kept = recommit && lastDayKnown ? keepLastDay(snapshot.ledgers, input.chapter, previous, opens?.accepted ?? checked.accepted, input.text, before, textSha) : undefined;
   const accepted = kept?.accepted ?? opens?.accepted ?? checked.accepted;
   const rejected = opens?.rejected ?? checked.rejected;
+  const missingKinds = keeper.quoteRepair?.failed
+    ? [...new Set(rejected.filter((item) => item.reason === "quote_not_in_text").map((item) => item.entry.kind))]
+    : [];
   // 重定稿：这章上次定稿时作者认过的出场人物不再当「第一次出场」问一遍（真跑：改两个错字重定稿，又问老郑、刀疤军官是谁）。
   const confirmedNames = previous.flatMap((entry) => (entry.kind === "presence" ? [presenceName(entry)] : []));
   const knownNames = [...(input.knownNames ?? []), ...confirmedNames];
@@ -518,6 +531,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     omittedThreads: keeper.omittedThreads,
     omittedFacts: keeper.omittedFacts,
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
+    ...(missingKinds.length > 0 ? { missingKinds } : {}),
     ...extra,
   };
 }

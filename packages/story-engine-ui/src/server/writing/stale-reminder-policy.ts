@@ -1,3 +1,5 @@
+import { idleChaptersBetween } from "@actalk/story-core";
+
 /**
  * stale 提醒里程碑制（2026-07-05 r7）：治「同一批停滞告警每章重复灌 prompt/预览」的长跑噪音。
  *
@@ -37,10 +39,11 @@ export function shouldRemindStaleAt(chaptersSinceTouched: number, threshold: num
  *
  * 未知按「本章刚碰过」（0 章）处理：不蛰伏、不报警。绝不拿读不到的日期做自动清理决策（铁律④：
  * 永不静默——蛰伏一条不知道上次何时推进的目标，就是静默地丢掉用户的叙事承诺）。
+ * unknown = 线索账没记全的章（核心 threadUnknownChapters）：不知道那几章动没动，不数（P2b 出口复核第 3 条）。
  */
-export function chaptersSinceTouched(lastTouchedChapter: unknown, currentChapter: number): number {
+export function chaptersSinceTouched(lastTouchedChapter: unknown, currentChapter: number, unknown: readonly number[] = []): number {
   const touched = typeof lastTouchedChapter === "number" && Number.isFinite(lastTouchedChapter)
     ? Math.floor(lastTouchedChapter)
     : currentChapter;
-  return Math.max(0, Math.floor(currentChapter) - touched);
+  return idleChaptersBetween(touched, Math.floor(currentChapter), unknown);
 }

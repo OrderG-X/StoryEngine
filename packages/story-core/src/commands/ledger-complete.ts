@@ -6,7 +6,7 @@
  * 导入的章由后台通读记账补，这里不接。编号和重定稿同一套（ledger/identity.ts），旧号照占、上次开的线索接得上。
  */
 import { z } from "zod";
-import { EntryInput, type LedgerStatus } from "../schema/ledger.js";
+import { EntryInput, EntryKind, type LedgerStatus } from "../schema/ledger.js";
 import { readChapterLedgerFile, readChapterText, sha256 } from "../store/book.js";
 import { chapterLedgerPath } from "../store/paths.js";
 import { buildChapterLedger, type ChapterCommitResult } from "./chapter-commit.js";
@@ -18,8 +18,8 @@ export const LedgerCompleteArgs = z.object({
   /** 补账时读到的那份账单的原样哈希。 */
   ledgerSha256: z.string().regex(/^[0-9a-f]{64}$/u),
   entries: z.array(EntryInput),
-  /** 这次又有一步没成、只补了一部分。 */
-  partial: z.object({ reasonCodes: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/u)).min(1) }).optional(),
+  /** 这次又有一步没成、只补了一部分（missingKinds：哪几类没补全；不给 = 不知道，当全部）。 */
+  partial: z.object({ reasonCodes: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/u)).min(1), missingKinds: z.array(EntryKind).min(1).optional() }).optional(),
   acceptedBasis: z.string().min(1).optional(),
 });
 export type LedgerCompleteArgs = z.infer<typeof LedgerCompleteArgs>;
@@ -55,7 +55,7 @@ export const ledgerComplete: WriteCommandSpec<LedgerCompleteArgs, LedgerComplete
       now: context.now,
       origin: ledger.origin,
       committedAt: ledger.committedAt,
-      ...(args.partial ? { shortfall: { status: "partial" as const, reasonCodes: args.partial.reasonCodes } } : {}),
+      ...(args.partial ? { shortfall: { status: "partial" as const, reasonCodes: args.partial.reasonCodes, ...(args.partial.missingKinds ? { missingKinds: args.partial.missingKinds } : {}) } } : {}),
       ...(args.acceptedBasis ? { acceptedBasis: args.acceptedBasis } : {}),
     });
     if (!built.ok) return built;

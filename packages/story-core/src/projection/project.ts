@@ -13,9 +13,10 @@
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import { entryQuote, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
+import { entryQuote, missingKindsOf, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
 import { timeDeclarationOf } from "../ledger/entries.js";
 import { nameKey } from "../text/quote.js";
+import { idleChaptersBetween, threadUnknownChapters } from "./coverage.js";
 import { Names } from "./names.js";
 import type {
   BookProjection,
@@ -352,9 +353,9 @@ function buildThreads(
     }
   }
 
-  // 「多少章没动」不数账待记的章：那几章的账没记上，不知道动没动。
-  const pending = ledgers.filter((ledger) => ledger.status === "pending").map((ledger) => ledger.chapter);
-  const idleSince = (chapter: number): number => upTo - chapter - pending.filter((item) => item > chapter && item <= upTo).length;
+  // 「多少章没动」不数线索没记全的章（账待记、没记全）：不知道那几章动没动。
+  const unknown = threadUnknownChapters(ledgers.map((ledger) => ({ chapter: ledger.chapter, missingKinds: missingKindsOf(ledger) })));
+  const idleSince = (chapter: number): number => idleChaptersBetween(chapter, upTo, unknown);
   const views = [...threads.values()].map((thread): ThreadView => {
     const lastTouchedAt = Math.max(thread.openedAt, ...thread.touches.map((touch) => touch.chapter));
     const idleChapters = Math.max(0, idleSince(lastTouchedAt));
@@ -399,6 +400,7 @@ function buildChapters(
   // 上一章结尾是第几天；不知道（账待记的章、接着它算的）= undefined，直到下一个作者定的天数。
   let previousEnd: number | undefined = 0;
   for (const ledger of ledgers) {
+    const missing = missingKindsOf(ledger);
     const time = timeDeclarationOf(ledger.entries);
     const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
     const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
@@ -413,8 +415,8 @@ function buildChapters(
     } else if (time?.basis === "author" && time.day !== undefined) {
       day = time.day;
       basis = "author";
-    } else if (ledger.status === "pending" || previousEnd === undefined) {
-      // 账待记：这章没有时间可依；上一章就不知道：相对它算的也不知道（不按 +1 估）。
+    } else if ((!time && missing.includes("time")) || previousEnd === undefined) {
+      // 这章的时间没记上（账待记、没记全）：没有时间可依；上一章就不知道：相对它算的也不知道（不按 +1 估）。
       basis = "unknown";
     } else if (time?.daysSincePrevious !== undefined) {
       day = Math.max(1, previousEnd + time.daysSincePrevious);
@@ -443,6 +445,7 @@ function buildChapters(
       committedAt: ledger.committedAt,
       ...(summary !== undefined ? { summary } : {}),
       ledgerStatus: ledger.status,
+      ...(missing.length > 0 ? { missingKinds: missing } : {}),
       ...(day !== undefined && dayEnd !== undefined ? { day, dayEnd } : {}),
       dayBasis: basis,
       ...(time?.weekday !== undefined ? { weekday: time.weekday } : {}),

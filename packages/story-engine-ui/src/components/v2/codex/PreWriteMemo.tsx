@@ -15,9 +15,10 @@ const BRIEF_NAMES = 3;
 /** 作者展开过就一直展开（换章也是），收起同理：一次会话里记着。 */
 let rememberedOpen = false;
 
-/** 「第 11 天傍晚」「第 3～5 天」；天数是估的就说是估的；这章账待记 / 天数不知道就照说。 */
+/** 「第 11 天傍晚」「第 3～5 天」；天数是估的就说是估的；这章账待记 / 没记全 / 天数不知道就照说。 */
 export function dayText(time: PreWritePrevious["time"]): string {
-  if (time.ledgerPending) return "账待记";
+  if (time.ledgerShort === "pending") return "账待记";
+  if (time.ledgerShort === "partial") return "账没记全";
   if (time.day === undefined || time.dayEnd === undefined) return "哪天不知道";
   const days = time.dayEnd > time.day ? `第 ${time.day}～${time.dayEnd} 天` : `第 ${time.day} 天${time.timeOfDay ?? ""}`;
   return time.basis === "estimated" || time.basis === "missing" ? `${days}（估的）` : days;

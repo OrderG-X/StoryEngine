@@ -34,6 +34,7 @@ export {
   UNITS_VERSION,
   entryQuote,
   entryShapeProblem,
+  missingKindsOf,
   presenceName,
   storedShapeProblem,
   subjectOf,
@@ -211,6 +212,7 @@ export {
 } from "./store/transaction.js";
 
 export { DEFAULT_STALE_AFTER, project, type ProjectionInput, type ProjectionOptions } from "./projection/project.js";
+export { idleChaptersBetween, threadUnknownChapters } from "./projection/coverage.js";
 export type * from "./projection/types.js";
 export {
   chapterBrief,

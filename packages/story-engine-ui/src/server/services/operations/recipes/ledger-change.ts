@@ -10,6 +10,7 @@
  * 改前存档、可撤销。
  */
 import { decisionRecord, projectBook, type BasisChange, type CommandReceipt, type DecisionInput, type TruthBasis } from "@actalk/story-core";
+import { itOrThem, shortChapters, shortChaptersText, type ShortChapter } from "../../../book/ledger-short.js";
 import { describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, coldPausedNote, LEDGER_ROLE, reviewOpenThreads, type BrainCallModel, type ThreadReviewOutcome } from "../../../editorial/index.js";
 import { KEEPER_MAX_CATCH_UP } from "../../../editorial/ledger-keeper.js";
@@ -114,11 +115,11 @@ const notDoneNotes = (notDone: readonly string[]): readonly string[] => (notDone
 const shortQuote = (text: string): string => (text.length > 40 ? `${text.slice(0, 40)}…` : text);
 
 /** 理线索的结论：收了的翻成「收掉线索」的裁定，还开着、拿不准、点不出原句、没看到的如实说。 */
-function reviewPlan(review: Extract<ThreadReviewOutcome, { ok: true }>, pending: readonly number[]): { readonly head: string; readonly decisions: readonly DecisionInput[]; readonly lines: readonly string[]; readonly notes: readonly string[] } {
+function reviewPlan(review: Extract<ThreadReviewOutcome, { ok: true }>, short: readonly ShortChapter[]): { readonly head: string; readonly decisions: readonly DecisionInput[]; readonly lines: readonly string[]; readonly notes: readonly string[] } {
   const shown = review.suggestions.slice(0, MAX_DECISIONS_PER_CHANGE);
   const notes = [
     // 账待记的章（正文定了、账还没记上）：那几章收没收线索账里看不出来，如实说。
-    pending.length > 0 ? `${pending.slice(0, 5).map((chapter) => `第 ${chapter} 章`).join("、")}${pending.length > 5 ? "等" : ""}的账还没记上，这份没算${pending.length > 1 ? "它们" : "它"}。` : "",
+    short.length > 0 ? `${shortChaptersText(short)}，这份缺${itOrThem(short)}的账。` : "",
     review.unsure.length > 0 ? `拿不准的 ${review.unsure.length} 条：${review.unsure.slice(0, 5).map((title) => `「${title}」`).join("")}${review.unsure.length > 5 ? "等" : ""}，你看着定。` : "",
     ...review.unproven.slice(0, 5).map((item) => `「${item.title}」记账员说${item.chapter !== undefined ? `第 ${item.chapter} 章` : ""}收了，但${item.why}，没列。`),
     review.unproven.length > 5 ? `另有 ${review.unproven.length - 5} 条也是点不出原句，没列。` : "",
@@ -203,10 +204,10 @@ export function createLedgerChangeRecipe(deps: LedgerChangeDeps = DEFAULT_DEPS):
       }
 
       // 理线索：先取依据（理的中途、作者点之前账变了，确认时不记）。
-      const { basis, upTo, pending } = await ctx.step("basis", {}, async () => {
+      const { basis, upTo, short } = await ctx.step("basis", {}, async () => {
         const taken = await readTruthBasisForWork(bookDir);
         const projection = await projectBook(bookDir);
-        return { basis: taken, upTo: projection.upTo, pending: projection.chapters.filter((chapter) => chapter.ledgerStatus === "pending").map((chapter) => chapter.chapter) };
+        return { basis: taken, upTo: projection.upTo, short: shortChapters(projection.chapters) };
       });
       if (upTo === 0) throw coded("no_chapters", "还没有定稿的章，没有线索可理。");
       await ctx.step("notes", { upTo }, async () => {
@@ -235,7 +236,7 @@ export function createLedgerChangeRecipe(deps: LedgerChangeDeps = DEFAULT_DEPS):
         if (!outcome.ok) throw coded("review_failed", `线索没理成：${trimStop(outcome.reason)}。`);
         return outcome;
       });
-      const plan = reviewPlan(review, pending ?? []);
+      const plan = reviewPlan(review, short ?? []);
       if (plan.decisions.length === 0) {
         const body: LedgerChangeBody = { kind: LEDGER_CHANGE_KIND, applied: [], notes: plan.notes };
         return { schema: "operation-result/1", summary: `${plan.head}${plan.notes.join("")}`, body };

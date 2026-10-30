@@ -28,6 +28,7 @@ import {
   type BasisChange,
   type ChapterCommitResult,
   type CommandReceipt,
+  type EntryInput,
   type LedgerCompleteResult,
   type LedgerShortfall,
   type TruthBasis,
@@ -242,17 +243,23 @@ const PENDING_DRAFT_CHANGED = "记账那会儿之后正文又改过，没定稿�
 
 type Choices = { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number };
 
-/** 补摘原句那一次没成、那几条因此没记：账记成 partial（核不上原句拒收的照旧算记全了）。 */
-function shortfallOf(preview: CommitPreview): LedgerShortfall | undefined {
-  return preview.quoteRepair?.failed ? { status: "partial", reasonCodes: ["quote_repair_failed"] } : undefined;
+/**
+ * 补摘原句那一次没成、那几条因此没记：账记成 partial，写明缺哪几类（核不上原句拒收的照旧算记全了）。
+ * 梗概、时间一章只有一条：最后交的条目里有了（作者在清单上填了天数）就不算缺。
+ */
+function shortfallOf(preview: CommitPreview, entries: readonly EntryInput[]): LedgerShortfall | undefined {
+  if (!preview.quoteRepair?.failed) return undefined;
+  const has = new Set(entries.map((entry) => entry.kind));
+  const missing = preview.missingKinds?.filter((kind) => !((kind === "time" || kind === "summary") && has.has(kind)));
+  return { status: "partial", reasonCodes: ["quote_repair_failed"], ...(missing && missing.length > 0 ? { missingKinds: missing } : {}) };
 }
 
 /** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完照盘上的账算回执。 */
 async function commit(bookDir: string, preview: CommitPreview, choices: Choices): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   // 定和照盘上算回执在同一把书锁里：定完到读账之间别的操作插不进来（回执卡的条数就是这次写的）。
   const { ticket, chapter } = preview;
-  const shortfall = shortfallOf(preview);
-  return withBookLock(bookDir, () => commitLocked(bookDir, chapter, ticket.textSha256, ticket.basis, commitEntriesOf(ticket, choices), shortfall, "清单出来之后"));
+  const entries = commitEntriesOf(ticket, choices);
+  return withBookLock(bookDir, () => commitLocked(bookDir, chapter, ticket.textSha256, ticket.basis, entries, shortfallOf(preview, entries), "清单出来之后"));
 }
 
 /** 记账没成、作者点了「先定正文、账待记」：正文照冻结那版定，账单记成待记（同一事务、写前存档、能撤销）。 */
@@ -303,14 +310,14 @@ async function commitLocked(
 /** 照票补账：只换这章的账单（作者档，写前存档、能撤销）；补账清单出来之后这章的账、正文、书变过都不写，说哪样变了。 */
 async function fill(bookDir: string, preview: CommitPreview, ledgerSha256: string, choices: Choices): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   const { ticket, chapter } = preview;
-  const shortfall = shortfallOf(preview);
   const entries = commitEntriesOf(ticket, choices);
+  const shortfall = shortfallOf(preview, entries);
   return withBookLock(bookDir, async () => {
     const { result, snapshotId } = await runCommandInOperation(bookDir, ledgerComplete, {
       chapter,
       ledgerSha256,
       entries,
-      ...(shortfall ? { partial: { reasonCodes: shortfall.reasonCodes } } : {}),
+      ...(shortfall ? { partial: { reasonCodes: shortfall.reasonCodes, ...(shortfall.missingKinds ? { missingKinds: shortfall.missingKinds } : {}) } } : {}),
       acceptedBasis: ticket.basis.digest,
     }, { what: `补账：第 ${chapter} 章`, caller: "author", basis: ticket.basis });
     if (!result.ok) {

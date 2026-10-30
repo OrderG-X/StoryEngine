@@ -225,7 +225,7 @@ describe("StoryEngine-NG ContextGateway", () => {
     const pending = envelope.sections.find((section) => section.name === "ledger_pending")?.content as { chapters: number[]; note: string } | undefined;
     expect(pending?.chapters).toEqual([1]);
     expect(pending?.note).toContain("第 1 章的账还没记上");
-    expect(envelope.sections.find((section) => section.name === "story_calendar")?.content).toEqual({ currentStoryDay: "不知道（前面有章的账还没记上）" });
+    expect(envelope.sections.find((section) => section.name === "story_calendar")?.content).toEqual({ currentStoryDay: "不知道（前面有章的时间没记上）" });
     // 最近那章账待记：承接它的正文，不拿「梗概给不出」当要推进的事。
     const continuity = envelope.sections.find((section) => section.name === "story_continuity")?.content as { recentEvents: string[]; carryForwardInstruction: string } | undefined;
     expect(continuity?.recentEvents).toEqual(["第 1 章：这章的账还没记上，梗概给不出"]);
@@ -234,6 +234,32 @@ describe("StoryEngine-NG ContextGateway", () => {
     // 没有账待记的章：没有这一段。
     const plain = await buildWriterContext({ projectDir: await createFixtureProject(), chapter: 8, chapterGoal: "推进。", maxTimelineEvents: 3 });
     expect(plain.trace.sectionNames).not.toContain("ledger_pending");
+  });
+
+  it("没记全、账待记的章不当成什么都没发生：单列一段如实说，线索不算闲置（P2b 出口复核第 2、3 条）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ledger-partial-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口", protagonistName: "林远" });
+    const commit = async (chapter: number, text: string, entries: unknown[], ledger?: unknown) => {
+      const outcome = await runCommand(projectDir, chapterCommit, { chapter, text, entries, ...(ledger ? { ledger } : {}) } as never, { caller: "author", idempotencyKey: randomUUID() });
+      expect(outcome.ok).toBe(true);
+    };
+    await commit(1, "# 第1章\n\n林远在渡口捡到一封信。", [
+      { kind: "time", review: "auto", basis: "author", day: 1 },
+      { kind: "thread", review: "auto", op: "open", type: "question", title: "信是谁写的", note: "捡到一封信", quote: "林远在渡口捡到一封信" },
+    ]);
+    // 第 2 章补摘原句没成，梗概、时间、线索都没记上；第 3、4 章账待记。
+    await commit(2, "# 第2章\n\n船来了。", [], { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: ["summary", "time", "thread"] });
+    for (const chapter of [3, 4]) await commit(chapter, `# 第${chapter}章\n\n又等了一天。`, [], { status: "pending", reasonCodes: ["keeper_failed"] });
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 5, chapterGoal: "拆信。", maxTimelineEvents: 5 });
+    const short = envelope.sections.find((section) => section.name === "ledger_pending")?.content as { chapters: number[]; note: string } | undefined;
+    expect(short?.chapters).toEqual([2, 3, 4]);
+    expect(short?.note).toContain("第 3 章、第 4 章的账还没记上、第 2 章的账没记全");
+    const continuity = envelope.sections.find((section) => section.name === "story_continuity")?.content as { recentEvents: string[] } | undefined;
+    expect(continuity?.recentEvents).toContain("第 2 章：这章的账没记全，梗概给不出");
+    // 按章号相减是「已 4 章没有推进」、要提醒；那 3 章不知道动没动，不数。
+    const threads = envelope.sections.find((section) => section.name === "story_threads")?.content as { staleThreadWarnings: unknown[] } | undefined;
+    expect(threads?.staleThreadWarnings).toEqual([]);
   });
 
   it("does not invent carry-forward pressure when there is no continuity", async () => {

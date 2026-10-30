@@ -174,10 +174,18 @@ describe("核账服务（核账员一路）", () => {
     const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
     const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: quiet });
     expect(result.ok).toBe(true);
-    expect(result.ledgerPending).toEqual([2]);
-    expect(result.summary).toContain("第 2 章的账还没记上，对账本的那一遍没算它。");
+    expect(result.ledgerShort).toEqual([{ chapter: 2, status: "pending" }]);
+    expect(result.summary).toContain("第 2 章的账还没记上，对账本的那一遍缺它的账。");
+    // 作者给待记那章定了天数：天数知道了，账照样没记上（出口复核第 4 条）；没调模型直接用记忆的那次也照说。
+    expect((await runCommand(dir, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 2, day: 7 }] }, { caller: "author", idempotencyKey: "check-service-pending-day" })).ok).toBe(true);
+    const dated = await checkChapterBody(dir, 3, BODY, { readerCallModel: quiet });
+    expect(dated.ledgerShort).toEqual([{ chapter: 2, status: "pending" }]);
+    expect(dated.summary).toContain("第 2 章的账还没记上");
+    const reused = await checkChapterBody(dir, 3, BODY, { readerCallModel: quiet });
+    expect(reused.reused).toBe(true);
+    expect(reused.summary).toContain("第 2 章的账还没记上");
     const plain = await checkChapterBody(await makeBook(), 3, BODY, { readerCallModel: quiet });
-    expect(plain.ledgerPending).toBeUndefined();
+    expect(plain.ledgerShort).toBeUndefined();
     expect(plain.summary).not.toContain("账还没记上");
   });
 

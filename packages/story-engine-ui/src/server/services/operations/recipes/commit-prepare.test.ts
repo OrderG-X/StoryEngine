@@ -366,6 +366,27 @@ describe("补账（P2b 设计 3.2）：按定稿那版正文补记，出清单�
     expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "ready", day: 1 });
   });
 
+  it("补摘原句那一步没成：账记成没记全、写明缺哪几类（P2b 出口复核第 2 条）；补账时又没成照样写明", async () => {
+    // 线索和一条事实的原句对不上，补摘那次交回来的不是 JSON。
+    const broken = {
+      ...LEDGER1,
+      facts: [LEDGER1.facts[0], { ...LEDGER1.facts[1], quote: "钟停在了三点一刻" }],
+      threads: [{ ...LEDGER1.threads[0], quote: "钟到底为什么停" }],
+    };
+    const done = await commit(1, CH1, broken);
+    expect(bodyOf(done)).toMatchObject({ committed: true });
+    expect(await readChapterLedger(book, 1)).toMatchObject({ status: "partial", coverage: { reasonCodes: ["quote_repair_failed"], missingKinds: ["fact", "thread"] } });
+    const view = (await projectBook(book)).chapters[0];
+    expect(view).toMatchObject({ ledgerStatus: "partial", missingKinds: ["fact", "thread"], day: 1 });
+
+    // 补账：时间那条又没对上、补摘又没成，作者在清单上填了天数 → 时间不算缺。
+    ledger = { ...broken, time: { ...LEDGER1.time, quote: "周二的傍晚时分" } };
+    const fill = await prepareFill(1);
+    const filled = await confirm(fill, [], { [DAY_ITEM_ID]: 1 });
+    expect(filled.state).toBe("succeeded");
+    expect(await readChapterLedger(book, 1)).toMatchObject({ status: "partial", coverage: { missingKinds: ["fact", "thread"] } });
+  });
+
   it("账待记那份没记天数：补账清单不说「上次定稿记的是第几天」（真点：拿估的天数当上次记的）", async () => {
     await commit(1, CH1, LEDGER1);
     await writeDraft(2, CH2);

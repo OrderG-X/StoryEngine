@@ -2,7 +2,7 @@
  * 投影：全部从真相（章节账单 + 作者裁定 + 正文）算出来，随时可重算，不另存。
  * 界面、核账员、对话 AI 读的都是这一份。里面的 id 只给程序用，展示时一律换成名字 / 标题。
  */
-import type { FactNature, LedgerStatus, ReviewMark, ThreadType, TimeBasis } from "../schema/ledger.js";
+import type { EntryKind, FactNature, LedgerStatus, ReviewMark, ThreadType, TimeBasis } from "../schema/ledger.js";
 
 export interface ChapterView {
   readonly chapter: number;
@@ -11,13 +11,15 @@ export interface ChapterView {
   readonly summary?: string;
   /** 这章的账记到什么程度：pending = 正文定了、账还没记上（不贡献任何条目，不是「什么都没发生」）。 */
   readonly ledgerStatus: LedgerStatus;
+  /** 哪几类没记全（账待记 = 全部；没记全 = 写明的那几类，没写明当全部）；记全了就没有。没记全的那类不能按「账里没有」下结论。 */
+  readonly missingKinds?: readonly EntryKind[];
   /** 故事第几天（从 1 起）。不知道（账待记的章、接着它算的章，直到下一个作者定的天数）就没有。 */
   readonly day?: number;
   /** 本章结束时是第几天（有 day 才有）。 */
   readonly dayEnd?: number;
   /**
    * 天数的依据；missing = 账单里没有时间，投影按上一章 +1 估的（要请作者确认）；
-   * unknown = 不知道（这章账待记，或上一章的天数就不知道），day / dayEnd 都没有。
+   * unknown = 不知道（这章的时间没记上：账待记、没记全；或上一章的天数就不知道），day / dayEnd 都没有。
    */
   readonly dayBasis: TimeBasis | "missing" | "unknown";
   /** 0 = 周一 … 6 = 周日。 */

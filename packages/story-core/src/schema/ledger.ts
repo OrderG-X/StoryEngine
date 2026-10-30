@@ -409,3 +409,13 @@ export const ChapterLedger = z
     if (times.has("chapterEnd") && !times.has("chapterStart")) ctx.addIssue({ code: "custom", path: ["entries"], message: "有本章结尾的时间就要有本章开头那条" });
   });
 export type ChapterLedger = z.infer<typeof ChapterLedger>;
+
+/**
+ * 这份账哪几类没记全（P2b 出口复核第 2 条）：ready 没有；pending 全部；partial 按 coverage 写明的那几类，没写明就当全部（不知道缺哪类）。
+ * 读的路径照它：没记全的那类不能按「账里没有」下结论（天数不按上一章 +1 估、线索不算闲置、节奏不算密度、梗概如实说给不出）。
+ */
+export function missingKindsOf(ledger: Pick<ChapterLedger, "status" | "coverage">): readonly EntryKind[] {
+  if (ledger.status === "ready") return [];
+  if (ledger.status === "partial" && ledger.coverage.missingKinds.length > 0) return ledger.coverage.missingKinds;
+  return EntryKind.options;
+}

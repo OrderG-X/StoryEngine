@@ -86,7 +86,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   const day = changes.day === undefined || changes.dayEnd === undefined
     ? "哪天不知道"
     : changes.dayEnd > changes.day ? `故事第 ${changes.day}～${changes.dayEnd} 天` : `故事第 ${changes.day} 天`;
-  const nothing = !changes.ledgerPending && changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
+  const nothing = !changes.ledgerShort && changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
   return (
     <section className="se-sm se-cc" aria-label="这章改了什么">
       <PageHead
@@ -100,7 +100,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
           </nav>
         ) : undefined}
       />
-      {changes.ledgerPending ? <p className="se-bk-blank">这章的账还没记上。</p> : null}
+      {changes.ledgerShort ? <p className="se-bk-blank">{changes.ledgerShort === "pending" ? "这章的账还没记上。" : "这章的账没记全，下面只是记上的那些。"}</p> : null}
       {nothing ? <p className="se-bk-blank">这章定稿时没记下新的人、线索和事。</p> : null}
       {changes.newCast.length > 0 ? (
         <div className="se-cc-block is-cast">

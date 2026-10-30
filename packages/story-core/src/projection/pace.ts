@@ -38,8 +38,8 @@ export interface PaceChapter {
   readonly span?: number;
   /** 从上一章结尾到这章结尾，故事走了几天（第一章 = 本章跨的天数；两头有一头不知道就没有）。 */
   readonly storyDays?: number;
-  /** 这章账待记：不知道推进了什么，不算密度、不下结论。 */
-  readonly pending?: true;
+  /** 这章的线索账没记全（账待记、没记全）：不知道推进了什么，不算密度、不下结论。 */
+  readonly movesUnknown?: true;
   /** 天数是正文写明 / 判断 / 作者定的（估的、没记的不算准）。 */
   readonly timeSure: boolean;
   readonly pace?: "slow" | "fast";
@@ -117,8 +117,8 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
     const count = words.get(view.chapter) ?? 0;
     const row = moves.get(view.chapter) ?? { opened: 0, advanced: 0, closed: 0 };
     const weighted = row.advanced + row.closed * 2;
-    const pending = view.ledgerStatus === "pending";
-    const density = !pending && count >= PACE_MIN_WORDS && openBefore(view.chapter) > 0 ? weighted / (count / 1000) : undefined;
+    const movesUnknown = view.missingKinds?.includes("thread") === true;
+    const density = !movesUnknown && count >= PACE_MIN_WORDS && openBefore(view.chapter) > 0 ? weighted / (count / 1000) : undefined;
     const span = view.day !== undefined && view.dayEnd !== undefined ? view.dayEnd - view.day : undefined;
     const storyDays = view.dayEnd === undefined ? undefined : previous ? (previous.dayEnd === undefined ? undefined : view.dayEnd - previous.dayEnd) : span;
     return {
@@ -129,7 +129,7 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
       ...(span !== undefined ? { span } : {}),
       ...(storyDays !== undefined ? { storyDays } : {}),
       timeSure: view.dayBasis !== "estimated" && view.dayBasis !== "missing" && view.dayBasis !== "unknown",
-      ...(pending ? { pending: true as const } : {}),
+      ...(movesUnknown ? { movesUnknown: true as const } : {}),
       weighted,
     };
   });
@@ -150,7 +150,7 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
       && item.density >= typicalDensity * PACE_FAST_RATIO
       && weighted >= PACE_FAST_MIN_MOVES,
     span: item.timeSure
-      && !item.pending
+      && !item.movesUnknown
       && item.words >= PACE_MIN_WORDS
       && item.span !== undefined && item.span >= PACE_SPAN_DAYS
       && item.words < typicalWords * PACE_SPAN_WORDS_RATIO,

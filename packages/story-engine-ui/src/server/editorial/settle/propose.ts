@@ -34,6 +34,7 @@ import {
 } from "@actalk/story-core";
 import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
+import { shortChapters, type ShortChapter } from "../../book/ledger-short.js";
 import { readTruthBasisForWork } from "../../book/truth-basis.js";
 
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
@@ -117,8 +118,8 @@ export interface SettleProposal {
   readonly searched: readonly number[];
   /** 核账报过和它打架、这次却没查出改法的句子（如实说）。 */
   readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
-  /** 账还没记上的章（写作版本 P2b 设计 3.3）：正文照查了，账里跟着改的事实没算它们。 */
-  readonly ledgerPending?: readonly number[];
+  /** 账没记全的章（写作版本 P2b 设计 3.3）：正文照查了，账里跟着改的事实缺它们的。 */
+  readonly ledgerShort?: readonly ShortChapter[];
   /** 复核去掉的改法（不上卡，留在存盘里查问题用）。 */
   readonly reviewDropped: readonly { readonly chapter?: number; readonly card?: string; readonly label?: string; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly failures: readonly string[];
@@ -615,7 +616,7 @@ export async function proposeSettle(input: {
   }
   // 每章是故事第几天（账里记的；没记、估的不给）：改「隔了多久」时照它算。投影读不了就不带，照常查。
   const projection = await projectBook(projectDir).catch(() => undefined);
-  const ledgerPending = (projection?.chapters ?? []).filter((view) => view.ledgerStatus === "pending").map((view) => view.chapter);
+  const ledgerShort = shortChapters(projection?.chapters ?? []);
   for (const view of projection?.chapters ?? []) {
     const doc = docs.get(view.chapter);
     if (!doc || view.dayBasis === "missing" || view.dayBasis === "estimated" || view.day === undefined || view.dayEnd === undefined) continue;
@@ -818,7 +819,7 @@ export async function proposeSettle(input: {
       drafts: drafts.filter((item) => edits.some((edit) => edit.target === "draft" && edit.chapter === item.chapter)),
       searched: picked.map((doc) => doc.chapter),
       missed,
-      ...(ledgerPending.length > 0 ? { ledgerPending } : {}),
+      ...(ledgerShort.length > 0 ? { ledgerShort } : {}),
       reviewDropped,
       failures,
       basis,

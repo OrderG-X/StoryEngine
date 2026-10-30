@@ -50,16 +50,16 @@ describe("故事时间线（读者形状）", () => {
   it("有章账待记：那几章和接着它算的章照实说哪天不知道、别替它们定日子；本章不知道也照实说（P2b）", () => {
     const t: StoryTimeline = {
       ...timeline([{ chapter: 1, day: 1, weekday: 2, source: "declared", quote: "周三" }]),
-      unknownDays: [{ chapter: 2, pending: true }, { chapter: 3, pending: false }],
+      unknownDays: [{ chapter: 2, own: "pending" }, { chapter: 3 }],
     };
     const text = describeTimelineForChapter(t, 4)!;
     expect(text).toContain("第 2 章：这章的账还没记上，是哪天不知道");
-    expect(text).toContain("第 3 章：前面有章的账还没记上，是哪天不知道");
+    expect(text).toContain("第 3 章：前面有章的时间没记上，是哪天不知道");
     expect(text).toContain("别替它们定日子");
     // 近的在前，和知道哪天的章排在一起。
     expect(text.indexOf("第 3 章")).toBeLessThan(text.indexOf("第 2 章"));
     expect(text.indexOf("第 2 章")).toBeLessThan(text.indexOf("第 1 章"));
-    expect(describeTimelineForChapter(t, 3)).toContain("本章（第 3 章）：前面有章的账还没记上，是哪天不知道，以正文里的说法为准");
+    expect(describeTimelineForChapter(t, 3)).toContain("本章（第 3 章）：前面有章的时间没记上，是哪天不知道，以正文里的说法为准");
     // 没有账待记的章：和原来一字不差。
     expect(describeTimelineForChapter(banye(), 5)).not.toContain("不知道");
   });

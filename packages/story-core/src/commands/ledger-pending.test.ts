@@ -71,10 +71,10 @@ describe("先定正文、账待记", () => {
     expect(three).toMatchObject({ day: 5, dayEnd: 5, dayBasis: "author" });
 
     const rows = timelineTable(view);
-    expect(rows[0]).toMatchObject({ chapter: 1, basis: "unknown", ledgerPending: true });
+    expect(rows[0]).toMatchObject({ chapter: 1, basis: "unknown", ledgerShort: "pending" });
     const text = timelineText(rows);
     expect(text).toContain("| 第 1 章 | 不知道 | — | — | 这章的账还没记上 |");
-    expect(text).toContain("| 第 2 章 | 不知道 | — | — | 不知道（前面有章的账还没记上） |");
+    expect(text).toContain("| 第 2 章 | 不知道 | — | — | 不知道（前面有章的时间没记上） |");
   });
 
   it("线索多久没动不算账待记的章；节奏不拿待记的章算密度", async () => {
@@ -86,7 +86,7 @@ describe("先定正文、账待记", () => {
     expect(view.threads[0]).toMatchObject({ title: "钟为什么停", idleChapters: 1 });
     expect(threadsForPrompt(view).threads[0]).toMatchObject({ title: "钟为什么停" });
     const pace = paceReport(view, new Map([[1, 3000], [2, 3000], [3, 3000]]));
-    expect(pace.chapters[1]).toMatchObject({ chapter: 2, pending: true });
+    expect(pace.chapters[1]).toMatchObject({ chapter: 2, movesUnknown: true });
     expect(pace.chapters[1]?.density).toBeUndefined();
   });
 });
@@ -117,6 +117,33 @@ describe("重记一章时编号沿用（carry）", () => {
     expect((await projectBook(book)).dangling).toEqual([]);
   });
 
+  it("同标题不同原句的新线索不套旧线索号：后文收口接的是旧的那条，如实说接不上（P2b 出口复核第 1 条）", async () => {
+    const KEY = "# 第1章 · 钥匙\n\n甲家的铜钥匙不见了。";
+    const KEY2 = "# 第1章 · 钥匙\n\n乙家的银钥匙丢了。";
+    const open = (quote: string): EntryInput => ({ kind: "thread", review: "auto", op: "open", type: "question", title: "钥匙在哪", note: quote, quote });
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: KEY, entries: [open("甲家的铜钥匙不见了")] }, author("k1")));
+    expectOk(await runCommand(book, chapterCommit, {
+      chapter: 2,
+      text: "# 第2章 · 找到\n\n甲家的铜钥匙找到了。",
+      entries: [{ kind: "thread", review: "auto", op: "close", thread: "t1-1", note: "找到了", quote: "甲家的铜钥匙找到了" }],
+    }, author("k2")));
+    // 第 1 章改成乙家银钥匙，连着两次账待记，再补一条同标题、不同原句、没写旧号的线索。
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: KEY2, entries: [], ledger: PENDING }, author("k3")));
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${KEY2}\n`, entries: [], ledger: PENDING }, author("k4")));
+    const pending = await readChapterLedgerFile(book, 1);
+    const filled = expectOk(await runCommand(book, ledgerComplete, { chapter: 1, ledgerSha256: pending!.sha256, entries: [open("乙家的银钥匙丢了")] }, author("k5")));
+    expect(filled.result.orphanedThreads).toEqual(["钥匙在哪"]);
+    expect((await readChapterLedger(book, 1))!.entries[0]).toMatchObject({ threadRef: { id: "t1-2" } });
+    expect((await projectBook(book)).dangling).toEqual([{ kind: "thread", ref: "t1-1", chapter: 2, source: "c2-1" }]);
+  });
+
+  it("标题和原句都一样、没写旧号的：照旧沿用线索号", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const { thread: _thread, ...sameOpen } = CH1_ENTRIES[3] as Extract<EntryInput, { kind: "thread" }>;
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: [{ ...sameOpen, quote: "钟停在三点十五分。" }] }, author("k2")));
+    expect((await readChapterLedger(book, 1))!.entries[0]).toMatchObject({ threadRef: { id: "t1-1" } });
+  });
+
   it("旧号不落到别的条目头上：重记少了几条，再记一条新的，新号排在认得的最大号后面", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES.slice(0, 2) }, author("k2")));
@@ -125,6 +152,47 @@ describe("重记一章时编号沿用（carry）", () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [...CH1_ENTRIES.slice(0, 2), other] }, author("k3")));
     // c1-3、c1-4 是之前那两条（钥匙在哪、钟为什么停）的号，新条目不拿。
     expect((await readChapterLedger(book, 1))!.entries.map((entry) => entry.id)).toEqual(["c1-1", "c1-2", "c1-5"]);
+  });
+});
+
+describe("没记全（partial）按没记上的那几类读", () => {
+  const CH2_PARTIAL = "# 第2章 · 外乡人\n\n外乡人又来了。老周站在门口，没让他进。";
+  it("时间、线索没记上：那章哪天不知道、线索不算闲置、节奏不算密度；只缺事实的照常算", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    // 补摘原句没成：时间和线索那几条没记上，只记上了出场。
+    expectOk(await runCommand(book, chapterCommit, {
+      chapter: 2,
+      text: CH2_PARTIAL,
+      entries: [{ kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: "老周站在门口" }],
+      ledger: { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: ["time", "thread"] },
+    }, author("k2")));
+    expectOk(await runCommand(book, chapterCommit, { chapter: 3, text: CH3, entries: [] }, author("k3")));
+    const view = await projectBook(book);
+    expect(view.chapters[1]).toMatchObject({ chapter: 2, ledgerStatus: "partial", missingKinds: ["time", "thread"], dayBasis: "unknown", present: ["周守义"] });
+    expect(view.chapters[1]?.day).toBeUndefined();
+    expect(view.chapters[2]?.dayBasis).toBe("unknown");
+    expect(view.threads[0]).toMatchObject({ title: "钟为什么停", idleChapters: 1 });
+    expect(paceReport(view, new Map([[1, 3000], [2, 3000], [3, 3000]])).chapters[1]).toMatchObject({ chapter: 2, movesUnknown: true });
+    expect(timelineText(timelineTable(view))).toContain("| 第 2 章 | 不知道 | — | — | 这章的账没记全，时间没记上 |");
+
+    // 只缺事实：天数照常按上一章 +1 估、线索照常算闲置。
+    expectOk(await runCommand(book, chapterCommit, {
+      chapter: 2,
+      text: CH2_PARTIAL,
+      entries: [{ kind: "time", review: "auto", basis: "judged", daysSincePrevious: 1, quote: "外乡人又来了" }],
+      ledger: { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: ["fact"] },
+    }, author("k4")));
+    const again = await projectBook(book);
+    expect(again.chapters[1]).toMatchObject({ chapter: 2, missingKinds: ["fact"], day: 2 });
+    expect(again.threads[0]).toMatchObject({ idleChapters: 2 });
+  });
+
+  it("没写明缺哪几类的没记全：当全部没记全", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: CH2_PARTIAL, entries: [], ledger: { status: "partial", reasonCodes: ["quote_repair_failed"] } }, author("k2")));
+    const view = await projectBook(book);
+    expect(view.chapters[1]).toMatchObject({ missingKinds: ["summary", "fact", "thread", "time", "presence"], dayBasis: "unknown" });
+    expect(view.threads[0]).toMatchObject({ idleChapters: 0 });
   });
 });
 

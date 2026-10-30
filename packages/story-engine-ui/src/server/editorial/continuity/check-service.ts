@@ -6,6 +6,7 @@
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
 import { describeTimelineForChapter, type StoryTimeline } from "../../book/story-timeline.js";
+import { itOrThem, shortChapters, shortChaptersText, type ShortChapter } from "../../book/ledger-short.js";
 import { readStoryViews } from "../../book/story-views.js";
 import { type FactEntry } from "../../book/types.js";
 import {
@@ -77,8 +78,8 @@ export interface ChapterCheckResult {
   readonly coverage?: { readonly mode: "cold"; readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number; readonly pausedBackfill?: string };
   /** 这次核账前先当场补了笔记（R5.2）：补了第 from～to 章、花了 ms 毫秒。summary 已带「这次先等核账员读完…再核」。 */
   readonly waited?: ReaderWaited;
-  /** 前面账还没记上的章（写作版本 P2b 设计 3.3）：对账本那一遍没算它们，summary 已如实说。 */
-  readonly ledgerPending?: readonly number[];
+  /** 前面账没记全的章（写作版本 P2b 设计 3.3）：对账本那一遍缺它们的账，summary 已如实说。 */
+  readonly ledgerShort?: readonly ShortChapter[];
   /** 作者标过「不是问题」、这次没再报的条数。 */
   readonly dismissed: number;
   /** 正文、前文、账本都没改过，直接用的上次结果（没调模型）。 */
@@ -219,6 +220,7 @@ export async function readCheckInputs(projectDir: string, chapter: number): Prom
   readonly ledgerFacts?: readonly FactEntry[];
   readonly foundation?: FoundationDigest;
   readonly timeline?: StoryTimeline;
+  readonly ledgerShort: readonly ShortChapter[];
   readonly earlierHash?: string;
   /** 读材料那会儿书的依据摘要（带写入代次）：核完存记忆前再核一遍，核的途中书变了就不存。 */
   readonly basisDigest?: string;
@@ -233,9 +235,11 @@ export async function readCheckInputs(projectDir: string, chapter: number): Prom
       return undefined;
     });
     const timeline = views?.timeline;
-    return { earlier, ledgerFacts, foundationRead, foundation, timeline };
+    // 按账单状态取缺账的章（出口复核第 4 条：作者定过天数的待记章也是缺账）。
+    const ledgerShort = views ? shortChapters(views.projection.chapters, chapter) : [];
+    return { earlier, ledgerFacts, foundationRead, foundation, timeline, ledgerShort };
   });
-  const { earlier, ledgerFacts, foundationRead, foundation, timeline } = value;
+  const { earlier, ledgerFacts, foundationRead, foundation, timeline, ledgerShort } = value;
   const earlierHash = basis && ledgerFacts && foundationRead && timeline
     ? hashEarlier(basis, chapter, { ledger: ledgerFacts, ...(foundation ? { setting: foundation.text } : {}), timeline: describeTimelineForChapter(timeline, chapter) })
     : undefined;
@@ -244,6 +248,7 @@ export async function readCheckInputs(projectDir: string, chapter: number): Prom
     ...(ledgerFacts ? { ledgerFacts } : {}),
     ...(foundation ? { foundation } : {}),
     ...(timeline ? { timeline } : {}),
+    ledgerShort,
     ...(earlierHash ? { earlierHash } : {}),
     ...(basis ? { basisDigest: basis.digest } : {}),
   };
@@ -298,7 +303,7 @@ export async function checkChapterBody(
 ): Promise<ChapterCheckResult> {
   // 账本只读一次：数字对账用它，核账记忆的键也带上它。读不了就不传，核账那边会如实记「账本读不了」。
   // 设定本也只读一次：上次对设定本的条目按它判还在不在。
-  const { earlier, ledgerFacts, foundation, timeline, earlierHash, basisDigest } = await readCheckInputs(projectDir, chapter);
+  const { earlier, ledgerFacts, foundation, timeline, ledgerShort, earlierHash, basisDigest } = await readCheckInputs(projectDir, chapter);
   const readerCallModel = options.readerCallModel ?? callConfiguredBrainModel;
   const bodyHash = hashBody(body);
   // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
@@ -380,9 +385,8 @@ export async function checkChapterBody(
       ].join(" + ")
     }，更早的细节可能漏。${coldPausedNote(result.coverage)}`
     : "";
-  // 前面账待记的章：对账本那一遍没有它们的账，如实说没算（正文核账员照读，不说那几章的账核过）。
-  const ledgerPending = (timeline?.unknownDays ?? []).filter((item) => item.pending && item.chapter < chapter).map((item) => item.chapter);
-  const pendingNote = ledgerPending.length > 0 ? `${ledgerPending.map((item) => `第 ${item} 章`).join("、")}的账还没记上，对账本的那一遍没算${ledgerPending.length > 1 ? "它们" : "它"}。` : "";
+  // 前面账没记全的章：对账本那一遍缺它们的账，如实说（正文核账员照读，不说那几章的账核过）。
+  const pendingNote = ledgerShort.length > 0 ? `${shortChaptersText(ledgerShort)}，对账本的那一遍缺${itOrThem(ledgerShort)}的账。` : "";
   const headline = !ok
     ? `${waitedNote}第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`
     : sure.length + maybe.length === 0
@@ -400,7 +404,7 @@ export async function checkChapterBody(
     failures: [...result.failures],
     ...(result.coverage ? { coverage: { mode: "cold" as const, ...result.coverage } } : {}),
     ...(!reused && result.waited ? { waited: result.waited } : {}),
-    ...(ledgerPending.length > 0 ? { ledgerPending } : {}),
+    ...(ledgerShort.length > 0 ? { ledgerShort } : {}),
     dismissed,
     reused,
     ...(changes ? { rechecked: { changed: changes.length } } : {}),

@@ -10,7 +10,7 @@
  * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
 import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, threadOf, timeDeclarationOf, type BibleView, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
-import type { StoryTimeline, TimelineEntry, TimelineSource } from "./story-timeline.js";
+import type { StoryTimeline, TimelineEntry, TimelineSource, UnknownDay } from "./story-timeline.js";
 import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
 export interface LedgerViews {
@@ -59,6 +59,8 @@ const TIME_SOURCE: Record<Exclude<BookProjection["chapters"][number]["dayBasis"]
 
 /** 账待记的章在「各章事件」里的梗概：如实说给不出（写手、章纲、概况照读这一句，不当成「这章什么都没发生」）。 */
 export const PENDING_CHAPTER_SUMMARY = "这章的账还没记上，梗概给不出";
+/** 账没记全、梗概那条没记上。 */
+export const PARTIAL_CHAPTER_SUMMARY = "这章的账没记全，梗概给不出";
 
 /**
  * 读者说的 stale 是「不再追踪」（清理掉的、合并掉的、过期的打算），一律不当开着的读。
@@ -81,7 +83,11 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
     return time ? [[ledger.chapter, time] as const] : [];
   }));
 
-  const unknownDays = projection.chapters.flatMap((chapter) => (chapter.day === undefined ? [{ chapter: chapter.chapter, pending: chapter.ledgerStatus === "pending" }] : []));
+  const unknownDays = projection.chapters.flatMap((chapter): UnknownDay[] => {
+    if (chapter.day !== undefined) return [];
+    const own = chapter.ledgerStatus !== "ready" && chapter.missingKinds?.includes("time") ? chapter.ledgerStatus : undefined;
+    return [{ chapter: chapter.chapter, ...(own ? { own } : {}) }];
+  });
   const timeline: StoryTimeline = {
     schemaVersion: 1,
     entries: projection.chapters.flatMap((chapter): TimelineEntry[] => {
@@ -159,8 +165,8 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
   const threadTypes = new Map(projection.threads.flatMap((thread) => [thread.id, ...thread.mergedFrom].map((id) => [id, thread.type] as const)));
   const events = projection.chapters.map((chapter): TimelineEvent => {
     const ledger = ledgers.find((item) => item.chapter === chapter.chapter);
-    const pending = chapter.ledgerStatus === "pending";
-    const summary = chapter.summary ?? (pending ? PENDING_CHAPTER_SUMMARY : "");
+    const short = chapter.ledgerStatus !== "ready" ? chapter.ledgerStatus : undefined;
+    const summary = chapter.summary ?? (short === "pending" ? PENDING_CHAPTER_SUMMARY : short === "partial" && chapter.missingKinds?.includes("summary") ? PARTIAL_CHAPTER_SUMMARY : "");
     const participants = [...chapter.present];
     const aliases = aliasesOf(ledger, projection);
     const { decision, discovery } = turnsOf(ledger, threadTypes);
@@ -170,7 +176,7 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
     return {
       id: `ch${String(chapter.chapter).padStart(4, "0")}-001`,
       chapter: chapter.chapter,
-      ...(pending ? { ledgerPending: true as const } : {}),
+      ...(short ? { ledgerShort: short } : {}),
       summary,
       participants,
       effects: {

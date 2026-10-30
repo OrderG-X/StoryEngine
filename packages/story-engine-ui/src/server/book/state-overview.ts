@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
-import { bigramSimilarity, DEFAULT_STALE_AFTER, LedgerNeedsUpgradeError, listChapterTexts, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
+import { bigramSimilarity, DEFAULT_STALE_AFTER, idleChaptersBetween, LedgerNeedsUpgradeError, threadUnknownChapters, listChapterTexts, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
 import { readStoryViews } from "./story-views.js";
 import type {
@@ -185,8 +185,9 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   const currentChapter = input.chapter ?? latestChapter;
   // 可清理的线索只按章数和作者标的轻重算，不按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
   // 从最新定稿章算、不随作者正翻着的章变（长篇实跑：翻到下一章，界面说 5 条、AI 说 6 条）。
+  const threadUnknown = threadUnknownChapters(views?.projection.chapters ?? []);
   const cleanupCandidates = threadPool.threads
-    .filter((thread) => isCleanupCandidate(thread, latestChapter))
+    .filter((thread) => isCleanupCandidate(thread, latestChapter, threadUnknown))
     .sort((a, b) => (a.lastTouchedChapter ?? 0) - (b.lastTouchedChapter ?? 0));
   const cleanupCandidateIds = new Set(cleanupCandidates.map((thread) => thread.id));
   const cleanupVisibleCount = cleanupCandidateIds.size;
@@ -338,14 +339,14 @@ export function clusterNearDuplicates<T extends { readonly id: string; readonly 
   return clusters;
 }
 
-/** 跟伏笔看板「停太久」同一把尺子（核心投影的 staleAfter），只是大伏笔不劝清理。 */
-function isCleanupCandidate(thread: NarrativeThread, latestChapter: number | null): boolean {
+/** 跟伏笔看板「停太久」同一把尺子（核心投影的 staleAfter、不数线索账没记全的章），只是大伏笔不劝清理。 */
+function isCleanupCandidate(thread: NarrativeThread, latestChapter: number | null, threadUnknown: readonly number[]): boolean {
   if (thread.status !== "open" && thread.status !== "touched") return false;
   // 大伏笔本来就要埋很久（长篇实跑：第 1 章的「铁箱里是什么」标了大伏笔，第 6 章起天天被劝清理）；
   // 小线索是作者说过「停多久都不提醒」的。
   if (thread.weight === "major" || thread.weight === "minor") return false;
   if (latestChapter === null || typeof thread.lastTouchedChapter !== "number") return false;
-  return latestChapter - thread.lastTouchedChapter >= DEFAULT_STALE_AFTER;
+  return idleChaptersBetween(thread.lastTouchedChapter, latestChapter, threadUnknown) >= DEFAULT_STALE_AFTER;
 }
 
 function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: string, relatedCount?: number): StateOverviewThreadItem {

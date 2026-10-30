@@ -12,6 +12,21 @@ import { buildStateOverview } from "./state-overview.js";
 
 describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
 
+  it("账待记的章不数进「多少章没动」：线索开了之后五章都待记，不劝清理（P2b 出口复核第 3 条）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-pending-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口", protagonistName: "林远" });
+    const author = (key: string) => ({ caller: "author" as const, idempotencyKey: key });
+    const open: EntryInput = { kind: "thread", review: "auto", op: "open", type: "question", title: "信是谁写的", note: "捡到一封信", quote: "林远在渡口捡到一封信" };
+    expect((await runCommand(projectDir, chapterCommit, { chapter: 1, text: "# 第1章\n\n林远在渡口捡到一封信。", entries: [open] }, author("o1"))).ok).toBe(true);
+    for (const chapter of [2, 3, 4, 5, 6]) {
+      const outcome = await runCommand(projectDir, chapterCommit, { chapter, text: `# 第${chapter}章\n\n又等了一天。`, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, author(`o${chapter}`));
+      expect(outcome.ok).toBe(true);
+    }
+    const overview = await buildStateOverview({ projectDir });
+    expect(overview.threads.cleanupVisibleCount).toBe(0);
+    await rm(rootDir, { recursive: true, force: true });
+  });
+
   it("从测试书拼出只读概况：账照旧、设定只带计数和主角，读完盘上一个字节不变", async () => {
     const projectDir = await createOverviewFixture();
     const before = await snapshotBookFiles(projectDir);

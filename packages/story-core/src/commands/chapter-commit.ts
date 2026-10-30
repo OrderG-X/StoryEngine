@@ -10,7 +10,7 @@
  * 后文对它们的推进、推翻才接得上；上次开的线索这次没了、后文又引用过它的，结果里如实列出。
  */
 import { z } from "zod";
-import { EntryInput, threadOf, type ChapterLedger, type LedgerStatus } from "../schema/ledger.js";
+import { EntryInput, EntryKind, threadOf, type ChapterLedger, type LedgerStatus } from "../schema/ledger.js";
 import { chapterSource, newLedger, storeEntry } from "../ledger/entries.js";
 import { assignIds, previousOf } from "../ledger/identity.js";
 import { readAllLedgers, readChapterLedgerFile, readDecisions, sha256 } from "../store/book.js";
@@ -22,10 +22,14 @@ import type { CommandFailure, WriteCommandSpec } from "./types.js";
 
 const reasonCode = z.string().regex(/^[a-z][a-z0-9_]*$/u);
 
-/** 账没记全时交的：pending = 账待记（条目必须空）；partial = 记账员有一步没成、记了一部分。原因用代码。 */
+/**
+ * 账没记全时交的：pending = 账待记（条目必须空）；partial = 记账员有一步没成、记了一部分。原因用代码。
+ * missingKinds（partial）：哪几类因此没记全；不给 = 不知道缺哪类，读的时候当全部没记全（missingKindsOf）。
+ */
 export const LedgerShortfall = z.object({
   status: z.enum(["pending", "partial"]),
   reasonCodes: z.array(reasonCode).min(1),
+  missingKinds: z.array(EntryKind).min(1).optional(),
 });
 export type LedgerShortfall = z.infer<typeof LedgerShortfall>;
 
@@ -93,8 +97,8 @@ export async function buildChapterLedger(
   const before = project({ ledgers: ledgers.filter((ledger) => ledger.chapter < input.chapter), decisions });
   const checked = pending ? { accepted: [], rejected: [] } : checkEntries(input.entries, input.text, before);
   const accepted = checked.accepted.map((item) => item.entry);
-  const assigned = assignIds(input.chapter, previous, accepted);
   const source = chapterSource(input.chapter, input.text);
+  const assigned = assignIds(input.chapter, previous, accepted, source);
   const entries = accepted.flatMap((entry, index) => storeEntry(entry, assigned.ids[index]!, source));
   const carried = previousOf(previous, file?.sha256);
 
@@ -105,7 +109,11 @@ export async function buildChapterLedger(
     origin: input.origin,
     entries,
     status: input.shortfall?.status ?? "ready",
-    coverage: { rejectedCount: checked.rejected.length, reasonCodes: [...(input.shortfall?.reasonCodes ?? [])] },
+    coverage: {
+      rejectedCount: checked.rejected.length,
+      reasonCodes: [...(input.shortfall?.reasonCodes ?? [])],
+      ...(input.shortfall?.status === "partial" && input.shortfall.missingKinds ? { missingKinds: [...new Set(input.shortfall.missingKinds)] } : {}),
+    },
     ...(input.acceptedBasis ? { acceptedBasis: input.acceptedBasis } : {}),
     ...(carried ? { previous: carried } : {}),
   });

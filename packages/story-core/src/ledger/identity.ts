@@ -3,16 +3,24 @@
  *
  * - 认得的旧条目 = 上一份账单的条目 + 它带着的 carry（同一编号留上一份账单那版）。
  * - 同一条只认声明写法完全一样（entryKey，只比字面，不猜意思）→ 沿用旧编号；
- *   新开线索：记账员写了认得的旧线索号、或标题一字不差 → 沿用旧线索号。
+ *   新开线索：记账员写了认得的旧线索号、或标题一字不差且原句落在这版正文的同一句 → 沿用旧线索号。只同标题不算：
+ *   改过的章同名不同事，套上旧号会被后文收口错接（P2b 出口复核第 1 条）。
  * - 其余发新号，从认得的旧号里最大的序号往后排：被裁定作废的、被后文 replaces 引着的旧号空着，不落到别的条目头上。
  * - 新账的 carry = 上一份账单的条目 ∪ 它的 carry：连着几次重记（中间账待记也一样）旧号都还占着。
  */
 import { threadOf, type ChapterLedger, type EntryInput, type LedgerEntry, type LedgerPrevious, type ThreadEntry } from "../schema/ledger.js";
-import { nameKey } from "../text/quote.js";
-import { declarationOf, type EntryIds } from "./entries.js";
+import { nameKey, normalizeForQuote } from "../text/quote.js";
+import { declarationOf, locateQuote, type ChapterSource, type EntryIds } from "./entries.js";
 
-/** 判断「同一条」的键：只认写法完全一样，不猜意思。 */
-export function entryKey(entry: EntryInput): string {
+/** 原句落在哪：给了这版正文且找得到唯一一处 → 第几句到第几句（同一句不管原句抄全没抄全、标点带没带）；否则按原句字面。 */
+function quoteSpot(quote: string | undefined, source: ChapterSource | undefined): string {
+  if (quote === undefined) return "";
+  const units = source ? locateQuote(quote, source)?.units : undefined;
+  return units ? `#${units.from}-${units.to}` : normalizeForQuote(quote);
+}
+
+/** 判断「同一条」的键：只认写法完全一样，不猜意思（新开线索连原句落在这版正文哪一句一起比）。 */
+export function entryKey(entry: EntryInput, source?: ChapterSource): string {
   switch (entry.kind) {
     case "summary":
       return "summary";
@@ -30,7 +38,9 @@ export function entryKey(entry: EntryInput): string {
         entry.nature === "event" ? nameKey(entry.text) : "",
       ].join("|");
     case "thread":
-      return entry.op === "open" ? `thread|open|${nameKey(entry.title ?? "")}` : `thread|${entry.op}|${entry.thread ?? ""}|${nameKey(entry.note)}`;
+      return entry.op === "open"
+        ? `thread|open|${nameKey(entry.title ?? "")}|${quoteSpot(entry.quote, source)}`
+        : `thread|${entry.op}|${entry.thread ?? ""}|${nameKey(entry.note)}`;
   }
 }
 
@@ -82,19 +92,19 @@ export interface AssignedIds {
   readonly droppedOpens: readonly ThreadEntry[];
 }
 
-/** 给一章这次要记的条目分配编号（重记时照认得的旧条目沿用）。 */
-export function assignIds(chapter: number, previous: ChapterLedger | undefined, entries: readonly EntryInput[]): AssignedIds {
+/** 给一章这次要记的条目分配编号（重记时照认得的旧条目沿用）。source = 这次记的那版正文。 */
+export function assignIds(chapter: number, previous: ChapterLedger | undefined, entries: readonly EntryInput[], source: ChapterSource): AssignedIds {
   const known = knownEntries(previous);
   const idByKey = new Map<string, string>();
   for (const entry of known) {
     const declared = declarationOf(entry, known);
-    if (declared && !idByKey.has(entryKey(declared))) idByKey.set(entryKey(declared), entry.id);
+    if (declared && !idByKey.has(entryKey(declared, source))) idByKey.set(entryKey(declared, source), entry.id);
   }
   const opens = knownOpens(previous);
-  const openThreadByTitle = new Map<string, string>();
+  const openThreadByKey = new Map<string, string>();
   for (const entry of opens) {
-    const key = `thread|open|${nameKey(entry.title ?? "")}`;
-    if (!openThreadByTitle.has(key)) openThreadByTitle.set(key, threadOf(entry));
+    const declared = declarationOf(entry, known);
+    if (declared && !openThreadByKey.has(entryKey(declared, source))) openThreadByKey.set(entryKey(declared, source), threadOf(entry));
   }
   const openThreadIds = new Set(opens.map(threadOf));
 
@@ -105,12 +115,12 @@ export function assignIds(chapter: number, previous: ChapterLedger | undefined, 
   const usedIds = new Set<string>();
   const usedThreads = new Set<string>();
   const ids = entries.map((entry): EntryIds => {
-    const key = entryKey(entry);
+    const key = entryKey(entry, source);
     const reuse = idByKey.get(key);
     const id = reuse && !usedIds.has(reuse) ? reuse : `${entryPrefix}${(nextEntry += 1)}`;
     usedIds.add(id);
     if (entry.kind !== "thread" || entry.op !== "open") return { id };
-    const keep = entry.thread && openThreadIds.has(entry.thread) && !usedThreads.has(entry.thread) ? entry.thread : openThreadByTitle.get(key);
+    const keep = entry.thread && openThreadIds.has(entry.thread) && !usedThreads.has(entry.thread) ? entry.thread : openThreadByKey.get(key);
     const thread = keep && !usedThreads.has(keep) ? keep : `${threadPrefix}${(nextThread += 1)}`;
     usedThreads.add(thread);
     return { id, thread };
