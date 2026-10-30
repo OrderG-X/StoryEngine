@@ -68,7 +68,7 @@ export interface BuiltChapterLedger {
   readonly rejected: ChapterCommitResult["rejected"];
   readonly previous: ChapterLedger | undefined;
   readonly orphanedThreads: readonly string[];
-  /** 记上的条数（一条声明算一条：时间存成两条也算一条）。 */
+  /** 记上的条数（一条声明算一条：时间存成几条也算一条）。 */
   readonly recorded: number;
 }
 
@@ -99,7 +99,9 @@ export async function buildChapterLedger(
   const accepted = checked.accepted.map((item) => item.entry);
   const source = chapterSource(input.chapter, input.text);
   const assigned = assignIds(input.chapter, previous, accepted);
-  const entries = accepted.flatMap((entry, index) => storeEntry(entry, assigned.ids[index]!, source));
+  const stored = accepted.map((entry, index) => storeEntry(entry, assigned.ids[index]!, source));
+  const entries = stored.flatMap((item) => item.entries);
+  const scenes = stored.flatMap((item) => item.scenes);
   const carried = previousOf(previous, file?.sha256);
 
   const ledger = newLedger({
@@ -108,6 +110,7 @@ export async function buildChapterLedger(
     committedAt: input.committedAt ?? input.now.toISOString(),
     origin: input.origin,
     entries,
+    scenes,
     status: input.shortfall?.status ?? "ready",
     coverage: {
       rejectedCount: checked.rejected.length,

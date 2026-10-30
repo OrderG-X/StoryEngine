@@ -208,59 +208,6 @@ describe("投影", () => {
     ]);
   });
 
-  it("时间：隔几天、章内过天、作者定的；没写的按 +1 估并标出来；星期从最近的明写推", () => {
-    const result = project({
-      ledgers: [
-        ledger(1, [{ kind: "time", basis: "text", quote: "周二傍晚", weekday: 1 }]),
-        ledger(2, [{ kind: "time", basis: "judged", quote: "当晚", daysSincePrevious: 0, daysInChapter: 1 }]),
-        ledger(3, []),
-        ledger(4, [{ kind: "time", basis: "author", day: 10 }]),
-      ],
-      decisions: [],
-    });
-    expect(result.chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis, chapter.weekday])).toEqual([
-      [1, 1, "text", 1],
-      [1, 2, "judged", 1],
-      [3, 3, "missing", 3],
-      [10, 10, "author", 3],
-    ]);
-    expect(result.chapters[2]?.weekdayDerived).toBe(true);
-  });
-
-  it("时间记了、却没说离上一章隔几天：按第二天记，标成估的（第一章不算）", () => {
-    const result = project({
-      ledgers: [
-        ledger(1, [{ kind: "time", basis: "text", quote: "周二傍晚", weekday: 1 }]),
-        ledger(2, [{ kind: "time", basis: "text", quote: "进了暑假", daysInChapter: 2 }]),
-        ledger(3, [{ kind: "time", basis: "judged", quote: "次日", daysSincePrevious: 1 }]),
-      ],
-      decisions: [],
-    });
-    expect(result.chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([
-      [1, 1, "text"],
-      [2, 4, "estimated"],
-      [5, 5, "judged"],
-    ]);
-  });
-
-  // 长篇实跑：第 24 章定稿后才发现天数记错（该是第 21～22 天），定稿后没处改。
-  it("作者裁定改一章的天数：顶掉账单记的，后面的章接着它往后推", () => {
-    const ledgers = [
-      ledger(1, [{ kind: "time", basis: "text", quote: "周二傍晚", weekday: 1 }]),
-      ledger(2, [{ kind: "time", basis: "judged", quote: "当晚", daysSincePrevious: 0 }]),
-      ledger(3, [{ kind: "time", basis: "judged", quote: "次日", daysSincePrevious: 1 }]),
-    ];
-    const result = project({
-      ledgers,
-      decisions: [decision({ type: "chapter.day", chapter: 2, day: 4 }), decision({ type: "chapter.day", chapter: 2, day: 5, dayEnd: 6 }, 2)],
-    });
-    expect(result.chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([
-      [1, 1, "text"],
-      [5, 6, "author"],
-      [7, 7, "judged"],
-    ]);
-  });
-
   // 长篇实跑：第 41 章梗概记成「离云州北上」（其实往南），定稿后没处改。
   it("作者裁定改一章的梗概：顶掉账单记的，改过几次按最后一次", () => {
     const ledgers = [
@@ -291,7 +238,7 @@ describe("投影", () => {
   it("量级：200 章、每章 60 条，全量重算够快", () => {
     const ledgers = Array.from({ length: 200 }, (_, index) => {
       const chapter = index + 1;
-      const drafts: Draft[] = [{ kind: "time", basis: "judged", quote: "原句原句", daysSincePrevious: 1 }];
+      const drafts: Draft[] = [{ kind: "time", start: { offset: { unit: "day", min: 1, max: 1 }, basis: "judged", quote: "原句原句" }, sameDay: true }];
       for (let n = 0; n < 20; n += 1) drafts.push(state(`物件${n}`, "在哪", `第${chapter}章的地方`));
       for (let n = 0; n < 20; n += 1) drafts.push(presence(`人物${n}`, n % 3 === 0 ? `阿${n}` : `人物${n}`));
       drafts.push(open(`t${chapter}-1`, `问题${chapter}`));

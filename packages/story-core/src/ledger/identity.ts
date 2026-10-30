@@ -10,7 +10,7 @@
  */
 import { threadOf, type ChapterLedger, type EntryInput, type LedgerEntry, type LedgerPrevious, type ThreadEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
-import { declarationOf, type EntryIds } from "./entries.js";
+import { dayDeclarationOf, declarationOf, timeDeclarationOf, type EntryIds } from "./entries.js";
 
 /** 判断「同一条」的键：只认写法完全一样，不猜意思（新开线索连写明的线索号一起比：没写旧号的不和任何旧条目同号）。 */
 export function entryKey(entry: EntryInput): string {
@@ -19,6 +19,8 @@ export function entryKey(entry: EntryInput): string {
       return "summary";
     case "time":
       return "time";
+    case "day":
+      return "day";
     case "presence":
       return `presence|${nameKey(entry.name)}|${nameKey(entry.nameUsed)}`;
     case "fact":
@@ -89,8 +91,13 @@ export interface AssignedIds {
 export function assignIds(chapter: number, previous: ChapterLedger | undefined, entries: readonly EntryInput[]): AssignedIds {
   const known = knownEntries(previous);
   const idByKey = new Map<string, string>();
+  // 时间、作者定的天数整章各一条：编号取上一份账单的（carry 里旧版的没有段，读不全也不要紧，只取编号）。
+  const time = timeDeclarationOf({ entries: known, ...(previous ? { scenes: previous.scenes } : {}) });
+  const day = dayDeclarationOf({ entries: known, ...(previous?.timeModel ? { timeModel: previous.timeModel } : {}) });
+  if (time) idByKey.set("time", time.id);
+  if (day) idByKey.set("day", day.id);
   for (const entry of known) {
-    const declared = declarationOf(entry, known);
+    const declared = declarationOf(entry);
     if (declared && !idByKey.has(entryKey(declared))) idByKey.set(entryKey(declared), entry.id);
   }
   const opens = knownOpens(previous);

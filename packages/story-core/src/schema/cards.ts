@@ -108,6 +108,11 @@ export const SettingCardsFile = z.object({
   canon: z.array(CanonItem).max(CANON_MAX).default([]),
   /** 作者说「不用建卡」的名字（账里记着的泛称、群体、物件……）：不再列进「还没建卡」、不再提醒；老文件没有这一栏。 */
   skipped: z.array(text.max(CARD_NAME_MAX)).max(SKIPPED_MAX).default([]),
+  /**
+   * 历法（P3a）：换天规矩——过了半夜就算第二天（midnight）/ 天亮才算第二天（dawn）；缺 = 没定，时间两种都推（设计 2.4）。
+   * 只有作者写（card.write），AI 补不了。
+   */
+  calendar: z.object({ dayBoundary: z.enum(["midnight", "dawn"]).optional(), at: text.optional() }).optional(),
 });
 export type SettingCardsFile = z.infer<typeof SettingCardsFile>;
 

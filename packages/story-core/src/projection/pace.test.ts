@@ -13,11 +13,18 @@ function ledger(chapter: number, drafts: Draft[]): ChapterLedger {
 const q = "原句原句";
 const open = (thread: string): Draft => ({ kind: "thread", op: "open", thread, type: "question", title: `线索${thread}`, note: "开", quote: q });
 const touch = (thread: string, op: "advance" | "close"): Draft => ({ kind: "thread", op, thread, note: op, quote: q });
-const days = (daysSincePrevious: number, daysInChapter = 0, basis: "text" | "estimated" = "text"): Draft =>
-  ({ kind: "time", basis, quote: q, daysSincePrevious, ...(daysInChapter ? { daysInChapter } : {}) });
+const exactly = (value: number) => ({ unit: "day" as const, min: value, max: value });
+/** 离上一章几天；章内过了几天（0 = 同一天；atLeast = 章内过了至少一天、说不准几天）。 */
+const days = (sincePrevious: number, inChapter: number | "atLeast" = 0): Draft => ({
+  kind: "time",
+  start: { offset: exactly(sincePrevious), basis: "text", quote: q },
+  ...(inChapter === 0
+    ? { sameDay: true }
+    : { dayChanges: [{ offset: inChapter === "atLeast" ? { unit: "day" as const, min: 1 } : exactly(inChapter) }] }),
+});
 
 /** 十章：平常每两千字推进两条；5～6 章不动、7 章一千字推五条（收一条算两条）、8 章一千字跨六天、9 章不动但过了十天、10 章两百字。 */
-function book(overrides: { readonly ch8Basis?: "text" | "estimated" } = {}) {
+function book(overrides: { readonly ch8Span?: "atLeast" } = {}) {
   const view = project({
     ledgers: [
       ledger(1, [open("a"), open("b"), open("c")]),
@@ -27,7 +34,7 @@ function book(overrides: { readonly ch8Basis?: "text" | "estimated" } = {}) {
       ledger(5, [days(1)]),
       ledger(6, [days(0)]),
       ledger(7, [days(1), touch("a", "advance"), touch("b", "advance"), touch("c", "advance"), touch("d", "close")]),
-      ledger(8, [days(1, 6, overrides.ch8Basis), touch("a", "advance"), touch("b", "advance")]),
+      ledger(8, [days(1, overrides.ch8Span ?? 6), touch("a", "advance"), touch("b", "advance")]),
       ledger(9, [days(10)]),
       ledger(10, [days(1), touch("a", "advance")]),
     ],
@@ -58,8 +65,8 @@ describe("节奏诊断", () => {
     expect(byChapter.get(9)?.pace).toBeUndefined();
   });
 
-  it("天数是估的：不拿它说「一章跨好多天」", () => {
-    const report = book({ ch8Basis: "estimated" });
+  it("章内过了几天说不准：不拿它说「一章跨好多天」", () => {
+    const report = book({ ch8Span: "atLeast" });
     expect(report.flags.map((flag) => flag.reason)).toEqual(["slow", "dense"]);
     expect(report.chapters.find((item) => item.chapter === 8)?.pace).toBeUndefined();
   });

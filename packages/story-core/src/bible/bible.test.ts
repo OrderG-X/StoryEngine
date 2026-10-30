@@ -40,6 +40,19 @@ describe("改设定卡（ops）", () => {
     expect(outcome.lines.join("")).not.toContain("k-");
   });
 
+  it("换天规矩只有作者能定：定了记上，再定一样的不算改动，改回没定就去掉；AI 补不了", () => {
+    const set = applyCardOps(emptySettingCards(), [{ op: "calendar.dayBoundary", value: "midnight" }], { by: "author", at: AT });
+    if (!set.ok) throw new Error(set.message);
+    expect(set.file.calendar).toEqual({ dayBoundary: "midnight", at: AT });
+    expect(set.lines).toEqual(["换天规矩改成了：过了半夜就算第二天"]);
+    expect(applyCardOps(set.file, [{ op: "calendar.dayBoundary", value: "midnight" }], { by: "author", at: AT })).toMatchObject({ ok: true, lines: [] });
+    const cleared = applyCardOps(set.file, [{ op: "calendar.dayBoundary", value: null }], { by: "author", at: AT });
+    expect(cleared).toMatchObject({ ok: true, lines: ["换天规矩改成了：没定"] });
+    expect(cleared.ok && cleared.file.calendar).toBeUndefined();
+    expect(applyCardOps(emptySettingCards(), [{ op: "calendar.dayBoundary", value: "dawn" }], { by: "ai", at: AT })).toMatchObject({ ok: false, code: "needs_author" });
+    expect(splitForAi(emptySettingCards(), [{ op: "calendar.dayBoundary", value: "dawn" }], AT).needsAuthor).toHaveLength(1);
+  });
+
   it("卡名和别名全书不重复", () => {
     const file = apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "孟叔", aliases: ["孟庆山"] }]);
     const outcome = applyCardOps(file, [{ op: "card.create", kind: "place", name: "孟庆山" }], { by: "author", at: AT });

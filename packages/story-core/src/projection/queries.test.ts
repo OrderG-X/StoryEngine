@@ -19,7 +19,21 @@ const fact = (nature: "hard" | "state", subject: string, attribute: string, valu
 const event = (subject: string, text: string): Draft => ({ kind: "fact", nature: "event", subject, text, quote: q });
 const open = (thread: string, title: string): Draft => ({ kind: "thread", op: "open", thread, type: "question", title, note: `开：${title}`, quote: q });
 const touch = (thread: string, op: "advance" | "close", note: string = op): Draft => ({ kind: "thread", op, thread, note, quote: q });
-const time = (extra: Partial<Extract<Draft, { kind: "time" }>>): Draft => ({ kind: "time", basis: "text", quote: q, ...extra });
+const exactly = (value: number) => ({ unit: "day" as const, min: value, max: value });
+/** 离上一章几天、章内过了几天（0 = 同一天）。 */
+const time = (
+  since: number,
+  inChapter = 0,
+  extra: Partial<Extract<Draft, { kind: "time" }>> & { readonly basis?: "text" | "judged" } = {},
+): Draft => {
+  const { basis = "text", ...rest } = extra;
+  return {
+    kind: "time",
+    start: { offset: exactly(since), basis, quote: q },
+    ...(inChapter === 0 ? { sameDay: true } : { dayChanges: [{ offset: exactly(inChapter) }] }),
+    ...rest,
+  };
+};
 const decision = (input: Record<string, unknown>, index = 1): AuthorDecision => ({ id: `d-${index}`, at: "2026-10-17T00:00:00.000Z", ...input }) as AuthorDecision;
 
 describe("投影查询", () => {
@@ -62,32 +76,36 @@ describe("投影查询", () => {
     }
   });
 
-  it("时间表：每章第几天、星期（明写 / 推算）、依据；文字版给提示词用", () => {
+  it("时间表：每章开头结尾第几天、离上一个当下章、星期（明写 / 推算）、依据；文字版给提示词用", () => {
     const view = project({
       ledgers: [
-        ledger(1, [time({ weekday: 1, timeOfDay: "傍晚" })]),
-        ledger(2, [time({ basis: "judged", daysSincePrevious: 2, daysInChapter: 1 })]),
+        ledger(1, [time(0, 0, { weekday: 1, timeOfDay: "傍晚" })]),
+        ledger(2, [time(2, 1, { basis: "judged" })]),
         ledger(3, []),
+        ledger(4, [time(1)]),
       ],
       decisions: [],
     });
     const rows = timelineTable(view);
-    expect(rows.map((row) => [row.chapter, row.day, row.dayEnd, row.weekday, row.weekdayDerived, row.basis])).toEqual([
-      [1, 1, 1, 1, false, "text"],
-      [2, 3, 4, 3, true, "judged"],
-      [3, 5, 5, 5, true, "missing"],
+    expect(rows.map((row) => [row.chapter, row.presentLine, row.start, row.end, row.weekday, row.weekdayDerived, row.basis])).toEqual([
+      [1, true, { lo: 1, hi: 1 }, { lo: 1, hi: 1 }, 1, false, "ledger"],
+      [2, true, { lo: 3, hi: 3 }, { lo: 4, hi: 4 }, 3, true, "ledger"],
+      [3, "unknown", undefined, undefined, undefined, false, "unknown"],
+      // 第 3 章没认出在不在当下线上：第 4 章找不到前一个当下章，天数不知道，也不推星期。
+      [4, true, undefined, undefined, undefined, false, "unknown"],
     ]);
     expect(timelineTable(view, 2)).toHaveLength(2);
     const text = timelineText(rows);
-    expect(text).toContain("| 第 1 章 | 1 | 周二 | 傍晚 | 正文明写 |");
-    expect(text).toContain("| 第 2 章 | 3～4 | 周四（推算） | — | 按正文推断 |");
-    expect(text).toContain("没记，按上一章 +1");
+    expect(text).toContain("| 第 1 章 | 第 1 天 | 第 1 天 | 不知道 | 周二 | 傍晚 | 按账推的 | — |");
+    expect(text).toContain("| 第 2 章 | 第 3 天 | 第 4 天 | 过了 2 天 | 周四（推算） | — | 按账推的 | — |");
+    expect(text).toContain("| 第 3 章 | — | — | — | — | — | 没认出在不在当下线上 | — |");
+    expect(text).toContain("| 第 4 章 | 不知道 | 不知道 | 不知道 | — | — | 不知道 | — |");
   });
 
   it("一章的简介：梗概、出场、视角、时间、动过的线索；没定稿的章 undefined", () => {
     const view = project({
       ledgers: [
-        ledger(1, [{ kind: "summary", text: "青禾到了雾港", quote: q }, presence("沈青禾", "沈青禾", true), presence("老周"), open("t-a", "钥匙开什么"), time({ timeOfDay: "清晨" })]),
+        ledger(1, [{ kind: "summary", text: "青禾到了雾港", quote: q }, presence("沈青禾", "沈青禾", true), presence("老周"), open("t-a", "钥匙开什么"), time(0, 0, { timeOfDay: "清晨" })]),
         ledger(2, [touch("t-a", "advance")]),
       ],
       decisions: [],
@@ -97,7 +115,7 @@ describe("投影查询", () => {
       summary: "青禾到了雾港",
       present: ["沈青禾", "老周"],
       viewpoint: "沈青禾",
-      time: { day: 1, timeOfDay: "清晨", basis: "text" },
+      time: { start: { lo: 1, hi: 1 }, timeOfDay: "清晨", basis: "ledger" },
       threads: [{ title: "钥匙开什么", op: "open" }],
     });
     expect(chapterBrief(view, 2)?.threads).toEqual([{ id: "t-a", title: "钥匙开什么", op: "advance" }]);
@@ -116,8 +134,8 @@ describe("写前备忘", () => {
   it("上一章停在哪：第几天、时段、梗概、在场、视角；跳过没定稿的章，接最近定稿的那章", () => {
     const view = project({
       ledgers: [
-        ledger(1, [time({ daysSincePrevious: 0 }), presence("许微", "许微", true)]),
-        ledger(3, [time({ daysSincePrevious: 1, daysInChapter: 2, timeOfDay: "傍晚" }), summary("许微去码头"), presence("许微", "许微", true), presence("孟叔")]),
+        ledger(1, [time(0), presence("许微", "许微", true)]),
+        ledger(3, [time(1, 2, { timeOfDay: "傍晚" }), summary("许微去码头"), presence("许微", "许微", true), presence("孟叔")]),
       ],
       decisions: [],
     });
@@ -127,7 +145,7 @@ describe("写前备忘", () => {
       summary: "许微去码头",
       present: ["许微", "孟叔"],
       viewpoint: "许微",
-      time: { chapter: 3, day: 2, dayEnd: 4, timeOfDay: "傍晚", basis: "text" },
+      time: { chapter: 3, start: { lo: 2, hi: 2 }, end: { lo: 4, hi: 4 }, sincePrevious: { lo: 1, hi: 1 }, timeOfDay: "傍晚", basis: "ledger" },
     });
   });
 

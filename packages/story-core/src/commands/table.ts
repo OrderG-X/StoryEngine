@@ -1,7 +1,7 @@
 /**
  * 命令表：核心认的全部写命令。按钮按名字调；对话 AI 的工具 = 这张表里它有权调的（ai-direct）+ 只读查询。
  *
- * 现在有十七条（定稿、改已定稿的章名、记裁定、导入老书、导入已写的书、通读记账、补账、账本升级、作者存稿、AI 换上写好的稿、作者换上候选、改设定卡、AI 补设定、搬老设定、定论并改齐、写章纲、撤销 / 整本恢复），
+ * 现在有十八条（定稿、改已定稿的章名、记裁定、导入老书、导入已写的书、通读记账、补账、账本升级、天数盘点、作者存稿、AI 换上写好的稿、作者换上候选、改设定卡、AI 补设定、搬老设定、定论并改齐、写章纲、撤销 / 整本恢复），
  * 其余按 docs/rebuild/P2-core-design.md 第四节逐条加：改账（author）、裁剪历史（author）。
  */
 import { chapterCommit } from "./chapter-commit.js";
@@ -12,6 +12,7 @@ import { bookImportText } from "../import/text-import.js";
 import { ledgerReread } from "./ledger-reread.js";
 import { ledgerComplete } from "./ledger-complete.js";
 import { ledgerMigrate } from "./ledger-migrate.js";
+import { timeAudit } from "./time-audit.js";
 import { draftAdoptCandidate, draftApplyGenerated, draftSave } from "../draft/commands.js";
 import { cardFill, cardsImport, cardWrite } from "../bible/commands.js";
 import { settleApply } from "./settle-apply.js";
@@ -28,6 +29,7 @@ export const WRITE_COMMANDS: Readonly<Record<string, AnyWriteCommandSpec>> = {
   [ledgerReread.name]: ledgerReread,
   [ledgerComplete.name]: ledgerComplete,
   [ledgerMigrate.name]: ledgerMigrate,
+  [timeAudit.name]: timeAudit,
   [draftSave.name]: draftSave,
   [draftApplyGenerated.name]: draftApplyGenerated,
   [draftAdoptCandidate.name]: draftAdoptCandidate,

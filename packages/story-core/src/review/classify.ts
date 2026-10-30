@@ -6,14 +6,18 @@
  *  - 明写推翻前文某条事实（replaces-fact）
  *  - 收掉一条线索（closes-thread）——收错了线索就丢了
  *  - 新面孔（new-character）——可能是已有人物的新称呼
- *  - 天数是估的（time-estimated / time-missing）
+ *  - 本章没记时间（timeMissing）——认不出在不在当下线上，后面的天数跟着不知道
+ * 人物说的、梦里的、回忆里的不算「改旧账」（P3a 设计第 3 节：不更新现状、不推翻、不收线索），不因它出卡；
+ * 在哪段按本章时间声明里的段和原句定（给了正文才分，没给按当下算）。
  * 目标：一章要看的 ≤ 8 条（重构计划第一节）。
  */
 import { nameKey } from "../text/quote.js";
-import type { EntryInput } from "../schema/ledger.js";
+import type { EntryInput, LedgerScene } from "../schema/ledger.js";
 import type { BookProjection } from "../projection/types.js";
+import { chapterSource, locateQuote, locateSegment } from "../ledger/entries.js";
+import { frameOf, rightsOf, type EntryRights } from "../projection/scope.js";
 
-export type ReviewReason = "hard-conflict" | "replaces-fact" | "closes-thread" | "new-character" | "time-estimated";
+export type ReviewReason = "hard-conflict" | "replaces-fact" | "closes-thread" | "new-character";
 
 export interface ClassifiedEntry {
   readonly index: number;
@@ -26,7 +30,7 @@ export interface ReviewPlan {
   readonly review: readonly ClassifiedEntry[];
   /** 自动记下的。 */
   readonly auto: readonly ClassifiedEntry[];
-  /** 本章没有时间条目（第 1 章除外）：投影会按上一章 +1 估，清单上要请作者确认天数。 */
+  /** 本章没有时间（记账员没记、作者也没定）：认不出在不在当下线上，清单上要请作者定天数。 */
   readonly timeMissing: boolean;
 }
 
@@ -34,6 +38,8 @@ export interface ClassifyOptions {
   readonly chapter: number;
   /** 设定卡上已有的人名（还没在账单里出场过的也算认识）。 */
   readonly knownNames?: readonly string[];
+  /** 本章正文：给了就按时间声明里的段分出梦里的、回忆里的。 */
+  readonly text?: string;
 }
 
 export function classifyForReview(
@@ -57,26 +63,46 @@ export function classifyForReview(
     hardValues.set(key, values);
   }
 
+  const rightsOfEntry = entryRights(entries.map((item) => item.entry), options);
   const review: ClassifiedEntry[] = [];
   const auto: ClassifiedEntry[] = [];
   let hasTime = false;
   for (const { index, entry } of entries) {
     const reasons: ReviewReason[] = [];
-    if (entry.kind === "fact") {
-      if (entry.replaces) reasons.push("replaces-fact");
+    const rights = rightsOfEntry(entry);
+    if (entry.kind === "fact" && rights.state) {
+      if (entry.replaces && rights.replaces) reasons.push("replaces-fact");
       if (entry.nature === "hard" && entry.subject && entry.attribute && entry.value) {
         const values = hardValues.get(`${resolve(entry.subject)}|${nameKey(entry.attribute)}`);
         if (values && !values.has(nameKey(entry.value)) && !entry.replaces) reasons.push("hard-conflict");
       }
-    } else if (entry.kind === "thread" && entry.op === "close") {
+    } else if (entry.kind === "thread" && entry.op === "close" && rights.close) {
       reasons.push("closes-thread");
     } else if (entry.kind === "presence") {
       if (!known.has(nameKey(entry.name)) && (entry.generic || !known.has(nameKey(entry.nameUsed)))) reasons.push("new-character");
-    } else if (entry.kind === "time") {
+    } else if (entry.kind === "time" || entry.kind === "day") {
       hasTime = true;
-      if (entry.basis === "estimated") reasons.push("time-estimated");
     }
     (reasons.length > 0 ? review : auto).push({ index, entry, reasons });
   }
-  return { review, auto, timeMissing: !hasTime && options.chapter > 1 };
+  return { review, auto, timeMissing: !hasTime };
+}
+
+/** 这批声明里每条事实、线索的权限（来源 × 所在段，projection/scope.ts）。 */
+function entryRights(entries: readonly EntryInput[], options: ClassifyOptions): (entry: EntryInput) => EntryRights {
+  const source = options.text !== undefined ? chapterSource(options.chapter, options.text) : undefined;
+  const time = entries.find((entry) => entry.kind === "time");
+  const scenes: Pick<LedgerScene, "units" | "frame">[] = [];
+  if (source && time?.kind === "time") {
+    for (const segment of time.segments ?? []) {
+      const units = locateSegment(segment, source);
+      if (typeof units !== "string") scenes.push({ units, frame: segment.frame });
+    }
+  }
+  return (entry) => {
+    if (entry.kind !== "fact" && entry.kind !== "thread") return rightsOf("unknown", "present");
+    const located = source && scenes.length > 0 ? locateQuote(entry.quote, source) : undefined;
+    const frame = frameOf(located?.units ? [{ units: located.units }] : [], located?.units !== undefined, scenes);
+    return rightsOf(entry.source?.kind ?? "unknown", frame);
+  };
 }
