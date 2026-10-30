@@ -99,6 +99,8 @@ describe("定稿前核时间声明", () => {
 
   it("原句没附、找不到的不收；作者定的天数一章一条", () => {
     expect(reasons({ ...time, start: { ...(time.start as Exclude<TimeInput["start"], "unknown" | undefined>), quote: "这句正文里没有" } })).toEqual(["本章时间没记上：附的原句在正文里找不到"]);
+    expect(reasons({ ...time, start: { ...(time.start as Exclude<TimeInput["start"], "unknown" | undefined>), quote: "" } })).toEqual(["本章时间没记上：没附原句"]);
+    expect(reasons({ kind: "fact", review: "auto", nature: "event", text: "下雨", quote: "" })).toEqual(["「下雨」没记上：没附原句"]);
     const two = checkEntries([{ kind: "day", review: "auto", day: 3 }, { kind: "day", review: "auto", day: 4 }], TEXT, empty);
     expect(two.rejected.map((item) => item.message)).toEqual(["作者定的天数没记上：作者定的天数一章只有一条"]);
   });

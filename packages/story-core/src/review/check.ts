@@ -58,7 +58,7 @@ export function checkEntries(entries: readonly EntryInput[], text: string, befor
     const shape = entryShapeProblem(entry);
     if (shape) return reject("shape", shape);
     const quotes = declaredQuotes(entry);
-    if (quotes.some((quote) => quote === undefined)) return reject("quote_not_in_text", "没附原句");
+    if (quotes.some((quote) => !quote)) return reject("quote_not_in_text", "没附原句");
     if (quotes.some((quote) => !quoteInText(quote as string, text))) return reject("quote_not_in_text", "附的原句在正文里找不到");
     if (entry.kind === "time") {
       const problem = timeDeclarationProblem(entry, (source ??= chapterSource(0, text)));

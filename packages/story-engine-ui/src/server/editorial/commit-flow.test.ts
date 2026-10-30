@@ -37,7 +37,7 @@ function fakeModel(ledger: unknown): BrainCallModel {
 
 const LEDGER1 = {
   summary: { text: "沈青禾进钟楼拿走钥匙", quote: "她在钟箱里摸到一把铜钥匙" },
-  time: { basis: "text", weekday: "周二", timeOfDay: "傍晚", quote: "周二傍晚" },
+  time: { start: { offset: 0, basis: "text", quote: "周二傍晚" }, sameDay: true, weekday: "周二", timeOfDay: "傍晚" },
   presence: [
     { name: "沈青禾", nameUsed: "沈青禾", viewpoint: true, quote: "沈青禾推开钟楼的门" },
     { name: "周守义", nameUsed: "老周", quote: "老周没有拦她" },
@@ -67,7 +67,7 @@ describe("定稿编排", () => {
     expect(preview.review.map((item) => item.label)).toEqual(["出场：周守义（正文叫「老周」）"]);
     expect(preview.review[0]?.reasons[0]?.code).toBe("new-character");
     expect(preview.auto.map((item) => item.kind)).toEqual(["summary", "time", "presence", "fact", "fact", "thread"]);
-    expect(preview.time).toMatchObject({ day: 1, basis: "text", weekday: 1, timeOfDay: "傍晚", needsConfirm: false });
+    expect(preview.time).toMatchObject({ row: { start: { lo: 1, hi: 1 }, end: { lo: 1, hi: 1 }, basis: "ledger", weekday: 1, timeOfDay: "傍晚" }, declared: "text", segments: [], needsConfirm: false });
     expect(preview.notRecorded).toEqual([]);
     expect(JSON.stringify(preview)).not.toMatch(/c1-|t1-/u);
 
@@ -86,7 +86,7 @@ describe("定稿编排", () => {
       text: CH2,
       callModel: fakeModel({
         summary: { text: "外乡人又来", quote: "外乡人又来了" },
-        time: { basis: "text", daysSincePrevious: 1, quote: "第二天上午" },
+        time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true },
         threads: [{ op: "advance", thread: "T1", quote: "钟是被人故意拨停的" }],
       }),
     }));
@@ -103,7 +103,7 @@ describe("定稿编排", () => {
       text: CH2,
       callModel: fakeModel({
         summary: { text: "外乡人又来", quote: "外乡人又来了" },
-        time: { basis: "text", daysSincePrevious: 1, quote: "第二天上午" },
+        time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true },
         threads: [{ op: "advance", thread: ["T1", "T2"], note: "钥匙锁进铜盒", quote: "沈青禾把钥匙锁进铜盒" }],
       }),
     }));
@@ -124,8 +124,9 @@ describe("定稿编排", () => {
         text: CH2,
         callModel: fakeModel({
           summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
-          // 记账员把同一天的章多填了「章内过了 1 天」（摘的换天原句正文里确有，代码核得上）：作者改天数后按作者说的那一天记（P6 第 7 步）。
-          time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, dayChangeQuote: "沈青禾把钥匙锁进铜盒", timeOfDay: "上午", quote: "第二天上午" },
+          // 记账员把同一天的章多记了一次换天（摘的那句正文里确有，代码核得上）：作者两头都填成第 5 天，按作者说的那一天记（P6 第 7 步），
+          // 记账员记的那次换天照留，和作者定的对不上由投影列出来（写作版本 P3 设计 2.5）。
+          time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, dayChanges: [{ offset: 1, quote: "沈青禾把钥匙锁进铜盒" }], timeOfDay: "上午" },
           presence: [{ name: "周守义", nameUsed: "老周", quote: "老周站在门口" }, { name: "外乡人", nameUsed: "外乡人", quote: "外乡人又来了" }],
           facts: [
             { nature: "state", subject: "铜钥匙", attribute: "在哪", value: "铜盒里", text: "铜钥匙锁在铜盒里", quote: "沈青禾把钥匙锁进铜盒" },
@@ -139,24 +140,29 @@ describe("定稿编排", () => {
     expect(closing?.label).toBe("收口「钟为什么停」：钟是被人故意拨停的");
     expect(preview.review.find((item) => item.kind === "presence")?.label).toBe("出场：外乡人");
     expect(preview.notRecorded).toEqual([{ code: "quote_not_in_text", label: "事实（发生过的事）：外乡人闯进了钟楼", reason: "「外乡人闯进了钟楼」没记上：附的原句在正文里找不到" }]);
-    expect(preview.time).toMatchObject({ day: 2, dayEnd: 3, basis: "text" });
+    expect(preview.time).toMatchObject({ row: { start: { lo: 2, hi: 2 }, end: { lo: 3, hi: 3 } }, declared: "text" });
 
     const stranger = preview.review.find((item) => item.label === "出场：外乡人");
-    const first = await confirmNow(preview.ticket, CH2, { excluded: [stranger!.index], day: 5 }, "ch2");
+    const first = await confirmNow(preview.ticket, CH2, { excluded: [stranger!.index], day: 5, dayEnd: 5 }, "ch2");
     expect(first).toMatchObject({ ok: true, version: 2, replayed: false });
-    const again = await confirmNow(preview.ticket, CH2, { excluded: [stranger!.index], day: 5 }, "ch2");
+    const again = await confirmNow(preview.ticket, CH2, { excluded: [stranger!.index], day: 5, dayEnd: 5 }, "ch2");
     expect(again).toMatchObject({ ok: true, version: 2, replayed: true });
 
     const view = await projectBook(book);
-    expect(view.chapters[1]).toMatchObject({ day: 5, dayEnd: 5, dayBasis: "author", timeOfDay: "上午" });
+    expect(view.chapters[1]?.time).toMatchObject({ start: { lo: 5, hi: 5 }, end: { lo: 5, hi: 5 }, basis: "author", timeOfDay: "上午" });
+    // 作者定的开头（第 5 天）和按上一章推的（第 2 天）、作者定的结尾和按换天推的（第 6 天）都对不上：列出来，不改任何一边。
+    expect(view.timeConflicts.map((conflict) => [conflict.kind, conflict.authorDay, conflict.expected])).toEqual([
+      ["time-start", 5, { lo: 2, hi: 2 }],
+      ["time-end", 5, { lo: 6, hi: 6 }],
+    ]);
     expect(view.chapters[1]?.present).toEqual(["周守义"]);
     expect(view.threads[0]).toMatchObject({ status: "closed", closedAt: 2 });
     const ledger = JSON.parse(await readFile(join(book, "ledger/chapters/0002.json"), "utf-8"));
     expect(ledger.entries.find((entry: { kind: string; op?: string }) => entry.kind === "thread")?.review).toBe("author");
   });
 
-  // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；作者只能改成一天，章里第二天那段丢了。
-  it("作者改天数也能记跨天：第 5 天到第 6 天", async () => {
+  // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；作者只能改成一天，章里第二天那段丢了（T4）。
+  it("作者改天数也能记跨天：只给开头，结尾按记账员记的换天推；两头都给按作者的", async () => {
     await commitChapter1();
     const preview = expectPreview(
       await prepareNow({
@@ -165,16 +171,34 @@ describe("定稿编排", () => {
         text: CH2,
         callModel: fakeModel({
           summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
-          time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, dayChangeQuote: "沈青禾把钥匙锁进铜盒", timeOfDay: "上午", quote: "第二天上午" },
+          time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, dayChanges: [{ offset: 1, quote: "沈青禾把钥匙锁进铜盒" }], timeOfDay: "上午" },
           presence: [{ name: "周守义", nameUsed: "老周", quote: "老周站在门口" }],
           facts: [],
           threads: [],
         }),
       }),
     );
-    expect(preview.time).toMatchObject({ day: 2, dayEnd: 3 });
-    expect(await confirmNow(preview.ticket, CH2, { day: 5, dayEnd: 6 })).toMatchObject({ ok: true });
-    expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 5, dayEnd: 6, dayBasis: "author" });
+    expect(preview.time.row).toMatchObject({ start: { lo: 2, hi: 2 }, end: { lo: 3, hi: 3 } });
+    expect(commitEntriesOf(preview.ticket, { day: 5 }).filter((entry) => entry.kind === "time" || entry.kind === "day")).toEqual([
+      expect.objectContaining({ kind: "time", dayChanges: [expect.objectContaining({ quote: "沈青禾把钥匙锁进铜盒" })] }),
+      { kind: "day", review: "author", day: 5 },
+    ]);
+    expect(await confirmNow(preview.ticket, CH2, { day: 5 })).toMatchObject({ ok: true });
+    const onlyStart = await projectBook(book);
+    expect(onlyStart.chapters[1]?.time).toMatchObject({ start: { lo: 5, hi: 5 }, end: { lo: 6, hi: 6 }, basis: "author" });
+    // 作者定的开头和按上一章推的对不上：列一条；结尾按章内跨度推，没有第二条。
+    expect(onlyStart.timeConflicts.map((conflict) => conflict.kind)).toEqual(["time-start"]);
+
+    const again = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: CH2, callModel: fakeModel({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } }) }));
+    // 重定稿：作者上次定的天数照留（作者的，不是记账员的）；记账员这次看成同一天，和上次不一样：上次换天那句还在，照上次的记、两边给作者看。
+    expect(again.ticket.entries.find((entry) => entry.kind === "day")).toMatchObject({ day: 5 });
+    expect(again.time).toMatchObject({
+      row: { start: { lo: 5, hi: 5 }, end: { lo: 6, hi: 6 }, basis: "author" },
+      needsConfirm: true,
+      sinceLast: { kept: true, other: { start: { lo: 5, hi: 5 }, end: { lo: 5, hi: 5 } } },
+    });
+    expect(await confirmNow(again.ticket, CH2, { day: 5, dayEnd: 6 })).toMatchObject({ ok: true });
+    expect((await projectBook(book)).chapters[1]?.time).toMatchObject({ start: { lo: 5, hi: 5 }, end: { lo: 6, hi: 6 }, basis: "author" });
   });
 
   it("改了前面一章再定稿：记账员看得到这章上次开的线索，本章还在开就沿用编号，后文的推进接得上", async () => {
@@ -262,25 +286,29 @@ describe("定稿编排", () => {
     const ch2Ledger = (time: Record<string, unknown>) => fakeModel({ time, presence: [{ name: "周守义", nameUsed: "老周", quote: "老周" }] });
     const first = expectPreview(await prepareNow({
       bookDir: book, chapter: 2, text: CH2,
-      callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" }),
+      callModel: ch2Ledger({ start: { offset: 1, basis: "judged", quote: "第二天上午" }, sameDay: true, timeOfDay: "上午" }),
     }));
     expect(await confirmNow(first.ticket, CH2)).toMatchObject({ ok: true });
-    expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 2 });
+    expect((await projectBook(book)).chapters[1]?.time.start).toEqual({ lo: 2, hi: 2 });
 
     // 只改了一个字，记账员这次看成当天：照上次的第 2 天记，列出这次看成的第 1 天。
     const typo = CH2.replace("没让他进", "没让他进门");
     const same = expectPreview(await prepareNow({
       bookDir: book, chapter: 2, text: typo,
-      callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 0, timeOfDay: "上午", quote: "外乡人又来了" }),
+      callModel: ch2Ledger({ start: { offset: 0, basis: "judged", quote: "外乡人又来了" }, sameDay: true, timeOfDay: "上午" }),
     }));
-    expect(same.time).toMatchObject({ day: 2, dayEnd: 2, needsConfirm: true, sinceLast: { kept: true, otherDay: 1, otherDayEnd: 1 } });
+    expect(same.time).toMatchObject({
+      row: { start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 } },
+      needsConfirm: true,
+      sinceLast: { kept: true, other: { start: { lo: 1, hi: 1 }, end: { lo: 1, hi: 1 } } },
+    });
     expect(await confirmNow(same.ticket, typo)).toMatchObject({ ok: true });
-    expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 2, timeOfDay: "上午" });
+    expect((await projectBook(book)).chapters[1]?.time).toMatchObject({ start: { lo: 2, hi: 2 }, timeOfDay: "上午" });
 
     // 天数一样：不多问。
     const again = expectPreview(await prepareNow({
       bookDir: book, chapter: 2, text: typo,
-      callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" }),
+      callModel: ch2Ledger({ start: { offset: 1, basis: "judged", quote: "第二天上午" }, sameDay: true, timeOfDay: "上午" }),
     }));
     expect(again.time.needsConfirm).toBe(false);
     expect(again.time.sinceLast).toBeUndefined();
@@ -289,9 +317,9 @@ describe("定稿编排", () => {
     const rewritten = typo.replace("第二天上午", "三天后的上午");
     const moved = expectPreview(await prepareNow({
       bookDir: book, chapter: 2, text: rewritten,
-      callModel: ch2Ledger({ basis: "text", daysSincePrevious: 3, timeOfDay: "上午", quote: "三天后的上午" }),
+      callModel: ch2Ledger({ start: { offset: 3, basis: "text", quote: "三天后的上午" }, sameDay: true, timeOfDay: "上午" }),
     }));
-    expect(moved.time).toMatchObject({ day: 4, needsConfirm: true, sinceLast: { kept: false, otherDay: 2, otherDayEnd: 2 } });
+    expect(moved.time).toMatchObject({ row: { start: { lo: 4, hi: 4 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 } } } });
   });
 
   it("重定稿：上次定稿认过的出场人物（含泛称）不再当第一次出场问；这次新冒出来的照问", async () => {
@@ -334,24 +362,24 @@ describe("定稿编排", () => {
     const first = "# 一\n\n老张回家了。";
     const next = "# 二\n\n第二天上午，老张出门。";
     const commitDay = async (day: number) => {
-      const outcome = await runCommand(book, chapterCommit, { chapter: 1, text: first, entries: [{ kind: "time", review: "author", basis: "author", day }] }, { caller: "author", idempotencyKey: `day-${day}` });
+      const outcome = await runCommand(book, chapterCommit, { chapter: 1, text: first, entries: [{ kind: "day", review: "author", day, dayEnd: day }] }, { caller: "author", idempotencyKey: `day-${day}` });
       expect(outcome.ok).toBe(true);
     };
     const model: BrainCallModel = async (messages) => messages.at(-1)!.content.includes("交这一章的账单")
-      ? JSON.stringify({ time: { basis: "text", daysSincePrevious: 1, daysInChapter: 0, quote: "第二天上午" } })
+      ? JSON.stringify({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } })
       : "老张回家。";
     await commitDay(1);
     const stale = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: next, callModel: model }));
-    expect(stale.time.day).toBe(2);
+    expect(stale.time.row.start?.lo).toBe(2);
     await commitDay(20);
     const refused = await confirmNow(stale.ticket, next);
     expect(refused).toMatchObject({ ok: false, code: "basis_changed" });
     expect(describeBasisChanges((refused as { readonly details: { readonly changes: readonly BasisChange[] } }).details.changes)).toContain("第 1 章的账");
     expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)).toBeUndefined();
     const fresh = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: next, callModel: model }));
-    expect(fresh.time.day).toBe(21);
+    expect(fresh.time.row.start?.lo).toBe(21);
     expect(await confirmNow(fresh.ticket, next)).toMatchObject({ ok: true });
-    expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)?.day).toBe(21);
+    expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)?.time.start?.lo).toBe(21);
   });
 
 });

@@ -149,10 +149,10 @@ export function CommitSheet({
   /** 正在打的字：删空了先让它空着（不然一删就弹回原来的数，再打成了「114」）。 */
   const [dayText, setDayText] = useState<string | null>(null);
   const [dayEndText, setDayEndText] = useState<string | null>(null);
-  // 记账员记的头一天和跨了几天；作者改了以后按作者的。哪天不知道的两栏空着，作者填了才有。
+  // 记下的头一天、最后一天（确定才有）；作者改了以后按作者的。哪天不知道的两栏空着，作者填了才有。
   const keptDay = day?.editableDay;
   const shownDay = dayOverride?.day ?? keptDay;
-  const shownEnd = dayOverride ? dayOverride.dayEnd ?? dayOverride.day : day?.editableDayEnd ?? shownDay;
+  const shownEnd = dayOverride ? dayOverride.dayEnd : day?.editableDayEnd;
   const changeDay = (value: DayOverride | undefined) => {
     setDayOverride(value);
     if (opId) rememberLedgerDayOverride(opId, value);
@@ -160,7 +160,7 @@ export function CommitSheet({
   /**
    * 改头一天：跨的天数跟着挪（第 20～21 天改成 21 → 第 21～22 天）；要只记一天，把「到第几天」也改成同一天。
    * 这次已经填过「到第几天」就按填的不动（换题材长篇实跑 2026-10-27：先填到第 13 天、再把头一天改成 12，
-   * 跟着挪成了第 12～14 天，框里却还显示 13）。
+   * 跟着挪成了第 12～14 天，框里却还显示 13）。章末是哪天说不准的，只改头一天就不替作者定结尾（按这章里换天推）。
    */
   const changeStart = (value: number | undefined) => {
     if (value === undefined) {
@@ -168,10 +168,9 @@ export function CommitSheet({
       return;
     }
     const start = shownDay ?? value;
-    const end = shownEnd ?? start;
-    const dayEnd = dayEndText !== null ? Math.max(end, value) : value + Math.max(0, end - start);
+    const dayEnd = shownEnd === undefined ? undefined : dayEndText !== null ? Math.max(shownEnd, value) : value + Math.max(0, shownEnd - start);
     if (dayEndText !== null && Number(dayEndText) !== dayEnd) setDayEndText(null);
-    changeDay({ day: value, dayEnd });
+    changeDay({ day: value, ...(dayEnd !== undefined ? { dayEnd } : {}) });
   };
   const changeEnd = (value: number | undefined) => {
     if (value === undefined) return;

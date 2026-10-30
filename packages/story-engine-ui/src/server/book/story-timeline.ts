@@ -5,7 +5,21 @@
  * 来源：作者（author）> 正文里的时间说法（declared，引原句）> 判的（plan）> 估的（fallback，绝不静默：表上注明「估的」）。
  * 星期几只给正文 / 作者明写的；其它日子由最近的锚点推算（weekdayOfDay）。
  */
+import { daysText, type DayRange } from "@actalk/story-core";
+
 export type TimelineSource = "author" | "declared" | "plan" | "fallback";
+
+const sameRange = (a: DayRange | undefined, b: DayRange | undefined): boolean => a?.lo === b?.lo && a?.hi === b?.hi;
+
+/**
+ * 一章是故事哪几天，全书一个口径（写作版本 P3 设计第 6 节）：「第 5 天」「第 5 天到第 6 天」「第 5～7 天到哪天说不准」；
+ * 开头不知道就 undefined（调用方说「不知道」时说清为什么）。
+ */
+export function storySpanText(range: { readonly start?: DayRange; readonly end?: DayRange }): string | undefined {
+  if (!range.start) return undefined;
+  if (sameRange(range.start, range.end)) return daysText(range.start);
+  return `${daysText(range.start)}到${range.end ? daysText(range.end) : "哪天说不准"}`;
+}
 
 export interface TimelineEntry {
   readonly chapter: number;

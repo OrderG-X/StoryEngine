@@ -33,8 +33,7 @@ function summarizeLedgerReport(root: Record<string, unknown>, ledger: Record<str
   const advanced = count(ledger.threadsAdvanced);
   const closed = count(ledger.threadsClosed);
   const present = count(ledger.present);
-  const day = count(ledger.day);
-  const dayEnd = count(ledger.dayEnd);
+  const storyTime = typeof ledger.storyTime === "string" && ledger.storyTime.trim() ? ledger.storyTime.trim() : undefined;
   const notRecorded = count(ledger.notRecorded);
   const status: CommitReportSummary["ledgerStatus"] = ledger.status === "pending" ? "pending" : ledger.status === "partial" ? "partial" : undefined;
   const flags = { ...(status ? { ledgerStatus: status } : {}), ...(root.fill === true ? { fill: true as const } : {}) };
@@ -44,7 +43,7 @@ function summarizeLedgerReport(root: Record<string, unknown>, ledger: Record<str
     ...(chapter > 0 ? { chapter } : {}),
     ...flags,
     detailLines: [
-      ...(day > 0 ? [`故事时间：${dayEnd > day ? `第 ${day}～${dayEnd} 天` : `第 ${day} 天`}`] : []),
+      ...(storyTime ? [`故事时间：${storyTime}`] : []),
       `事实：${facts} 条`,
       `线索：新开 ${opened}，推进 ${advanced}，收口 ${closed}`,
       `出场人物：${present} 人`,

@@ -8,7 +8,7 @@
  * 只认精确的词表（op、类型、星期、是 / 否），不做模糊匹配；短号由调用方给的 handles 换回真编号。
  * 这里不核原句、不判断前文有没有这条线索——那是 story-core 的 checkEntries 的事，核不上的会如实列出来。
  */
-import type { EntryInput, FactInput, PresenceInput, SummaryInput, ThreadInput, TimeInput } from "@actalk/story-core";
+import type { BoundaryOffsets, DeclaredSource, EntryInput, FactInput, PresenceInput, SegmentInput, SummaryInput, ThreadInput, TimeInput, TimeOffset } from "@actalk/story-core";
 
 export interface KeeperDrop {
   /** 哪一类、第几条（从 1 起），如「facts 第 3 条」。 */
@@ -24,8 +24,6 @@ export interface KeeperParseResult {
   readonly drops: readonly KeeperDrop[];
   /** 改动过的条目（比如缺字段的事实降为「发生过的事」），带原因。 */
   readonly adjusted: readonly KeeperDrop[];
-  /** 本章中间换了天时，记账员摘的那句换天的原句（还没核对：由 runLedgerKeeper 拿正文核）。 */
-  readonly dayChangeQuote?: string;
 }
 
 export interface KeeperHandles {
@@ -101,14 +99,74 @@ const CHINESE_DIGITS: Record<string, number> = {
   零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
 };
 
-/** 非负整数：数字、数字字符串、单个中文数字（零～十）。其余 → undefined。 */
-function count(value: unknown): number | undefined {
-  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : undefined;
+/** 整数（可负）：数字、数字字符串、单个中文数字（零～十，前面可带负号）。其余 → undefined。 */
+function integer(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) ? value : undefined;
   const text = str(value);
   if (text === undefined) return undefined;
-  if (text in CHINESE_DIGITS) return CHINESE_DIGITS[text];
+  const negative = text.startsWith("-") || text.startsWith("－");
+  const body = negative ? text.slice(1).trim() : text;
+  if (body in CHINESE_DIGITS) return (negative ? -1 : 1) * (CHINESE_DIGITS[body] as number);
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+  return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+const UNITS: Record<string, TimeOffset["unit"]> = { day: "day", days: "day", d: "day", 天: "day", 日: "day", month: "month", months: "month", 月: "month", 个月: "month", year: "year", years: "year", 年: "year" };
+/** 相对多少的上限（和核心一样，±一百年）。 */
+const MAX_OFFSET = 36500;
+
+/**
+ * 相对多少：`{unit, min, max}`；只写一个数（`value` / `days`，或整个就是个数）= 两头一样；unit 缺 = 天。
+ * 两头都没有、倒了、超界、单位认不出 → 字符串（原因）。
+ */
+function offsetOf(value: unknown): TimeOffset | string {
+  if (typeof value === "number" || typeof value === "string") {
+    const n = integer(value);
+    return n === undefined ? "相对多少不是整数" : offsetOf({ min: n, max: n });
+  }
+  if (!isRecord(value)) return "相对多少写得不对";
+  const unitText = str(value.unit)?.toLowerCase();
+  const unit = unitText === undefined ? "day" : UNITS[unitText];
+  if (!unit) return `单位写成了「${unitText}」，认不出（只认天、月、年）`;
+  const single = integer(value.value ?? value.days);
+  const min = integer(value.min) ?? single;
+  const max = integer(value.max) ?? single;
+  if (min === undefined && max === undefined) return "相对多少两头都没写";
+  if ([min, max].some((side) => side !== undefined && Math.abs(side) > MAX_OFFSET)) return "相对多少超出了一百年";
+  if (min !== undefined && max !== undefined && min > max) return "相对多少的两头倒了";
+  return { unit, ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) };
+}
+
+/** 一处相对：offset 或 byBoundary（两种换天规矩各一份，只用天）。两样都给了按 byBoundary（更细）。 */
+function relativeOf(raw: Raw): { offset: TimeOffset } | { byBoundary: BoundaryOffsets } | string {
+  if (raw.byBoundary !== undefined && raw.byBoundary !== null) {
+    const both = isRecord(raw.byBoundary) ? raw.byBoundary : {};
+    const midnight = offsetOf(both.midnight);
+    const dawn = offsetOf(both.dawn);
+    if (typeof midnight === "string" || typeof dawn === "string") return `按换天规矩各写的那两份不对：${typeof midnight === "string" ? midnight : dawn}`;
+    if (midnight.unit !== "day" || dawn.unit !== "day") return "按换天规矩各写的只能是天数";
+    return { byBoundary: { midnight, dawn } };
+  }
+  if (raw.offset === undefined || raw.offset === null || raw.offset === "") return "没写相对多少";
+  const offset = offsetOf(raw.offset);
+  return typeof offset === "string" ? offset : { offset };
+}
+
+const FRAMES: Record<string, SegmentInput["frame"]> = {
+  past: "past", flashback: "past", memory: "past", recall: "past", 回忆: "past", 倒叙: "past",
+  other: "other", dream: "other", imagination: "other", rumor: "other", story: "other", 梦: "other", 想象: "other", 传闻: "other",
+};
+const NARRATION_WORDS = new Set(["narration", "narrator", "叙述"]);
+const CLAIM_WORDS = new Set(["claim", "character", "character_claim", "speech", "人物说的"]);
+
+/** 事实、线索的来源：speaker = 人物说的；source = narration = 叙述直接写的；拿不准不标。 */
+function sourceOf(item: Raw, where: string, adjusted: KeeperDrop[]): DeclaredSource | undefined {
+  const speaker = str(item.speaker);
+  const kind = str(item.source)?.toLowerCase();
+  if (speaker) return { kind: "character_claim", speaker };
+  if (kind && NARRATION_WORDS.has(kind)) return { kind: "narration" };
+  if (kind && CLAIM_WORDS.has(kind)) adjusted.push({ where, reason: "说是人物说的、却没写是谁说的，来源按不知道记" });
+  return undefined;
 }
 
 const TRUE_WORDS = new Set(["true", "yes", "y", "1", "是", "对"]);
@@ -180,7 +238,6 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     drops.push({ where, reason, ...(name ? { name } : {}) });
   };
   const named = (value: string | undefined): string | undefined => (value === undefined ? undefined : nameHandles(value, handles.handleNames));
-  let dayChangeQuote: string | undefined;
 
   // —— 梗概 ——
   if (root.summary !== undefined && root.summary !== null) {
@@ -192,35 +249,9 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     else drop("summary", "梗概是空的");
   }
 
-  // —— 时间 ——
-  if (isRecord(root.time)) {
-    const raw = root.time;
-    const quote = quoteText(raw.quote);
-    const basisText = str(raw.basis)?.toLowerCase();
-    // 模型只能交正文明写 / 读前后文判断两种；写了别的（author、estimated）一律按判断记。
-    const basis: TimeInput["basis"] = basisText === "text" ? "text" : "judged";
-    const time: { -readonly [K in keyof TimeInput]: TimeInput[K] } = { kind: "time", review: "auto", basis };
-    const days = count(raw.daysSincePrevious);
-    if (days !== undefined) time.daysSincePrevious = days;
-    else if (raw.daysSincePrevious !== undefined && raw.daysSincePrevious !== null && raw.daysSincePrevious !== "") drop("time.daysSincePrevious", "隔几天不是非负整数");
-    const inChapter = count(raw.daysInChapter);
-    if (inChapter !== undefined && inChapter > 0) {
-      time.daysInChapter = inChapter;
-      dayChangeQuote = quoteText(raw.dayChangeQuote);
-    }
-    const weekdayText = str(raw.weekday);
-    if (weekdayText !== undefined) {
-      if (weekdayText in WEEKDAYS) time.weekday = WEEKDAYS[weekdayText];
-      else drop("time.weekday", `星期写成了「${weekdayText}」，认不出（只认「周二」这类写法）`);
-    }
-    const timeOfDay = str(raw.timeOfDay);
-    if (timeOfDay) time.timeOfDay = timeOfDay;
-    // 没附原句的照样交上去，等补摘（见梗概那条）。
-    time.quote = quote ?? "";
-    if (time.daysSincePrevious === undefined && time.weekday === undefined && time.timeOfDay === undefined && time.daysInChapter === undefined) {
-      drop("time", "时间里什么都没写");
-    } else entries.push(time);
-  }
+  // —— 时间、段 ——
+  const time = parseTime(root, drop, adjusted);
+  if (time) entries.push(time);
 
   // —— 出场 ——
   for (const [index, item] of asList(root.presence).entries()) {
@@ -287,6 +318,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       } else drop(`${where}.replaces`, "要推翻的那条不在列出的事实里，这一项没记（事实本身照记）");
     }
     if (replaces.length > 0) fact.replaces = replaces;
+    const source = sourceOf(item, where, adjusted);
+    if (source) fact.source = source;
     entries.push(fact);
   }
 
@@ -321,7 +354,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       if (!type && typeText) adjusted.push({ where, reason: `类型写成了「${typeText}」，按悬念记` });
       // 重定稿沿用上次的编号：只认这次列出的 R 短号，别的写法当新开（核心再按标题兜一次）。
       const reopen = handleList(item.thread).map((handle) => handles.reopenHandles?.get(handle)).find((id) => id !== undefined);
-      entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote: quote ?? "", ...(reopen ? { thread: reopen } : {}) } satisfies ThreadInput);
+      const source = sourceOf(item, where, adjusted);
+      entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote: quote ?? "", ...(reopen ? { thread: reopen } : {}), ...(source ? { source } : {}) } satisfies ThreadInput);
       continue;
     }
     const targets = handleList(item.thread);
@@ -330,15 +364,129 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       continue;
     }
     const seen = new Set<string>();
+    const source = sourceOf(item, where, adjusted);
     for (const handle of targets) {
       // 短号对不上：原样交下去，checkEntries 会以「前文没有这条线索」如实列出来。
       // R 短号（这一章上次开的）报成推进 / 收口：换成真编号交下去，定稿编排认得出是这章自己开的那条。
       const thread = handles.threadHandles.get(handle) ?? handles.reopenHandles?.get(handle) ?? handle;
       if (seen.has(thread)) continue;
       seen.add(thread);
-      entries.push({ kind: "thread", review: "auto", op, thread, note, quote: quote ?? "" } satisfies ThreadInput);
+      entries.push({ kind: "thread", review: "auto", op, thread, note, quote: quote ?? "", ...(source ? { source } : {}) } satisfies ThreadInput);
     }
   }
 
-  return { entries, drops, adjusted, ...(dayChangeQuote ? { dayChangeQuote } : {}) };
+  return { entries, drops, adjusted };
+}
+
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+/**
+ * 时间（设计第 4 节）：start、sameDay、dayChanges、weekday、timeOfDay 在 time 里；segments 在顶层（写进 time 里的也认）。
+ * 原句没附的照样交上去（空串），等补摘；结构上自相矛盾的按能确定的那一半记、如实说：
+ *  - start 的相对多少写坏了 → 本章开头按说不出（unknown）记；
+ *  - 换天有一次写坏了 → 换天全不记、章末不知道（少记一次换天，后面每章都错一天）；又说同一天又列了换天 → 两样都不记；
+ *  - 段写坏了 → 那段不记（如实说，这段里的事按当下记了）；
+ *  - 没写 start、也没有盖住全章的段，却写了同一天 / 换天 / 星期 → 本章开头按说不出记。
+ */
+function parseTime(root: Raw, drop: (where: string, reason: string) => void, adjusted: KeeperDrop[]): TimeInput | undefined {
+  const raw = isRecord(root.time) ? root.time : undefined;
+  const segmentsRaw = root.segments ?? raw?.segments;
+  const segments: SegmentInput[] = [];
+  for (const [index, item] of asList(segmentsRaw).entries()) {
+    const where = `segments 第 ${index + 1} 段`;
+    if (!isRecord(item)) {
+      drop(where, "不是对象");
+      continue;
+    }
+    const frameText = str(item.frame)?.toLowerCase();
+    const frame = frameText ? FRAMES[frameText] : undefined;
+    const firstQuote = quoteText(item.firstQuote);
+    const lastQuote = quoteText(item.lastQuote) ?? firstQuote;
+    if (!frame) {
+      drop(where, frameText ? `frame 写成了「${frameText}」，认不出（只认 past、other），这段没记，段里的事按当下记了` : "没写是回忆还是梦这类，这段没记，段里的事按当下记了");
+      continue;
+    }
+    const segment: Mutable<SegmentInput> = { frame, firstQuote: firstQuote ?? "", lastQuote: lastQuote ?? "" };
+    const whenText = str(item.when)?.toLowerCase();
+    if (frame === "past" && whenText === "unknown") segment.when = "unknown";
+    else if (frame === "past" && isRecord(item.when)) {
+      const when = relativeOf(item.when);
+      if (typeof when === "string") adjusted.push({ where, reason: `这段是什么时候没写对（${when}），按说不出记` });
+      segment.when = typeof when === "string" ? "unknown" : when;
+    } else if (frame === "other" && item.when !== undefined && item.when !== null && item.when !== "") {
+      adjusted.push({ where, reason: "梦、想象、传闻这类段不上时间线，写的时间没记" });
+    }
+    segments.push(segment);
+  }
+  if (!raw) {
+    if (segments.length === 0) return undefined;
+    return { kind: "time", review: "auto", segments };
+  }
+
+  const time: Mutable<TimeInput> = { kind: "time", review: "auto" };
+  const startText = str(raw.start)?.toLowerCase();
+  if (startText === "unknown") time.start = "unknown";
+  else if (isRecord(raw.start)) {
+    const start = raw.start;
+    const relative = relativeOf(start);
+    const basis = str(start.basis)?.toLowerCase() === "text" ? "text" : "judged";
+    if (typeof relative === "string") {
+      adjusted.push({ where: "time.start", reason: `本章开头离上一章多久没写对（${relative}），按说不出记` });
+      time.start = "unknown";
+    } else time.start = { ...relative, basis, quote: quoteText(start.quote) ?? "" };
+  } else if (raw.start !== undefined && raw.start !== null && raw.start !== "") {
+    adjusted.push({ where: "time.start", reason: "本章开头离上一章多久写得认不出，按说不出记" });
+    time.start = "unknown";
+  }
+
+  const sameDay = flag(raw.sameDay);
+  const changes: Mutable<NonNullable<TimeInput["dayChanges"]>[number]>[] = [];
+  let changesBroken: string | undefined;
+  for (const [index, item] of asList(raw.dayChanges).entries()) {
+    if (!isRecord(item)) {
+      changesBroken ??= `第 ${index + 1} 次换天不是对象`;
+      continue;
+    }
+    const relative = relativeOf(item);
+    if (typeof relative === "string") {
+      changesBroken ??= `第 ${index + 1} 次换天${relative}`;
+      continue;
+    }
+    const days = "offset" in relative ? relative.offset : undefined;
+    if (days && (days.unit !== "day" || days.min === undefined || days.min < 1)) {
+      changesBroken ??= `第 ${index + 1} 次换天没写成「至少过了一天」`;
+      continue;
+    }
+    const quote = quoteText(item.quote);
+    changes.push({ ...relative, ...(quote ? { quote } : { quote: "" }) });
+  }
+  if (changesBroken) {
+    adjusted.push({ where: "time.dayChanges", reason: `${changesBroken}，换天都没记，章末是哪天不知道` });
+  } else if (sameDay === true && changes.length > 0) {
+    adjusted.push({ where: "time", reason: "又说整章同一天、又列了换天，两样都没记，章末是哪天不知道" });
+  } else if (changes.length > 0) {
+    time.dayChanges = changes;
+  } else if (sameDay === true) {
+    time.sameDay = true;
+  }
+
+  const weekdayText = str(raw.weekday);
+  if (weekdayText !== undefined) {
+    if (weekdayText in WEEKDAYS) time.weekday = WEEKDAYS[weekdayText];
+    else drop("time.weekday", `星期写成了「${weekdayText}」，认不出（只认「周二」这类写法）`);
+  }
+  const timeOfDay = str(raw.timeOfDay);
+  if (timeOfDay) time.timeOfDay = timeOfDay;
+  if (segments.length > 0) time.segments = segments;
+
+  const present = time.start !== undefined || time.sameDay !== undefined || time.dayChanges !== undefined || time.weekday !== undefined || time.timeOfDay !== undefined;
+  if (!present && segments.length === 0) {
+    drop("time", "时间里什么都没写");
+    return undefined;
+  }
+  if (present && time.start === undefined) {
+    adjusted.push({ where: "time.start", reason: "没写本章开头离上一章多久，按说不出记" });
+    time.start = "unknown";
+  }
+  return time;
 }

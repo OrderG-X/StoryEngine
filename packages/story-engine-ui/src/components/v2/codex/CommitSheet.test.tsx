@@ -15,7 +15,7 @@ const preview = (over: Partial<CommitPreviewCardData> = {}): CommitPreviewCardDa
   chapter: 7,
   canCommit: true,
   ledgerChecklist: [
-    { id: "day", kind: "time", label: "这一章记为故事第 3 天（正文明写）", detail: "三天后的上午", removable: false, editableDay: 3 },
+    { id: "day", kind: "time", label: "这一章记为故事第 3 天（正文明写）", detail: "三天后的上午", removable: false, editableDay: 3, editableDayEnd: 3 },
     { id: "0", kind: "fact", label: "钟箱门：锁死 → 没锁（和第 6 章对不上）", detail: "钟箱门一推就开了。", removable: true, needsConfirm: true },
     { id: "change_confirm:1", kind: "change", label: "改记：茶馆在斜对面 → 竹桌收进墙根", removable: true, needsConfirm: true, defaultUnchecked: true },
     { id: "2", kind: "fact", label: "楼门钥匙放回茶馆柜台底下", removable: true },
@@ -43,7 +43,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
 
   it("只有天数要你看：说「除了天数，没有要你特别看的」（和对话里「要你看 1 条」对得上）", () => {
     render(<CommitSheet preview={preview({ ledgerChecklist: [
-      { id: "day", kind: "time", label: "这一章记为故事第 11 天（先按上一章往后推，不对就改）", removable: false, editableDay: 11, needsConfirm: true },
+      { id: "day", kind: "time", label: "这章离上一章多久说不准，是故事哪天不知道；知道的话填上", removable: false, dayUnknown: true, needsConfirm: true },
       { id: "2", kind: "fact", label: "楼门钥匙放回茶馆柜台底下", removable: true },
     ] })} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText("除了天数，没有要你特别看的，下面这些自动记下。")).toBeTruthy();
@@ -138,6 +138,25 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(screen.getByText("这一章改记为故事第 6 天")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
     expect(onConfirm).toHaveBeenLastCalledWith([], { day: 6, dayEnd: 6 });
+  });
+
+  // 写作版本 P3 设计 2.5：章末是哪天说不准（换天那句没对上、只说了开头），作者只改头一天就不替他定结尾，按这章里换天推。
+  it("章末说不准：只改头一天不带结尾；填了「到第几天」才带", () => {
+    const onConfirm = vi.fn();
+    const base = preview();
+    const open = { ...base, ledgerChecklist: base.ledgerChecklist!.map((item) => (item.id === "day" ? { id: "day", kind: "time", label: "这一章记为故事第 3 天到哪天说不准", removable: false, editableDay: 3 } : item)) };
+    render(<CommitSheet preview={open} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    const end = screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement;
+    expect(end.value).toBe("");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "4" } });
+    expect(end.value).toBe("");
+    expect(screen.getByText("这一章改记为故事第 4 天")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 4 });
+    fireEvent.change(end, { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 4, dayEnd: 6 });
   });
 
   it("关了再开（同一次定稿）动过的条目和天数还在；别的一次不带", () => {

@@ -67,6 +67,7 @@ export {
   relocateEvidence,
   relocateScenes,
   storeEntry,
+  storeLegacyTime,
   dayDeclarationOf,
   locateSegment,
   timeDeclarationOf,
@@ -74,6 +75,7 @@ export {
   type ChapterSource,
   type EntryDraft,
   type EntryIds,
+  type LegacyTimeDraft,
   type StoredDeclaration,
 } from "./ledger/entries.js";
 export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";

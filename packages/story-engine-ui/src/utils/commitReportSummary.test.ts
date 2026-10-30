@@ -45,11 +45,11 @@ describe("summarizeCommitReport", () => {
     const summary = summarizeCommitReport({
       chapter: 2,
       chapterPath: "chapters/0002.md",
-      ledger: { facts: 4, threadsOpened: 1, threadsAdvanced: 2, threadsClosed: 1, present: 3, day: 2, dayEnd: 3, notRecorded: 1 },
+      ledger: { facts: 4, threadsOpened: 1, threadsAdvanced: 2, threadsClosed: 1, present: 3, storyTime: "第 2 天到第 3 天", notRecorded: 1 },
     });
     expect(summary.chapter).toBe(2);
     expect(summary.detailLines).toEqual([
-      "故事时间：第 2～3 天",
+      "故事时间：第 2 天到第 3 天",
       "事实：4 条",
       "线索：新开 1，推进 2，收口 1",
       "出场人物：3 人",
@@ -60,7 +60,7 @@ describe("summarizeCommitReport", () => {
   it("账待记：不列一排零，只说还没记上；没记全的照列条数再标一行；补账的回执带着标记", () => {
     const pending = summarizeCommitReport({ chapter: 3, ledger: { facts: 0, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 0, notRecorded: 0, status: "pending" } });
     expect(pending).toEqual({ chapter: 3, detailLines: ["账：还没记上"], ledgerStatus: "pending" });
-    const partial = summarizeCommitReport({ chapter: 3, fill: true, ledger: { facts: 2, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, day: 4, dayEnd: 4, notRecorded: 0, status: "partial" } });
+    const partial = summarizeCommitReport({ chapter: 3, fill: true, ledger: { facts: 2, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, storyTime: "第 4 天", notRecorded: 0, status: "partial" } });
     expect(partial).toMatchObject({ chapter: 3, ledgerStatus: "partial", fill: true });
     expect(partial.detailLines.at(-1)).toBe("账：没记全");
     expect(summarizeCommitReport({ chapter: 3, ledger: { facts: 1, status: "ready" } }).ledgerStatus).toBeUndefined();

@@ -9,6 +9,8 @@
  *
  *   - 账单还是旧格式（`chapter-ledger/1`，写作版本 P2b 以前）→ 先存撤销点，再「账本升级」：一个事务全升成新格式，
  *     正文、裁定、设定不碰；有一章升不了整本不升、如实说没接上。升级是撤销的边界（之前的只能整本恢复）。
+ *   - 以前导入老书时记进账的不可信天数（估的、比上一章早却记成作者定的、紧跟它们的下一章；写作版本 P3 设计 2.6）
+ *     → 先存撤销点，再「天数盘点」：改成不知道、原值留着给作者看；证明不了是作者定的列出来待作者确认。能撤销。
  *
  * 新书建书时就写好了设定卡，还没有定稿章不用导入账单：第一次定稿就会建出账单。这一步每次开书都会调，
  * 已经接好的书只列一次目录、读几个小文件。
@@ -18,7 +20,30 @@
  */
 import { mkdir, rename, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { BOOK_START_KEYS, bookImport, cardsImport, KEPT_TX_DIR, ledgerMigrate, ledgerMigrateKey, ledgersToUpgrade, listChapterLedgers, LegacyResidueError, listChapterTexts, readCards, recoverBookTransactions, runCommand, withBookLock, type BookImportResult, type CardsImportResult, type LedgerMigrateResult, type RunOptions } from "@actalk/story-core";
+import {
+  BOOK_START_KEYS,
+  bookImport,
+  cardsImport,
+  KEPT_TX_DIR,
+  ledgerMigrate,
+  ledgerMigrateKey,
+  ledgersToUpgrade,
+  listChapterLedgers,
+  LegacyResidueError,
+  listChapterTexts,
+  readCards,
+  recoverBookTransactions,
+  runCommand,
+  timeAudit,
+  timeAuditKey,
+  timeAuditPlan,
+  withBookLock,
+  type BookImportResult,
+  type CardsImportResult,
+  type LedgerMigrateResult,
+  type RunOptions,
+  type TimeAuditResult,
+} from "@actalk/story-core";
 
 /** 以前生成镜像时写的标记：有它 = 下面这几个文件是我们从账生成的（原来的老文件第一次生成前另存过）。 */
 const MIRROR_MARKER = ".story-core-mirror.json";
@@ -32,6 +57,8 @@ export type EnsureOnCoreResult =
       readonly imported?: BookImportResult;
       /** 这次把旧格式账单升成了新格式。 */
       readonly migrated?: LedgerMigrateResult;
+      /** 这次把导入时记进账的不可信天数改成了不知道（哪几章、哪几章待作者确认）。 */
+      readonly audited?: TimeAuditResult;
       /** 这次把老设定搬进了设定卡。 */
       readonly cards?: CardsImportResult;
       /** 这次把以前生成的镜像挪走了（挪了哪几个文件）。 */
@@ -74,6 +101,15 @@ async function ensureNow(bookDir: string, options: EnsureOnCoreOptions): Promise
     if (!outcome.ok && outcome.code !== "nothing_to_upgrade") return { ok: false, code: outcome.code, reason: outcome.message };
     if (outcome.ok) migrated = outcome.result;
   }
+  // 升级完再盘天数（盘的是新格式的导入账；刚导入的书按同一条规则导进来，盘不出东西）。
+  let audited: TimeAuditResult | undefined;
+  const audit = await timeAuditPlan(bookDir).catch((error: unknown) => error as Error);
+  if (audit instanceof Error) return { ok: false, code: "book_unreadable", reason: audit.message };
+  if (audit) {
+    const outcome = await runCommand(bookDir, timeAudit, { digest: audit.digest }, { caller: "author", idempotencyKey: timeAuditKey(audit.digest), ...snapshot });
+    if (!outcome.ok && outcome.code !== "nothing_to_audit") return { ok: false, code: outcome.code, reason: outcome.message };
+    if (outcome.ok) audited = outcome.result;
+  }
   // 先导账单再搬设定：看「有没有账单」而不是书的版本号（搬设定、改设定也会让版本号往上走）。
   let ledgers = (await listChapterLedgers(bookDir)).length;
   let imported: BookImportResult | undefined;
@@ -90,7 +126,14 @@ async function ensureNow(bookDir: string, options: EnsureOnCoreOptions): Promise
     if (outcome.ok) cards = outcome.result;
   }
   const retired = ledgers > 0 ? await retireMirror(bookDir) : [];
-  return { ok: true as const, ...(imported ? { imported } : {}), ...(migrated ? { migrated } : {}), ...(cards ? { cards } : {}), ...(retired.length > 0 ? { retired } : {}) };
+  return {
+    ok: true as const,
+    ...(imported ? { imported } : {}),
+    ...(migrated ? { migrated } : {}),
+    ...(audited ? { audited } : {}),
+    ...(cards ? { cards } : {}),
+    ...(retired.length > 0 ? { retired } : {}),
+  };
 }
 
 /**

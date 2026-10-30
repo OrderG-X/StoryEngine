@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { cardWrite, chapterCommit, decisionRecord, projectBook, readCards, readChapterLedger, readHead, runCommand } from "@actalk/story-core";
+import { cardWrite, chapterCommit, declarationsOf, decisionRecord, projectBook, readCards, readChapterLedger, readHead, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createStoryProject } from "../../../book/project-store.js";
@@ -91,7 +91,7 @@ const CH2 = `# 第2章 · 四点\n\n第二天上午，钟楼的钟停在四点�
 
 const LEDGER1 = {
   summary: { text: "林远进钟楼拿走钥匙", quote: "他在钟箱里摸到一把铜钥匙" },
-  time: { basis: "text", weekday: "周二", timeOfDay: "傍晚", quote: "周二傍晚" },
+  time: { start: { offset: 0, basis: "text", quote: "周二傍晚" }, sameDay: true, weekday: "周二", timeOfDay: "傍晚" },
   presence: [
     { name: "林远", nameUsed: "林远", viewpoint: true, quote: "林远推开钟楼的门" },
     { name: "周守义", nameUsed: "老周", quote: "老周没有拦他" },
@@ -104,7 +104,7 @@ const LEDGER1 = {
 };
 const LEDGER2 = {
   summary: { text: "林远锁好钥匙，明白钟是被拨停的", quote: "林远把钥匙锁进铜盒" },
-  time: { basis: "text", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" },
+  time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true, timeOfDay: "上午" },
   presence: [{ name: "林远", nameUsed: "林远", viewpoint: true, quote: "林远把钥匙锁进铜盒" }, { name: "周守义", nameUsed: "老周", quote: "老周站在门口" }],
   facts: [
     { nature: "state", subject: "铜钥匙", attribute: "在哪", value: "铜盒里", text: "铜钥匙锁在铜盒里", quote: "林远把钥匙锁进铜盒" },
@@ -298,11 +298,11 @@ describe("记账没成：停下请作者挑「再记一次」或「先定正文�
     const done = await stored(record.opId);
     expect(done.state).toBe("succeeded");
     expect(bodyOf(done)).toMatchObject({ committed: true, done: { report: { chapter: 1, ledger: { status: "pending", facts: 0 } } } });
-    expect(bodyOf(done).done?.report?.ledger.day).toBeUndefined();
+    expect(bodyOf(done).done?.report?.ledger.storyTime).toBeUndefined();
     expect(summaryOf(done)).toContain("第 1 章正文定了，账还没记上");
     expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
     expect(await readChapterLedger(book, 1)).toMatchObject({ status: "pending", entries: [] });
-    expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "pending", dayBasis: "unknown" });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "pending", time: { presentLine: "unknown", basis: "unknown" } });
 
     await undoInOperation(book, done.opId);
     expect(await exists(join(book, "chapters", "0001.md"))).toBe(false);
@@ -363,7 +363,7 @@ describe("补账（P2b 设计 3.2）：按定稿那版正文补记，出清单�
     expect(bodyOf(done).done?.draftBody).toBeUndefined();
     expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
     expect(await readChapterLedger(book, 1)).toMatchObject({ status: "ready", committedAt: before!.committedAt, textSha256: before!.textSha256 });
-    expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "ready", day: 1 });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "ready", time: { start: { lo: 1, hi: 1 } } });
   });
 
   it("补摘原句那一步没成：账记成没记全、写明缺哪几类（P2b 出口复核第 2 条）；补账时又没成照样写明", async () => {
@@ -377,10 +377,10 @@ describe("补账（P2b 设计 3.2）：按定稿那版正文补记，出清单�
     expect(bodyOf(done)).toMatchObject({ committed: true });
     expect(await readChapterLedger(book, 1)).toMatchObject({ status: "partial", coverage: { reasonCodes: ["quote_repair_failed"], missingKinds: ["fact", "thread"] } });
     const view = (await projectBook(book)).chapters[0];
-    expect(view).toMatchObject({ ledgerStatus: "partial", missingKinds: ["fact", "thread"], day: 1 });
+    expect(view).toMatchObject({ ledgerStatus: "partial", missingKinds: ["fact", "thread"], time: { start: { lo: 1, hi: 1 } } });
 
-    // 补账：时间那条又没对上、补摘又没成，作者在清单上填了天数 → 时间不算缺。
-    ledger = { ...broken, time: { ...LEDGER1.time, quote: "周二的傍晚时分" } };
+    // 补账：时间那条开头那句又没对上、补摘又没成（按说不出隔多久记），作者在清单上填了天数 → 时间不算缺。
+    ledger = { ...broken, time: { ...LEDGER1.time, start: { ...LEDGER1.time.start, quote: "周二的傍晚时分" } } };
     const fill = await prepareFill(1);
     const filled = await confirm(fill, [], { [DAY_ITEM_ID]: 1 });
     expect(filled.state).toBe("succeeded");
@@ -394,8 +394,8 @@ describe("补账（P2b 设计 3.2）：按定稿那版正文补记，出清单�
     const record = await prepare(2);
     await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "pending" });
     await __drainOperationsForTests();
-    // 记账员这次看成隔了两天（第 3 天）；账待记时按「上一章 +1」估是第 2 天，那不是上次记的。
-    ledger = { ...LEDGER2, time: { ...LEDGER2.time, daysSincePrevious: 2 } };
+    // 记账员这次看成隔了两天（第 3 天）；账待记那份没记时间，没有「上次记的」可比。
+    ledger = { ...LEDGER2, time: { ...LEDGER2.time, start: { ...LEDGER2.time.start, offset: 2 } } };
     const fill = await prepareFill(2);
     expect(fill.state).toBe("waiting_author");
     expect(JSON.stringify(viewOf(fill))).not.toContain("上次定稿记的");
@@ -459,14 +459,13 @@ describe("清单出来停下等作者", () => {
     expect(await readHead(book)).toMatchObject({ version: base });
   });
 
-  it("第 1 章正文没写时间：天数说「先这么记」，不提没有的上一章（2026-10-23 桌面包走查）", async () => {
+  it("第 1 章正文没写时间：不估，天数那行说不知道、请作者填，不提没有的上一章（2026-10-23 桌面包走查；写作版本 P3 删了估算）", async () => {
     await writeDraft(1, CH1);
     const { time: _time, ...noTime } = LEDGER1;
     ledger = noTime;
     const day = viewOf(await prepare(1)).ledgerChecklist?.[0];
-    expect(day?.label).toContain("故事第 1 天");
-    expect(day?.label).toContain("先这么记");
-    expect(day?.label).not.toContain("上一章");
+    expect(day).toMatchObject({ id: DAY_ITEM_ID, dayUnknown: true, needsConfirm: true });
+    expect(day?.label).toBe("正文里没认出这章的时间，是故事哪天不知道；知道的话填上");
   });
 });
 
@@ -480,11 +479,11 @@ describe("作者点「确认定稿」", () => {
     expect(done.state).toBe("succeeded");
     const body = bodyOf(done);
     expect(body).toMatchObject({ committed: true, snapshotId: expect.stringMatching(/^[0-9a-f]{40}$/u) });
-    expect(body.done).toMatchObject({ draftTitle: "第1章 · 钟停", report: { chapter: 1, ledger: { facts: 2, threadsOpened: 1, threadsClosed: 0, present: 1, day: 3, notRecorded: 0 } } });
+    expect(body.done).toMatchObject({ draftTitle: "第1章 · 钟停", report: { chapter: 1, ledger: { facts: 2, threadsOpened: 1, threadsClosed: 0, present: 1, storyTime: "第 3 天", notRecorded: 0 } } });
     expect(body.done?.draftBody?.startsWith("周二傍晚")).toBe(true);
     expect(summaryOf(done)).toContain("第 1 章已定稿");
     expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
-    expect((await projectBook(book)).chapters[0]).toMatchObject({ day: 3, dayBasis: "author", present: ["林远"] });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ time: { start: { lo: 3, hi: 3 }, end: { lo: 3, hi: 3 }, basis: "author" }, present: ["林远"] });
     expect(await exists(join(book, ".story-core-mirror.json"))).toBe(false);
     expect(warmUpReadersMock).toHaveBeenCalledWith(book, 1);
 
@@ -586,7 +585,8 @@ describe("作者点「确认定稿」", () => {
       throw new OperationStopped("operation_stopped", "定完、记检查点之前断了");
     };
     expect(await confirm(record)).toMatchObject({ state: "paused" });
-    const first = (await readChapterLedger(book, 1))?.entries ?? [];
+    const firstLedger = await readChapterLedger(book, 1);
+    const first = firstLedger?.entries ?? [];
     expect(first.filter((entry) => entry.kind === "fact")).toHaveLength(2);
     const later = await commit(1, CH1.replaceAll("铜钥匙", "银钥匙"), { summary: { text: "林远找到银钥匙", quote: "银钥匙" } });
     expect(bodyOf(later).done?.report?.ledger.facts).toBe(0);
@@ -599,7 +599,8 @@ describe("作者点「确认定稿」", () => {
     expect(bodyOf(done)).toMatchObject({ committed: true });
     expect(bodyOf(done).done?.report).toBeUndefined();
     expect(bodyOf(done).done?.draftBody).toBeUndefined();
-    expect(summaryOf(done)).toContain(`记了 ${first.length} 条`);
+    // 条数按声明算（时间一条声明存成开头、结尾几条）。
+    expect(summaryOf(done)).toContain(`记了 ${declarationsOf(firstLedger!).length} 条`);
     expect(summaryOf(done)).toContain("之后又改过");
   });
 
@@ -681,23 +682,26 @@ describe("作者点「确认定稿」", () => {
     await commit(1, CH1, LEDGER1);
     await commit(2, CH2, LEDGER2);
     await writeDraft(2, CH2.replace("没让外人进", "没让外人进门"));
-    ledger = { ...LEDGER2, time: { basis: "judged", daysSincePrevious: 0, timeOfDay: "上午", quote: "林远把钥匙锁进铜盒" } };
+    ledger = { ...LEDGER2, time: { start: { offset: 0, basis: "judged", quote: "林远把钥匙锁进铜盒" }, sameDay: true, timeOfDay: "上午" } };
     const view = viewOf(await prepare(2));
     const day = view.ledgerChecklist?.[0];
-    expect(day).toMatchObject({ id: DAY_ITEM_ID, editableDay: 2, needsConfirm: true, detail: "第二天上午" });
-    expect(day?.label).toBe("这一章记为故事第 2 天（上午，周三）（照上次定稿）");
+    expect(day).toMatchObject({ id: DAY_ITEM_ID, editableDay: 2, editableDayEnd: 2, needsConfirm: true, detail: "第二天上午" });
+    expect(day?.label).toBe("这一章记为故事第 2 天（上午，推算是周三）（照上次定稿）");
     expect(day?.reason).toBe("记账员这次看成第 1 天，和上次定稿不一样；先照上次的记，不对就改天数");
     expect(view.summary).toContain("要你看");
   });
 
-  it("记账员没说离上一章隔几天：天数那行说清是估的，算一条要你看（换题材长篇实跑第 21 章「进了暑假」）", async () => {
+  it("记账员说不准离上一章隔几天：不估，天数那行请作者填，算一条要你看（换题材长篇实跑第 21 章「进了暑假」）", async () => {
     await commit(1, CH1, LEDGER1);
     await writeDraft(2, CH2);
-    ledger = { ...LEDGER2, time: { basis: "text", timeOfDay: "上午", quote: "第二天上午" } };
+    ledger = { ...LEDGER2, time: { start: "unknown", sameDay: true, timeOfDay: "上午" } };
     const view = viewOf(await prepare(2));
-    expect(view.ledgerChecklist?.[0]).toMatchObject({ id: DAY_ITEM_ID, editableDay: 2, needsConfirm: true });
-    expect(view.ledgerChecklist?.[0]?.label).toBe("这一章记为故事第 2 天（上午，周三）（正文没说离上一章隔了几天，先按第二天记，不对就改）");
+    expect(view.ledgerChecklist?.[0]).toMatchObject({ id: DAY_ITEM_ID, dayUnknown: true, needsConfirm: true });
+    expect(view.ledgerChecklist?.[0]?.label).toBe("这章离上一章多久说不准，是故事哪天不知道；知道的话填上");
     expect(view.summary).toContain("要你看");
+    // 按月、年说的原样给，不折天。
+    ledger = { ...LEDGER2, time: { start: { offset: { unit: "month", min: 6, max: 6 }, basis: "text", quote: "第二天上午" }, sameDay: true } };
+    expect(viewOf(await prepare(2)).ledgerChecklist?.[0]?.label).toBe("这章离上一章6 个月后，不折成天，是故事哪天不知道；知道的话填上");
   });
 
   it("一句说明推进两条线索：清单一行、标题并排；作者去掉这行两条都不记（换题材长篇实跑第 22 章同一段说明连出三遍）", async () => {

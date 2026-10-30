@@ -215,10 +215,19 @@ describe("对话 AI 提的改账：停下等作者点「确认改账」", () => 
     const group = await edit({ op: "group", groups: [["钟为什么停", "钟楼的门为什么开着"]] }, { op: "group", groups: [["钟为什么停", "钟楼的门为什么开着"]] });
     expect(await decisionsOf(group)).toEqual([{ type: "thread.merge", from: ["t1-2"], into: "t1-1" }]);
     expect(previewOf(group).lines).toEqual(["把 「钟楼的门为什么开着」并进「钟为什么停」"]);
+    // 两章都没记时间（是哪天不知道，不估）：作者定了第 1 章，第 2 章还是不知道。
     const day = await confirm(await edit({ op: "day", chapter: 1, day: 3, dayEnd: 4 }));
-    expect(summaryOf(day)).toBe("账改好了：第 1 章从故事第 1 天改记为第 3 天到第 4 天（可撤销）。");
-    expect((await projectBook(book)).chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([[3, 4, "author"], [5, 5, "missing"]]);
+    expect(summaryOf(day)).toBe("账改好了：第 1 章改记为故事第 3 天到第 4 天（可撤销）。");
+    expect((await projectBook(book)).chapters.map(({ time }) => [time.start, time.end, time.basis])).toEqual([
+      [{ lo: 3, hi: 3 }, { lo: 4, hi: 4 }, "author"],
+      [undefined, undefined, "unknown"],
+    ]);
     expect((await edit({ op: "day", chapter: 1, day: 3, dayEnd: 4 })).failure?.message).toContain("不用改");
+    expect((await edit({ op: "day", chapter: 1, day: 3 })).failure?.message).toContain("不用改");
+    // 明说就这一天：结尾记成同一天，不吞掉（T4）。
+    const same = await edit({ op: "day", chapter: 1, day: 3, dayEnd: 3 });
+    expect(await decisionsOf(same)).toEqual([{ type: "chapter.day", chapter: 1, day: 3, dayEnd: 3 }]);
+    expect(previewOf(same).lines).toEqual(["第 1 章从故事第 3 天到第 4 天改记为第 3 天"]);
     await confirm(await edit({ op: "summary", chapter: 1, text: "她在钟楼里找到了铜钥匙。" }));
     expect((await projectBook(book)).chapters[0]?.summary).toBe("她在钟楼里找到了铜钥匙。");
   });
