@@ -113,7 +113,7 @@ const twoDraftsRecipe: Recipe<readonly AiDraftInput[]> = {
 };
 
 async function authorSaves(chapter: number, body: string): Promise<void> {
-  const baseVersion = (await readDraft(book, chapter))?.version ?? null;
+  const { version: baseVersion } = await readDraftState(book, chapter);
   const outcome = await runCommand(book, draftSave, { chapter, title: "", body, baseVersion }, { caller: "author" });
   if (!outcome.ok) throw new Error(outcome.message);
 }
@@ -133,7 +133,8 @@ async function submit(mode: "undo" | "restore" | "prune", params: Record<string,
 }
 
 async function answer(record: OperationRecord): Promise<OperationRecord> {
-  const pending = record.pendingActions[0];
+  // 点过的那张还留在记录里（带 decisionHash），点的是还没点的那张。
+  const pending = record.pendingActions.find((action) => !action.decisionHash);
   if (!pending) throw new Error("没在等作者");
   const resumed = await resumeOperation(book, record.opId, { actionId: pending.actionId, decision: "apply" });
   if (!resumed.ok) throw new Error(JSON.stringify(resumed));
@@ -275,6 +276,38 @@ describe("撤销上一步", () => {
       expect(preview.lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
       expect(preview.notes[0]).toContain("要撤的是");
       expect(await bodyOf(9)).toBe("第九章。");
+    });
+  }
+
+  for (const when of ["点了之后、应用之前断了", "点之前"] as const) {
+    it(`说不准的第 1 章，作者看过卡${when}又改了它：旧的确认不算，再停下问（Astra 第 17 轮第 1 条）`, async () => {
+      await aiWrites(9, "第九章。");
+      await aiWrites(1, "AI 写的。");
+      await undoInOperation(book);
+      await authorSaves(1, "AI 写的。");
+      const waiting = await submit("undo", {}, "button");
+      expect(waiting.state).toBe("waiting_author");
+      expect((operationView(waiting).pendingActions[0]?.preview as { lines: string[] }).lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
+      let asked: OperationRecord;
+      if (when === "点之前") {
+        await authorSaves(1, "作者又改了一版。");
+        asked = await answer(waiting);
+      } else {
+        hook.beforePlan = async () => {
+          hook.beforePlan = undefined;
+          throw new OperationStopped("operation_stopped", "点了之后、应用之前断了");
+        };
+        const paused = await answer(waiting);
+        expect(paused.state).toBe("paused");
+        await authorSaves(1, "作者又改了一版。");
+        expect(await resumeOperation(book, paused.opId)).toMatchObject({ ok: true });
+        asked = await untilOperation(book, paused.opId, (record) => record.eventSeq > paused.eventSeq && (SETTLED_STATES.includes(record.state) || record.state === "waiting_author"));
+      }
+      expect(asked.state).toBe("waiting_author");
+      expect(await bodyOf(9)).toBe("第九章。");
+      expect(await answer(asked)).toMatchObject({ state: "succeeded" });
+      expect(await bodyOf(9)).toBeUndefined();
+      expect(await bodyOf(1)).toBe("作者又改了一版。");
     });
   }
 

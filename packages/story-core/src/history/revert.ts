@@ -201,6 +201,12 @@ function lineageOf(receipts: readonly CommandReceipt[], current?: ReadonlyMap<st
   return { ids, presentIn, present, lastOutside };
 }
 
+/** 说不准的一个文件和它现在的哈希（不在 = null）。 */
+export interface UnsureFile {
+  readonly path: string;
+  readonly now: string | null;
+}
+
 /** 往前找「上一步」时跳过的：第 from 张回执起现在不在了的那几次（撤销本身、没写东西的不算）。 */
 function skipped(receipts: readonly CommandReceipt[], lineage: Lineage, from: number): number[] {
   const out: number[] = [];
@@ -242,8 +248,9 @@ export function lastUndoable(receipts: readonly CommandReceipt[], current?: Read
  * 「撤销上一步」找到 target 之后：往前找时跳过的那几次（target 之后、现在不在了的）写过的文件，之后又在回执之外改过
  * （比如原样放回了它那份），它在不在就说不准，找到的这次对不对也说不准——这几个文件撤之前要作者看（Astra 第 13 轮第 1 条）。
  * 照现在的谱系算：配方在计划、应用两步的书锁里都重算一遍，记了撤哪次之后才改的也认得出（第 16 轮第 1 条）。
+ * 每个文件带现在的哈希（不在 = null；没给 current 也是 null）：作者点过之后这几个文件又改了，确认依据跟着变、要重新问（第 17 轮第 1 条）。
  */
-export function undoUnsure(receipts: readonly CommandReceipt[], target: RevertTarget, current?: ReadonlyMap<string, string>): readonly string[] {
+export function undoUnsure(receipts: readonly CommandReceipt[], target: RevertTarget, current?: ReadonlyMap<string, string>): readonly UnsureFile[] {
   const lineage = lineageOf(receipts, current);
   const id = targetId(target);
   const last = lineage.ids.lastIndexOf(id);
@@ -254,7 +261,7 @@ export function undoUnsure(receipts: readonly CommandReceipt[], target: RevertTa
       if (index < (lineage.lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
     }
   }
-  return [...unsure].sort();
+  return [...unsure].sort().map((path) => ({ path, now: current?.get(path) ?? null }));
 }
 
 /** 撤销范围里现在每个文件的哈希（谱系认最后一张回执之后在回执之外改的要它）。 */
@@ -275,7 +282,7 @@ export async function lastUndoableIn(bookDir: string, receipts: readonly Command
 }
 
 /** 找到 target 之后说不准的那几个文件，照书里现在的样子核。 */
-export async function undoUnsureIn(bookDir: string, receipts: readonly CommandReceipt[], target: RevertTarget): Promise<readonly string[] | CommandFailure> {
+export async function undoUnsureIn(bookDir: string, receipts: readonly CommandReceipt[], target: RevertTarget): Promise<readonly UnsureFile[] | CommandFailure> {
   const current = await currentHashes(bookDir);
   return "ok" in current ? current : undoUnsure(receipts, target, current);
 }

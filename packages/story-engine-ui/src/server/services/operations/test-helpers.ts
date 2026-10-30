@@ -79,7 +79,7 @@ export async function undoInOperation(bookDir: string, opId?: string): Promise<H
   withHistoryRecipe();
   let record = await runToEnd(bookDir, { kind: HISTORY_CHANGE_KIND, mode: "undo", params: opId ? { opId } : {}, origin: "button" });
   while (record.state === "waiting_author") {
-    const pending = record.pendingActions[0];
+    const pending = record.pendingActions.find((action) => !action.decisionHash);
     if (!pending) break;
     const resumed = await resumeOperation(bookDir, record.opId, { actionId: pending.actionId, decision: "apply" });
     if (!resumed.ok) throw new Error(`没点上「全撤」：${JSON.stringify(resumed)}`);

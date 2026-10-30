@@ -428,6 +428,13 @@ describe("「撤销上一步」撤哪次", () => {
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "B" });
   });
 
+  /** 「撤销上一步」找到 target 之后说不准的那几个文件。 */
+  async function unsurePaths(target: { opId: string }): Promise<string[]> {
+    const files = await undoUnsureIn(book, await readReceipts(book), target);
+    if ("ok" in files) throw new Error(files.message);
+    return files.map((file) => file.path);
+  }
+
   /** 不走命令、直接改盘上的文件（回执之外的改写）。 */
   async function outside(files: { path: string; content: string }[]): Promise<void> {
     for (const file of files) {
@@ -446,11 +453,11 @@ describe("「撤销上一步」撤哪次", () => {
     await write("C", chapter(1, [], { text: TEXT(1, "，第三版"), stamp: "stamp-1c" }));
     // C 还在：照常是上一次，不带「说不准」（C 是照盘上那份写的）。
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "C" });
-    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "C" })).toEqual([]);
+    expect(await unsurePaths({ opId: "C" })).toEqual([]);
     expect(await applyRevert("C", await revert("C"), "U2")).toMatchObject({ ok: true });
     expect(await read(chapterTextPath(1))).toBe(TEXT(1, "，第二版"));
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "X" });
-    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "X" })).toEqual([chapterTextPath(1), chapterLedgerPath(1)]);
+    expect(await unsurePaths({ opId: "X" })).toEqual([chapterTextPath(1), chapterLedgerPath(1)]);
   });
 
   it("作者存稿不留回执：照当时盘上那份改的，AI 那次还在、照常是上一次；撤了 AI 那次之后作者又写，再往前找带「说不准」", async () => {
@@ -458,7 +465,7 @@ describe("「撤销上一步」撤哪次", () => {
     await write("A", [{ path: draftPath(1), content: "AI 写的。" }]);
     await outside([{ path: draftPath(1), content: "作者接着改的。" }]);
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "A" });
-    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "A" })).toEqual([]);
+    expect(await unsurePaths({ opId: "A" })).toEqual([]);
     await write("B", [{ path: draftPath(1), content: "AI 又改的。" }]);
     expect(await applyRevert("B", await revert("B"), "U1")).toMatchObject({ ok: true });
     expect(await read(draftPath(1))).toBe("作者接着改的。");
@@ -467,7 +474,7 @@ describe("「撤销上一步」撤哪次", () => {
     expect(await applyRevert("A", { ...(await revert("A")) }, "U2")).toMatchObject({ ok: true });
     await outside([{ path: draftPath(1), content: "作者自己从头写的。" }]);
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "X" });
-    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "X" })).toEqual([draftPath(1)]);
+    expect(await unsurePaths({ opId: "X" })).toEqual([draftPath(1)]);
   });
 
   it("A 写第 1 章 → B 改第 1、2 章 → 全撤 A → 回执之外把第 1 章原样放回 B 那版：B 靠第 2 章还在被选中，撤它的计划把第 1 章列成后来改过（Astra 第 14 轮第 1 条、第 15 轮第 1 条）", async () => {
@@ -484,7 +491,7 @@ describe("「撤销上一步」撤哪次", () => {
     const plan = await revert("B");
     expect(plan.impact.map((item) => [item.path, item.unknown])).toEqual([[chapterTextPath(1), true], [chapterLedgerPath(1), true]]);
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "B" });
-    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "B" })).toEqual([]);
+    expect(await unsurePaths({ opId: "B" })).toEqual([]);
   });
 
   it("最后一张回执之后才在回执之外改的：照现在的样子认出来（只读回执认不出）", async () => {
@@ -494,7 +501,9 @@ describe("「撤销上一步」撤哪次", () => {
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "X" });
     await outside([{ path: draftPath(1), content: "作者自己写的。" }]);
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "X" });
-    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "X" })).toEqual([draftPath(1)]);
+    // 带现在的哈希：作者点过之后又改了，确认依据跟着变（Astra 第 17 轮第 1 条）。
+    expect(await undoUnsureIn(book, await readReceipts(book), { opId: "X" })).toEqual([{ path: draftPath(1), now: sha256Bytes("作者自己写的。") }]);
+    expect(await unsurePaths({ opId: "X" })).toEqual([draftPath(1)]);
     expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "X" });
     expect(undoUnsure(await readReceipts(book), { opId: "X" })).toEqual([]);
   });

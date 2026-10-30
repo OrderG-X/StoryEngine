@@ -222,7 +222,7 @@ export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResu
 export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
 export { historyApply, HistoryApplyArgs, receiptOnDisk, type HistoryApplyResult } from "./history/apply.js";
-export { BOOK_START_KEYS, HISTORY_APPLY_COMMAND, lastUndoable, lastUndoableIn, planRevert, readReceipts, revertTargetOf, undoUnsure, undoUnsureIn, type ImpactItem, type LaterWrite, type PlannedChange, type RevertPlan, type RevertTarget } from "./history/revert.js";
+export { BOOK_START_KEYS, HISTORY_APPLY_COMMAND, lastUndoable, lastUndoableIn, planRevert, readReceipts, revertTargetOf, undoUnsure, undoUnsureIn, type ImpactItem, type UnsureFile, type LaterWrite, type PlannedChange, type RevertPlan, type RevertTarget } from "./history/revert.js";
 export { planRestore, type RestorePlan } from "./history/restore.js";
 export { HISTORY_FILE_MAX_BYTES, ledgerChapterOfPath, rangeDigestOf, readUndoableFiles, type HistoryReader } from "./history/store.js";
 export { refsOfDecision, refsOfEntry, type Ref, type RefWhere } from "./history/references.js";

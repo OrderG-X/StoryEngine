@@ -232,7 +232,7 @@ async function planUndo(bookDir: string, undo: UndoTarget) {
     throw coded(plan.code, `${plan.message}${restoreHint}`);
   }
   if ("ok" in unsure) throw coded(unsure.code, unsure.message);
-  return { plan, unsure: unsure.filter((path) => !plan.impact.some((item) => item.path === path)) };
+  return { plan, unsure: unsure.filter((file) => !plan.impact.some((item) => item.path === file.path)) };
 }
 
 /** 要不要停下给作者看；不用返回 undefined。 */
@@ -240,8 +240,9 @@ async function askOf(bookDir: string, planned: Awaited<ReturnType<typeof planUnd
   const { plan, unsure } = planned;
   if (plan.impact.length === 0 && unsure.length === 0) return undefined;
   return {
-    lines: [...await impactLines(bookDir, plan.impact), ...unsure.map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`)],
+    lines: [...await impactLines(bookDir, plan.impact), ...unsure.map((file) => `${pathLabel(file.path)}：在操作之外改过，跟操作记录接不上`)],
     impacted: plan.impact.length > 0,
+    // 说不准的带着现在的哈希：作者点过之后那几个文件又改了，就重新问（Astra 第 17 轮第 1 条）。
     digest: unsure.length === 0 ? plan.impactDigest : sha256Bytes(canonicalJson({ impact: plan.impactDigest, unsure })),
   };
 }
