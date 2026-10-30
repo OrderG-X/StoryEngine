@@ -67,16 +67,40 @@ export function planPath(chapter: number): string {
   return `drafts/plans/chapter-${pad(chapter)}.json`;
 }
 
-const UNDOABLE_DIRS = ["chapters/", "ledger/chapters/", "drafts/fast/", "drafts/plans/"] as const;
-const UNDOABLE_FILES: readonly string[] = [DECISIONS_PATH, CARDS_PATH];
+/** 章纲路径 → 章号；不是章纲返回 undefined。 */
+export function planChapterOfPath(path: string): number | undefined {
+  const plain = path.split(sep).join("/");
+  const prefix = "drafts/plans/chapter-";
+  if (!plain.startsWith(prefix) || !plain.endsWith(".json")) return undefined;
+  return chapterFromFileName(`${plain.slice(prefix.length, -".json".length)}.json`);
+}
+
+/** 撤销范围里的目录（整本恢复按它们列文件）和单个文件。 */
+export const UNDOABLE_DIRS = ["chapters", CHAPTER_LEDGER_DIR, "drafts/fast", "drafts/plans"] as const;
+export const UNDOABLE_FILES: readonly string[] = [DECISIONS_PATH, CARDS_PATH];
 
 /**
- * 撤销、整本恢复管的范围（写作版本 P2a）：正文、账单、裁定、设定卡、工作稿、章纲。回执只给这个范围里的文件记前后哈希。
- * 候选、恢复稿、回执、控制文件、head 不在里面：撤销不把它们翻回去。
+ * 撤销、整本恢复管的范围（写作版本 P2a）：正文、账单、裁定、设定卡、工作稿、章纲，只认这几种文件名（目录里别的东西不管，
+ * 比如系统留下的隐藏文件）。回执只给这个范围里的文件记前后哈希。候选、恢复稿、回执、控制文件、head 不在里面：撤销不把它们翻回去。
  */
 export function isUndoablePath(path: string): boolean {
   const plain = path.split(sep).join("/");
-  return UNDOABLE_FILES.includes(plain) || UNDOABLE_DIRS.some((dir) => plain.startsWith(dir) && plain.length > dir.length && !plain.slice(dir.length).includes("/"));
+  if (UNDOABLE_FILES.includes(plain)) return true;
+  const slash = plain.lastIndexOf("/");
+  const dir = plain.slice(0, slash);
+  const name = plain.slice(slash + 1);
+  switch (dir) {
+    case "chapters":
+      return name.endsWith(".md") && chapterFromFileName(name) !== undefined;
+    case CHAPTER_LEDGER_DIR:
+      return name.endsWith(".json") && chapterFromFileName(name) !== undefined;
+    case "drafts/fast":
+      return draftChapterOfPath(plain) !== undefined;
+    case "drafts/plans":
+      return planChapterOfPath(plain) !== undefined;
+    default:
+      return false;
+  }
 }
 
 export function receiptPath(keyHash: string): string {

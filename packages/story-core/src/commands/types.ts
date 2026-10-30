@@ -36,6 +36,8 @@ export interface WritePlan<R> {
   readonly writes: readonly TxWrite[];
   readonly changed: ChangeSet;
   readonly result: R;
+  /** 整本换一个工作稿纪元（撤销、整本恢复：每一章的工作稿版本号都和之前对不上），不只换写了的那几章。 */
+  readonly freshDraftEpoch?: boolean;
 }
 
 export interface PlanContext {

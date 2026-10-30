@@ -161,7 +161,7 @@ export {
   setLegacyTxIoHookForTests,
   type LegacyRecoveryNotice,
 } from "./store/legacy-transaction.js";
-export { BOOK_EPOCH_PATH, CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, isUndoablePath, KEPT_TX_DIR, LEDGER_DIR, planPath, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR } from "./store/paths.js";
+export { BOOK_EPOCH_PATH, CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, isUndoablePath, KEPT_TX_DIR, LEDGER_DIR, planChapterOfPath, planPath, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR, UNDOABLE_DIRS, UNDOABLE_FILES } from "./store/paths.js";
 export { isSavedCopyId, listSavedDrafts, readSavedDraft, settleSavedCopy, type SavedDraft } from "./store/saved-copies.js";
 export {
   hasPendingTransactions,
@@ -221,6 +221,11 @@ export { decisionRecord, DecisionRecordArgs, MAX_DECISIONS_PER_RECORD, type Deci
 export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
 export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
+export { historyApply, HistoryApplyArgs, type HistoryApplyResult } from "./history/apply.js";
+export { planRevert, readReceipts, type ImpactItem, type LaterWrite, type PlannedChange, type RevertPlan, type RevertTarget } from "./history/revert.js";
+export { planRestore, type RestorePlan } from "./history/restore.js";
+export { HISTORY_FILE_MAX_BYTES, rangeDigestOf, readUndoableFiles, type HistoryReader } from "./history/store.js";
+export { refsOfDecision, refsOfEntry, type Ref, type RefWhere } from "./history/references.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
 export { bookImportText, BookImportTextArgs, TEXT_IMPORT_MAX_CHAPTERS, type BookImportTextResult } from "./import/text-import.js";
 export {

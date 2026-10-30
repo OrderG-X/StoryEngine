@@ -15,7 +15,7 @@ import { BOOK_HEAD_SCHEMA, COMMAND_RECEIPT_SCHEMA, CommandReceipt } from "../sch
 import { canonicalJson, diffTruthBasis } from "../store/basis.js";
 import { BookFileError, readHead, readTruthBasis } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
-import { draftGensWrite, readDraftGens, revisionWrite } from "../store/control.js";
+import { draftGensWrite, freshDraftGensWrite, readDraftGens, revisionWrite } from "../store/control.js";
 import { assertInsideBook, draftChapterOfPath, HEAD_PATH, isUndoablePath, receiptPath } from "../store/paths.js";
 import { LegacyResidueError } from "../store/legacy-transaction.js";
 import { commitFiles, isTxDelete, recoverTransactions, sha256Bytes, type RecoveryReport, type TxEffect, type TxWrite } from "../store/transaction.js";
@@ -201,7 +201,9 @@ export async function runCommand<A, R>(
       return chapter === undefined ? [] : [chapter];
     }))];
     let gens: TxWrite[] = [];
-    if (draftChapters.length > 0) {
+    if (planned.freshDraftEpoch) {
+      gens = [freshDraftGensWrite()];
+    } else if (draftChapters.length > 0) {
       try {
         gens = [draftGensWrite(await readDraftGens(bookDir), draftChapters, draftGen)];
       } catch (error) {
