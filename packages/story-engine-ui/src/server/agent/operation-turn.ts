@@ -262,7 +262,7 @@ export async function finishOperationTurn(args: {
             : record.kind === CANON_PROPOSE_KIND
               ? canonWaitingText(record)
               : record.kind === HISTORY_CHANGE_KIND
-                ? (record.mode === "prune" ? "要裁的在卡上：点「确认裁剪」才裁。" : "这次之后又改过的几处在卡上：点「全撤」才撤。")
+                ? (record.mode === "prune" ? "要裁的在卡上：点「确认裁剪」才裁。" : "撤之前要你看一眼，在卡上：点「全撤」才撤。")
               : record.kind === COMMIT_PREPARE_KIND && chapter !== undefined
                 // 清单（要你看的、自动记下的、提醒）在弹窗和对话小卡里，回话只说一句（刷新后弹窗没开也说得通）。
                 ? `第 ${chapter} 章可以定稿，清单在卡上：点「确认定稿」才定。`

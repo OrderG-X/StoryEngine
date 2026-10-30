@@ -266,7 +266,7 @@ async function applyUndo(bookDir: string, undo: UndoTarget, confirmed: string | 
 }
 
 const UNDO_NOTES = ["全撤会把这几处一起退回这次之前的样子：之后那几次在这几处的改动也跟着没了。"];
-const UNSURE_NOTE = "往前找「上一步」时这几处说不准之前那几次还在不在，找到的是这一次；点了才撤。";
+const UNSURE_NOTE = "往前找「上一步」时这几处说不准，找到的是这一次。";
 
 async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<OperationResult> {
   const { bookDir } = ctx;
