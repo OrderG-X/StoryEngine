@@ -125,6 +125,8 @@ function offsetOf(value: unknown): TimeOffset | string {
     return n === undefined ? "相对多少不是整数" : offsetOf({ min: n, max: n });
   }
   if (!isRecord(value)) return "相对多少写得不对";
+  // 按换天规矩各写的那份里又套了一层 offset（照着 start 的写法套的）：拆开。
+  if (value.offset !== undefined && value.min === undefined && value.max === undefined && value.value === undefined && value.days === undefined) return offsetOf(value.offset);
   const unitText = str(value.unit)?.toLowerCase();
   const unit = unitText === undefined ? "day" : UNITS[unitText];
   if (!unit) return `单位写成了「${unitText}」，认不出（只认天、月、年）`;
@@ -424,17 +426,19 @@ function parseTime(root: Raw, drop: (where: string, reason: string) => void, adj
   }
 
   const time: Mutable<TimeInput> = { kind: "time", review: "auto" };
-  const startText = str(raw.start)?.toLowerCase();
+  // start 那几样直接写在 time 里、没套 start：照 start 收。
+  const startRaw = raw.start ?? (raw.offset !== undefined || raw.byBoundary !== undefined ? { offset: raw.offset, byBoundary: raw.byBoundary, basis: raw.basis, quote: raw.quote } : undefined);
+  const startText = str(startRaw)?.toLowerCase();
   if (startText === "unknown") time.start = "unknown";
-  else if (isRecord(raw.start)) {
-    const start = raw.start;
+  else if (isRecord(startRaw)) {
+    const start = startRaw;
     const relative = relativeOf(start);
     const basis = str(start.basis)?.toLowerCase() === "text" ? "text" : "judged";
     if (typeof relative === "string") {
       adjusted.push({ where: "time.start", reason: `本章开头离上一章多久没写对（${relative}），按说不出记` });
       time.start = "unknown";
     } else time.start = { ...relative, basis, quote: quoteText(start.quote) ?? "" };
-  } else if (raw.start !== undefined && raw.start !== null && raw.start !== "") {
+  } else if (startRaw !== undefined && startRaw !== null && startRaw !== "") {
     adjusted.push({ where: "time.start", reason: "本章开头离上一章多久写得认不出，按说不出记" });
     time.start = "unknown";
   }

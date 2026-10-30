@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
 import { nameHandles, parseKeeperOutput } from "./keeper-parse.js";
-import { buildKeeperTask, KEEPER_SPEC, LEDGER_ROLE, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
+import { buildKeeperTask, endingByWorld, KEEPER_SPEC, LEDGER_ROLE, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
 type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: "auto" | "author" } : never) : never;
@@ -196,6 +196,10 @@ describe("记账员交回的账单", () => {
         { frame: "past", firstQuote: "她想起那年", lastQuote: "雪很大", when: { offset: { unit: "year", max: -3 } } },
         { frame: "other", firstQuote: "梦里", lastQuote: "梦醒" },
       ],
+    });
+    // 按换天规矩各写的那份里又套了一层 offset：拆开照收。
+    expect(time({ start: { byBoundary: { midnight: { offset: { unit: "day", min: 0, max: 0 } }, dawn: { offset: 1 } }, basis: "text", quote: "第二天一早" } })?.entries[0]).toMatchObject({
+      start: { byBoundary: { midnight: { unit: "day", min: 0, max: 0 }, dawn: { unit: "day", min: 1, max: 1 } }, basis: "text" },
     });
     // 整章是一段：只写 segments（写在 time 里也认）。
     expect(time({ segments: [{ frame: "past", firstQuote: "那年", lastQuote: "那年", when: "unknown" }] })?.entries[0]).toEqual({
@@ -597,6 +601,25 @@ describe("记账员跑一章", () => {
     expect(previousPresentChapter(view, 6)).toBe(5);
     expect(previousPresentChapter(view, 1)).toBeUndefined();
     expect(buildKeeperTask(4, "正文", "", { chapter: 1, text: "结尾" })).toContain("【上一个当下章结尾（第 1 章）】\n结尾");
+  });
+
+  it("上一个当下章结尾两种换天规矩不在同一天：告诉记账员各是哪天；一样的不说", () => {
+    const text = (chapter: number) => `# 第${chapter}章\n\n他坐到后半夜。屋里静了。`;
+    const day = (min: number) => ({ unit: "day" as const, min, max: min });
+    const first = ledgerOf({ chapter: 1, text: text(1), committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "judged", quote: "他坐到后半夜" }, sameDay: true }] });
+    const late = ledgerOf({
+      chapter: 2,
+      text: text(2),
+      committedAt: "2026-10-17T00:00:00.000Z",
+      entries: [{ kind: "time", review: "auto", start: { offset: day(1), basis: "judged", quote: "他坐到后半夜" }, dayChanges: [{ byBoundary: { midnight: day(1), dawn: day(0) }, quote: "屋里静了" }] }],
+    });
+    const view = project({ ledgers: [first, late], decisions: [] });
+    expect(endingByWorld(view, 1)).toBeUndefined();
+    const ends = endingByWorld(view, 2);
+    expect(ends).toEqual({ midnight: { lo: 3, hi: 3 }, dawn: { lo: 2, hi: 2 } });
+    const task = buildKeeperTask(3, "正文", "", { chapter: 2, text: "屋里静了。", byWorld: ends });
+    expect(task).toContain("过了半夜就算第二天时是第 3 天，天亮才算第二天时是第 2 天");
+    expect(buildKeeperTask(3, "正文", "", { chapter: 2, text: "屋里静了。" })).not.toContain("两种换天规矩不在同一天");
   });
 
   it("提示词里不写任何具体书名、人名", () => {

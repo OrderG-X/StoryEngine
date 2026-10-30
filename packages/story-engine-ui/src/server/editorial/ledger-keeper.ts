@@ -22,6 +22,7 @@ import {
   readCards,
   splitUnits,
   type BookProjection,
+  type DayRange,
   type EntryInput,
   type SegmentInput,
   type TextUnit,
@@ -78,9 +79,10 @@ export const KEEPER_SPEC: readonly string[] = [
   "time：每章都给（第 1 章也照样给）。",
   "- 当下 = 故事「现在」往前走的那条线。多线叙事换个人物从前天讲起也还在当下，只是往回接。回忆、倒叙、梦、想象、传闻、故事里讲的故事不在当下，写进 segments。",
   "- start = 本章开头离上一个当下章的结尾多久（下面【上一个当下章结尾】是原文）。写成 {\"offset\":{\"unit\":\"day\",\"min\":1,\"max\":1},\"basis\":\"text\",\"quote\":\"…\"}：同一天 0，「第二天」1，「三天后」3，往回接的写负数（「前天」-2）。本章开头做的正是上一个当下章约到「明天」「第二天」的事，或者本章里说「昨天」指的是上一个当下章的事，也是 1。说不准几天就写区间（「过了几天」写 min、max 两头，「几天后」只写 min）；「半年后」「三年后」照原样写 unit 为 month、year，不要折成天。正文明写了 basis 填 text；对照上一个当下章结尾和本章开头判断的填 judged。quote 引说明它的那句。",
-  "- 要看「过了半夜算不算第二天」才定的（上一章结尾在夜里、本章开头是后半夜、凌晨、天亮这类），按两种规矩各写一份，不写 offset：\"byBoundary\":{\"midnight\":{过了半夜就算第二天时隔多久},\"dawn\":{天亮才算第二天时隔多久}}。不看规矩就定的只写 offset。",
+  "- 要看「过了半夜算不算第二天」才定的，按两种规矩各写一份，不写 offset：\"byBoundary\":{\"midnight\":{\"unit\":\"day\",\"min\":0,\"max\":0},\"dawn\":{\"unit\":\"day\",\"min\":1,\"max\":1}}（midnight = 过了半夜十二点就算第二天时隔多久，dawn = 天亮才算第二天时隔多久，里面直接写 unit、min、max，不要再套一层 offset）。两种情形要分：① 上一个当下章停在半夜以后、天亮以前（后半夜、凌晨），本章开头是那之后第一次天亮（「第二天一早」这类）：midnight 0、dawn 1；② 上一个当下章停在白天或半夜以前，本章开头在半夜以后、天亮以前（凌晨四点这类）：midnight 1、dawn 0。再往后每多隔一天，两份各加 1。下面【上一个当下章结尾】后面注明了按两种规矩不在同一天的，多半就是①。不看规矩就定的只写 offset。",
   "- 本章接着当下往下讲、但判断不了隔多久，写 \"start\":\"unknown\"，不要硬填一个数。整章都是回忆、梦这类段时，time 只写 segments，不写 start、sameDay、dayChanges、weekday、timeOfDay。",
-  "- 本章从头到尾在同一天，写 \"sameDay\":true（从早到晚、从白天到深夜都还是同一天）。中间换了天就逐次列 dayChanges：每次写隔了几天（offset 至少 1 天；要看换天规矩才定的照样用 byBoundary 各写一份），quote 逐字摘新的一天开头那句。两样都不写 = 章末是哪天不知道。",
+  "- 本章从头到尾在同一天，写 \"sameDay\":true（从早到晚、从白天到半夜以前都还是同一天）。中间换了天就逐次列 dayChanges：每次写隔了几天（offset 至少 1 天；要看换天规矩才定的照样用 byBoundary 各写一份），quote 逐字摘新的一天开头那句。两样都不写 = 章末是哪天不知道。",
+  "- 章里写过了半夜、或从半夜以后写到天亮，不写 sameDay，dayChanges 按两种规矩各记一次：写到半夜以后那一处（「后半夜」「凌晨两点」这类）记 midnight 1、dawn 0；从半夜以后写到天亮那一处（「天亮了」「上午九点」这类）记 midnight 0、dawn 1。一夜从半夜以前一直写到天亮以后的，两处各记一次；本章开头已在半夜以后（上面②）、写到天亮的，只记天亮那一处。",
   "- weekday 只填正文明写的星期，写成「周二」这样；没写就不填，不要自己推算。timeOfDay 填正文写的时段（「傍晚」）。",
   "- 不要写「故事第几天」，那由代码按全书算。",
   "",
@@ -184,24 +186,56 @@ export function previousPresentChapter(before: BookProjection, chapter: number):
   return undefined;
 }
 
+/** 上一个当下章的结尾：原文最后一小段，两种换天规矩下结尾不在同一天时带上各是哪天。 */
+export interface PreviousEnding {
+  readonly chapter: number;
+  readonly text: string;
+  readonly byWorld?: { readonly midnight: DayRange; readonly dawn: DayRange };
+}
+
+/** 两种换天规矩下这一章结尾各是哪天：都知道、又不一样才有（一样的、哪边不知道的不给，记账员照原文判）。 */
+export function endingByWorld(before: BookProjection, chapter: number): PreviousEnding["byWorld"] {
+  const days = before.chapters.find((view) => view.chapter === chapter)?.time.byWorld;
+  const midnight = days?.midnight?.end;
+  const dawn = days?.dawn?.end;
+  if (!midnight || !dawn || dayText(midnight) === undefined || dayText(dawn) === undefined) return undefined;
+  if (midnight.lo === dawn.lo && midnight.hi === dawn.hi) return undefined;
+  return { midnight, dawn };
+}
+
+function dayText(range: DayRange): string | undefined {
+  if (range.lo !== undefined && range.lo === range.hi) return `第 ${range.lo} 天`;
+  if (range.lo !== undefined && range.hi !== undefined) return `第 ${range.lo}～${range.hi} 天`;
+  if (range.lo !== undefined) return `第 ${range.lo} 天或更晚`;
+  if (range.hi !== undefined) return `不晚于第 ${range.hi} 天`;
+  return undefined;
+}
+
 /** 上一个当下章定稿正文的最后一小段（没有、读不到就没有）。 */
-async function previousEnding(projectDir: string, before: BookProjection, chapter: number): Promise<{ readonly chapter: number; readonly text: string } | undefined> {
+async function previousEnding(projectDir: string, before: BookProjection, chapter: number): Promise<PreviousEnding | undefined> {
   const previous = previousPresentChapter(before, chapter);
   if (previous === undefined) return undefined;
   try {
     const text = (await readFile(join(projectDir, chapterTextPath(previous)), "utf-8")).trim();
-    return { chapter: previous, text: text.length > PREVIOUS_ENDING_CHARS ? `…${text.slice(-PREVIOUS_ENDING_CHARS)}` : text };
+    const byWorld = endingByWorld(before, previous);
+    return { chapter: previous, text: text.length > PREVIOUS_ENDING_CHARS ? `…${text.slice(-PREVIOUS_ENDING_CHARS)}` : text, ...(byWorld ? { byWorld } : {}) };
   } catch {
     return undefined;
   }
 }
 
+function endingSection(ending: PreviousEnding): string {
+  const head = `【上一个当下章结尾（第 ${ending.chapter} 章）】\n${ending.text}`;
+  if (!ending.byWorld) return head;
+  return `${head}\n（第 ${ending.chapter} 章结尾按两种换天规矩不在同一天：过了半夜就算第二天时是${dayText(ending.byWorld.midnight)}，天亮才算第二天时是${dayText(ending.byWorld.dawn)}。本章开头隔几天按两种规矩各写一份 byBoundary。）`;
+}
+
 /** 拼给记账员的那条 user 消息（单测和考卷也用）。ending = 上一个当下章的结尾。 */
-export function buildKeeperTask(chapter: number, draft: string, contextText: string, ending?: { readonly chapter: number; readonly text: string }): string {
+export function buildKeeperTask(chapter: number, draft: string, contextText: string, ending?: PreviousEnding): string {
   return [
     `【第 ${chapter} 章 正文（待定稿，上面还没给过你）】\n${draft}`,
     contextText,
-    ending && ending.text ? `【上一个当下章结尾（第 ${ending.chapter} 章）】\n${ending.text}` : "",
+    ending && ending.text ? endingSection(ending) : "",
     `这一章即将定稿入库。对照你读过的前文原文和记账笔记，交这一章的账单。\n\n${KEEPER_SPEC.join("\n")}`,
   ]
     .filter((part) => part.length > 0)
