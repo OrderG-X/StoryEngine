@@ -12,7 +12,7 @@
  *   getPlaceholder / formatMessageBlocks / renderRichText / ThinkingIndicator。
  * 工具步聚合复用 agentTimelineModel 的 buildTimelineModel；权限点复用 v2Utils.primaryPermission。
  */
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ToolStep, DraftReviewIssueView, ReaderCatchUpStatus } from "../../../api/types.js";
 import type { ChapterMessage, MessageCard, WritingWorkspaceLayoutProps, AiFlavorViolation } from "../../../types.js";
@@ -49,6 +49,7 @@ import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, withoutRailDuplicates, type NextStepPrompt } from "./nextStepChoices.js";
 import { newCommitAction, type AgentUserAction } from "../../../api/agentChatClient.js";
+import { summarizeCommitReport } from "../../../utils/commitReportSummary.js";
 import { confirmableCommitPreviewIds, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
@@ -284,6 +285,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // R6.2：概况刷新带来的新初值盖过旧轮询结果（同一次打开里后来的补读也显示）；动作进行中（busy）也轮询，回包到了再按 reading 停。
   // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
   const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp, workspaceBusy);
+  // 账还没记上 / 没记全的章：那章的定稿回执卡上给「补记账」（补上了就不再给）。
+  const ledgerShortChapters = useMemo(() => new Set((props.overview?.ledgerShort ?? []).map((item) => item.chapter)), [props.overview?.ledgerShort]);
   useRefreshWhenRereadDone(props.projectPath, readerCatchUp);
   // 这一章还差什么（顶卡；和稿纸底下的工具条同源）。
   const chapterProgressNow = useChapterProgress(targetChapterWordsOf(props.overview));
@@ -582,6 +585,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSuggestedAction={props.onSuggestedAction}
             commitConfirmable={confirmablePreviewIds.has(message.id)}
             commitUndoable={message.id === undoableCommitId}
+            ledgerShortChapters={ledgerShortChapters}
             continuitySuperseded={staleContinuityIds.has(message.id)}
             continuitySettled={settledContinuity.get(message.id)}
             projectPath={props.projectPath ?? null}
@@ -821,6 +825,7 @@ function MessageBubbles({
   onSuggestedAction,
   commitConfirmable = false,
   commitUndoable = false,
+  ledgerShortChapters,
   continuitySuperseded = false,
   continuitySettled,
   onPrefillComposer,
@@ -841,12 +846,14 @@ function MessageBubbles({
   /** 点「审校问题」卡的「改这处」=给 agent 发一句改写意图（chat 驱动）。 */
   readonly onSendMessage?: (content: string) => void;
   /** 结构化动作直达（核账「改这处」按钮直接改，不经模型）。 */
-  readonly onSendUserAction?: (action: AgentUserAction) => void;
+  readonly onSendUserAction?: (action: AgentUserAction, options?: { readonly echo?: string }) => void;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
   readonly commitConfirmable?: boolean;
   /** 本条的定稿回执是否挂「撤销这次定稿」（最近一次改动就是这次定稿才挂）。 */
   readonly commitUndoable?: boolean;
+  /** 账还没记上 / 没记全的章（定稿回执卡上给「补记账」）。 */
+  readonly ledgerShortChapters?: ReadonlySet<number>;
   /** 本条的核账卡是不是旧的（同一章后来又核过）：旧卡不给「改这处」。 */
   readonly continuitySuperseded?: boolean;
   /** 这张核账卡之后定论改掉的条目键。 */
@@ -993,6 +1000,9 @@ function MessageBubbles({
             report={card.report}
             onUndo={canUndo && commitUndoable ? onUndoToHere : undefined}
             undoDisabled={chatLoading}
+            {...(onSendUserAction && ledgerShortChapters?.has(summarizeCommitReport(card.report).chapter ?? 0)
+              ? { onFill: (chapter: number) => onSendUserAction(newCommitAction(chapter, { fill: true })) }
+              : {})}
           />
         );
       case "directions":

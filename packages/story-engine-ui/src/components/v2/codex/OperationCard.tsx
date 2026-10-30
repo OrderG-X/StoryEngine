@@ -29,12 +29,15 @@ export function checkedBeforeEdit(
   return paper.dirty || (paper.baseVersion !== null && paper.baseVersion !== checkedVersion);
 }
 
+/** 点卡上按钮：echo＝对话里「你：…」那句（选择卡照按钮上的字回显）。 */
+type SendAction = (action: AgentUserAction, options?: { readonly echo?: string }) => void;
+
 export function OperationCard({ op, inLiveTurn, busy, onAction }: {
   readonly op: OperationCardData;
   /** 这一轮还在跑、操作就是这一轮交的：停它用输入框的停止键，卡上不再给「不要了」。 */
   readonly inLiveTurn: boolean;
   readonly busy: boolean;
-  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+  readonly onAction?: SendAction | undefined;
 }) {
   if (ENDED_OPERATION_STATES.has(op.state)) {
     if (op.announced) return null;
@@ -47,6 +50,7 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
   if (op.state === "waiting_author" && op.pending?.kind === "revise") return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   if (op.state === "waiting_author" && op.pending?.kind === "confirm") return <ChangeConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   if (op.state === "waiting_author" && op.pending?.kind === "canon") return <CanonConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
+  if (op.state === "waiting_author" && op.pending?.kind === "choice") return <AuthorChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   // 定稿清单等作者点：清单卡（和弹窗）就是这次的样子，操作卡不另说一行。
   if (op.state === "waiting_author" && op.pending?.kind === "commit") return null;
   const running = RUNNING.has(op.state);
@@ -81,7 +85,7 @@ function ReviseChoice({ op, pending, busy, onAction }: {
   readonly op: OperationCardData;
   readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "revise" }>;
   readonly busy: boolean;
-  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+  readonly onAction?: SendAction | undefined;
 }) {
   const { revise } = pending;
   return (
@@ -118,6 +122,38 @@ function ReviseChoice({ op, pending, busy, onAction }: {
   );
 }
 
+/** 停下请作者挑一个（记账没成：「再记一次」「先定正文、账待记」）：说明和按钮的字都是服务端给的。 */
+function AuthorChoice({ op, pending, busy, onAction }: {
+  readonly op: OperationCardData;
+  readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "choice" }>;
+  readonly busy: boolean;
+  readonly onAction?: SendAction | undefined;
+}) {
+  return (
+    <div className="se-op-card se-op-settings" role="group" aria-label={op.what}>
+      {pending.lines.map((line, index) => <p key={index} className="se-op-brief">{line}</p>)}
+      {onAction ? (
+        <span className="se-op-acts">
+          {pending.choices.map((choice) => (
+            <button
+              key={choice.decision}
+              type="button"
+              className={choice.primary ? "chip is-primary" : "chip"}
+              disabled={busy}
+              onClick={() => onAction({ kind: "resume", opId: op.opId, answer: { actionId: pending.actionId, decision: choice.decision } }, { echo: choice.label })}
+            >
+              {choice.label}
+            </button>
+          ))}
+          {op.allowed.includes("cancel") ? (
+            <button type="button" className="chip" disabled={busy} onClick={() => onAction({ kind: "cancel", opId: op.opId })}>不要了</button>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 const CONFIRM_LABELS = { settings: "确认改设定", ledger: "确认改账", undo: "全撤", prune: "确认裁剪" } as const;
 
 /**
@@ -128,7 +164,7 @@ function ChangeConfirm({ op, pending, busy, onAction }: {
   readonly op: OperationCardData;
   readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "confirm" }>;
   readonly busy: boolean;
-  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+  readonly onAction?: SendAction | undefined;
 }) {
   return (
     <div className="se-op-card se-op-settings" role="group" aria-label={op.what}>
@@ -165,7 +201,7 @@ function CanonConfirm({ op, pending, busy, onAction }: {
   readonly op: OperationCardData;
   readonly pending: Extract<NonNullable<OperationCardData["pending"]>, { readonly kind: "canon" }>;
   readonly busy: boolean;
-  readonly onAction?: ((action: AgentUserAction) => void) | undefined;
+  readonly onAction?: SendAction | undefined;
 }) {
   const [excluded, setExcluded] = useState<readonly string[]>([]);
   const { card } = pending;

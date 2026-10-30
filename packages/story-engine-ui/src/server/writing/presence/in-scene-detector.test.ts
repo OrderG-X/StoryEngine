@@ -2,16 +2,16 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  CHAPTER_LEDGER_SCHEMA,
   applyCardOps,
   bibleView,
   cardWrite,
   emptySettingCards,
+  ledgerOf,
   project,
   runCommand,
   type CardOp,
   type ChapterLedger,
-  type LedgerEntry,
+  type EntryDraft,
 } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -182,19 +182,13 @@ describe("detectInSceneCharacters：超额按分收窄", () => {
 });
 
 describe("inSceneCandidates", () => {
-  type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> : never) : never;
-  const ledgerOf = (chapter: number, drafts: Draft[]): ChapterLedger => ({
-    schema: CHAPTER_LEDGER_SCHEMA,
-    chapter,
-    textSha256: "0".repeat(64),
-    committedAt: AT,
-    origin: "commit",
-    entries: drafts.map((draft, index) => ({ review: "auto", ...draft, id: `c${chapter}-${index + 1}` }) as LedgerEntry),
-  });
+  type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> : never) : never;
+  const chapterLedger = (chapter: number, drafts: Draft[]): ChapterLedger =>
+    ledgerOf({ chapter, committedAt: AT, entries: drafts.map((draft) => ({ review: "auto", ...draft }) as EntryDraft) });
 
   it("人物卡在前（带账里用过的称呼），账里出场、还没建卡的人在后；账里别的主体不算人", () => {
     const projection = project({
-      ledgers: [ledgerOf(1, [
+      ledgers: [chapterLedger(1, [
         { kind: "presence", name: "许微", nameUsed: "许微", quote: "许微来了" },
         { kind: "presence", name: "孟庆山", nameUsed: "孟叔", quote: "孟叔来了" },
         { kind: "presence", name: "韩德胜", nameUsed: "老韩", quote: "老韩来了" },
@@ -234,16 +228,11 @@ describe("resolveInSceneCharacters（读真书）", () => {
     if (!outcome.ok) throw new Error(outcome.message);
   }
   async function ledger(chapter: number, present: { name: string; nameUsed?: string }[]): Promise<void> {
-    const file: ChapterLedger = {
-      schema: CHAPTER_LEDGER_SCHEMA,
+    const file = ledgerOf({
       chapter,
-      textSha256: "0".repeat(64),
       committedAt: AT,
-      origin: "commit",
-      entries: present.map((item, index) => ({
-        kind: "presence", review: "auto", id: `c${chapter}-${index + 1}`, name: item.name, nameUsed: item.nameUsed ?? item.name, quote: `${item.nameUsed ?? item.name}来了`,
-      })),
-    };
+      entries: present.map((item) => ({ kind: "presence", review: "auto", name: item.name, nameUsed: item.nameUsed ?? item.name, quote: `${item.nameUsed ?? item.name}来了` })),
+    });
     await mkdir(join(projectDir, "ledger", "chapters"), { recursive: true });
     await writeFile(join(projectDir, "ledger", "chapters", `${String(chapter).padStart(4, "0")}.json`), JSON.stringify(file), "utf-8");
   }

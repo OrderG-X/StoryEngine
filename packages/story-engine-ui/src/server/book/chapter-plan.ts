@@ -12,7 +12,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-store.js";
-import { chapterEndDay, readStoryTimeline } from "./story-timeline.js";
+import { chapterEndDay } from "./story-timeline.js";
+import { readStoryViews } from "./story-views.js";
 
 export interface ChapterPlanThreadStep {
   /** 推进的线索/目标标题（尽量逐字取自现有开着的线索）。 */
@@ -221,14 +222,14 @@ export interface StoryClockEntry {
 
 /**
  * 前面各章的「故事第几天」（近的在后），最多 limit 条。
- * 2026-10-10 起读故事时间线（story/timeline.json；老书由章纲和已定稿章节现推）：以前只认章纲，
- * 作者自己写、没有章纲的章整段缺席，新章的天数会静默偏小。摘要优先章纲，没有就用时间线事件。
+ * 读故事时间线（从投影现算）：以前只认章纲，作者自己写、没有章纲的章整段缺席，新章的天数会静默偏小。
+ * 摘要优先章纲，没有就用那章的梗概。
  */
 export async function readStoryClock(projectDir: string, chapter: number, limit = 12): Promise<readonly StoryClockEntry[]> {
-  const { timeline } = await readStoryTimeline(projectDir);
+  const { timeline, events } = await readStoryViews(projectDir);
   const entries = timeline.entries.filter((entry) => entry.chapter < chapter).slice(-limit);
   if (entries.length === 0) return [];
-  const eventSummaries = await readEventSummaries(projectDir);
+  const eventSummaries = new Map(events.map((event) => [event.chapter, event.summary]));
   const out: StoryClockEntry[] = [];
   for (const entry of entries) {
     const plan = await readChapterPlan(projectDir, entry.chapter).catch(() => undefined);
@@ -237,17 +238,6 @@ export async function readStoryClock(projectDir: string, chapter: number, limit 
     out.push({ chapter: entry.chapter, storyDay: entry.day, ...(entry.daysInChapter ? { endDay: chapterEndDay(entry) } : {}), ...(time ? { time } : {}), summary });
   }
   return out;
-}
-
-async function readEventSummaries(projectDir: string): Promise<ReadonlyMap<number, string>> {
-  try {
-    const events = JSON.parse(await readFile(join(projectDir, "timeline", "events.json"), "utf-8")) as { chapter?: unknown; summary?: unknown }[];
-    return new Map(events
-      .filter((event) => typeof event.chapter === "number" && typeof event.summary === "string")
-      .map((event) => [event.chapter as number, event.summary as string]));
-  } catch {
-    return new Map();
-  }
 }
 
 export function chapterPlanPath(projectDir: string, chapter: number): string {

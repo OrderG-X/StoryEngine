@@ -6,7 +6,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { bookImportText, projectBook, readChapterLedger, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureBookOnCore } from "../../../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../../../book/ensure-on-core.js";
 import { createStoryProject } from "../../../book/project-store.js";
 import { __resetCatchUpQueuesForTests, readReadersCatchUpStatus } from "../../../editorial/catch-up.js";
 import { resumeBackgroundReading, type BrainCallModel } from "../../../editorial/index.js";
@@ -214,10 +214,10 @@ describe("通读记账", () => {
   });
 
   it("只记导入已写的书时那份空账单：老格式书导入的账（origin 也是 import，带着老账）、定稿过的、记过的都不记", () => {
-    expect(awaitsReread({ origin: "import", entries: [] })).toBe(true);
-    expect(awaitsReread({ origin: "import", entries: [{} as never] })).toBe(false);
-    expect(awaitsReread({ origin: "commit", entries: [] })).toBe(false);
-    expect(awaitsReread({ origin: "reread", entries: [] })).toBe(false);
+    expect(awaitsReread({ origin: "import", status: "pending" })).toBe(true);
+    expect(awaitsReread({ origin: "import", status: "ready" })).toBe(false);
+    expect(awaitsReread({ origin: "commit", status: "pending" })).toBe(false);
+    expect(awaitsReread({ origin: "reread", status: "ready" })).toBe(false);
   });
 
   it("模型没配好：也受理，跑起来如实没成（进度行挂着原因，账没记全的书不放行）", async () => {

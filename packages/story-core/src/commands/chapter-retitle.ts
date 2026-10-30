@@ -2,11 +2,12 @@
  * 「改已定稿的章名」命令（作者档，2026-10-22 真机试写）：定稿前忘了起章名，定稿后稿纸锁了、章名点不动，
  * 作者没有路可走，章节栏永远「未命名」。
  *
- * 只换定稿正文第一行的「# 章名」，正文一个字不动；账单里的正文指纹跟着换（不然投影会当成「定稿后改过正文」）。
+ * 只换定稿正文第一行的「# 章名」，正文一个字不动；账单里的正文指纹和证据的版本跟着换（不然投影会当成「定稿后改过正文」）。
  * 这一章还有工作稿的，工作稿的章名一起换（章节栏、书架先看工作稿的章名）。账单条目一条不动，不用重新记账。
  */
 import { z } from "zod";
 import { ChapterLedger } from "../schema/ledger.js";
+import { chapterSource, relocateEvidence } from "../ledger/entries.js";
 import { readChapterLedger, readChapterText, sha256 } from "../store/book.js";
 import { chapterLedgerPath, chapterTextPath, draftPath } from "../store/paths.js";
 import { composeDraftFile, parseDraftFile, readDraft } from "../draft/draft.js";
@@ -47,7 +48,9 @@ export const chapterRetitle: WriteCommandSpec<ChapterRetitleArgs, ChapterRetitle
     const nextText = composeDraftFile({ title, body: parseDraftFile(text).body });
     const writes: TxWrite[] = [];
     if (nextText !== text) {
-      const next = ChapterLedger.parse({ ...ledger, textSha256: sha256(nextText) });
+      // 证据跟着换到新一版正文（章名行不切句，句号不变）。
+      const source = chapterSource(args.chapter, nextText);
+      const next = ChapterLedger.parse({ ...ledger, textSha256: sha256(nextText), entries: ledger.entries.map((entry) => relocateEvidence(entry, source)) });
       writes.push(
         { path: chapterTextPath(args.chapter), content: nextText },
         { path: chapterLedgerPath(args.chapter), content: `${JSON.stringify(next, null, 2)}\n` },

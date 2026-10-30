@@ -361,11 +361,14 @@ function withCommitCards(message: ChapterMessage, view: OperationViewData): Chap
   const commit = view.commit;
   if (!commit?.committed || hasCard(message, "commit-report")) return message;
   let next = withCard(message, { type: "commit-report", report: commit.report });
+  // 补账只换了账（设定本里的线索板、故事地图），正文没动。
+  const toolName = commit.fill ? "change_ledger" : "prepare_commit";
   if (commit.snapshotId && !(next.turnSnapshots ?? []).some((entry) => entry.snapshotId === commit.snapshotId)) {
-    next = { ...next, turnSnapshots: [...(next.turnSnapshots ?? []), { toolName: "prepare_commit", snapshotId: commit.snapshotId, chapterNumber: commit.chapter }] };
+    next = { ...next, turnSnapshots: [...(next.turnSnapshots ?? []), { toolName, snapshotId: commit.snapshotId, chapterNumber: commit.chapter }] };
   }
+  const scope = commit.fill ? "foundation" : "full";
   const scopes = next.affectedScopes ?? [];
-  return scopes.includes("full") ? next : { ...next, affectedScopes: [...scopes, "full"] };
+  return scopes.includes(scope) ? next : { ...next, affectedScopes: [...scopes, scope] };
 }
 
 /** 做完打了存档点的那一类 → 这一轮记的工具名（「撤销到此」按它说退的是什么）。 */

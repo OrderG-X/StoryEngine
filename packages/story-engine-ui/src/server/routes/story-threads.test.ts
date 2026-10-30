@@ -7,6 +7,7 @@ type Thread = BookProjection["threads"][number];
 const thread = (over: Partial<Thread> & Pick<Thread, "id" | "status">): Thread => ({
   type: "question",
   title: over.id,
+  idleChapters: 0,
   openedAt: 1,
   lastTouchedAt: 1,
   weight: "normal",

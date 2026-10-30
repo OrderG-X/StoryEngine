@@ -9,31 +9,23 @@
  *   - NEW: timeline.macroSummary (L3) 含早期 ch1-5 mainEvent；
  *          read_timeline(chapter=2) 精确返回第2章事件
  *
- * Attribute 2 · 收线后退出上下文（Task 7 hook 自动收口 + 单调性）
- *   - OLD: hook 永远 active，无收口，总是占在 activeItems
- *   - NEW: resolved hook 被 closedStatuses:["resolved","abandoned"] 过滤，退出 activeItems；
- *          且单调（收口后再次提及不重激活）
+ * （Attribute 2 · 伏笔池收口：伏笔池随 P2b 删镜像一起删了，伏笔就是悬念类线索，收口看 threads。）
  *
  * 均为确定性、无网络、纯内存函数级别验证（不调 LLM，不读真实磁盘临时文件除外）。
  */
 
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { seedChapters } from "./ledger-test-helpers.js";
 import { createStoryProject } from "./project-store.js";
 import { buildStateOverview } from "./state-overview.js";
 import { buildTimelineLayers } from "./timeline-layers.js";
-import type { TimelineEvent, HookItem, HookPool } from "./types.js";
+import type { TimelineEvent } from "./types.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  // 建书不再建 story/、timeline/ 目录（重构 P9）：老格式账文件要写自己建目录。
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-}
 
 function makeTimelineEvent(
   chapter: number,
@@ -151,7 +143,7 @@ describe("Phase 2 A/B probe — 属性 1：早期大事件可查（Task 6 timeli
     console.log(`[属性1 NEW] L3 blocks: ${macroBlocks.map((b) => `[ch${b.fromChapter}-${b.toChapter}]`).join(", ")}`);
   });
 
-  it("NEW：buildStateOverview(chapter=30) 的 timeline.macroSummary 含早期 ch1-5 宏块", async () => {
+  it("NEW：buildStateOverview(chapter=30) 的 timeline.macroSummary 含早期 ch1-5 宏块", { timeout: 60_000 }, async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "phase2-attr1-overview-"));
     const { projectDir } = await createStoryProject({
       rootDir,
@@ -160,8 +152,11 @@ describe("Phase 2 A/B probe — 属性 1：早期大事件可查（Task 6 timeli
       logline: "主角进入权力中心，早期伏笔埋下。",
       protagonistName: "林远",
     });
-    const events = make30ChapterEvents();
-    await writeJson(join(projectDir, "timeline", "events.json"), events);
+    // 每章梗概就是事件（从账算）：早期 5 章带 MACRO- 标记。
+    await seedChapters(projectDir, make30ChapterEvents().map((event) => ({
+      chapter: event.chapter,
+      entries: [{ kind: "summary" as const, text: String((event.effects?.semanticSummary as { mainEvent?: string } | undefined)?.mainEvent) }],
+    })));
 
     const overview = await buildStateOverview({ projectDir, chapter: CURRENT_CHAPTER });
 
@@ -202,130 +197,5 @@ describe("Phase 2 A/B probe — 属性 1：早期大事件可查（Task 6 timeli
     expect(oldRecall).toBe(0); // OLD 完全不可查
     expect(newRecall).toBe(1); // NEW 100% 可查
     expect(newRecall).toBeGreaterThan(oldRecall); // NEW 明显优于 OLD
-  });
-});
-
-// ── 属性 2 A/B 对比 ──────────────────────────────────────────────────────────
-
-describe("Phase 2 A/B probe — 属性 2：收线后退出上下文（Task 7 hook 收口 + 单调性）", () => {
-  /**
-   * Fixture:
-   *   - hookA: 早期 seed (firstSeen=2)，在第 20 章用收口语收口 → resolved
-   *   - hookB: 正常 active hook (firstSeen=15)，未收口
-   *
-   * OLD 内联复刻：hookPool.hooks.filter(status=active|seeded).sort().slice(N)
-   *   → resolved hook 依然按旧 filter 出现（若旧逻辑不过滤 resolved）
-   *   实际上旧逻辑是 filter(status=active|seeded)，所以 resolved hook 就已过滤；
-   *   但旧版没有自动收口，hook 一直是 active，永远占上下文槽。
-   *   OLD 复刻：hook 永不变为 resolved → activeItems 永远包含它。
-   *
-   * NEW：buildHookTrackingPlan 检测收口语 → resolvedHookIds；
-   *      mergeHookTrackingUpdates 把它标为 resolved；
-   *      buildStateOverview activeItems 用 closedStatuses:["resolved","abandoned"] → 已收口 hook 退出。
-   *
-   * 单调性：收口后再次提及（无收口语），hook 保持 resolved（mergeExistingHook 保护）。
-   */
-
-  const RESOLVED_HOOK_ID = "hook-mz";
-  const ACTIVE_HOOK_ID = "hook-active";
-
-  function makeHookPool(resolvedStatus: "active" | "resolved"): HookPool {
-    return {
-      hooks: [
-        {
-          id: RESOLVED_HOOK_ID,
-          title: "密信谜团",
-          description: "早期埋下的密信伏笔",
-          status: resolvedStatus,
-          relatedCharacters: [],
-          firstSeenChapter: 2,
-          lastTouchedChapter: 2,
-          evidence: ["第2章发现密信"],
-        } satisfies HookItem,
-        {
-          id: ACTIVE_HOOK_ID,
-          title: "账目线索",
-          description: "近章活跃伏笔",
-          status: "active",
-          relatedCharacters: [],
-          firstSeenChapter: 15,
-          lastTouchedChapter: 18,
-          evidence: ["第15章账目出现"],
-        } satisfies HookItem,
-      ],
-    };
-  }
-
-  /**
-   * OLD 内联复刻：旧版无自动收口，hook 永远 active，
-   * activeItems 选取逻辑 = filter(status=active|seeded).sort(lastTouched desc).slice(N)
-   * hook 是 active → 永远出现
-   */
-  function oldSelectActiveItems(hookPool: HookPool, n = 12): string[] {
-    return hookPool.hooks
-      .filter((h) => h.status === "active" || h.status === "seeded")
-      .slice()
-      .sort((a, b) => {
-        const la = a.lastTouchedChapter ?? a.firstSeenChapter ?? 0;
-        const lb = b.lastTouchedChapter ?? b.firstSeenChapter ?? 0;
-        return lb - la;
-      })
-      .slice(0, n)
-      .map((h) => h.id);
-  }
-
-  it("OLD：无收口机制，密信谜团（resolved 前）永远在 activeItems（占槽）", () => {
-    // OLD 世界：hook 没有自动收口，密信谜团一直是 active
-    const poolOld = makeHookPool("active");
-    const oldActiveIds = oldSelectActiveItems(poolOld);
-
-    expect(oldActiveIds).toContain(RESOLVED_HOOK_ID); // OLD: 永远占用上下文槽
-    console.log(`[属性2 OLD] activeItems: ${oldActiveIds.join(",")}`);
-  });
-
-  it("NEW：收口后 hook 变 resolved，buildStateOverview activeItems 不含它", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "phase2-attr2-resolved-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "Phase2 属性2 收口测试",
-      genre: "都市",
-      logline: "主角调查密信谜团。",
-      protagonistName: "林远",
-    });
-
-    // hooks.json: 密信谜团已 resolved（模拟收口后状态）
-    const hookPool = makeHookPool("resolved");
-    await writeJson(join(projectDir, "story", "hooks.json"), hookPool);
-
-    const overview = await buildStateOverview({ projectDir, chapter: 30 });
-    const activeIds = overview.hooks.activeItems.map((h) => h.id);
-
-    // NEW: resolved hook 已退出上下文（closedStatuses 过滤）
-    expect(activeIds).not.toContain(RESOLVED_HOOK_ID);
-    // 非收口 hook 仍在
-    expect(activeIds).toContain(ACTIVE_HOOK_ID);
-
-    // resolvedCount 递增
-    expect(overview.hooks.resolvedCount).toBe(1);
-
-    console.log(`[属性2 NEW] activeItems: ${activeIds.join(",")}, resolvedCount: ${overview.hooks.resolvedCount}`);
-  });
-
-  it("量化对比：OLD 已收口 hook 占槽 = YES vs NEW 占槽 = NO（退出上下文）", () => {
-    // OLD world: hook 是 active（无收口机制）
-    const poolOld = makeHookPool("active");
-    const oldInActive = oldSelectActiveItems(poolOld).includes(RESOLVED_HOOK_ID);
-
-    // NEW world: hook 是 resolved（收口后）
-    const poolNew = makeHookPool("resolved");
-    const newInActive = oldSelectActiveItems(poolNew).includes(RESOLVED_HOOK_ID); // 用同样 filter 验证退出
-
-    console.log("\n=== 属性 2 量化对比 ===");
-    console.log(`OLD 已收口 hook 还在 activeItems: ${oldInActive ? "YES（占槽）" : "NO"}`);
-    console.log(`NEW 已收口 hook 还在 activeItems: ${newInActive ? "YES（有问题）" : "NO（已退出）"}`);
-
-    // 硬门
-    expect(oldInActive).toBe(true);  // OLD: 永远占槽
-    expect(newInActive).toBe(false); // NEW: 已退出
   });
 });

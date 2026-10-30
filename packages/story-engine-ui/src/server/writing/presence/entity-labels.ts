@@ -16,7 +16,7 @@ import { join } from "node:path";
 const INTERNAL_ENTITY_ID = /^(?:char|asset|location|thread|hook|fact|lead|goal|chapter)-[0-9a-z]+$/iu;
 
 /**
- * 老格式角色册 → id→角色名 映射：只给老历史（重构 P9 之前的存档点标签、老镜像里的参与者）解析裸 char-id 用。
+ * 老格式角色册 → id→角色名 映射：只给老历史（重构 P9 之前的存档点标签）解析裸 char-id 用。
  * 新设定卡不往外给编号。读失败/无册 → 空 Map（调用方据此回落，不崩）。
  */
 export async function readCharacterNameById(projectDir: string): Promise<Map<string, string>> {

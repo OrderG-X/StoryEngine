@@ -8,14 +8,14 @@ type Thread = BookProjection["threads"][number];
 type Member = BookProjection["cast"][number];
 
 const chapter = (n: number, over: Partial<Chapter> = {}): Chapter => ({
-  chapter: n, origin: "commit", committedAt: "2026-10-18T00:00:00.000Z", day: n, dayEnd: n, dayBasis: "text",
+  chapter: n, origin: "commit", committedAt: "2026-10-18T00:00:00.000Z", ledgerStatus: "ready", day: n, dayEnd: n, dayBasis: "text",
   weekdayDerived: false, present: [], textMissing: false, ...over,
 });
 const fact = (id: string, n: number, over: Partial<Fact> = {}): Fact => ({
   id, chapter: n, nature: "state", text: `事实${id}`, review: "auto", status: "current", ...over,
 });
 const thread = (id: string, title: string, touches: Thread["touches"]): Thread => ({
-  id, type: "question", title, openedAt: touches[0]!.chapter, lastTouchedAt: touches.at(-1)!.chapter,
+  id, type: "question", title, openedAt: touches[0]!.chapter, lastTouchedAt: touches.at(-1)!.chapter, idleChapters: 0,
   status: "active", weight: "normal", touches, mergedFrom: [],
 });
 const member = (name: string, chapters: number[]): Member => ({

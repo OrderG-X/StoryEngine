@@ -95,7 +95,7 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
     let alive = true;
     fetchSnapshots(projectPath)
       .then((list) => { if (alive) setSnapshots(list); })
-      .catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
+      .catch((e: unknown) => { if (alive) setError(`读取存档失败：${e instanceof Error ? e.message : String(e)}`); });
     return () => { alive = false; };
   }, [projectPath, refreshKey]);
 
@@ -165,7 +165,7 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
           <div className="op-history-empty">没有「{KIND_FILTERS.find((f) => f.id === kindFilter)?.label}」类的存档。</div>
         ) : null}
         {!projectPath ? <div className="op-history-empty">请先打开一本真实的本地项目，才能查看操作历史。</div> : null}
-        {projectPath && error ? <div className="op-history-error">读取存档失败：{error}</div> : null}
+        {projectPath && error ? <div className="op-history-error">{error}</div> : null}
         {projectPath && !error && snapshots === null ? <Skeleton label="正在读取存档列表…" /> : null}
         {projectPath && snapshots !== null && snapshots.length === 0 ? (
           <div className="op-history-empty">还没有任何存档。AI 第一次写入前会自动创建。</div>

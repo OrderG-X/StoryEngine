@@ -3,6 +3,10 @@ export interface CommitReportSummary {
   readonly chapter?: number;
   /** 记了什么，一项一行（「事实：4 条」）；正文写进哪一章不另说——卡头「已定稿」就是。 */
   readonly detailLines: readonly string[];
+  /** 账记到什么程度（P2b）：pending = 正文定了、账还没记上；partial = 没记全。记全了 / 老回执没有。 */
+  readonly ledgerStatus?: "pending" | "partial";
+  /** 补账的回执（正文没动）。 */
+  readonly fill?: true;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -32,14 +36,20 @@ function summarizeLedgerReport(root: Record<string, unknown>, ledger: Record<str
   const day = count(ledger.day);
   const dayEnd = count(ledger.dayEnd);
   const notRecorded = count(ledger.notRecorded);
+  const status: CommitReportSummary["ledgerStatus"] = ledger.status === "pending" ? "pending" : ledger.status === "partial" ? "partial" : undefined;
+  const flags = { ...(status ? { ledgerStatus: status } : {}), ...(root.fill === true ? { fill: true as const } : {}) };
+  // 账待记：一条都没记，不列一排零。
+  if (status === "pending") return { ...(chapter > 0 ? { chapter } : {}), detailLines: ["账：还没记上"], ...flags };
   return {
     ...(chapter > 0 ? { chapter } : {}),
+    ...flags,
     detailLines: [
       ...(day > 0 ? [`故事时间：${dayEnd > day ? `第 ${day}～${dayEnd} 天` : `第 ${day} 天`}`] : []),
       `事实：${facts} 条`,
       `线索：新开 ${opened}，推进 ${advanced}，收口 ${closed}`,
       `出场人物：${present} 人`,
       ...(notRecorded > 0 ? [`没记上：${notRecorded} 条`] : []),
+      ...(status === "partial" ? ["账：没记全"] : []),
     ],
   };
 }

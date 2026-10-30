@@ -3,30 +3,54 @@
  *
  * 参数里的条目是作者在定稿清单上留下的那些（记账员的草案、作者勾掉的已去掉）。
  * 核心再核一遍（和预览同一个 checkEntries），核不上的如实列进结果、不写；能核上的分配编号写进账单。
+ * 记账没成、作者点了「先定正文、账待记」：`ledger.status = pending`、条目空，同一事务写正文和待记的账单（P2b 设计 3.1）；
+ * 记账员有一步没成、这几条因此没记：`partial`，原因写进 coverage。
  *
- * 重定稿同一章：整份账单换掉。编号尽量沿用上次的（同一条事实、同一条线索编号不变），
+ * 重定稿同一章：整份账单换掉。编号照 ledger/identity.ts 沿用（同一条事实、同一条线索编号不变，旧号不挪给别的条目），
  * 后文对它们的推进、推翻才接得上；上次开的线索这次没了、后文又引用过它的，结果里如实列出。
  */
 import { z } from "zod";
-import { ChapterLedger, CHAPTER_LEDGER_SCHEMA, EntryInput, type LedgerEntry } from "../schema/ledger.js";
-import { readAllLedgers, readDecisions, sha256 } from "../store/book.js";
+import { EntryInput, EntryKind, threadOf, type ChapterLedger, type LedgerStatus } from "../schema/ledger.js";
+import { chapterSource, newLedger, storeEntry } from "../ledger/entries.js";
+import { assignIds, previousOf } from "../ledger/identity.js";
+import { readAllLedgers, readChapterLedgerFile, readDecisions, sha256 } from "../store/book.js";
 import { chapterLedgerPath, chapterTextPath } from "../store/paths.js";
 import { project } from "../projection/project.js";
 import { checkEntries, type RejectedEntry } from "../review/check.js";
-import { nameKey } from "../text/quote.js";
 import { fail } from "./runner.js";
 import type { CommandFailure, WriteCommandSpec } from "./types.js";
+
+const reasonCode = z.string().regex(/^[a-z][a-z0-9_]*$/u);
+
+/**
+ * 账没记全时交的：pending = 账待记（条目必须空）；partial = 记账员有一步没成、记了一部分。原因用代码。
+ * missingKinds（partial）：哪几类因此没记全；不给 = 不知道缺哪类，读的时候当全部没记全（missingKindsOf）。
+ */
+export const LedgerShortfall = z.object({
+  status: z.enum(["pending", "partial"]),
+  reasonCodes: z.array(reasonCode).min(1),
+  missingKinds: z.array(EntryKind).min(1).optional(),
+});
+export type LedgerShortfall = z.infer<typeof LedgerShortfall>;
 
 export const ChapterCommitArgs = z.object({
   chapter: z.number().int().min(1),
   /** 定稿的完整正文（含标题行），原样写进 chapters/NNNN.md。 */
   text: z.string().refine((value) => value.trim().length > 0, "正文是空的"),
   entries: z.array(EntryInput),
+  /** 不给 = 账记全了（ready）。 */
+  ledger: LedgerShortfall.optional(),
+  /** 作者点确认时依据的摘要。 */
+  acceptedBasis: z.string().min(1).optional(),
 });
 export type ChapterCommitArgs = z.infer<typeof ChapterCommitArgs>;
 
 export interface ChapterCommitResult {
   readonly chapter: number;
+  /** 正文定了（定稿命令成了就是 true；给界面分清「正文定了、账没记上」）。 */
+  readonly textCommitted: true;
+  /** 这章的账记到什么程度。 */
+  readonly ledgerStatus: LedgerStatus;
   /** 记进账单的条数。 */
   readonly recorded: number;
   /** 没记上的（给作者看 message）。 */
@@ -37,40 +61,6 @@ export interface ChapterCommitResult {
   readonly orphanedThreads: readonly string[];
 }
 
-/** 判断「同一条」的键：只认写法完全一样，不猜意思。 */
-function entryKey(entry: EntryInput | LedgerEntry): string {
-  switch (entry.kind) {
-    case "summary":
-      return "summary";
-    case "time":
-      return "time";
-    case "presence":
-      return `presence|${nameKey(entry.name)}|${nameKey(entry.nameUsed)}`;
-    case "fact":
-      return [
-        "fact",
-        entry.nature,
-        nameKey(entry.subject ?? ""),
-        nameKey(entry.attribute ?? ""),
-        nameKey(entry.value ?? ""),
-        entry.nature === "event" ? nameKey(entry.text) : "",
-      ].join("|");
-    case "thread":
-      return entry.op === "open" ? `thread|open|${nameKey(entry.title ?? "")}` : `thread|${entry.op}|${entry.thread ?? ""}|${nameKey(entry.note)}`;
-  }
-}
-
-/** 编号里最大的序号（`c3-7` → 7）。 */
-function maxSeq(ids: readonly string[], prefix: string): number {
-  let max = 0;
-  for (const id of ids) {
-    if (!id.startsWith(prefix)) continue;
-    const seq = Number(id.slice(prefix.length));
-    if (Number.isInteger(seq) && seq > max) max = seq;
-  }
-  return max;
-}
-
 /** 一章新账单拼好了（还没写盘）。 */
 export interface BuiltChapterLedger {
   readonly ok: true;
@@ -78,75 +68,68 @@ export interface BuiltChapterLedger {
   readonly rejected: ChapterCommitResult["rejected"];
   readonly previous: ChapterLedger | undefined;
   readonly orphanedThreads: readonly string[];
+  /** 记上的条数（一条声明算一条：时间存成两条也算一条）。 */
+  readonly recorded: number;
 }
 
 /**
- * 给一章拼新账单：核条目（和预览同一个 checkEntries）→ 分配编号（重记同一章时尽量沿用上次的）→ 校验整份账单。
- * 「定稿」和「通读记账」共用：两者只差 origin。
+ * 给一章拼新账单：核条目（和预览同一个 checkEntries）→ 分配编号（重记同一章时照旧账沿用）→ 校验整份账单。
+ * 「定稿」「通读记账」「补账」共用：差在 origin、记到什么程度、定稿时间留不留原来的。
  */
 export async function buildChapterLedger(
   bookDir: string,
-  input: { readonly chapter: number; readonly text: string; readonly entries: readonly EntryInput[]; readonly now: Date; readonly origin: "commit" | "reread" },
+  input: {
+    readonly chapter: number;
+    readonly text: string;
+    readonly entries: readonly EntryInput[];
+    readonly now: Date;
+    readonly origin: "commit" | "reread";
+    readonly shortfall?: LedgerShortfall;
+    /** 补账：定稿时间照原来的（只换账，正文还是那次定的）。 */
+    readonly committedAt?: string;
+    readonly acceptedBasis?: string;
+  },
 ): Promise<BuiltChapterLedger | CommandFailure> {
-  const [ledgers, decisions] = await Promise.all([readAllLedgers(bookDir), readDecisions(bookDir)]);
-  const previous = ledgers.find((ledger) => ledger.chapter === input.chapter);
+  const pending = input.shortfall?.status === "pending";
+  if (pending && input.entries.length > 0) return fail("bad_args", "账待记的定稿不该带条目。");
+  const [ledgers, decisions, file] = await Promise.all([readAllLedgers(bookDir), readDecisions(bookDir), readChapterLedgerFile(bookDir, input.chapter)]);
+  const previous = file?.ledger;
   const before = project({ ledgers: ledgers.filter((ledger) => ledger.chapter < input.chapter), decisions });
-  const checked = checkEntries(input.entries, input.text, before);
+  const checked = pending ? { accepted: [], rejected: [] } : checkEntries(input.entries, input.text, before);
+  const accepted = checked.accepted.map((item) => item.entry);
+  const source = chapterSource(input.chapter, input.text);
+  const assigned = assignIds(input.chapter, previous, accepted);
+  const entries = accepted.flatMap((entry, index) => storeEntry(entry, assigned.ids[index]!, source));
+  const carried = previousOf(previous, file?.sha256);
 
-  const entryPrefix = `c${input.chapter}-`;
-  const threadPrefix = `t${input.chapter}-`;
-  const previousEntries = previous?.entries ?? [];
-  const previousIdByKey = new Map<string, string>();
-  for (const entry of previousEntries) if (!previousIdByKey.has(entryKey(entry))) previousIdByKey.set(entryKey(entry), entry.id);
-  const previousOpens = previousEntries.filter((entry) => entry.kind === "thread" && entry.op === "open");
-  const previousOpenThreadByTitle = new Map(previousOpens.map((entry) => [entryKey(entry), entry.kind === "thread" ? entry.thread : ""]));
-  const previousOpenThreadIds = new Set(previousOpens.map((entry) => (entry.kind === "thread" ? entry.thread : "")));
-
-  let nextEntry = maxSeq(previousEntries.map((entry) => entry.id), entryPrefix);
-  let nextThread = maxSeq([...previousOpenThreadIds], threadPrefix);
-  const usedIds = new Set<string>();
-  const usedThreads = new Set<string>();
-  const entries: LedgerEntry[] = [];
-  for (const { entry } of checked.accepted) {
-    const key = entryKey(entry);
-    const reuse = previousIdByKey.get(key);
-    const id = reuse && !usedIds.has(reuse) ? reuse : `${entryPrefix}${(nextEntry += 1)}`;
-    usedIds.add(id);
-    if (entry.kind === "thread" && entry.op === "open") {
-      const keep = entry.thread && previousOpenThreadIds.has(entry.thread) && !usedThreads.has(entry.thread)
-        ? entry.thread
-        : previousOpenThreadByTitle.get(key);
-      const thread = keep && !usedThreads.has(keep) ? keep : `${threadPrefix}${(nextThread += 1)}`;
-      usedThreads.add(thread);
-      entries.push({ ...entry, id, thread });
-    } else if (entry.kind === "thread") {
-      entries.push({ ...entry, id, thread: entry.thread as string });
-    } else {
-      entries.push({ ...entry, id } as LedgerEntry);
-    }
-  }
-
-  const ledger = ChapterLedger.safeParse({
-    schema: CHAPTER_LEDGER_SCHEMA,
+  const ledger = newLedger({
     chapter: input.chapter,
     textSha256: sha256(input.text),
-    committedAt: input.now.toISOString(),
+    committedAt: input.committedAt ?? input.now.toISOString(),
     origin: input.origin,
     entries,
+    status: input.shortfall?.status ?? "ready",
+    coverage: {
+      rejectedCount: checked.rejected.length,
+      reasonCodes: [...(input.shortfall?.reasonCodes ?? [])],
+      ...(input.shortfall?.status === "partial" && input.shortfall.missingKinds ? { missingKinds: [...new Set(input.shortfall.missingKinds)] } : {}),
+    },
+    ...(input.acceptedBasis ? { acceptedBasis: input.acceptedBasis } : {}),
+    ...(carried ? { previous: carried } : {}),
   });
   if (!ledger.success) return fail("ledger_invalid", "这一章的账单没拼成，没有记上。", ledger.error.issues);
 
-  // 上次开的线索这次没了，后文还引用着它：如实列出来。
-  const lost = new Set([...previousOpenThreadIds].filter((thread) => !usedThreads.has(thread)));
+  // 认得的旧开线索这次没了，后文还引用着它：如实列出来。
+  const lost = new Set(assigned.droppedOpens.map(threadOf));
   const orphanedThreads: string[] = [];
   if (lost.size > 0) {
     const referenced = new Set<string>();
     for (const later of ledgers) {
       if (later.chapter <= input.chapter) continue;
-      for (const entry of later.entries) if (entry.kind === "thread" && lost.has(entry.thread)) referenced.add(entry.thread);
+      for (const entry of later.entries) if (entry.kind === "thread" && lost.has(threadOf(entry))) referenced.add(threadOf(entry));
     }
-    for (const entry of previousOpens) {
-      if (entry.kind === "thread" && referenced.has(entry.thread)) orphanedThreads.push(entry.title ?? entry.note);
+    for (const entry of assigned.droppedOpens) {
+      if (referenced.has(threadOf(entry))) orphanedThreads.push(entry.title ?? entry.note);
     }
   }
 
@@ -156,6 +139,7 @@ export async function buildChapterLedger(
     rejected: checked.rejected.map(({ index, reason, message }) => ({ index, reason, message })),
     previous,
     orphanedThreads,
+    recorded: checked.accepted.length,
   };
 }
 
@@ -167,7 +151,15 @@ export const chapterCommit: WriteCommandSpec<ChapterCommitArgs, ChapterCommitRes
   snapshot: true,
   idempotent: true,
   async plan(context, args) {
-    const built = await buildChapterLedger(context.bookDir, { ...args, now: context.now, origin: "commit" });
+    const built = await buildChapterLedger(context.bookDir, {
+      chapter: args.chapter,
+      text: args.text,
+      entries: args.entries,
+      now: context.now,
+      origin: "commit",
+      ...(args.ledger ? { shortfall: args.ledger } : {}),
+      ...(args.acceptedBasis ? { acceptedBasis: args.acceptedBasis } : {}),
+    });
     if (!built.ok) return { ...built, message: built.code === "ledger_invalid" ? "这一章的账单没拼成，没有定稿。" : built.message };
     return {
       label: `定稿：第 ${args.chapter} 章`,
@@ -178,7 +170,9 @@ export const chapterCommit: WriteCommandSpec<ChapterCommitArgs, ChapterCommitRes
       changed: { chapters: [args.chapter], ledgers: [args.chapter] },
       result: {
         chapter: args.chapter,
-        recorded: built.ledger.entries.length,
+        textCommitted: true,
+        ledgerStatus: built.ledger.status,
+        recorded: built.recorded,
         rejected: built.rejected,
         recommitted: built.previous !== undefined,
         orphanedThreads: built.orphanedThreads,

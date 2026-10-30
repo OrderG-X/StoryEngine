@@ -18,7 +18,7 @@ import { type WriterContextEnvelope } from "../../writing/context-gateway.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __drainOperationsForTests, __resetRecipesForTests } from "../operations/executor.js";
 import { fakeDraftDeps, fakePlanner, quietReader, runDraftChange } from "../operations/recipes/draft-change-kit.js";
-import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../../book/ensure-on-core.js";
 import { checkerRoleFor, DEFAULT_READER_VARIANT } from "../../editorial/checker.js";
 import { PLANNER_ROLE } from "../../editorial/planner.js";
 import { ensureReaderWindow } from "../../editorial/reader-window.js";

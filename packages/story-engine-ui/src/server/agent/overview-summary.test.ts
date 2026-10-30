@@ -2,12 +2,13 @@
 //
 // summarizeStateOverview（重构 P9）：概况摘要只说进度、人物名单、设定本几张卡、账的计数和最近时间线；
 // 设定本的具体内容（卡上写的、关系、势力）不在这里展开，摘要里指去 read_foundation。
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { cardWrite, chapterCommit, runCommand, type CardOp } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
+import { seedChapters } from "../book/ledger-test-helpers.js";
 import { createStoryProject } from "../book/project-store.js";
 
 import { summarizeStateOverview } from "./overview-summary.js";
@@ -35,17 +36,14 @@ async function fixture(): Promise<string> {
   // 账里出场过、还没建卡的人。
   const outcome = await runCommand(projectDir, chapterCommit, {
     chapter: 1,
-    text: "# 第1章\n\n林序走进码头，老周递给他一张船票。",
+    text: "# 第1章\n\n林序走进码头，老周递给他一张船票。林序在码头拿到船票。",
     entries: [
+      { kind: "summary", review: "auto", text: "林序在码头拿到船票。", quote: "林序在码头拿到船票。" },
       { kind: "presence", review: "auto", name: "林序", nameUsed: "林序", viewpoint: true, quote: "林序走进码头" },
       { kind: "presence", review: "auto", name: "周伯", nameUsed: "老周", quote: "老周递给他一张船票" },
     ],
   }, { caller: "author", idempotencyKey: "c1" });
   expect(outcome.ok).toBe(true);
-  await mkdir(join(projectDir, "timeline"), { recursive: true });
-  await writeFile(join(projectDir, "timeline", "events.json"), JSON.stringify([
-    { id: "ch0001-001", chapter: 1, summary: "林序在码头拿到船票。", participants: ["林序"], effects: {} },
-  ]), "utf-8");
   return projectDir;
 }
 
@@ -60,14 +58,34 @@ describe("summarizeStateOverview（重构 P9）", () => {
     expect(summary).toContain("最近时间线：林序在码头拿到船票。");
   });
 
+  it("有章正文定了、账还没记上：概况列出来（导入的不算），摘要说清、指去补记账；都记上了不提（P2b）", async () => {
+    const projectDir = await fixture();
+    expect(summarizeStateOverview(await buildStateOverview({ projectDir }))).not.toContain("账还没记上");
+    const outcome = await runCommand(projectDir, chapterCommit, {
+      chapter: 2,
+      text: "# 第2章\n\n林序上了船。",
+      entries: [],
+      ledger: { status: "pending", reasonCodes: ["keeper_failed"] },
+    }, { caller: "author", idempotencyKey: "c2" });
+    expect(outcome.ok).toBe(true);
+    const overview = await buildStateOverview({ projectDir });
+    expect(overview.ledgerShort).toEqual([{ chapter: 2, status: "pending" }]);
+    expect(summarizeStateOverview(overview)).toContain("账：第 2 章正文定了、账还没记上");
+  });
+
   it("开放线索把推进过、还没收的也算上（换题材长篇实跑第 26 章：14 条推进过没收，报 0 条）", async () => {
     const projectDir = await fixture();
-    await mkdir(join(projectDir, "story"), { recursive: true });
-    await writeFile(join(projectDir, "story", "threads.json"), JSON.stringify({ threads: [
-      { id: "t1", title: "船票是谁给的", type: "question", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1 },
-      { id: "t2", title: "码头那批货", type: "question", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 1 },
-      { id: "t3", title: "老周的来历", type: "question", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1 },
-    ] }), "utf-8");
+    await seedChapters(projectDir, [
+      { chapter: 2, entries: [
+        { kind: "thread", thread: "t1", op: "open", type: "question", title: "船票是谁给的", note: "船票" },
+        { kind: "thread", thread: "t2", op: "open", type: "question", title: "码头那批货", note: "货" },
+        { kind: "thread", thread: "t3", op: "open", type: "question", title: "老周的来历", note: "老周" },
+      ] },
+      { chapter: 3, entries: [
+        { kind: "thread", thread: "t2", op: "advance", note: "货到了" },
+        { kind: "thread", thread: "t3", op: "close", note: "老周是船老大" },
+      ] },
+    ]);
     const summary = summarizeStateOverview(await buildStateOverview({ projectDir }));
 
     expect(summary).toContain("开放线索 2 条");

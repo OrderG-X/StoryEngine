@@ -34,6 +34,20 @@ describe("操作历史「查看改动」：文件 → 人话", () => {
     ]);
   });
 
+  it("开书挪走老镜像文件后的那个存档：几个删除不列（整理，不是改了资料）", () => {
+    const d = (path: string) => ({ status: "D" as const, path });
+    expect(describeSnapshotChanges([
+      m("drafts/fast/chapter-0003.md"),
+      d("story/threads.json"),
+      d("story/timeline.json"),
+      d("timeline/events.json"),
+      d("time/calendar.json"),
+      d("story/fact-ledger.json"),
+      d("story/arc-goals.json"),
+      d("story/hooks.json"),
+    ], names)).toEqual(["工作稿：第 3 章有改动"]);
+  });
+
   it("新建角色报名字、不重复报角色册；认不出的角色不吐 id", () => {
     expect(describeSnapshotChanges([
       a("characters/char-c6008d/core.json"),

@@ -15,6 +15,8 @@ import { bookEpochWrite, opBookEpoch } from "../store/control.js";
 import { CARDS_PATH, chapterFromFileName, DECISIONS_PATH, draftChapterOfPath, isUndoablePath, planChapterOfPath } from "../store/paths.js";
 import { sha256Bytes, type TxWrite } from "../store/transaction.js";
 import { HISTORY_APPLY_COMMAND } from "./revert.js";
+import { ChapterLedger } from "../schema/ledger.js";
+import { isLedgerV1 } from "../ledger/migrate-v1.js";
 import { ledgerChapterOfPath, rangeDigestOf, readUndoableFiles } from "./store.js";
 
 export const HistoryApplyArgs = z.object({
@@ -56,6 +58,15 @@ export async function receiptOnDisk(bookDir: string, receipt: CommandReceipt): P
   return true;
 }
 
+function ledgerContentProblem(content: string): "ledger_needs_upgrade" | "ledger_invalid" | undefined {
+  if (isLedgerV1(content)) return "ledger_needs_upgrade";
+  try {
+    return ChapterLedger.safeParse(JSON.parse(content)).success ? undefined : "ledger_invalid";
+  } catch {
+    return "ledger_invalid";
+  }
+}
+
 const chapterOfTextPath = (path: string): number | undefined =>
   path.startsWith("chapters/") && path.endsWith(".md") ? chapterFromFileName(path.slice("chapters/".length)) : undefined;
 
@@ -95,6 +106,11 @@ export const historyApply: WriteCommandSpec<HistoryApplyArgs, HistoryApplyResult
       seen.add(path);
       if ((await currentSha(context.bookDir, path)) !== change.expect) {
         return fail("changed_since_plan", "算好之后这一份又改过，这次一处都没动。重新算一次。", { path });
+      }
+      // 账单只写得进新格式：存档里的旧账（迁移之前的）哪条路来的都写不回去（设计 2.3）。
+      if (change.content !== null && ledgerChapterOfPath(path) !== undefined) {
+        const problem = ledgerContentProblem(change.content);
+        if (problem) return fail(problem, problem === "ledger_needs_upgrade" ? "要写回去的账本是升级之前的旧格式，这次一处都没动。" : "要写回去的账本读不了，这次一处都没动。", { path });
       }
       writes.push(change.content === null ? { path, delete: true } : { path, content: change.content });
     }

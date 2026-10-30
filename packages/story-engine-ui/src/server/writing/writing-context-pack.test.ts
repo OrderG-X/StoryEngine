@@ -1,16 +1,16 @@
 // @vitest-environment node
 // 写这一章的上下文（重构 P9）：本章任务 + 设定包（设定卡 + 账里现状）+ 接着写要扛住的线 + 本章硬约束 + 读坏的如实留痕。
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { buildWriterContext } from "./context-gateway.js";
 import { createStoryProject } from "../book/project-store.js";
+import { seedChapters, seedThreads } from "../book/ledger-test-helpers.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { buildWritingContextPack } from "./writing-context-pack.js";
-import { EMPTY_BIBLE } from "./setting-pack.js";
 
 describe("Writing Context Pack（设定卡版）", () => {
   it("主角恒带进设定包；本章相关人物整张带上，其余人物只列名字", async () => {
@@ -138,10 +138,7 @@ describe("Writing Context Pack（设定卡版）", () => {
 
     it("已确立事实（事实账本）进 continuityFocus 和硬约束：不得改写", async () => {
       const projectDir = await createSoulSteelFixture();
-      await writeJson(projectDir, "story/fact-ledger.json", {
-        version: "v0",
-        facts: [{ id: "fact-1-0", chapter: 1, text: "魂钢申请表只有左半张，未补全", source: "auto" }],
-      });
+      await seedChapters(projectDir, [{ chapter: 1, entries: [{ kind: "fact", nature: "state", subject: "魂钢申请表", attribute: "状态", value: "只有左半张", text: "魂钢申请表只有左半张，未补全" }] }]);
       const pack = await buildWritingContextPack({ projectDir, chapter: 2, userDirection: "第二章继续" });
       expect(pack.continuityFocus.establishedFacts).toEqual(expect.arrayContaining(["第1章：魂钢申请表只有左半张，未补全"]));
       expect(pack.hardConstraints.join("\n")).toContain("不得改写或否认以下已确立事实：第1章：魂钢申请表只有左半张，未补全。");
@@ -183,16 +180,17 @@ describe("Writing Context Pack（设定卡版）", () => {
     expect(renderFastDraftPromptText(context)).not.toContain("作者文风样本");
   });
 
-  it("调用方给了设定视图就用它，不再读盘", async () => {
+  it("调用方读坏了（views: null）就按空设定、空账写，不再读第二遍、不重复记原因", async () => {
     const projectDir = await createSoulSteelFixture();
     const pack = await buildWritingContextPack({
       projectDir,
       chapter: 1,
       userDirection: "第一章",
-      bible: { bible: EMPTY_BIBLE },
+      views: null,
     });
     expect(pack.setting.protagonist).toBeUndefined();
     expect(pack.setting.story).toEqual([]);
+    expect(pack.readFailures).toEqual([]);
   });
 
   it("never hardcodes 题材专名 in the writing-context-pack source", async () => {
@@ -205,26 +203,20 @@ describe("Writing Context Pack（设定卡版）", () => {
   describe("接着写要扛住的线", () => {
     it("早期未收口线索（第 2 章）在第 50 章仍进 mustCarryThreads，不被近章线索淘汰", async () => {
       const projectDir = await createSoulSteelFixture();
-      await writeJson(projectDir, "story/threads.json", {
-        version: "v0",
-        threads: [
-          { id: "thread-early", type: "lead", title: "借条秘密：赵叔欠下的神秘债务", status: "open", firstSeenChapter: 2, lastTouchedChapter: 2, evidence: ["第2章赵叔提过一张未还的借条"] },
-          ...[47, 48, 49].map((chapter) => ({ id: `thread-${chapter}`, type: "lead", title: `近章线索（第${chapter}章）`, status: "open", firstSeenChapter: chapter, lastTouchedChapter: chapter, evidence: [`第${chapter}章新发现`] })),
-        ],
-      });
+      await seedThreads(projectDir, [
+        { name: "thread-early", type: "question", title: "借条秘密：赵叔欠下的神秘债务", openedAt: 2, quote: "第2章赵叔提过一张未还的借条" },
+        ...[47, 48, 49].map((chapter) => ({ name: `thread-${chapter}`, type: "question" as const, title: `近章线索（第${chapter}章）`, openedAt: chapter, quote: `第${chapter}章新发现` })),
+      ]);
       const pack = await buildWritingContextPack({ projectDir, chapter: 50, userDirection: "第50章继续推进" });
       expect(pack.continuityFocus.mustCarryThreads.some((thread) => thread.includes("借条秘密"))).toBe(true);
     });
 
-    it("已收口线索（status:done）不进 mustCarryThreads，无论章号多近", async () => {
+    it("已收口线索不进 mustCarryThreads，无论章号多近", async () => {
       const projectDir = await createSoulSteelFixture();
-      await writeJson(projectDir, "story/threads.json", {
-        version: "v0",
-        threads: [
-          { id: "thread-done", type: "lead", title: "已收口线索（已结案）", status: "done", firstSeenChapter: 45, lastTouchedChapter: 49, evidence: ["第49章已收口"] },
-          { id: "thread-open", type: "lead", title: "开放线索", status: "open", firstSeenChapter: 48, lastTouchedChapter: 48, evidence: ["第48章"] },
-        ],
-      });
+      await seedThreads(projectDir, [
+        { name: "thread-done", type: "question", title: "已收口线索（已结案）", openedAt: 45, closedAt: 49 },
+        { name: "thread-open", type: "question", title: "开放线索", openedAt: 48 },
+      ]);
       const pack = await buildWritingContextPack({ projectDir, chapter: 50, userDirection: "第50章" });
       expect(pack.continuityFocus.mustCarryThreads.join("\n")).not.toContain("已收口线索");
       expect(pack.continuityFocus.mustCarryThreads.join("\n")).toContain("开放线索");
@@ -232,29 +224,27 @@ describe("Writing Context Pack（设定卡版）", () => {
 
     it("早期未达成主线目标（第 3 章）在第 50 章仍进 arcGoalFocus", async () => {
       const projectDir = await createSoulSteelFixture();
-      await writeJson(projectDir, "story/arc-goals.json", {
-        version: "v0",
-        goals: [
-          { id: "goal-early", title: "查清魂钢申请异常的真相（第3章起）", status: "active", scope: "main_arc", firstSeenChapter: 3, lastTouchedChapter: 3, evidence: ["第3章设定"] },
-          ...[47, 48, 49].map((chapter) => ({ id: `goal-${chapter}`, title: `近章目标（第${chapter}章）`, status: "active", scope: "mini_arc", firstSeenChapter: chapter, lastTouchedChapter: chapter, evidence: [`第${chapter}章`] })),
-        ],
-      });
+      await seedThreads(projectDir, [
+        { name: "goal-early", type: "goal", title: "查清魂钢申请异常的真相（第3章起）", openedAt: 3, weight: "major" },
+        ...[47, 48, 49].map((chapter) => ({ name: `goal-${chapter}`, type: "goal" as const, title: `近章目标（第${chapter}章）`, openedAt: chapter })),
+      ]);
       const pack = await buildWritingContextPack({ projectDir, chapter: 50, userDirection: "第50章继续推进" });
       expect(pack.continuityFocus.arcGoalFocus.some((goal) => goal.includes("查清魂钢申请异常"))).toBe(true);
     });
 
-    // P1-7：重提中间章时该章事件落在文件尾，「最近 N 条」必须按章号选。
-    it("recentTimelineEvents 按章号选最近 3 条，不受落盘顺序影响", async () => {
+    // P1-7：重定稿中间章是最后记的那笔，「最近 N 条」必须按章号选。
+    it("recentTimelineEvents 按章号选最近 3 条，不受记账先后影响", async () => {
       const projectDir = await createSoulSteelFixture();
-      const ev = (chapter: number, summary = `CH${chapter}-EVENT`) => ({ id: `ch${String(chapter).padStart(4, "0")}-001`, chapter, summary, participants: [] });
-      await writeJson(projectDir, "timeline/events.json", [...[1, 2, 4, 5, 6, 7].map((chapter) => ev(chapter)), ev(3, "CH3-REWRITE-EVENT")]);
+      const ev = (chapter: number, summary = `CH${chapter}-EVENT`) => ({ chapter, entries: [{ kind: "summary" as const, text: summary }] });
+      await seedChapters(projectDir, [1, 2, 3, 4, 5, 6, 7].map((chapter) => ev(chapter)));
+      await seedChapters(projectDir, [ev(3, "CH3-REWRITE-EVENT")]);
       const pack = await buildWritingContextPack({ projectDir, chapter: 8, userDirection: "续写" });
       expect(pack.continuityFocus.recentTimelineEvents).toEqual(["第5章：CH5-EVENT", "第6章：CH6-EVENT", "第7章：CH7-EVENT"]);
     });
 
     it("包内摘要恒 ≤3 条（maxTimelineEvents=10 不生效），完整时间线走可裁的 timeline_events 段", async () => {
       const projectDir = await createSoulSteelFixture();
-      await writeJson(projectDir, "timeline/events.json", [1, 2, 3, 4, 5, 6, 7].map((chapter) => ({ id: `ch${chapter}`, chapter, summary: `CH${chapter}`, participants: [] })));
+      await seedChapters(projectDir, [1, 2, 3, 4, 5, 6, 7].map((chapter) => ({ chapter, entries: [{ kind: "summary" as const, text: `CH${chapter}` }] })));
       const pack = await buildWritingContextPack({ projectDir, chapter: 8, userDirection: "续写", maxTimelineEvents: 10 });
       expect(pack.continuityFocus.recentTimelineEvents).toHaveLength(3);
       const envelope = await buildWriterContext({ projectDir, chapter: 8, chapterGoal: "续写", maxTimelineEvents: 10 });
@@ -271,30 +261,27 @@ describe("Writing Context Pack（设定卡版）", () => {
       expect(pack.setting.protagonist).toBeUndefined();
       expect(pack.setting.rules.bans).toEqual([]);
       expect(pack.readFailures).toHaveLength(1);
-      expect(pack.readFailures[0]).toContain("设定本读取失败");
+      expect(pack.readFailures[0]).toContain("设定本和账读取失败");
       expect(pack.readFailures.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
 
       const envelope = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "第一章" });
       const failures = envelope.sections.find((item) => item.name === "read_failures")?.content as { failures: readonly string[] } | undefined;
-      expect(failures?.failures.join(" ")).toContain("设定本读取失败");
+      expect(failures?.failures).toHaveLength(1);
+      expect(failures?.failures.join(" ")).toContain("设定本和账读取失败");
     });
 
-    it("时间线、事实账本坏了 → 各自按空降级，readFailures 带相对文件名", async () => {
+    it("账坏了 → 设定、事件、事实都按空降级（同一份快照），readFailures 只记一条、带相对位置", async () => {
       const projectDir = await createSoulSteelFixture();
-      await mkdir(join(projectDir, "timeline"), { recursive: true });
-      await mkdir(join(projectDir, "story"), { recursive: true });
-      await writeFile(join(projectDir, "timeline", "events.json"), "{not-json", "utf-8");
-      await writeFile(join(projectDir, "story", "fact-ledger.json"), "{not-json", "utf-8");
+      await seedChapters(projectDir, [{ chapter: 1, entries: [{ kind: "summary", text: "林序拿到半张申请表。" }, { kind: "fact", nature: "event", text: "林序拿到半张申请表。" }] }]);
+      await writeFile(join(projectDir, "ledger", "chapters", "0001.json"), "{not-json", "utf-8");
 
       const pack = await buildWritingContextPack({ projectDir, chapter: 2, userDirection: "第二章" });
       expect(pack.continuityFocus.recentTimelineEvents).toEqual([]);
       expect(pack.continuityFocus.establishedFacts).toEqual([]);
       const joined = pack.readFailures.join(" ");
-      expect(joined).toContain("时间线事件读取失败（timeline/events.json");
-      expect(joined).toContain("事实账本读取失败（story/fact-ledger.json");
+      expect(pack.readFailures).toHaveLength(1);
+      expect(joined).toContain("设定本和账读取失败（ledger/");
       expect(joined).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
-      // 设定本本身好好的，照常带上
-      expect(pack.setting.protagonist?.name).toBe("林序");
     });
   });
 });
@@ -343,10 +330,4 @@ async function createSoulSteelFixture(): Promise<string> {
     { op: "rules.add", list: "bans", text: "不要提前揭开魂钢真实来源" },
   ]);
   return projectDir;
-}
-
-async function writeJson(projectDir: string, relativePath: string, value: unknown): Promise<void> {
-  const path = join(projectDir, relativePath);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }

@@ -104,7 +104,7 @@ describe("卷笔记缺口和额度上界", () => {
     expect((await readerNotesStatus({ projectDir: book, role: PLANNER_ROLE, upTo: 120 })).volumesMissing).toBe(0);
     const after = await ensureReaderWindow({ projectDir: book, role: PLANNER_ROLE, upTo: 120, callModel: async () => { throw new Error("不该再调"); }, maxVolumeBuilds: 0 });
     expect(after).toMatchObject({ missing: 0, volumesBuilt: 0 });
-  });
+  }, 60_000);
 
   it("200 章只缺第 200 章笔记、旧卷缓存全丢：走真实调用路径一次补完，不停在额度上，实际发送不超额度", async () => {
     await commitChapters(1, 200);

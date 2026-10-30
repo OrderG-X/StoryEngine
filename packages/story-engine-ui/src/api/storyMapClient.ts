@@ -1,37 +1,10 @@
 /**
  * 故事地图的数据（GET /api/story-map，重构 P6）。读不到就如实给原因。
  */
-import type { PaceReport } from "@actalk/story-core";
+import type { StoryMap } from "../server/routes/story-map.js";
 
 export type { PaceChapter, PaceFlag, PaceReport } from "@actalk/story-core";
-
-export interface StoryMapChapter {
-  readonly chapter: number;
-  readonly day: number;
-  readonly dayEnd: number;
-  readonly weekday?: number;
-  readonly weekdayDerived: boolean;
-  readonly timeOfDay?: string;
-  readonly basis: "text" | "judged" | "author" | "estimated" | "missing";
-  readonly summary?: string;
-  readonly present: readonly string[];
-  readonly viewpoint?: string;
-}
-
-export interface StoryMapMember {
-  readonly name: string;
-  readonly aliases: readonly string[];
-  readonly viewpointChapters: readonly number[];
-  readonly appearances: readonly { readonly chapter: number; readonly quote: string }[];
-}
-
-export interface StoryMap {
-  readonly upTo: number;
-  readonly chapters: readonly StoryMapChapter[];
-  readonly cast: readonly StoryMapMember[];
-  /** 节奏诊断：每章推进了几条线索、字数，哪几章可能拖 / 赶。 */
-  readonly pace?: PaceReport;
-}
+export type { StoryMap, StoryMapChapter, StoryMapMember } from "../server/routes/story-map.js";
 
 export type StoryMapResult = { readonly ok: true; readonly map: StoryMap } | { readonly ok: false; readonly error: string };
 

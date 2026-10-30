@@ -5,9 +5,19 @@
  * 清单上每一行的键（作者点「不记」「改记」带回来的）：自动记下 / 要你看的是 `i<序号>`（并成一行的几条以第一条的序号为键，
  * 去掉这行就一起去掉），默认不写、作者勾上才写的是 `o<序号>`。天数那一行不是条目，键是 `day`，改的是天数两栏。
  */
-import { nameKey, parseDraftFile, project, readBookSnapshot, readCardsOrLegacy, readChapterLedger, readChapterPaper, type ChapterCommitResult } from "@actalk/story-core";
+import {
+  nameKey,
+  parseDraftFile,
+  project,
+  readBookSnapshot,
+  readCardsOrLegacy,
+  readChapterLedger,
+  readChapterPaper,
+  type ChapterCommitResult,
+  type LedgerCompleteResult,
+} from "@actalk/story-core";
 import { WEEKDAY_NAMES } from "../book/story-timeline.js";
-import { markdownTitle } from "../book/mirror/sync.js";
+import { markdownTitle } from "../book/story-views.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import { describeReaderWait } from "../editorial/reader-progress.js";
 import type { CommitItem, CommitPreview } from "../editorial/commit-flow.js";
@@ -31,6 +41,8 @@ export interface ChecklistItem {
   readonly removable: boolean;
   readonly editableDay?: number;
   readonly editableDayEnd?: number;
+  /** 天数那一行：这章是哪天不知道（前面有章的账还没记上），两栏空着请作者填。 */
+  readonly dayUnknown?: true;
   readonly needsConfirm?: boolean;
   readonly defaultUnchecked?: boolean;
 }
@@ -50,7 +62,29 @@ export interface CommitPreviewView {
   readonly draftIssues?: readonly string[];
   /** 只差字数下限：清单上给「就这么短，照样定稿」。 */
   readonly shortOnly?: boolean;
+  /** 补账清单（按钮是「确认记账」，正文不动）。 */
+  readonly fill?: true;
   readonly ledgerChecklist?: readonly ChecklistItem[];
+}
+
+/** 停下请作者挑一个的卡（通用）：几行说明 + 几个按钮，字都由服务端给。 */
+export interface AuthorChoicePreview {
+  readonly lines: readonly string[];
+  readonly choices: readonly { readonly decision: string; readonly label: string; readonly primary?: true }[];
+}
+
+/** 记账没成那张卡：「再记一次」；定稿时还能「先定正文、账待记」（补账时没有这一项）。 */
+export function ledgerFailedChoice(chapter: number, reason: string, options: { readonly pendingAllowed: boolean }): AuthorChoicePreview {
+  return {
+    lines: [
+      `第 ${chapter} 章的账这次没记成：${reason}。`,
+      ...(options.pendingAllowed ? ["也可以先把正文定下来，账以后再补；补上之前，这章出了什么事、是哪天，账里都没有。"] : []),
+    ],
+    choices: [
+      { decision: "retry", label: "再记一次", primary: true },
+      ...(options.pendingAllowed ? [{ decision: "pending", label: "先定正文、账待记" }] : []),
+    ],
+  };
 }
 
 /** 清单上作者动过的行 → 去掉的、勾上的条目序号（只认这张清单上有的键）。 */
@@ -122,6 +156,7 @@ function dayReason(preview: CommitPreview): string | undefined {
 
 function dayLabel(preview: CommitPreview): string {
   const { time } = preview;
+  if (time.day === undefined || time.dayEnd === undefined) return "这一章是哪天不知道（前面有章的账还没记上）；知道的话填上";
   const span = `故事${daySpan(time.day, time.dayEnd)}`;
   const extra = [time.timeOfDay, time.weekday !== undefined ? WEEKDAY_NAMES[time.weekday] : undefined].filter(Boolean).join("，");
   const basis = time.sinceLast?.kept
@@ -141,7 +176,7 @@ function dayLabel(preview: CommitPreview): string {
 }
 
 /** 能定稿的清单：天数一行在最前，要作者看的随后，自动记下的最后；keys = 每行的键 → 条目序号。 */
-export function checklistView(preview: CommitPreview, extraNotes: readonly string[]): { readonly view: CommitPreviewView; readonly keys: Record<string, number[]> } {
+export function checklistView(preview: CommitPreview, extraNotes: readonly string[], options: { readonly fill?: true } = {}): { readonly view: CommitPreviewView; readonly keys: Record<string, number[]> } {
   const timeItems = (items: readonly CommitItem[]) => items.filter((item) => item.kind === "time");
   const others = (items: readonly CommitItem[]) => items.filter((item) => item.kind !== "time");
   const timeQuote = [...timeItems(preview.review), ...timeItems(preview.auto)].find((item) => item.quote)?.quote;
@@ -157,8 +192,9 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
       ...(dayReason(preview) ? { reason: dayReason(preview) } : {}),
       ...(timeQuote ? { detail: timeQuote } : {}),
       removable: false,
-      editableDay: preview.time.day,
-      ...(preview.time.dayEnd > preview.time.day ? { editableDayEnd: preview.time.dayEnd } : {}),
+      ...(preview.time.day !== undefined && preview.time.dayEnd !== undefined
+        ? { editableDay: preview.time.day, ...(preview.time.dayEnd > preview.time.day ? { editableDayEnd: preview.time.dayEnd } : {}) }
+        : { dayUnknown: true as const }),
       ...(preview.time.needsConfirm ? { needsConfirm: true } : {}),
     },
     ...others(preview.review).map((item) => toChecklistItem(item, true)),
@@ -169,7 +205,7 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
   const notRecorded = preview.notRecorded.map((item) => `${item.label}：${item.reason}`);
   const notes: string[] = [];
   if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条没记上（原因在清单里）`);
-  if (preview.recommit) notes.push("这章定稿过，这次会换掉原来的账");
+  if (preview.recommit) notes.push(options.fill ? "这章原来记上的那部分，这次一起换成新记的" : "这章定稿过，这次会换掉原来的账");
   if (preview.lostThreads && preview.lostThreads.length > 0) {
     notes.push(`这章原来开的${preview.lostThreads.slice(0, 3).map((title) => `「${title}」`).join("")}这次没记上，后文还接着它；定稿后它就没了开头`);
   }
@@ -183,9 +219,10 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
   }
   if (preview.waited) notes.push(describeReaderWait("ledger", preview.waited, "记账"));
   notes.push(...extraNotes);
+  const can = options.fill ? `第 ${preview.chapter} 章的账可以补上` : `第 ${preview.chapter} 章可以定稿`;
   const head = reviewCount > 0
-    ? `第 ${preview.chapter} 章可以定稿：要你看 ${reviewCount} 条，其余 ${autoCount} 条自动记下（不对的都能去掉）。`
-    : `第 ${preview.chapter} 章可以定稿：${autoCount} 条自动记下（不对的都能去掉）。`;
+    ? `${can}：要你看 ${reviewCount} 条，其余 ${autoCount} 条自动记下（不对的都能去掉）。`
+    : `${can}：${autoCount} 条自动记下（不对的都能去掉）。`;
   return {
     view: {
       chapter: preview.chapter,
@@ -194,6 +231,7 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
       summary: notes.length > 0 ? `${head}${notes.map((note) => `【${note}】`).join("")}` : head,
       ...(notes.length > 0 ? { notes } : {}),
       notRecorded,
+      ...(options.fill ? { fill: true as const } : {}),
       ledgerChecklist,
     },
     keys,
@@ -218,15 +256,20 @@ export function openThreadsHintDue(before: number, after: number): boolean {
 export interface CommitLedgerReport {
   readonly chapter: number;
   readonly chapterPath: string;
+  /** 补账的回执（正文没动）。 */
+  readonly fill?: true;
   readonly ledger: {
     readonly facts: number;
     readonly threadsOpened: number;
     readonly threadsAdvanced: number;
     readonly threadsClosed: number;
     readonly present: number;
-    readonly day: number;
-    readonly dayEnd: number;
+    /** 是哪天不知道（账待记、前面有章账待记）就没有。 */
+    readonly day?: number;
+    readonly dayEnd?: number;
     readonly notRecorded: number;
+    /** pending = 正文定了、账还没记上。 */
+    readonly status: "pending" | "partial" | "ready";
   };
 }
 
@@ -251,8 +294,8 @@ export function supersededCommitView(chapter: number, result: ChapterCommitResul
   return { summary: parts.join(" ") };
 }
 
-/** 定稿成了：照定稿后的账算回执（读的是盘上刚写好的）。mirrorOk = 老格式镜像跟上了没有（没跟上如实说一句）。 */
-export async function commitDoneView(projectDir: string, chapter: number, text: string, result: ChapterCommitResult, mirrorOk: boolean): Promise<CommitDone> {
+/** 照盘上刚写好的账算回执卡的条数，和条数之外要提的几句（新人物、出场满几章没卡、线索积多了）。 */
+async function ledgerReportOf(projectDir: string, chapter: number, notRecorded: number): Promise<{ readonly report: CommitLedgerReport; readonly notes: readonly string[]; readonly escalated: boolean }> {
   const ledger = await readChapterLedger(projectDir, chapter);
   const entries = ledger?.entries ?? [];
   const count = (predicate: (entry: (typeof entries)[number]) => boolean): number => entries.filter(predicate).length;
@@ -277,31 +320,54 @@ export async function commitDoneView(projectDir: string, chapter: number, text: 
       threadsAdvanced: count((entry) => entry.kind === "thread" && entry.op === "advance"),
       threadsClosed: count((entry) => entry.kind === "thread" && entry.op === "close"),
       present: count((entry) => entry.kind === "presence"),
-      day: view?.day ?? 1,
-      dayEnd: view?.dayEnd ?? view?.day ?? 1,
-      notRecorded: result.rejected.length,
+      ...(view?.day !== undefined && view.dayEnd !== undefined ? { day: view.day, dayEnd: view.dayEnd } : {}),
+      notRecorded,
+      status: ledger?.status ?? "ready",
     },
   };
   const openThreads = after.threads.filter((thread) => thread.status !== "closed").length;
   const openBefore = openThreads - report.ledger.threadsOpened + report.ledger.threadsClosed;
-  const parts = [
-    // 记了几条在定稿回执卡上，这里不复述（重构 P6：一回合一句结论）；撤销在定稿回执卡上。
-    `第 ${chapter} 章已定稿${result.recommitted ? "（换掉了原来的账）" : ""}。`,
-    ...(result.rejected.length > 0 ? [`有 ${result.rejected.length} 条没记上：${result.rejected.slice(0, 3).map((item) => item.message).join("；")}。`] : []),
-    ...(result.orphanedThreads.length > 0
-      ? [`换账后有 ${result.orphanedThreads.length} 条线索后文还在推进、这章却不再开它：${result.orphanedThreads.slice(0, 3).map((title) => `「${title}」`).join("")}，要看一下。`]
-      : []),
-    ...(mirrorOk ? [] : ["（老格式资料没同步上，下次打开书会补；账本身已经记好。）"]),
+  const notes = [
     ...(newCharacters.length > 0 ? [`这章还出现了新人物：${newCharacters.join("、")}——要给谁建卡，在设定本「还没建卡」里点一下就行。`] : []),
     ...(recurring.length > 0 ? [`${recurring.map((name) => `「${name}」`).join("、")}已经出场 ${RECURRING_UNCARDED_THRESHOLD} 章了，还没有人物卡。`] : []),
     ...(openThreadsHintDue(openBefore, openThreads) ? [`另外，开着的线索已积到 ${openThreads} 条——有讲同一件事的可以说「归并线索」。`] : []),
   ];
+  return { report, notes, escalated: openThreads >= THREAD_STALE_ESCALATION_THRESHOLD };
+}
+
+const rejectedNote = (rejected: ChapterCommitResult["rejected"]): readonly string[] =>
+  rejected.length > 0 ? [`有 ${rejected.length} 条没记上：${rejected.slice(0, 3).map((item) => item.message).join("；")}。`] : [];
+const orphanedNote = (orphaned: readonly string[]): readonly string[] =>
+  orphaned.length > 0 ? [`换账后有 ${orphaned.length} 条线索后文还在推进、这章却不再开它：${orphaned.slice(0, 3).map((title) => `「${title}」`).join("")}，要看一下。`] : [];
+
+/** 定稿成了：照定稿后的账算回执（读的是盘上刚写好的）。账待记 / 没记全的如实说，回执卡上给「补记账」。 */
+export async function commitDoneView(projectDir: string, chapter: number, text: string, result: ChapterCommitResult): Promise<CommitDone> {
+  const { report, notes, escalated } = await ledgerReportOf(projectDir, chapter, result.rejected.length);
+  const head = report.ledger.status === "pending"
+    ? `第 ${chapter} 章正文定了，账还没记上；回头点「补记账」补上。`
+    : report.ledger.status === "partial"
+      ? `第 ${chapter} 章已定稿，账没记全（补摘原句那一步没成）；回头可以点「补记账」补全。`
+      : `第 ${chapter} 章已定稿${result.recommitted ? "（换掉了原来的账）" : ""}。`;
+  // 记了几条在定稿回执卡上，这里不复述（重构 P6：一回合一句结论）；撤销在定稿回执卡上。
+  const parts = [head, ...rejectedNote(result.rejected), ...orphanedNote(result.orphanedThreads), ...notes];
   const title = markdownTitle(text);
   return {
     report,
     summary: parts.join(" "),
     draftBody: parseDraftFile(text).body,
     ...(title ? { draftTitle: title } : {}),
-    ...(openThreads >= THREAD_STALE_ESCALATION_THRESHOLD ? { threadMaintenanceHint: "escalated" as const } : {}),
+    ...(escalated ? { threadMaintenanceHint: "escalated" as const } : {}),
+  };
+}
+
+/** 补账成了：照补上的账算回执（正文没动，稿纸不重新载入）。 */
+export async function fillDoneView(projectDir: string, chapter: number, result: LedgerCompleteResult): Promise<CommitDone> {
+  const { report: counted, notes, escalated } = await ledgerReportOf(projectDir, chapter, result.rejected.length);
+  const report: CommitLedgerReport = { ...counted, fill: true };
+  const head = result.ledgerStatus === "partial" ? `第 ${chapter} 章的账补了，还是没记全（补摘原句那一步没成）。` : `第 ${chapter} 章的账补上了。`;
+  return {
+    report,
+    summary: [head, ...rejectedNote(result.rejected), ...orphanedNote(result.orphanedThreads), ...notes].join(" "),
+    ...(escalated ? { threadMaintenanceHint: "escalated" as const } : {}),
   };
 }

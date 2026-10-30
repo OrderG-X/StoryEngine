@@ -3,7 +3,7 @@
 // 节奏诊断取数（services/pace-report）：字数按定稿正文数（只数汉字、去标题），故事地图带上这份。
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chapterCommit, projectBook, runCommand, type LedgerEntry } from "@actalk/story-core";
+import { chapterCommit, projectBook, runCommand, type EntryInput } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { registerStoryMapRoutes } from "./story-map.js";
@@ -18,7 +18,7 @@ afterEach(async () => {
   await rm(rootDir, { recursive: true, force: true });
 });
 
-type Entry = Omit<LedgerEntry, "id"> & Record<string, unknown>;
+type Entry = EntryInput;
 
 async function newBook(): Promise<string> {
   const { projectDir } = await createStoryProject({ rootDir, title: "节奏", genre: "悬疑", logline: "雾港的信。", protagonistName: "许微" });

@@ -6,7 +6,7 @@ import type { StateOverview } from "../api/types.js";
  * 空书 = 用户还没真正开始写：没有章节、只有占位主角（或没有角色）、没有草稿/已提交章节。
  * 只读现成 StateOverview 字段，不依赖新增引擎数据。
  *
- * 【为什么不看 hooks/threads/arcGoals 计数】（V4 真机失败的教训）：
+ * 【为什么不看 threads/arcGoals 计数】（V4 真机失败的教训）：
  * 历史上建书会种 1 个 status:"active" 的 arc-goal（也可能种伏笔），那是**建书噪声、不代表用户干了活**，
  * 旧实现据此判「非空书」→ reopen 落到章节语气。该种子来源已随极简空建退役（建书不再种 arc-goal/伏笔），
  * 但本函数仍只认「用户已开始写」的可靠信号、不看这些计数，以兼容历史/异常项目，避免误判。

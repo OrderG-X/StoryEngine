@@ -4,14 +4,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 
-const { readTimelineEvents, readCharacterNameById } = vi.hoisted(() => ({
-  readTimelineEvents: vi.fn(),
+const { readStoryViews, readCharacterNameById } = vi.hoisted(() => ({
+  readStoryViews: vi.fn(),
   // participants 解析用：老镜像里的参与者可能还是老格式人物编号（char-a→林明 / char-b→周冬，验「裸 char-id → 角色名」）。
   readCharacterNameById: vi.fn(async () => new Map([["char-a", "林明"], ["char-b", "周冬"]])),
 }));
-vi.mock("../../book/project-store.js", async (importOriginal) => ({
+vi.mock("../../book/story-views.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  readTimelineEvents,
+  readStoryViews,
 }));
 vi.mock("../../writing/presence/entity-labels.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -20,6 +20,8 @@ vi.mock("../../writing/presence/entity-labels.js", async (importOriginal) => ({
 
 import { buildProjectRequestContext } from "../request-context.js";
 import { readTimelineTool } from "./read-timeline.js";
+
+const eventsView = (events: unknown) => ({ events });
 
 const ctx = { requestContext: buildProjectRequestContext("/tmp/proj") } as unknown as ToolExecutionContext;
 const ctxWithChapter = { requestContext: buildProjectRequestContext("/tmp/proj", 5) } as unknown as ToolExecutionContext;
@@ -60,10 +62,10 @@ const mockEvents = [
 ];
 
 describe("read_timeline 按章/区间查询 timeline 事件", () => {
-  beforeEach(() => readTimelineEvents.mockReset());
+  beforeEach(() => readStoryViews.mockReset());
 
   it("查单章 chapter=2 → 只返回第 2 章事件，ok=true", async () => {
-    readTimelineEvents.mockResolvedValue(mockEvents);
+    readStoryViews.mockResolvedValue(eventsView(mockEvents));
     const out = await run({ chapter: 2 }, ctx);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(1);
@@ -77,7 +79,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
   });
 
   it("查区间 fromChapter=1 toChapter=2 → 返回第 1-2 章事件，ok=true", async () => {
-    readTimelineEvents.mockResolvedValue(mockEvents);
+    readStoryViews.mockResolvedValue(eventsView(mockEvents));
     const out = await run({ fromChapter: 1, toChapter: 2 }, ctx);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(2);
@@ -86,7 +88,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
   });
 
   it("无参数（无 context chapter）→ 返回全部事件，ok=true", async () => {
-    readTimelineEvents.mockResolvedValue(mockEvents);
+    readStoryViews.mockResolvedValue(eventsView(mockEvents));
     const out = await run({}, ctx);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(3);
@@ -94,7 +96,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
   });
 
   it("context 里有 currentChapter=5，input 没给 chapter → 用 context 里的章（5）", async () => {
-    readTimelineEvents.mockResolvedValue(mockEvents);
+    readStoryViews.mockResolvedValue(eventsView(mockEvents));
     const out = await run({}, ctxWithChapter);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(1);
@@ -102,7 +104,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
   });
 
   it("查不存在的章 → ok=true, events 空, summary 说没有事件", async () => {
-    readTimelineEvents.mockResolvedValue(mockEvents);
+    readStoryViews.mockResolvedValue(eventsView(mockEvents));
     const out = await run({ chapter: 99 }, ctx);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(0);
@@ -111,13 +113,13 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
 
   it("mainEvent 为空时 participants 仍把裸 char-id 解析成角色名（绝不泄露 char-xxx）", async () => {
     // 验证没有 semanticSummary.mainEvent 的事件也能正确返回；participants 裸 char-id → 角色名。
-    readTimelineEvents.mockResolvedValue([{
+    readStoryViews.mockResolvedValue(eventsView([{
       id: "ch0003-001",
       chapter: 3,
       summary: "第3章事件无mainEvent",
       participants: ["char-a", "char-b", "char-deadbeef"],
       effects: {}, // 无 semanticSummary
-    }] as never);
+    }] as never));
     const out = await run({ chapter: 3 }, ctx);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(1);
@@ -127,14 +129,14 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
     expect(out.events[0].participants.join("")).not.toContain("char-");
   });
 
-  it("新镜像（legacy-mirror/2）里参与者已经是名字：原样给，不当成编号去解析", async () => {
-    readTimelineEvents.mockResolvedValue([{
+  it("账里的参与者就是名字：原样给，不当成编号去解析", async () => {
+    readStoryViews.mockResolvedValue(eventsView([{
       id: "ch0004-001",
       chapter: 4,
       summary: "第4章",
       participants: ["沈青禾", "周守义"],
       effects: { semanticSummary: { mainEvent: "钥匙锁进铜盒", participants: ["沈青禾"] } },
-    }] as never);
+    }] as never));
     const out = await run({ chapter: 4 }, ctx);
     expect(out.events[0].participants).toEqual(["沈青禾", "周守义"]);
     expect(out.events[0].semanticSummary.participants).toEqual(["沈青禾"]);
@@ -146,13 +148,13 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
   });
 
   it("题材中立：summary 不含任何题材词", async () => {
-    readTimelineEvents.mockResolvedValue([{
+    readStoryViews.mockResolvedValue(eventsView([{
       id: "ch0001-001",
       chapter: 1,
       summary: "某章事件",
       participants: [],
       effects: {},
-    }]);
+    }]));
     const out = await run({ chapter: 1 }, ctx);
     expect(out.summary).not.toMatch(/玄幻|修仙|武侠|霸总|穿越|科幻|言情/u);
   });
@@ -178,7 +180,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
         effects: {},
       },
     ];
-    readTimelineEvents.mockResolvedValue(eventsWithEarly);
+    readStoryViews.mockResolvedValue(eventsView(eventsWithEarly));
 
     // 传 fromChapter=1, toChapter=10，不传 chapter
     const out = await run({ fromChapter: 1, toChapter: 10 }, ctxAt50);

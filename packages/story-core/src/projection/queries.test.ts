@@ -1,20 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AuthorDecision } from "../schema/decisions.js";
-import { CHAPTER_LEDGER_SCHEMA, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
+import type { ChapterLedger, ReviewMark } from "../schema/ledger.js";
+import { ledgerOf, type EntryDraft } from "../ledger/entries.js";
 import { project } from "./project.js";
 import { chapterBrief, currentFactsAbout, preWriteMemo, threadsForPrompt, timelineTable, timelineText } from "./queries.js";
 
-type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string } : never) : never;
+type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: ReviewMark } : never) : never;
 
 function ledger(chapter: number, drafts: Draft[]): ChapterLedger {
-  return {
-    schema: CHAPTER_LEDGER_SCHEMA,
-    chapter,
-    textSha256: "0".repeat(64),
-    committedAt: "2026-10-17T00:00:00.000Z",
-    origin: "commit",
-    entries: drafts.map((draft, index) => ({ review: "auto", ...draft, id: draft.id ?? `c${chapter}-${index + 1}` }) as LedgerEntry),
-  };
+  return ledgerOf({ chapter, committedAt: "2026-10-17T00:00:00.000Z", entries: drafts.map((draft) => ({ review: "auto", ...draft }) as EntryDraft & { id?: string }) });
 }
 
 const q = "原句原句";

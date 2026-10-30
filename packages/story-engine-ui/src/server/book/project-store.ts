@@ -2,15 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BOOK_START_KEYS, cardsImport, cardWrite, runCommand, type CardOp } from "@actalk/story-core";
-import type {
-  ArcGoalPool,
-  FactLedger,
-  HookPool,
-  TimelineEvent,
-  StoryCalendar,
-  StoryProject,
-  ThreadPool,
-} from "./types.js";
+import type { StoryProject } from "./types.js";
 
 export interface CreateStoryProjectInput {
   readonly rootDir: string;
@@ -71,51 +63,6 @@ export async function createStoryProject(input: CreateStoryProjectInput): Promis
 
 export async function readProject(projectDir: string): Promise<StoryProject> {
   return readJson<StoryProject>(join(projectDir, "project.json"));
-}
-
-export async function readFactLedger(projectDir: string): Promise<FactLedger | null> {
-  return readOptionalJson<FactLedger>(join(projectDir, "story", "fact-ledger.json"));
-}
-
-export async function readHookPool(projectDir: string): Promise<HookPool> {
-  // 老书兼容（审计 P1-4）：缺 hooks.json 按空池处理，与 readThreadPool/readArcGoalPool 同款兜底；
-  // 损坏 JSON 仍上抛——伏笔池是正式状态，坏文件绝不能静默当空池往下写。
-  return readJson<HookPool>(join(projectDir, "story", "hooks.json")).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return { hooks: [] };
-    throw error;
-  });
-}
-
-export async function readThreadPool(projectDir: string): Promise<ThreadPool> {
-  return readJson<ThreadPool>(join(projectDir, "story", "threads.json")).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return { threads: [] };
-    throw error;
-  });
-}
-
-export async function readArcGoalPool(projectDir: string): Promise<ArcGoalPool> {
-  return readJson<ArcGoalPool>(join(projectDir, "story", "arc-goals.json")).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return { goals: [] };
-    throw error;
-  });
-}
-
-export async function readStoryCalendar(projectDir: string): Promise<StoryCalendar> {
-  // 老书兼容（审计 P1-4）：缺 time/calendar.json 按「第 1 天·时刻未知」起步——
-  // commit-plan-builder 每次提交必发 calendar 更新，缺文件不该让 commit 直接 reject。
-  return readJson<StoryCalendar>(join(projectDir, "time", "calendar.json")).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return { currentStoryDay: 1, currentTimeOfDay: "unknown" };
-    throw error;
-  });
-}
-
-export async function readTimelineEvents(projectDir: string): Promise<readonly TimelineEvent[]> {
-  // 老书兼容（审计 P1-4）：缺 timeline/events.json 按空时间线处理；
-  // 损坏 JSON 仍上抛，由上层（context-gateway 的 read_failures 等）如实记录降级。
-  return readJson<TimelineEvent[]>(join(projectDir, "timeline", "events.json")).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [] as TimelineEvent[];
-    throw error;
-  });
 }
 
 function normalizeToSafeIdCore(value: string): string {
@@ -190,13 +137,6 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf-8")) as T;
-}
-
-async function readOptionalJson<T>(path: string): Promise<T | null> {
-  return readJson<T>(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  });
 }
 
 /**

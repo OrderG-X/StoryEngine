@@ -7,15 +7,15 @@ import { createStoryProject } from "./project-store.js";
 import { buildStateOverview } from "./state-overview.js";
 
 describe("State Overview defensive readers", () => {
-  it("corrupt ledger JSON degrades to empty but surfaces a visible warning (审计 Low：面板显示「坏」而非「空」)", async () => {
+  it("project.json 坏了：书名按占位显示，但如实挂警告（审计 Low：面板显示「坏」而非「空」）", async () => {
     const projectDir = await createLegacyBookWithSparseFiles();
-    await writeFile(join(projectDir, "story", "hooks.json"), "{not-json", "utf-8");
+    await writeFile(join(projectDir, "project.json"), "{not-json", "utf-8");
 
     const overview = await buildStateOverview({ projectDir, chapter: 1 });
 
     // 读侧降级照做（不堵概览）
     expect(overview.uiHints.warnings.join(" ")).toContain("资料文件损坏");
-    expect(overview.uiHints.warnings.join(" ")).toContain(join("story", "hooks.json"));
+    expect(overview.uiHints.warnings.join(" ")).toContain("project.json");
   });
 
   it("老书还没有设定卡：从手写的老设定文件现拼（缺字段不崩、不写盘）", async () => {

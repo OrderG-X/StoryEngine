@@ -663,7 +663,6 @@ export async function resolveDraftRunContext(input: {
 export function sharedFastDraftInput(run: DraftRunContext, input: {
   readonly projectDir: string;
   readonly chapter: number;
-  readonly selectedHookIds?: readonly string[];
   readonly mustHitBeats?: readonly string[];
   readonly maxOutputTokens?: number;
   readonly segmentByPlan?: boolean;
@@ -677,7 +676,6 @@ export function sharedFastDraftInput(run: DraftRunContext, input: {
     // 引擎侧 `undefined` 与缺键同义（?? 兜底），工具路零行为变化。
     requestedDraftLength: run.requestedDraftLength,
     ...(run.selectedCharacters !== undefined ? { selectedCharacters: run.selectedCharacters } : {}),
-    ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
     maxTimelineEvents: run.maxTimelineEvents,
     maxOutputTokens: positiveOrUndefined(input.maxOutputTokens) ?? resolveDraftMaxOutputTokens(run.lengthTarget),

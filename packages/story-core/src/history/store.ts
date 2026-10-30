@@ -12,6 +12,7 @@ import { CARDS_PATH, CHAPTER_LEDGER_DIR, chapterFromFileName, DECISIONS_PATH, is
 import { sha256Bytes } from "../store/transaction.js";
 import { AuthorDecisionsFile, type AuthorDecision } from "../schema/decisions.js";
 import { ChapterLedger } from "../schema/ledger.js";
+import { isLedgerV1, upgradeLedgerV1 } from "../ledger/migrate-v1.js";
 import { SettingCardsFile } from "../schema/cards.js";
 
 export interface HistoryReader {
@@ -116,8 +117,23 @@ export class HistoryStore {
     return value;
   }
 
-  ledger(key: string, path: string): Promise<ChapterLedger> {
+  /** 存档里的一份账单；升级之前的旧格式当场过迁移器（没配对正文：原句一律记成找不到，只用来核引用、指纹）。 */
+  async ledger(key: string, path: string): Promise<ChapterLedger> {
+    const memo = `ledger|${key}`;
+    if (this.parsed.has(memo)) return this.parsed.get(memo) as ChapterLedger;
+    const raw = textOf(await this.bytes(key, path), path);
+    if (isLedgerV1(raw)) {
+      const upgraded = upgradeLedgerV1(raw, undefined);
+      if (!upgraded.ok) throw new HistoryFileError("file_invalid", path, `这一版的 ${path} 读不了，撤不了。`);
+      this.parsed.set(memo, upgraded.ledger);
+      return upgraded.ledger;
+    }
     return this.parse(key, path, (value) => ChapterLedger.parse(value));
+  }
+
+  /** 按内容键取一份文字。 */
+  async text(key: string, path: string): Promise<string> {
+    return textOf(await this.bytes(key, path), path);
   }
 
   async decisions(key: string | undefined): Promise<readonly AuthorDecision[]> {

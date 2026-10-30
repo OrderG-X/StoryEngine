@@ -8,8 +8,8 @@
  *  - 老的「作废」链改写成新那条的 replaces；只说作废、没说被谁取代的，导入成作者裁定 fact.expire（老账里这种只有手动作废才会有）。
  *  - 故事天数：按老时间线逐章算出「隔几天」，投影重算出来的天数和老数据一致；倒回去的（倒叙）按作者定的天数记。
  */
-import { CHAPTER_LEDGER_SCHEMA, ChapterLedger, type LedgerEntry, type ThreadType, type TimeBasis } from "../schema/ledger.js";
-import { sha256 } from "../store/book.js";
+import type { ChapterLedger, EntryKind, LedgerEntry, ThreadType, TimeBasis } from "../schema/ledger.js";
+import { chapterSource, newLedger, storeEntry, type EntryDraft } from "../ledger/entries.js";
 import { nameKey, quoteInText } from "../text/quote.js";
 import { LEGACY_FILES, type ImportSkip, type LegacyData } from "./legacy.js";
 
@@ -50,9 +50,10 @@ export interface ImportBuild {
   readonly adjusted: readonly ImportAdjustment[];
 }
 
-type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id"> & { id?: string } : never) : never;
+/** 老数据里的一条（老事实沿用老编号；线索的老编号在 thread 上）。 */
+type Draft = EntryDraft & { readonly id?: string };
 
-const SECTION_ORDER: Record<LedgerEntry["kind"], number> = { summary: 0, time: 1, presence: 2, fact: 3, thread: 4 };
+const SECTION_ORDER: Record<EntryKind, number> = { summary: 0, time: 1, presence: 2, fact: 3, thread: 4 };
 const THREAD_OP_ORDER = { open: 0, advance: 1, close: 2 } as const;
 
 const TIME_BASIS: Record<string, TimeBasis> = { author: "author", declared: "text", plan: "judged", fallback: "estimated" };
@@ -321,24 +322,34 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
         || a.position - b.position)
       .map(({ draft }) => draft);
     let seq = 0;
-    const entries = ordered.map((draft) => ({ ...draft, id: draft.id ?? `c${chapter}-${(seq += 1)}` }) as LedgerEntry);
-    for (const entry of entries) {
-      if (entry.kind === "fact") counts.facts += 1;
-      else if (entry.kind === "time") counts.times += 1;
-      else if (entry.kind === "summary") counts.summaries += 1;
-      else if (entry.kind === "presence") counts.presences += 1;
-      else if (entry.op === "open") counts.threadsOpened += 1;
-      else if (entry.op === "advance") counts.threadAdvances += 1;
+    const source = chapterSource(chapter, texts.get(chapter) as string);
+    const entries: LedgerEntry[] = [];
+    for (const draft of ordered) {
+      if (draft.kind === "fact") counts.facts += 1;
+      else if (draft.kind === "time") counts.times += 1;
+      else if (draft.kind === "summary") counts.summaries += 1;
+      else if (draft.kind === "presence") counts.presences += 1;
+      else if (draft.op === "open") counts.threadsOpened += 1;
+      else if (draft.op === "advance") counts.threadAdvances += 1;
       else counts.threadsClosed += 1;
+      const { id: kept, ...declared } = draft;
+      const id = kept ?? `c${chapter}-${(seq += 1)}`;
+      const thread = declared.kind === "thread" && declared.op === "open" ? declared.thread : undefined;
+      // 老数据：来源、范围说不清，按迁移来的记；原句前面核过，在正文里。
+      entries.push(...storeEntry(declared as EntryDraft, { id, ...(thread ? { thread } : {}) }, source, "migrated"));
     }
-    ledgers.push(ChapterLedger.parse({
-      schema: CHAPTER_LEDGER_SCHEMA,
+    // 老数据里这章什么都没有：账待记，记账员通读时记（和导入已写的书同一种）。
+    const built = newLedger({
       chapter,
-      textSha256: sha256(texts.get(chapter) as string),
+      textSha256: source.revision,
       committedAt,
       origin: "import",
       entries,
-    }));
+      status: entries.length === 0 ? "pending" : "ready",
+      coverage: { reasonCodes: [entries.length === 0 ? "imported_text" : "legacy_protocol"] },
+    });
+    if (!built.success) throw new Error(`第 ${chapter} 章的账单没拼成：${built.error.issues[0]?.message ?? "格式不对"}`);
+    ledgers.push(built.data);
   }
   return {
     ledgers,

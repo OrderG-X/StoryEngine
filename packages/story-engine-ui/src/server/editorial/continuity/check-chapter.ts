@@ -16,7 +16,7 @@ import { parseDraftFile, splitUnits } from "@actalk/story-core";
 import { canCallAgain } from "../../lib/llm-client.js";
 import { OperationStopped, StopSignal } from "../../lib/operations/context.js";
 import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js";
-import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
+import { readStoryViews } from "../../book/story-views.js";
 import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
 import { type FactEntry } from "../../book/types.js";
 import type { SettingKind } from "../foundation-digest.js";
@@ -345,7 +345,7 @@ export async function ledgerNumberIssues(input: {
   let facts = input.ledgerFacts;
   if (!facts) {
     try {
-      facts = (await readFactLedgerStrict(input.projectDir)).facts;
+      facts = (await readStoryViews(input.projectDir)).facts.facts;
     } catch (error) {
       return { issues: [], failures: [`账本读不了，这次没对账：${error instanceof Error ? error.message : String(error)}`] };
     }

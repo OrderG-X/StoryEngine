@@ -2,13 +2,12 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
-import { bigramSimilarity, DEFAULT_STALE_AFTER, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
+import { bigramSimilarity, DEFAULT_STALE_AFTER, idleChaptersBetween, LedgerNeedsUpgradeError, threadUnknownChapters, listChapterTexts, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
+import { readStoryViews } from "./story-views.js";
 import type {
   ArcGoal,
   ArcGoalPool,
-  HookItem,
-  HookPool,
   NarrativeThread,
   StoryProject,
   ThreadPool,
@@ -19,10 +18,12 @@ export interface BuildStateOverviewInput {
   readonly projectDir: string;
   readonly chapter?: number;
   readonly maxTimelineEvents?: number;
+  /** 开书时没接上新核心的原因（ensureBookOnCore 失败）：账读不出来时照它说，不让作者「重新打开」一个开了也没用的书。 */
+  readonly notOnCore?: string;
 }
 
 /**
- * 书概况：账（伏笔、线索、时间线）+ 设定本的几个数。设定卡本身走设定视图（core readBible / GET /api/bible），
+ * 书概况：账（线索、目标、时间线，从投影现算）+ 设定本的几个数。设定卡本身走设定视图（core readBible / GET /api/bible），
  * 这里只带别处要用的：主角名、人物名单、目标字数（重构 P9）。
  */
 export interface StateOverview {
@@ -37,12 +38,6 @@ export interface StateOverview {
   readonly storyStatus: {
     readonly currentObjective?: string;
     readonly lastTimelineEvent?: string;
-  };
-  readonly hooks: {
-    readonly activeCount: number;
-    readonly touchedCount: number;
-    readonly resolvedCount: number;
-    readonly activeItems: readonly StateOverviewHookItem[];
   };
   readonly threads: {
     readonly total: number;
@@ -79,6 +74,8 @@ export interface StateOverview {
     readonly knownCharacters: readonly StateOverviewCharacterItem[];
   };
   readonly setting: StateOverviewSetting;
+  /** 定稿时账没记上（pending）/ 没记全（partial）、还能「补记账」的章（导入的由通读记账补，不算）。没有就不带。 */
+  readonly ledgerShort?: readonly { readonly chapter: number; readonly status: "pending" | "partial" }[];
   readonly uiHints: {
     readonly warnings: readonly string[];
   };
@@ -93,18 +90,6 @@ export interface StateOverviewSetting {
   readonly uncarded: number;
   /** 故事设定写了几栏。 */
   readonly storyFields: number;
-}
-
-export interface StateOverviewHookItem {
-  readonly id: string;
-  readonly title: string;
-  readonly status: string;
-  readonly lastTouchedChapter?: number;
-  readonly risk?: "low" | "medium" | "high";
-  /** B5-2: 初次埋入章号（透传自 HookItem.firstSeenChapter）。读时投影，不写盘。 */
-  readonly firstSeenChapter?: number;
-  /** B5-2: 回收章号（status=resolved 时填；透传自 HookItem.resolvedAtChapter）。读时投影，不写盘。 */
-  readonly resolvedAtChapter?: number;
 }
 
 export interface StateOverviewThreadItem {
@@ -169,18 +154,17 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   const degradedReads: string[] = [];
   const [
     project,
-    hookPool,
-    threadPool,
-    arcGoalPool,
-    timelineEvents,
+    views,
     bible,
     commitRecoveryNotices,
   ] = await Promise.all([
     readJsonSafe<StoryProject>(input.projectDir, "project.json", { id: "unknown", title: "Untitled", createdAt: "", updatedAt: "" }, noteCorruptLedger),
-    readJsonSafe<HookPool>(input.projectDir, join("story", "hooks.json"), { hooks: [] }, noteCorruptLedger),
-    readJsonSafe<ThreadPool>(input.projectDir, join("story", "threads.json"), { threads: [] }, noteCorruptLedger),
-    readJsonSafe<ArcGoalPool>(input.projectDir, join("story", "arc-goals.json"), { goals: [] }, noteCorruptLedger),
-    readJsonSafe<readonly TimelineEvent[]>(input.projectDir, join("timeline", "events.json"), [], noteCorruptLedger),
+    // 账是真相：读不出来如实挂警告，概况照常出（读侧不堵）。
+    readStoryViews(input.projectDir).catch((error: unknown) => {
+      const why = error instanceof LedgerNeedsUpgradeError && input.notOnCore ? `账本升级没成：${input.notOnCore}` : describeErrorBriefly(error, input.projectDir);
+      degradedReads.push(`账读不出来（${why}），线索和时间线按空显示。定稿等写入操作会如实报错。`);
+      return undefined;
+    }),
     // 设定卡是真相：读不出来如实挂警告，概况照常出（读侧不堵）。
     readBible(input.projectDir).then((read) => read.bible).catch((error: unknown) => {
       degradedReads.push(`设定卡读不出来（${describeErrorBriefly(error, input.projectDir)}），设定本按空显示。`);
@@ -191,13 +175,19 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     // 扫描失败不堵概览——概述是读侧，残留信号由下一次 recover/commit 继续兜。
     listLegacyRecoveryNotices(input.projectDir).catch(() => [] as const),
   ]);
+  const threadPool: ThreadPool = views?.threads ?? { threads: [] };
+  const arcGoalPool: ArcGoalPool = views?.goals ?? { goals: [] };
+  const timelineEvents: readonly TimelineEvent[] = views?.events ?? [];
 
-  const latestChapter = inferCurrentChapter(timelineEvents);
+  // 账还没接上新核心的老书（书架上列着、还没打开过）：投影是空的，章数照盘上的定稿正文算，不报成零章；开书时导入。
+  const textChapters = views?.projection.chapters.length ? [] : await listChapterTexts(input.projectDir).catch(() => [] as readonly number[]);
+  const latestChapter = inferCurrentChapter(timelineEvents) ?? (textChapters.length > 0 ? Math.max(...textChapters) : null);
   const currentChapter = input.chapter ?? latestChapter;
   // 可清理的线索只按章数和作者标的轻重算，不按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
   // 从最新定稿章算、不随作者正翻着的章变（长篇实跑：翻到下一章，界面说 5 条、AI 说 6 条）。
+  const threadUnknown = threadUnknownChapters(views?.projection.chapters ?? []);
   const cleanupCandidates = threadPool.threads
-    .filter((thread) => isCleanupCandidate(thread, latestChapter))
+    .filter((thread) => isCleanupCandidate(thread, latestChapter, threadUnknown))
     .sort((a, b) => (a.lastTouchedChapter ?? 0) - (b.lastTouchedChapter ?? 0));
   const cleanupCandidateIds = new Set(cleanupCandidates.map((thread) => thread.id));
   const cleanupVisibleCount = cleanupCandidateIds.size;
@@ -210,6 +200,9 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   // L2/L3 分层摘要——从全量 events 派生，保留早期内容，不破坏 recentEvents
   const timelineLayers = buildTimelineLayers(timelineEvents, currentChapter ?? 0);
   const lastEvent = recentEvents.at(-1);
+  const ledgerShort = (views?.projection.chapters ?? []).flatMap((chapter) => (
+    chapter.origin !== "import" && chapter.ledgerStatus !== "ready" ? [{ chapter: chapter.chapter, status: chapter.ledgerStatus }] : []
+  ));
 
   return {
     project: {
@@ -224,19 +217,6 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
         firstOpenThread(threadPool.threads)?.title,
       ]),
       lastTimelineEvent: lastEvent?.summary,
-    },
-    hooks: {
-      activeCount: hookPool.hooks.filter((hook) => hook.status === "active" || hook.status === "seeded").length,
-      touchedCount: hookPool.hooks.filter((hook) => hook.status === "active").length,
-      resolvedCount: hookPool.hooks.filter((hook) => hook.status === "resolved").length,
-      activeItems: (() => {
-        const hookSelectChapter = currentChapter ?? Math.max(0, ...hookPool.hooks.map((h) => h.firstSeenChapter ?? 0));
-        return selectRelevant({
-          items: hookPool.hooks.map((h) => ({ ...h, text: h.title ?? "" })),
-          chapter: hookSelectChapter,
-          closedStatuses: ["resolved", "abandoned"],
-        }).selected.slice(0, MAX_ITEMS).map(toHookOverview);
-      })(),
     },
     threads: {
       total: threadPool.threads.length,
@@ -282,9 +262,10 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       knownCharacters: bible ? knownCharactersOf(bible) : [],
     },
     setting: settingOf(bible),
+    ...(ledgerShort.length > 0 ? { ledgerShort } : {}),
     uiHints: {
       warnings: [
-        ...buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
+        ...buildWarnings({ threadPool, arcGoalPool, cleanupVisibleCount }),
         ...commitRecoveryNotices.map(formatLegacyRecoveryNotice),
         // 审计 Low：损坏台账如实可见（绝不把「坏文件」显示成「没有资料」）。
         ...unique(corruptLedgerFiles.map((relativePath) =>
@@ -358,26 +339,14 @@ export function clusterNearDuplicates<T extends { readonly id: string; readonly 
   return clusters;
 }
 
-function toHookOverview(hook: HookItem): StateOverviewHookItem {
-  return {
-    id: hook.id,
-    title: truncate(hook.title),
-    status: hook.status,
-    ...(hook.lastTouchedChapter !== undefined ? { lastTouchedChapter: hook.lastTouchedChapter } : {}),
-    risk: hookRisk(hook),
-    ...(hook.firstSeenChapter !== undefined ? { firstSeenChapter: hook.firstSeenChapter } : {}),
-    ...(hook.resolvedAtChapter !== undefined ? { resolvedAtChapter: hook.resolvedAtChapter } : {}),
-  };
-}
-
-/** 跟伏笔看板「停太久」同一把尺子（核心投影的 staleAfter），只是大伏笔不劝清理。 */
-function isCleanupCandidate(thread: NarrativeThread, latestChapter: number | null): boolean {
+/** 跟伏笔看板「停太久」同一把尺子（核心投影的 staleAfter、不数线索账没记全的章），只是大伏笔不劝清理。 */
+function isCleanupCandidate(thread: NarrativeThread, latestChapter: number | null, threadUnknown: readonly number[]): boolean {
   if (thread.status !== "open" && thread.status !== "touched") return false;
   // 大伏笔本来就要埋很久（长篇实跑：第 1 章的「铁箱里是什么」标了大伏笔，第 6 章起天天被劝清理）；
   // 小线索是作者说过「停多久都不提醒」的。
   if (thread.weight === "major" || thread.weight === "minor") return false;
   if (latestChapter === null || typeof thread.lastTouchedChapter !== "number") return false;
-  return latestChapter - thread.lastTouchedChapter >= DEFAULT_STALE_AFTER;
+  return idleChaptersBetween(thread.lastTouchedChapter, latestChapter, threadUnknown) >= DEFAULT_STALE_AFTER;
 }
 
 function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: string, relatedCount?: number): StateOverviewThreadItem {
@@ -450,15 +419,7 @@ function firstOpenThread(threads: readonly NarrativeThread[]): NarrativeThread |
   return threads.find((thread) => thread.status === "open" || thread.status === "touched");
 }
 
-function hookRisk(hook: HookItem): "low" | "medium" | "high" {
-  const evidenceCount = hook.evidence?.length ?? 0;
-  if (hook.nextActionHint) return "high";
-  if (evidenceCount > 1 || hook.status === "active") return "medium";
-  return "low";
-}
-
 function buildWarnings(input: {
-  readonly hookPool: HookPool;
   readonly threadPool: ThreadPool;
   readonly arcGoalPool: ArcGoalPool;
   readonly cleanupVisibleCount: number;
@@ -467,7 +428,6 @@ function buildWarnings(input: {
   if (input.threadPool.threads.filter((thread) => thread.status === "open").length > 30) warnings.push("many_open_threads");
   if (input.cleanupVisibleCount > 0) warnings.push("cleanup_candidates_visible");
   if (!input.arcGoalPool.goals.some((goal) => goal.status === "active" || goal.status === "touched")) warnings.push("no_active_arc_goals");
-  if (!input.hookPool.hooks.some((hook) => hook.status === "active" || hook.status === "seeded")) warnings.push("no_active_hooks");
   return warnings;
 }
 

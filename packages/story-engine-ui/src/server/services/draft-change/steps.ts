@@ -303,7 +303,6 @@ export async function writeVersion(input: {
       ...sharedFastDraftInput(run, {
         projectDir,
         chapter: params.chapter,
-        ...(params.selectedHookIds ? { selectedHookIds: params.selectedHookIds } : {}),
         ...(params.mustHitBeats ? { mustHitBeats: params.mustHitBeats } : {}),
         // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）；接着写不分。
         segmentByPlan: !continuing,

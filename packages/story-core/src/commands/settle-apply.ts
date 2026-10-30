@@ -18,12 +18,13 @@ import { applyCardOps, CardOp, MAX_OPS_PER_CHANGE } from "../bible/ops.js";
 import { readCardsOrLegacy } from "../bible/commands.js";
 import { draftVersionOf, readDraftStamp } from "../draft/draft.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import { ChapterLedger, entryShapeProblem, type LedgerEntry } from "../schema/ledger.js";
+import { ChapterLedger, entryQuote, storedShapeProblem, type LedgerEntry } from "../schema/ledger.js";
+import { chapterSource, evidenceFor, relocateEvidence, type ChapterSource } from "../ledger/entries.js";
 import { cardsFileText, decisionsFileText, readAllLedgers, readChapterText, readDecisions, sha256 } from "../store/book.js";
 import { CARDS_PATH, chapterLedgerPath, chapterTextPath, DECISIONS_PATH, draftPath } from "../store/paths.js";
 import type { TxWrite } from "../store/transaction.js";
 import { normalizeForQuote, quoteInText } from "../text/quote.js";
-import { applyUnitEdits, splitUnits, type AppliedUnitEdit } from "../text/units.js";
+import { applyUnitEdits, type AppliedUnitEdit } from "../text/units.js";
 import { fail } from "./runner.js";
 import type { WriteCommandSpec } from "./types.js";
 
@@ -84,6 +85,15 @@ type ChapterOutcome =
   | { readonly ok: true; readonly ledger: ChapterLedger; readonly text: string; readonly retract: readonly string[]; readonly summary: SettledChapter }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
+/** 换成改后正文里的这一句：核得上就按新一版算证据；太短核不了的（「嗯。」）照原样记这句（它确实在新正文里），不给句号。 */
+function requote(entry: LedgerEntry, sentence: string, source: ChapterSource): LedgerEntry {
+  const proof = evidenceFor(sentence, source) ?? {
+    evidence: [{ resource: { kind: "chapter" as const, chapter: source.chapter }, revision: source.revision, quote: sentence }],
+    evidenceStatus: "quoted" as const,
+  };
+  return { ...entry, ...proof };
+}
+
 function settleLedger(
   ledger: ChapterLedger,
   original: string,
@@ -95,7 +105,7 @@ function settleLedger(
   const chapter = ledger.chapter;
   const patchById = new Map(patches.map((patch) => [patch.id, patch]));
   const retractSet = new Set(retractIds);
-  const units = splitUnits(next);
+  const source = chapterSource(chapter, next);
   const entries: LedgerEntry[] = [];
   const factsUpdated: string[] = [];
   const factsRetracted: string[] = [];
@@ -105,13 +115,15 @@ function settleLedger(
   for (const entry of ledger.entries) {
     const patch = entry.kind === "fact" ? patchById.get(entry.id) : undefined;
     if (patch && entry.kind === "fact") {
+      const quote = patch.quote ?? entryQuote(entry);
+      const proof = quote === undefined ? undefined : evidenceFor(quote, source);
       const updated = {
         ...entry,
         ...(patch.value ? { value: patch.value } : {}),
         ...(patch.text ? { text: patch.text } : {}),
-        ...(patch.quote ? { quote: patch.quote } : {}),
+        ...proof,
       };
-      if (!updated.quote || !quoteInText(updated.quote, next) || entryShapeProblem(updated)) {
+      if (!proof || proof.evidenceStatus === "none" || storedShapeProblem(updated)) {
         return { ok: false, code: "fact_patch_invalid", message: `第 ${chapter} 章账里「${entry.text}」的改法核不上改后的正文` };
       }
       entries.push(updated);
@@ -124,9 +136,9 @@ function settleLedger(
       factsRetracted.push(entry.text);
       continue;
     }
-    const quote = entry.quote;
+    const quote = entryQuote(entry);
     if (!quote || quoteInText(quote, next) || !quoteInText(quote, original)) {
-      entries.push(entry);
+      entries.push(relocateEvidence(entry, source));
       continue;
     }
     const edit = applied.find((item) => brokenBy(original, item, quote)) ?? applied[0];
@@ -139,12 +151,12 @@ function settleLedger(
     if (entry.kind === "presence") {
       const sentence = edit && containsName(edit.to, entry.nameUsed)
         ? edit.to
-        : units.find((unit) => containsName(unit.text, entry.nameUsed))?.text;
+        : source.units.find((unit) => containsName(unit.text, entry.nameUsed))?.text;
       if (!sentence) {
         presenceDropped.push(entry.nameUsed);
         continue;
       }
-      entries.push({ ...entry, quote: sentence });
+      entries.push(requote(entry, sentence, source));
       requoted += 1;
       continue;
     }
@@ -152,8 +164,9 @@ function settleLedger(
       entries.push(entry);
       continue;
     }
-    entries.push({ ...entry, quote: edit.to });
-    requoted += 1;
+    entries.push(requote(entry, edit.to, source));
+    // 时间存成开头、结尾两条，算一条。
+    if (!(entry.kind === "time" && entry.appliesTo === "chapterEnd")) requoted += 1;
   }
   const unknown = [...patches.map((patch) => patch.id), ...retractIds].find((id) => !ledger.entries.some((entry) => entry.kind === "fact" && entry.id === id));
   if (unknown) return { ok: false, code: "unknown_fact", message: `第 ${chapter} 章账里没有要改的那条事实了` };

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { normalizeChapterPlan } from "../book/chapter-plan.js";
+import { seedChapters } from "../book/ledger-test-helpers.js";
 import {
   applySureGate,
   callConfiguredBrainModel,
@@ -520,15 +521,12 @@ describe("A 自复核", () => {
 });
 
 describe("B 时间线表进核账", () => {
+  /** 第 1、2 章照原文定稿，作者定了天数（时间线从账算）。 */
   async function writeTimeline(dir: string): Promise<void> {
-    await mkdir(join(dir, "story"), { recursive: true });
-    await writeFile(join(dir, "story", "timeline.json"), JSON.stringify({
-      schemaVersion: 1,
-      entries: [
-        { chapter: 1, day: 1, weekday: 0, source: "author" },
-        { chapter: 2, day: 2, weekday: 1, source: "author" },
-      ],
-    }), "utf-8");
+    await seedChapters(dir, [
+      { chapter: 1, entries: [{ kind: "summary", text: "客人送来怀表。", quote: CH1 }, { kind: "time", basis: "author", day: 1, weekday: 0 }] },
+      { chapter: 2, entries: [{ kind: "summary", text: "林舟把怀表锁进抽屉。", quote: CH2 }, { kind: "time", basis: "author", day: 2, weekday: 1 }] },
+    ]);
   }
 
   it("variant.timeline → 三遍的新稿消息后面附上引擎排好的时间线表", async () => {
@@ -549,10 +547,10 @@ describe("B 时间线表进核账", () => {
     for (const { messages } of plain.checkCalls()) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
   });
 
-  it("时间线文件读不了 → 不附表也不算失败，三遍照核", async () => {
+  it("账读不了 → 不附表也不算失败，三遍照核", async () => {
     const dir = await makeBook();
-    await mkdir(join(dir, "story"), { recursive: true });
-    await writeFile(join(dir, "story", "timeline.json"), "{{{坏掉的 JSON", "utf-8");
+    await writeTimeline(dir);
+    await writeFile(join(dir, "ledger", "chapters", "0001.json"), "{{{坏掉的 JSON", "utf-8");
     const { callModel, checkCalls } = fakeModel({});
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { timeline: true } });
     expect(result.failures).toEqual([]);
@@ -641,15 +639,12 @@ describe("D「确定」门槛（applySureGate）", () => {
 });
 
 describe("F 时间线表只进自复核（R2.1）", () => {
+  /** 第 1、2 章照原文定稿，作者定了天数（时间线从账算）。 */
   async function writeTimeline(dir: string): Promise<void> {
-    await mkdir(join(dir, "story"), { recursive: true });
-    await writeFile(join(dir, "story", "timeline.json"), JSON.stringify({
-      schemaVersion: 1,
-      entries: [
-        { chapter: 1, day: 1, weekday: 0, source: "author" },
-        { chapter: 2, day: 2, weekday: 1, source: "author" },
-      ],
-    }), "utf-8");
+    await seedChapters(dir, [
+      { chapter: 1, entries: [{ kind: "summary", text: "客人送来怀表。", quote: CH1 }, { kind: "time", basis: "author", day: 1, weekday: 0 }] },
+      { chapter: 2, entries: [{ kind: "summary", text: "林舟把怀表锁进抽屉。", quote: CH2 }, { kind: "time", basis: "author", day: 2, weekday: 1 }] },
+    ]);
   }
 
   /** 三遍报怀表 + 自复核按 verdicts 回；记下每次调用，供检查三遍和复核各自的消息里有没有时间线表。 */
@@ -696,10 +691,10 @@ describe("F 时间线表只进自复核（R2.1）", () => {
     expect(review[0]!.messages.at(-1)!.content).toContain("【故事时间线（日子以这张表为准）】");
   });
 
-  it("时间线文件读不了 → 复核不带表也不算失败，照常出结果", async () => {
+  it("账读不了 → 复核不带表也不算失败，照常出结果", async () => {
     const dir = await makeBook();
-    await mkdir(join(dir, "story"), { recursive: true });
-    await writeFile(join(dir, "story", "timeline.json"), "{{{坏掉的 JSON", "utf-8");
+    await writeTimeline(dir);
+    await writeFile(join(dir, "ledger", "chapters", "0001.json"), "{{{坏掉的 JSON", "utf-8");
     const { callModel, byKind } = modelWithReview();
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { selfReview: true, timelineInReview: true } });
     expect(result.failures).toEqual([]);

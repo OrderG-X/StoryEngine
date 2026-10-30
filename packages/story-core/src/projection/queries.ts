@@ -6,6 +6,7 @@
  */
 import type { ThreadType, TimeBasis } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
+import { idleChaptersBetween, threadUnknownChapters } from "./coverage.js";
 import { DEFAULT_STALE_AFTER, MAJOR_STALE_FACTOR } from "./project.js";
 import type { BookProjection, ChapterView, FactView, ThreadStatus, ThreadView, ThreadWeight } from "./types.js";
 
@@ -91,7 +92,7 @@ export function threadsForPrompt(projection: BookProjection, options: { readonly
     weight: thread.weight,
     openedAt: thread.openedAt,
     lastTouchedAt: thread.lastTouchedAt,
-    idleChapters: Math.max(0, projection.upTo - thread.lastTouchedAt),
+    idleChapters: thread.idleChapters,
     lastNote: thread.touches.at(-1)?.note ?? thread.title,
   }));
   return { threads, omitted: sorted.length - threads.length };
@@ -99,13 +100,16 @@ export function threadsForPrompt(projection: BookProjection, options: { readonly
 
 export interface TimelineRow {
   readonly chapter: number;
-  readonly day: number;
-  readonly dayEnd: number;
+  /** 不知道（时间没记上的章、接着它算的）就没有。 */
+  readonly day?: number;
+  readonly dayEnd?: number;
   /** 0 = 周一 … 6 = 周日。 */
   readonly weekday?: number;
   readonly weekdayDerived: boolean;
   readonly timeOfDay?: string;
-  readonly basis: TimeBasis | "missing";
+  readonly basis: TimeBasis | "missing" | "unknown";
+  /** 这章的时间没记上：pending = 账还没记上；partial = 账没记全、时间那类没记上。 */
+  readonly ledgerShort?: "pending" | "partial";
 }
 
 /** 每章「第几天、星期几、依据」，算到 upTo（含；缺省 = 投影算到的那章）。模型照表对，不自己做日期算术。 */
@@ -114,12 +118,12 @@ export function timelineTable(projection: BookProjection, upTo: number = project
     .filter((chapter) => chapter.chapter <= upTo)
     .map((chapter) => ({
       chapter: chapter.chapter,
-      day: chapter.day,
-      dayEnd: chapter.dayEnd,
+      ...(chapter.day !== undefined && chapter.dayEnd !== undefined ? { day: chapter.day, dayEnd: chapter.dayEnd } : {}),
       ...(chapter.weekday !== undefined ? { weekday: chapter.weekday } : {}),
       weekdayDerived: chapter.weekdayDerived,
       ...(chapter.timeOfDay !== undefined ? { timeOfDay: chapter.timeOfDay } : {}),
       basis: chapter.dayBasis,
+      ...(chapter.ledgerStatus !== "ready" && chapter.missingKinds?.includes("time") ? { ledgerShort: chapter.ledgerStatus } : {}),
     }));
 }
 
@@ -130,21 +134,26 @@ const BASIS_LABELS: Record<TimelineRow["basis"], string> = {
   author: "作者定的",
   estimated: "估计的",
   missing: "没记，按上一章 +1",
+  unknown: "不知道（前面有章的时间没记上）",
 };
 
 /** 时间表的文字版，给提示词直接贴。 */
 export function timelineText(rows: readonly TimelineRow[]): string {
   const lines = ["| 章 | 第几天 | 星期 | 时段 | 依据 |", "|---|---|---|---|---|"];
   for (const row of rows) {
-    const days = row.dayEnd > row.day ? `${row.day}～${row.dayEnd}` : `${row.day}`;
+    const days = row.day === undefined || row.dayEnd === undefined ? "不知道" : row.dayEnd > row.day ? `${row.day}～${row.dayEnd}` : `${row.day}`;
     const weekday = row.weekday === undefined ? "—" : `${WEEKDAY_NAMES[row.weekday]}${row.weekdayDerived ? "（推算）" : ""}`;
-    lines.push(`| 第 ${row.chapter} 章 | ${days} | ${weekday} | ${row.timeOfDay ?? "—"} | ${BASIS_LABELS[row.basis]} |`);
+    const basis = row.ledgerShort === "pending" ? "这章的账还没记上" : row.ledgerShort === "partial" ? "这章的账没记全，时间没记上" : BASIS_LABELS[row.basis];
+    lines.push(`| 第 ${row.chapter} 章 | ${days} | ${weekday} | ${row.timeOfDay ?? "—"} | ${basis} |`);
   }
   return lines.join("\n");
 }
 
 export interface ChapterBrief {
   readonly chapter: number;
+  /** pending = 这章的账还没记上（梗概、出场、线索都给不出，不是「什么都没发生」）；partial = 没记全（missingKinds 那几类）。 */
+  readonly ledgerStatus: ChapterView["ledgerStatus"];
+  readonly missingKinds?: ChapterView["missingKinds"];
   readonly summary?: string;
   readonly present: readonly string[];
   readonly viewpoint?: string;
@@ -168,6 +177,8 @@ export function chapterBrief(projection: BookProjection, chapter: number): Chapt
   const [time] = timelineTable({ ...projection, chapters: [view] }, chapter);
   return {
     chapter,
+    ledgerStatus: view.ledgerStatus,
+    ...(view.missingKinds ? { missingKinds: view.missingKinds } : {}),
     ...(view.summary !== undefined ? { summary: view.summary } : {}),
     present: view.present,
     ...(view.viewpoint !== undefined ? { viewpoint: view.viewpoint } : {}),
@@ -252,6 +263,8 @@ export function preWriteMemo(projection: BookProjection, chapter: number): PreWr
   type Candidate = PreWriteThread & { readonly openedAt: number };
   const candidates: Candidate[] = [];
   let openCount = 0;
+  // 停了几章不数线索没记全的章（不知道那几章动没动）。
+  const unknown = threadUnknownChapters(projection.chapters);
   for (const thread of projection.threads) {
     if (thread.openedAt > upTo) continue;
     if (thread.closedAt !== undefined && thread.closedAt <= upTo) continue;
@@ -259,7 +272,7 @@ export function preWriteMemo(projection: BookProjection, chapter: number): PreWr
     const touches = thread.touches.filter((touch) => touch.chapter <= upTo);
     const last = touches.at(-1);
     const lastChapter = Math.max(thread.openedAt, last?.chapter ?? thread.openedAt);
-    const idle = upTo - lastChapter;
+    const idle = idleChaptersBetween(lastChapter, upTo, unknown);
     const idleLimit = thread.weight === "major" ? DEFAULT_STALE_AFTER * MAJOR_STALE_FACTOR : DEFAULT_STALE_AFTER;
     const previousTouch = touches.filter((touch) => touch.chapter === upTo && touch.op !== "close").at(-1);
     const reason: PreWriteThread["reason"] | undefined = previousTouch

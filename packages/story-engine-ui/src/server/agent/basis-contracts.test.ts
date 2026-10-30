@@ -31,7 +31,6 @@ import * as readers from "../editorial/reader-window.js";
 import { readRereadState, REREAD_KIND } from "../editorial/reread-state.js";
 import { settleApplyArgs } from "../editorial/settle/apply-args.js";
 import type { SettleProposal } from "../editorial/settle/propose.js";
-import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { readChapterPlan } from "../book/chapter-plan.js";
 import { createBookBackup, restoreBookFromBackup } from "../lib/book-backup.js";
 import { moveBookToTrash, restoreFromTrash } from "../lib/book-trash.js";
@@ -304,7 +303,6 @@ describe("依据安全契约", () => {
 
   it("R9 拟章纲途中书 A→B→撤销回 A：章纲员读的是 B，拟出的章纲不挂 A 的指纹、下次重拟", async () => {
     await seed("# 一\n\n他叫张三。");
-    expect((await syncLegacyMirror(book)).ok).toBe(true);
     const saved = await createSnapshot(book, "state-A");
     const basisA = await planBasisOf(book, 2);
     const original = readers.ensureReaderWindow;

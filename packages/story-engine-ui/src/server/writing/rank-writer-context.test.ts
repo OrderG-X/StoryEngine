@@ -241,7 +241,6 @@ function makeEnvelope(sections: readonly ContextSection[]): WriterContextEnvelop
       stableTokenEstimate,
       dynamicTokenEstimate: totalTokenEstimate - stableTokenEstimate,
       selectedCharacters: [],
-      selectedHooks: [],
       selectedTimelineEvents: [],
     },
   };

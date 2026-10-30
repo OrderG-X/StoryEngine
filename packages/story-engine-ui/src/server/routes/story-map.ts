@@ -7,19 +7,22 @@
 import { projectBook, type BookProjection, type PaceReport } from "@actalk/story-core";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../book/ensure-on-core.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
 import { readPaceReport } from "../services/pace-report.js";
 
 export interface StoryMapChapter {
   readonly chapter: number;
-  readonly day: number;
-  readonly dayEnd: number;
+  /** 这章的账没记全：pending = 还没记上（格子显示「账待记」）；partial = 记了一部分（天数没记上时格子显示「账没记全」）。 */
+  readonly ledgerShort?: "pending" | "partial";
+  /** 是哪天不知道（时间没记上的章、接着它算的）就没有。 */
+  readonly day?: number;
+  readonly dayEnd?: number;
   /** 0 = 周一 … 6 = 周日。 */
   readonly weekday?: number;
   readonly weekdayDerived: boolean;
   readonly timeOfDay?: string;
-  readonly basis: "text" | "judged" | "author" | "estimated" | "missing";
+  readonly basis: "text" | "judged" | "author" | "estimated" | "missing" | "unknown";
   readonly summary?: string;
   readonly present: readonly string[];
   readonly viewpoint?: string;
@@ -46,8 +49,8 @@ export function toStoryMap(projection: Pick<BookProjection, "upTo" | "chapters" 
     upTo: projection.upTo,
     chapters: projection.chapters.map((chapter) => ({
       chapter: chapter.chapter,
-      day: chapter.day,
-      dayEnd: chapter.dayEnd,
+      ...(chapter.ledgerStatus !== "ready" ? { ledgerShort: chapter.ledgerStatus } : {}),
+      ...(chapter.day !== undefined && chapter.dayEnd !== undefined ? { day: chapter.day, dayEnd: chapter.dayEnd } : {}),
       ...(chapter.weekday !== undefined ? { weekday: chapter.weekday } : {}),
       weekdayDerived: chapter.weekdayDerived,
       ...(chapter.timeOfDay ? { timeOfDay: chapter.timeOfDay } : {}),

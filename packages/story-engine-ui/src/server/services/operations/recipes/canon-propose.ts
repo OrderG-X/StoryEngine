@@ -9,6 +9,7 @@
  * 对话 AI 交（`propose_canon`）只能交「作者定下的说法」（statement）；「以某一边为准」（pick）的原句是核账卡上的，只认按钮。
  */
 import { CANON_TEXT_MAX, listChapterTexts, settleApply, type BasisChange, type SettleApplyResult } from "@actalk/story-core";
+import { itOrThem, shortChaptersText, type ShortChapter } from "../../../book/ledger-short.js";
 import { describeBasisChanges } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
 import type { BrainCallModel } from "../../../editorial/reader-window.js";
@@ -59,6 +60,8 @@ export interface CanonCard {
   readonly fields: readonly { readonly key: string; readonly card?: string; readonly label: string; readonly from: string; readonly to: string }[];
   readonly searched: readonly number[];
   readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
+  /** 账没记全的章：账里跟着改的事实缺它们的。 */
+  readonly ledgerShort?: readonly ShortChapter[];
   readonly failures: readonly string[];
   /** 核账卡上点「以本章为准」的那条（条目键，原样带回）。 */
   readonly resolves?: string;
@@ -167,6 +170,7 @@ export function canonCardOf(proposal: SettleProposal, item?: string): CanonCard 
     fields: proposal.fields.map((field) => ({ key: field.key, ...(field.card ? { card: field.card } : {}), label: field.label, from: field.from, to: field.to })),
     searched: proposal.searched,
     missed: proposal.missed,
+    ...(proposal.ledgerShort ? { ledgerShort: proposal.ledgerShort } : {}),
     failures: proposal.failures,
     ...(item ? { resolves: item } : {}),
   };
@@ -186,7 +190,8 @@ export function canonPreviewSummary(card: CanonCard): string {
     : card.replaces ? "查完了：没有要改的。点「换掉旧的」把设定本里原来那条换成这条。" : "查完了：没有要改的。点「记下定论」记进设定本。";
   const missed = card.missed.length > 0 ? `核账报的${card.missed.map((item) => `第 ${item.chapter} 章「${item.quote}」`).join("、")}这次没查出改法，可以重新查一遍。` : "";
   const failed = card.failures.length > 0 ? `没查全：${card.failures.join("；")}。` : "";
-  return [body, missed, failed].filter(Boolean).join("");
+  const pending = card.ledgerShort && card.ledgerShort.length > 0 ? `${shortChaptersText(card.ledgerShort)}，账里跟着改的事实缺${itOrThem(card.ledgerShort)}的。` : "";
+  return [body, missed, failed, pending].filter(Boolean).join("");
 }
 
 /** 改齐之后那句话：记了什么、改了哪几章几处、账里跟着改了 / 作废了什么。 */

@@ -77,8 +77,8 @@ describe("想走法只有执行器一个入口（片 2D）", () => {
 });
 
 describe("定稿只有执行器一个入口（片 4A）", () => {
-  it("定稿命令只在 commit.prepare 配方里调；清单只在那里出", async () => {
-    expect(await filesMatching(SERVER, /\bchapterCommit\b/u)).toEqual(["services/operations/recipes/commit-prepare.ts"]);
+  it("定稿命令只在 commit.prepare 配方里调；清单只在那里出（单测助手给要「账里有这些」前提的测试种账用）", async () => {
+    expect(await filesMatching(SERVER, /\bchapterCommit\b/u)).toEqual(["book/ledger-test-helpers.ts", "services/operations/recipes/commit-prepare.ts"]);
     expect(await filesMatching(SERVER, /\bprepareChapterCommit\s*\(/u)).toEqual(["editorial/commit-flow.ts", "services/operations/recipes/commit-prepare.ts"]);
   });
 
@@ -103,8 +103,8 @@ describe("撤销 / 恢复 / 裁剪只有执行器一个入口（片 4C）", () =
 });
 
 describe("改账只有执行器一个入口（片 3B）", () => {
-  it("记裁定、理线索只在 ledger.change 配方里调", async () => {
-    expect(await filesMatching(SERVER, /\bdecisionRecord\b/u)).toEqual(["services/operations/recipes/ledger-change.ts"]);
+  it("记裁定、理线索只在 ledger.change 配方里调（单测助手种裁定）", async () => {
+    expect(await filesMatching(SERVER, /\bdecisionRecord\b/u)).toEqual(["book/ledger-test-helpers.ts", "services/operations/recipes/ledger-change.ts"]);
     expect(await filesMatching(SERVER, /\breviewOpenThreads\s*\(/u)).toEqual(["editorial/thread-review.ts", "services/operations/recipes/ledger-change.ts"]);
   });
 
@@ -119,7 +119,7 @@ describe("改账只有执行器一个入口（片 3B）", () => {
 
 /** 路由以外登记过的几处（设计第十一节；定稿预览那处随片 4A 删了，定稿走执行器受理之前那处）。 */
 const ON_CORE_CALLERS: Readonly<Record<string, string>> = {
-  "book/mirror/ensure.ts": "定义处",
+  "book/ensure-on-core.ts": "定义处",
   "services/operations/executor.ts": "submitOperation 受理之前",
 };
 

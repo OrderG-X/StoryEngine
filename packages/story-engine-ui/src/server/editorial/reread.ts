@@ -25,6 +25,7 @@ import {
 import { touchesHardFact } from "./commit-flow.js";
 import { runLedgerKeeper } from "./ledger-keeper.js";
 import { canCallAgain } from "../lib/llm-client.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import type { BrainCallModel } from "./reader-window.js";
 
@@ -41,8 +42,8 @@ export type RereadChapterOutcome =
   /** 读的时候书正在写、这章正文和快照对不上：照新的样子重来。 */
   | { readonly kind: "changed" };
 
-/** 这章的账单还是导入已写的书时那份空账单（要通读记）。老格式书导入的账 origin 也是 import，但带着老账，不算。 */
-export const awaitsReread = (ledger: Pick<ChapterLedger, "origin" | "entries">): boolean => ledger.origin === "import" && ledger.entries.length === 0;
+/** 这章是导入进来、账还待记的（要通读记）。老格式书导入的账 origin 也是 import，但带着老账（ready），不算。 */
+export const awaitsReread = (ledger: Pick<ChapterLedger, "origin" | "status">): boolean => ledger.origin === "import" && ledger.status === "pending";
 
 /** 记这一章读到的那一版书的指纹（只看内容，不看写入代次：撤销回原样照样认）。 */
 export function rereadInputDigest(basis: TruthBasis, chapter: number): string {
@@ -51,11 +52,6 @@ export function rereadInputDigest(basis: TruthBasis, chapter: number): string {
     text: basis.texts[String(chapter)] ?? null,
     ledger: basis.ledgers[String(chapter)] ?? null,
   }));
-}
-
-function oneLine(error: unknown): string {
-  const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
-  return text.length > 120 ? `${text.slice(0, 120)}…` : text || "未知错误";
 }
 
 /** 这章试满还不成（或这章没法记）：message 是给作者看的一句原因。 */
@@ -94,7 +90,7 @@ export async function rereadChapter(projectDir: string, chapter: number, callMod
       cause = keeper.cause;
     } catch (error) {
       rethrowIfStopped(error);
-      reason = oneLine(error);
+      reason = modelFailureText(error);
       cause = error;
     }
     // 被拒这类再发也一样（写作版本 P2a 4.2）：这章不再试。

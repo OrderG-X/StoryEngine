@@ -16,13 +16,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findRecurringPhrases, parseDraftFile } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
-import {
-  readArcGoalPool,
-  readFactLedger,
-  readThreadPool,
-  readTimelineEvents,
-} from "../book/project-store.js";
+import { shortChapters, shortChaptersText } from "../book/ledger-short.js";
+import { readStoryViews, type StoryViews } from "../book/story-views.js";
 import { readChapterPlan, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
+import { unknownDayOf } from "../book/story-timeline.js";
 import { selectEffectiveFacts } from "../writing/fact-selection.js";
 import { foundationMessage, readFoundationDigest } from "./foundation-digest.js";
 
@@ -38,6 +35,8 @@ export interface PlanChapterMaterials {
   readonly foundation?: string;
   readonly previousChapter?: { readonly chapter: number; readonly text: string };
   readonly recentChapters: readonly string[];
+  /** 前面账没记全的章（写作版本 P2b，出口复核第 2 条）：如实说账里缺那几章，以正文为准。没有就不给。 */
+  readonly ledgerShort?: string;
   readonly openThreads: readonly string[];
   readonly openGoals: readonly string[];
   /** 设定本里的人物 + 账里出场过、还没建卡的人（名字）。 */
@@ -102,16 +101,17 @@ async function readRecentPlanTimes(projectDir: string, chapter: number): Promise
 
 /** 读盘收集拟章纲的材料。全部读失败即空、绝不阻断（拟不成就回落无章纲出稿）。 */
 export async function collectPlanMaterials(projectDir: string, chapter: number, direction?: string): Promise<PlanChapterMaterials> {
-  const [bible, threadPool, goalPool, timeline, previousChapter, factLedger, recentBodies, recentTimes] = await Promise.all([
+  const [bible, views, previousChapter, recentBodies, recentTimes] = await Promise.all([
     settle(readBible(projectDir).then((read): BibleView | undefined => read.bible), undefined),
-    settle(readThreadPool(projectDir), { threads: [] }),
-    settle(readArcGoalPool(projectDir), { goals: [] }),
-    settle(readTimelineEvents(projectDir), []),
+    settle(readStoryViews(projectDir).then((read): StoryViews | undefined => read), undefined),
     readPreviousChapterText(projectDir, chapter),
-    settle(readFactLedger(projectDir), null),
     readRecentChapterBodies(projectDir, chapter),
     readRecentPlanTimes(projectDir, chapter),
   ]);
+  const threadPool = views?.threads ?? { threads: [] };
+  const goalPool = views?.goals ?? { goals: [] };
+  const timeline = views?.events ?? [];
+  const factLedger = views?.facts;
   // 设定本读不了当没有（拟纲照常，只是少一份对照）；哪类资料都没有的新书也是 undefined。
   const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
   const recentBeats = await readRecentPlanBeats(projectDir, chapter);
@@ -149,11 +149,13 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     .filter((event) => event.chapter < chapter)
     .sort((a, b) => a.chapter - b.chapter)
     .slice(-RECENT_CHAPTER_SUMMARIES)
-    .map((event) => `第 ${event.chapter} 章：${event.summary.slice(0, 120)}`);
+    .map((event) => `第 ${event.chapter} 章：${event.summary.slice(0, 120) || "（账里没有这章的梗概）"}`);
+  const short = shortChapters(views?.projection.chapters ?? [], chapter);
   return {
     ...(foundation ? { foundation: foundationMessage(foundation) } : {}),
     ...(previousChapter ? { previousChapter } : {}),
     recentChapters,
+    ...(short.length > 0 ? { ledgerShort: `${shortChaptersText(short)}：那几章的事、线索、天数账里没有或不全，以正文为准，别当成什么都没发生。` } : {}),
     openThreads,
     openGoals,
     characters: characterNames,
@@ -215,6 +217,7 @@ export function planMaterialBlocks(
     direction?.trim() ? `【作者这章的方向】${direction.trim()}` : "【作者这章的方向】没有特别指定，按故事现状自然往下推进。",
     materials.openGoals.length > 0 ? `【目标】\n${materials.openGoals.join("\n")}` : "",
     materials.openThreads.length > 0 ? `【开着的线索】\n${materials.openThreads.join("\n")}` : "",
+    materials.ledgerShort ? `【账没记全的章】${materials.ledgerShort}` : "",
     ...(options.withoutRecentSummaries ? [] : [materials.recentChapters.length > 0 ? `【前面几章发生了什么】\n${materials.recentChapters.join("\n")}` : ""]),
     materials.characters.length > 0 ? `【已有人物（身份、年龄见设定本，别用错人、别算错年代）】${materials.characters.join("、")}` : "",
     materials.foundation ?? "",
@@ -269,7 +272,12 @@ function stepFromTimeText(time: string): number | undefined {
  * 天数却记 5——日历跟着错，写手把前天标成「昨天」）。先用模型给的 dayOffset（离上一章结尾过了几天），没给就看开场时间
  * 里的「第二天 / 三天后 / 当天」；都没有才用模型的 storyDay，且不许比上一章早；全没有当同一天。第 1 章由引擎记为第 1 天。
  */
-export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefined, lastDay: number | undefined): ChapterPlan {
+export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefined, lastDay: number | "unknown" | undefined): ChapterPlan {
+  if (lastDay === "unknown") {
+    // 上一章是哪天不知道：章纲员给的天数没有依据，不留（留了写手会照它说「昨天、前天」）。
+    const { storyDay: _unknown, ...rest } = plan;
+    return rest;
+  }
   if (lastDay === undefined) return plan;
   const step = dayOffset ?? stepFromTimeText(plan.scene.time ?? "");
   if (step !== undefined) return { ...plan, storyDay: lastDay + step };
@@ -303,8 +311,15 @@ export function storyDayAtChapterEnd(plan: ChapterPlan | undefined): number | un
   return day;
 }
 
-/** 上一章结束时是故事第几天（章纲员路也要用：天数归一在拟和改两处都跑）。 */
-export async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | undefined> {
+/**
+ * 上一章结束时是故事第几天（章纲员路也要用：天数归一在拟和改两处都跑）。
+ * 上一章定稿了但天数不知道（它或它前面有章账待记）→ "unknown"：不拿再前一章的天数顶（写作版本 P2b 设计 3.3）。
+ */
+export async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | "unknown" | undefined> {
+  if (chapter > 1) {
+    const views = await readStoryViews(projectDir).catch(() => undefined);
+    if (views && unknownDayOf(views.timeline, chapter - 1)) return "unknown";
+  }
   const last = (await readStoryClock(projectDir, chapter).catch(() => [])).at(-1);
   if (!last) return undefined;
   // 时间线记了章内换天（定稿时正文声明、原句核过）就用它；没记再按那章章纲的要点推。

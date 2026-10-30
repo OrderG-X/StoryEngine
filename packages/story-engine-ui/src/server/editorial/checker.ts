@@ -12,7 +12,9 @@
  * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
-import { describeTimelineForChapter, readStoryTimeline } from "../book/story-timeline.js";
+import { describeTimelineForChapter } from "../book/story-timeline.js";
+import { modelFailureText } from "../lib/ai-errors.js";
+import { readStoryViews } from "../book/story-views.js";
 import { findEarlierPassages } from "../writing/earlier-passages.js";
 import { MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
@@ -648,8 +650,8 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
   // B 时间线表：引擎排好的日子，核账时照表判「昨天 / 前天 / 周几」，不让模型自己推算（压「换了一天」那类误报）。
   // F（时间线只进自复核）开着时三遍不带表、只在 A 那一轮带（表照样读一次）。
   const timelineTable = variant.timeline || variant.timelineInReview
-    ? await readStoryTimeline(input.projectDir)
-      .then((read) => describeTimelineForChapter(read.timeline, input.chapter))
+    ? await readStoryViews(input.projectDir)
+      .then((views) => describeTimelineForChapter(views.timeline, input.chapter))
       .catch(() => undefined)
     : undefined;
   // 前文有看不到原文的章（折叠只剩笔记 / 冷窗口没给到）→ 先翻一轮原文贴回去，三遍和自复核共用这一段前缀。
@@ -690,7 +692,7 @@ async function runReaderPasses(
   settled.forEach((result, index) => {
     if (result.status === "rejected") rethrowIfStopped(result.reason);
     if (result.status === "fulfilled") passes.push(result.value);
-    else failures.push(`${plans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    else failures.push(`${plans[index]!.label}没跑成：${modelFailureText(result.reason)}`);
   });
   return { passes, failures };
 }

@@ -1,12 +1,13 @@
 // @vitest-environment node
-// AI 写稿用到、不在真相依据里的材料（别的章的工作稿、各章章纲、镜像和书里别的文件）：开写时整本拍一份，写的途中变了，照旧材料写的不换上、留候选
-// （第 5 轮复核 S8/S9、第 6 轮 T5/T6/T9、第 7 轮 U3/U5）；没变照常换上（第 6 轮 T7）。开写时镜像必须跟上真相（第 7 轮 U3；U3a 在 agent/ledger-draft-mirror.test.ts），
+// AI 写稿用到、不在真相依据里的材料（别的章的工作稿、各章章纲、书里别的文件）：开写时整本拍一份，写的途中变了，照旧材料写的不换上、留候选
+// （第 5 轮复核 S8/S9、第 6 轮 T5/T6/T9、第 7 轮 U3/U5）；没变照常换上（第 6 轮 T7）。账从真相现算，定稿完就开写读到的是新账（第 7 轮 U3；U3a 在 agent/ledger-then-draft.test.ts），
 // 核账旧记忆前文改了不交给写手（第 7 轮 U4）。真写稿操作（draft.change 配方 + 执行器）+ 真章纲编排 + 真核心写盘，只替换模型（draft-change-kit）。
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cardWrite, chapterCommit, draftSave, readDraft, readDraftState, readTruthBasis, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
+import { seedChapters } from "../book/ledger-test-helpers.js";
 import { normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
 import { pendingDraftFor } from "../lib/draft-candidates.js";
 import { planBasisOf, resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
@@ -16,25 +17,13 @@ import type { WriterClient } from "../writing/fast-draft-writer.js";
 import { __drainOperationsForTests, __resetRecipesForTests } from "./operations/executor.js";
 import { fakeDraftDeps, fakePlanner, planJson, quietReader, runDraftChange, settledDraftChange, submitDraftChange } from "./operations/recipes/draft-change-kit.js";
 import type { DraftChangeDeps } from "./operations/recipes/draft-change.js";
-import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { canReuseCheck, checkChapterBody } from "../editorial/continuity/check-service.js";
 import { readCheckMemory } from "../editorial/continuity/check-memory.js";
 
 const hooks = vi.hoisted(() => ({
   afterPresence: undefined as undefined | (() => Promise<void>),
   afterMaterial: undefined as undefined | (() => Promise<void>),
-  mirrorBroken: false,
 }));
-vi.mock("../book/mirror/sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../book/mirror/sync.js")>();
-  return {
-    ...actual,
-    syncLegacyMirror: async (...args: Parameters<typeof actual.syncLegacyMirror>) => {
-      if (hooks.mirrorBroken) return { ok: false as const, code: "failed" as const, reason: "测试：镜像写不进去" };
-      return actual.syncLegacyMirror(...args);
-    },
-  };
-});
 vi.mock("../writing/presence/in-scene-detector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../writing/presence/in-scene-detector.js")>();
   return {
@@ -67,7 +56,6 @@ afterEach(async () => {
   await __drainOperationsForTests();
   hooks.afterPresence = undefined;
   hooks.afterMaterial = undefined;
-  hooks.mirrorBroken = false;
   vi.unstubAllEnvs();
   if (root) await rm(root, { recursive: true, force: true });
   root = undefined;
@@ -148,7 +136,8 @@ it("照本章章纲写的途中章纲被重拟：不换上、留候选（第 5 �
 
 it("写手读过的前章章纲写的途中重拟了：不换上（第 6 轮 T5）", async () => {
   const book = await makeBook();
-  await save(book, 1, "林远走到了河岸。");
+  // 前章定了稿、记了天数：写手段的故事日历按时间线读前章，连带读它的章纲（摘要、开场时间）。
+  await seedChapters(book, [{ chapter: 1, entries: [{ kind: "summary", text: "林远走到河岸。", quote: "林远走到了河岸。" }, { kind: "time", basis: "author", day: 1 }] }]);
   await writeChapterPlan(book, normalizeChapterPlan(JSON.parse(planJson("钥匙交给老周")), { chapter: 1, source: "author" })!);
   await writeChapterPlan(book, normalizeChapterPlan({ ...JSON.parse(planJson("林远接着走")), storyDay: 2 }, { chapter: 2, source: "author" })!);
   const result = await write(book, 2, {
@@ -252,7 +241,7 @@ it("沿用的章纲、新拟的章纲没被动过：照常换上", async () => {
   expect((await readDraft(book, 2))?.body).toContain("又一次");
 });
 
-/** 定稿第 1 章：带一条保险柜口令的事实（镜像里的事实账跟着它）。 */
+/** 定稿第 1 章：带一条保险柜口令的事实。 */
 async function commitKey(book: string, text: string, key: string, withFact = true): Promise<void> {
   const entries = withFact ? [{ kind: "fact" as const, review: "author" as const, nature: "hard" as const, subject: "保险柜", attribute: "口令", value: key, text, quote: text }] : [];
   const result = await runCommand(book, chapterCommit, { chapter: 1, text: `# 第一章\n\n${text}`, entries }, { caller: "author", idempotencyKey: key });
@@ -262,11 +251,9 @@ async function commitKey(book: string, text: string, key: string, withFact = tru
 const packOf = (context: { readonly sections: readonly { readonly name: string; readonly content?: unknown }[] }): string =>
   JSON.stringify(context.sections.find((section) => section.name === "writing_context_pack")?.content);
 
-it("真相改了、镜像还没同步就开写：先把镜像补上再写，写手读到的是新账（第 7 轮 U3）", async () => {
+it("重定稿完马上开写：写手读到的是新账（第 7 轮 U3）", async () => {
   const book = await makeBook();
   await commitKey(book, "保险柜的口令是红松。", "红松");
-  expect((await syncLegacyMirror(book)).ok).toBe(true);
-  // 定稿之后、同步镜像之前开写（生产链是先提交、再同步）。
   await commitKey(book, "保险柜的口令是白鹤。", "白鹤");
   let consumed = "";
   const result = await write(book, 2, {
@@ -280,26 +267,11 @@ it("真相改了、镜像还没同步就开写：先把镜像补上再写，写�
   expect(result.body?.ok).toBe(true);
 });
 
-it("镜像一直跟不上真相：不受理、不开写、不花钱，如实说（第 7 轮 U3）", async () => {
-  const book = await makeBook();
-  await commitKey(book, "保险柜的口令是红松。", "红松");
-  expect((await syncLegacyMirror(book)).ok).toBe(true);
-  await commitKey(book, "保险柜的口令是白鹤。", "白鹤");
-  hooks.mirrorBroken = true;
-  const writer = vi.fn(async () => ({ title: "开柜", content: prose("林远输入红松。") }));
-  const outcome = await submitDraftChange(book, "write", { chapter: 2, allowWriteAhead: true }, fakeDraftDeps({ writerClient: { generateDraft: writer } }));
-  expect(outcome).toMatchObject({ ok: false, code: "book_not_on_core", message: expect.stringContaining("镜像写不进去") });
-  await __drainOperationsForTests();
-  expect(writer).not.toHaveBeenCalled();
-  expect(await pendingDraftFor(book, 2)).toBeUndefined();
-});
-
 it("核账记忆是照改之前的前文核的：不当成「上一稿核出的错」交给写手（第 7 轮 U4）", async () => {
   const book = await makeBook();
   const oldFact = "钥匙在老周手里。";
   const nowCorrect = "钥匙在老李手里。";
   await commitKey(book, oldFact, "old-key", false);
-  expect((await syncLegacyMirror(book)).ok).toBe(true);
   const checkedBody = `林远走到门口。${nowCorrect}他们约好明天再见。`;
   const checked = await checkChapterBody(book, 2, checkedBody, {
     readerCallModel: async (messages, options) => {
@@ -316,7 +288,6 @@ it("核账记忆是照改之前的前文核的：不当成「上一稿核出的�
   expect(await readCheckMemory(book, 2)).toBeDefined();
   // 作者把前文改成老李：旧记忆按旧前文核的，作废。
   await commitKey(book, nowCorrect, "new-key", false);
-  expect((await syncLegacyMirror(book)).ok).toBe(true);
   expect(await canReuseCheck(book, 2, checkedBody)).toBe(false);
   let conflicts: unknown = "没调写手";
   await write(book, 2, {
@@ -332,7 +303,6 @@ it("前文没改的核账记忆照常交给写手（对照）", async () => {
   const book = await makeBook();
   const fact = "钥匙在老周手里。";
   await commitKey(book, fact, "key", false);
-  expect((await syncLegacyMirror(book)).ok).toBe(true);
   const wrong = "钥匙在老李手里。";
   await checkChapterBody(book, 2, `林远走到门口。${wrong}`, {
     readerCallModel: async (messages, options) => {

@@ -23,6 +23,8 @@ import { readDraftVersions } from "../utils/draftVersions.js";
 import { readSettleData, readSettleExcluded } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 import type { ChatHistoryMessage } from "../server/lib/project-io.js";
+import type { CommitPrepareParams } from "../server/services/operations/recipes/commit-prepare.js";
+import type { AuthorChoicePreview } from "../server/services/commit-view.js";
 
 const AI_ERROR_REASONS: readonly AiErrorReason[] = ["setup", "auth", "quota", "rate-limit", "server", "network", "timeout", "unknown"];
 
@@ -59,7 +61,6 @@ export interface DraftParamsData {
   readonly mustHitBeats?: readonly string[];
   readonly length?: number;
   readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   readonly candidates?: 2 | 3;
@@ -143,7 +144,7 @@ export type OperationActionData =
   /** 定论（片 3C）：核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（pick）；「以定论为准」、设定本「查前文」、定论卡「重新查」（statement）。 */
   | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "pick"; readonly params: CanonPickData; readonly requestKey: string; readonly issuedAt: string }
   | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "statement"; readonly params: CanonStatementData; readonly requestKey: string; readonly issuedAt: string }
-  /** 定稿（片 4A）：「定稿」出清单；「就这么短，照样定稿」带 allowShort（只认按钮）。 */
+  /** 定稿（片 4A）：「定稿」出清单；「就这么短，照样定稿」带 allowShort（只认按钮）；「补记账」带 fill（P2b）。 */
   | { readonly kind: "new"; readonly type: "commit.prepare"; readonly params: CommitPrepareParamsData; readonly requestKey: string; readonly issuedAt: string }
   /** 撤销（片 4C）：「撤销上一步」不带号；「撤回来」「撤销这次定稿」带那次操作的号；「撤销到此」= 整本恢复到那个存档。 */
   | { readonly kind: "new"; readonly type: "history.change"; readonly mode: "undo"; readonly params: { readonly opId?: string }; readonly requestKey: string; readonly issuedAt: string }
@@ -159,23 +160,20 @@ export interface AuthorAnswerData {
   readonly values?: Readonly<Record<string, number>>;
 }
 
-/** 定稿参数（和服务端 recipes/commit-prepare.ts 的 CommitPrepareParams 同形）。 */
-export interface CommitPrepareParamsData {
-  readonly chapter: number;
-  readonly allowShort?: true;
-}
+/** 定稿参数（服务端 recipes/commit-prepare.ts 的 CommitPrepareParams）。 */
+export type CommitPrepareParamsData = CommitPrepareParams;
 
 /** 「撤销上一步」（不给号）/「撤回来」「撤销这次定稿」（给那次操作的号）：请求号这时候给。 */
 export function newUndoAction(opId?: string): OperationActionData {
   return { kind: "new", type: "history.change", mode: "undo", params: opId ? { opId } : {}, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
 }
 
-/** 一个定稿按钮（请求号这时候给）。allowShort＝这一章就这么短，不拿字数下限挡。 */
-export function newCommitAction(chapter: number, options: { readonly allowShort?: boolean } = {}): OperationActionData {
+/** 一个定稿按钮（请求号这时候给）。allowShort＝这一章就这么短，不拿字数下限挡；fill＝补记这章的账（正文不动）。 */
+export function newCommitAction(chapter: number, options: { readonly allowShort?: boolean; readonly fill?: boolean } = {}): OperationActionData {
   return {
     kind: "new",
     type: "commit.prepare",
-    params: { chapter, ...(options.allowShort ? { allowShort: true as const } : {}) },
+    params: options.fill ? { chapter, fill: true } : { chapter, ...(options.allowShort ? { allowShort: true as const } : {}) },
     requestKey: crypto.randomUUID(),
     issuedAt: new Date().toISOString(),
   };
@@ -464,6 +462,8 @@ export interface ChangedData {
 export interface CommitResultData {
   readonly chapter: number;
   readonly committed: boolean;
+  /** 这次是补账（正文没动）。 */
+  readonly fill?: true;
   readonly blocked?: CommitPreviewCardData;
   readonly report?: unknown;
   readonly snapshotId?: string;
@@ -497,7 +497,9 @@ export type PendingActionData =
   | { readonly kind: "canon"; readonly actionId: string; readonly decisions: readonly string[]; readonly card: SettleCardData; readonly summary: string }
   | { readonly kind: "confirm"; readonly what: ConfirmWhat; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] }
   /** 定稿清单等作者点「确认定稿」（服务端 CommitConfirmPreview）：清单上每行能划掉、天数两栏能改。 */
-  | { readonly kind: "commit"; readonly actionId: string; readonly decisions: readonly string[]; readonly preview: CommitPreviewCardData };
+  | { readonly kind: "commit"; readonly actionId: string; readonly decisions: readonly string[]; readonly preview: CommitPreviewCardData }
+  /** 停下请作者挑一个（服务端 AuthorChoicePreview，如记账没成的「再记一次」「先定正文、账待记」）：字都是服务端给的。 */
+  | { readonly kind: "choice"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly choices: AuthorChoicePreview["choices"] };
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
 export interface DraftOperationData {
@@ -548,6 +550,7 @@ const REVISE_CONFIRM_KIND = "draft.revise.confirm";
 const CONFIRM_KINDS: Readonly<Record<string, ConfirmWhat>> = { settings_confirm: "settings", ledger_confirm: "ledger", undo_confirm: "undo", prune_confirm: "prune" };
 const CANON_CONFIRM_KIND = "canon_confirm";
 const COMMIT_CONFIRM_KIND = "commit_confirm";
+const AUTHOR_CHOICE_KIND = "author_choice";
 
 function readPendingAction(value: unknown): PendingActionData | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -566,6 +569,17 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
       const view = preview ? readCommitPreviewCard(preview.view) : undefined;
       if (!view || decisions.length === 0) continue;
       return { kind: "commit", actionId: item.actionId, decisions, preview: view };
+    }
+    if (item.kind === AUTHOR_CHOICE_KIND) {
+      const lines = preview ? textList(preview.lines, 10) : undefined;
+      // 按钮只认服务端列的决定里有的。
+      const choices = preview && Array.isArray(preview.choices)
+        ? preview.choices.flatMap((choice) => (isRecord(choice) && typeof choice.decision === "string" && decisions.includes(choice.decision) && typeof choice.label === "string" && choice.label
+          ? [{ decision: choice.decision, label: choice.label, ...(choice.primary === true ? { primary: true as const } : {}) }]
+          : []))
+        : [];
+      if (!lines || choices.length === 0) continue;
+      return { kind: "choice", actionId: item.actionId, decisions, lines, choices };
     }
     if (item.kind === CANON_CONFIRM_KIND) {
       const card = preview ? readSettleData(preview.card) : undefined;
@@ -962,11 +976,17 @@ function readCommitResult(body: unknown): CommitResultData | undefined {
   if (chapter === undefined) return undefined;
   if (body.committed !== true) {
     const blocked = readCommitPreviewCard(body.blocked);
-    return blocked ? { chapter, committed: false, blocked } : undefined;
+    return blocked ? { chapter, committed: false, ...(body.fill === true ? { fill: true as const } : {}), blocked } : undefined;
   }
   const report = isRecord(body.done) && isRecord(body.done.report) ? body.done.report : undefined;
   if (!report) return undefined;
-  return { chapter, committed: true, report, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}) };
+  return {
+    chapter,
+    committed: true,
+    ...(body.fill === true ? { fill: true as const } : {}),
+    report,
+    ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}),
+  };
 }
 
 /**
@@ -1083,7 +1103,9 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
   if (value.type === "commit.prepare") {
     const params = isRecord(value.params) ? value.params : {};
     const chapter = positiveInt(params.chapter);
-    return chapter ? { kind: "new", type: "commit.prepare", params: { chapter, ...(params.allowShort === true ? { allowShort: true as const } : {}) }, ...stamp } : undefined;
+    if (!chapter) return undefined;
+    if (params.fill === true) return { kind: "new", type: "commit.prepare", params: { chapter, fill: true }, ...stamp };
+    return { kind: "new", type: "commit.prepare", params: { chapter, ...(params.allowShort === true ? { allowShort: true as const } : {}) }, ...stamp };
   }
   if (value.type === "plan.propose") {
     const params = readPlanParams(value.params);
@@ -1208,7 +1230,6 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
   const mustHitBeats = textList(value.mustHitBeats);
   const length = positiveInt(value.length);
   const selectedCharacters = textList(value.selectedCharacters);
-  const selectedHookIds = textList(value.selectedHookIds);
   const maxTimelineEvents = positiveInt(value.maxTimelineEvents);
   const contextTokenBudget = positiveInt(value.contextTokenBudget);
   const pick = writing && value.pick === "author" ? "author" as const : undefined;
@@ -1219,7 +1240,6 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
     ...(mustHitBeats ? { mustHitBeats } : {}),
     ...(length !== undefined ? { length } : {}),
     ...(selectedCharacters ? { selectedCharacters } : {}),
-    ...(selectedHookIds ? { selectedHookIds } : {}),
     ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
     ...(contextTokenBudget !== undefined ? { contextTokenBudget } : {}),
     ...(candidates !== undefined ? { candidates } : {}),

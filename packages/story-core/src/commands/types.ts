@@ -65,7 +65,7 @@ export interface WriteCommandSpec<A, R> {
   readonly idempotent: boolean;
   /**
    * 写完要不要把书的版本号 +1（默认要）。工作稿不算书的真相投影（投影只看定稿、账单、裁定），
-   * 存稿不 +1：不然每次停笔都会让老格式镜像「过期」重生成，还会让没导入的老书被当成已导入。
+   * 存稿不 +1：不然每次停笔都会让没导入的老书被当成已导入。
    */
   readonly bumpsVersion?: boolean;
   plan(context: PlanContext, args: A): Promise<WritePlan<R> | CommandFailure>;

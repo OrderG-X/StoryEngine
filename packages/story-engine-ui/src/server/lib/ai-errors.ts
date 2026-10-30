@@ -5,6 +5,7 @@
  * 顺着 cause / lastError / errors 往里找（AI SDK 的重试错误、fetch 的 TypeError 都把真原因包在里面）。
  */
 
+import { aiErrorCause } from "../../lib/ai-error-text.js";
 import type { AttemptClass } from "./operations/attempts.js";
 
 /** 模型没配好：没配、缺密钥、档案指向的服务商没了。重试没用，得去设置里补。 */
@@ -114,4 +115,15 @@ export function classifyAiError(error: unknown): AiErrorReason {
     if (Array.isArray(record.errors)) queue.push(...record.errors);
   }
   return "unknown";
+}
+
+/**
+ * 模型调用没成、写进给作者看的原因里的那一句：认得的类（连不上、密钥、额度、限流、服务商故障、超时、没设好）说中文短句，
+ * 不把 SDK / fetch 的英文原文（「fetch failed」）端给作者；认不出的用错误本身那句（自家抛的都是中文），压成一行。
+ */
+export function modelFailureText(error: unknown, max = 160): string {
+  const reason = classifyAiError(error);
+  if (reason !== "unknown") return aiErrorCause(reason);
+  const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
+  return text.length > max ? `${text.slice(0, max)}…` : text || "未知错误";
 }

@@ -2,13 +2,13 @@
  * AI 写稿用到、却不在真相依据里的材料（写作版本 P1b 第 5 轮复核 S8/S9 起）。
  *
  * 不按「哪处读了哪样」逐处登记（第 6 轮复核 T5/T6：写手读前章章纲、在场检测读前章工作稿都在登记之外），
- * 也不按「哪几类文件算材料」列白名单（第 7 轮复核 U3：老格式镜像不在白名单里，照旧镜像写的稿照样换上）：
+ * 也不按「哪几类文件算材料」列白名单（第 7 轮复核 U3：白名单漏一类，照旧材料写的稿照样换上）：
  * 开写时把书里**除下面这几样以外的所有文件**拍一份，换上前在书锁里按同样的读法再拍一份，有一样变了，
  * AI 这版就可能是照旧材料写的，不换上、留成候选（basis_moved）。不算材料的只有：
  *  - 真相（正文、账单、裁定、设定卡）和它的记账（`ledger/` 整个目录）：真相依据管；
  *  - 本章工作稿：底版号管；本章章纲：单独记它的内容指纹（拟纲就是这次出稿自己写的）；
  *  - 记录和缓存：`store-control/`（写入代次、工作稿代次）、`agents/`（专员笔记、候选、恢复稿）、`diagnostics/`，
- *    以及书目录顶层以点开头的（存档仓库、事务目录、界面的会话 / 统计 / 核账记忆）——镜像标记 `.story-core-mirror.json` 除外。
+ *    以及书目录顶层以点开头的（存档仓库、事务目录、界面的会话 / 统计 / 核账记忆）。
  *    缓存要当材料用的，各自按自己的键核（核账记忆按前文键，跟读笔记按正文哈希），不靠这里。
  * 别的章的工作稿记版本号（里面有代次，作者存一笔就换，撤销改回原样也认得出）；别的文件记全文哈希。
  * 本章章纲没有记成「用的是哪份」时，按开写时盘上那份（没有就是「没有章纲」）核：途中新建、重拟都算变了（第 7 轮 U5）。
@@ -18,7 +18,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { canonicalJson, chapterFromFileName, LEDGER_DIR, readDraftVersions, sha256 } from "@actalk/story-core";
 import { chapterPlanPath, readChapterPlan, type ChapterPlan } from "./chapter-plan.js";
-import { MIRROR_MARKER } from "./mirror/sync.js";
 
 export type MaterialRead =
   /** 除 except 这章外，各章工作稿的版本号（章号 → 版本号；没有稿的章不在里面）。 */
@@ -87,7 +86,7 @@ async function otherFiles(projectDir: string): Promise<Record<string, string>> {
   const walk = async (relative: string): Promise<void> => {
     for (const entry of await listDir(relative ? join(projectDir, relative) : projectDir)) {
       const path = relative ? `${relative}/${entry.name}` : entry.name;
-      if (!relative && entry.name.startsWith(".") && entry.name !== MIRROR_MARKER) continue;
+      if (!relative && entry.name.startsWith(".")) continue;
       if (!relative && NOT_MATERIAL_DIRS.has(entry.name)) continue;
       if (path === DRAFT_DIR || path === PLAN_DIR) continue;
       // 定稿正文是真相：依据管。chapters/ 里别的文件照样算。

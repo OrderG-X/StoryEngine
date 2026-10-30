@@ -8,6 +8,7 @@ type Member = BookProjection["cast"][number];
 const chapter = (over: Partial<Chapter> & Pick<Chapter, "chapter" | "day">): Chapter => ({
   origin: "commit",
   committedAt: "2026-10-18T00:00:00.000Z",
+  ledgerStatus: "ready",
   dayEnd: over.day,
   dayBasis: "text",
   weekdayDerived: false,

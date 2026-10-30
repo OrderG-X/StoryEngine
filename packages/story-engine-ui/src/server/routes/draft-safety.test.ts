@@ -10,8 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bumpRevision, cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readBookEpoch, readDraft, readDraftState, readTruthBasis, runCommand, setLegacyTxIoHookForTests, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, hasFailedUnsavedDraft, isOwnSavedVersion, keepPaperMine, openPaper, refreshPaper, saveDraftKeepalive, scheduleDraftSave, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
-import { syncLegacyMirror } from "../book/mirror/sync.js";
+import { ensureBookOnCore } from "../book/ensure-on-core.js";
 import { createStoryProject } from "../book/project-store.js";
 import { applyAiDraftInOperation as applyAiDraft } from "../services/operations/test-helpers.js";
 import { writeCards } from "../lib/card-write.js";
@@ -1413,14 +1412,13 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     }
   });
 
-  it("改稿开工正赶上定稿写到一半（真相写了、版本号还没换）：等那条命令写完、镜像同步了才取依据，读到的是新账（第 8 轮 V2）", async () => {
+  it("改稿开工正赶上定稿写到一半（真相写了、版本号还没换）：等那条命令写完才取依据，读到的是新账（第 8 轮 V2）", async () => {
     const commit = (value: string) => runCommand(book, chapterCommit, {
       chapter: 1,
       text: `# 第一章\n\n保险柜的口令是${value}。`,
       entries: [{ kind: "fact", review: "author", nature: "hard", subject: "保险柜", attribute: "口令", value, text: `保险柜的口令是${value}。`, quote: `保险柜的口令是${value}。` }],
     }, { caller: "author", idempotencyKey: value });
     expect(await commit("红松")).toMatchObject({ ok: true });
-    expect((await syncLegacyMirror(book)).ok).toBe(true);
     await save(2, "林远看着保险柜。");
     const atHead = barrier();
     const finishHead = barrier();

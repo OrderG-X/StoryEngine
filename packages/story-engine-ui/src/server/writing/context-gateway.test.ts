@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, chapterCommit, runCommand, type CardOp } from "@actalk/story-core";
 import {
   buildWriterContext,
   estimateTokens,
@@ -15,7 +15,7 @@ import {
 } from "./context-gateway.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { createStoryProject } from "../book/project-store.js";
-import type { ArcGoalPool, HookPool, ThreadPool, TimelineEvent } from "../book/types.js";
+import { seedChapters, seededThreadId, seedThreads, type SeedChapter, type SeedThread } from "../book/ledger-test-helpers.js";
 
 describe("StoryEngine-NG ContextGateway", () => {
   it("builds an ordered writer context from structured project data（设定走 writing_context_pack，没有老的设定段）", async () => {
@@ -34,10 +34,10 @@ describe("StoryEngine-NG ContextGateway", () => {
     // 所以 timeline_earlier_summary 会出现（L2 非空）
     expect(envelope.trace.sectionNames).toEqual([
       "chapter_goal",
+      "chapter_titles",
+      "previous_chapter",
       "writing_context_pack",
       "story_calendar",
-      "hook_pool",
-      "hook_tracking",
       "story_threads",
       "arc_goals",
       "story_continuity",
@@ -50,8 +50,7 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(envelope.sections.every((section) => section.cachePolicy === "dynamic")).toBe(true);
     // 没点名：走在场检测（主角恒带 + 方向里点到名字的），trace 里是名字，不是编号
     expect(envelope.trace.selectedCharacters).toEqual(["林远", "林婉清"]);
-    expect(envelope.trace.selectedHooks).toEqual(["h-seeded", "h-active"]);
-    expect(envelope.trace.selectedTimelineEvents).toEqual(["event-0005", "event-0006", "event-0007"]);
+    expect(envelope.trace.selectedTimelineEvents).toEqual(["ch0005-001", "ch0006-001", "ch0007-001"]);
     expect(envelope.trace.totalTokenEstimate).toBeGreaterThan(0);
     expect(envelope.trace.dynamicTokenEstimate).toBe(envelope.trace.totalTokenEstimate);
     expect(envelope.trace.stableTokenEstimate).toBe(0);
@@ -75,7 +74,7 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(pack.setting.otherNames.characters).toEqual(["孙管事"]);
   });
 
-  it("honors explicit character（名字）, hook, and timeline selections", async () => {
+  it("honors explicit character（名字） and timeline selections", async () => {
     const projectDir = await createFixtureProject();
 
     const envelope = await buildWriterContext({
@@ -83,13 +82,11 @@ describe("StoryEngine-NG ContextGateway", () => {
       chapter: 8,
       chapterGoal: "只处理废弃伏笔的复盘。",
       selectedCharacters: ["林婉清"],
-      selectedHookIds: ["h-resolved"],
       maxTimelineEvents: 1,
     });
 
     expect(envelope.trace.selectedCharacters).toEqual(["林婉清"]);
-    expect(envelope.trace.selectedHooks).toEqual(["h-resolved"]);
-    expect(envelope.trace.selectedTimelineEvents).toEqual(["event-0007"]);
+    expect(envelope.trace.selectedTimelineEvents).toEqual(["ch0007-001"]);
     const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as WritingContextPack;
     // 主角恒带；点名的人整张带上
     expect(pack.setting.protagonist?.name).toBe("林远");
@@ -114,26 +111,19 @@ describe("StoryEngine-NG ContextGateway", () => {
       "林远在库房遭管事克扣月钱，并发现账册暗号指向账房。",
       "林远被同门打压，被迫离开园圃，并发现园圃灵土里藏着账本残页。",
     ]);
-    expect(continuity?.openLeads).toEqual([
-      expect.stringContaining("后墙"),
-      expect.stringContaining("明日"),
-      expect.stringContaining("后院"),
-    ]);
-    expect(continuity?.activeConflicts).toEqual([
-      "管事威胁林远交出破损信物。",
-      "林远在库房遭管事克扣月钱。",
-      "林远被同门打压，被迫离开园圃。",
-    ]);
+    // 账里没有「下一步线索」「冲突」「地点」：不编。
+    expect(continuity?.openLeads).toEqual([]);
+    expect(continuity?.activeConflicts).toEqual([]);
+    // 本章收掉的悬念 = 揭开的事。
     expect(continuity?.discoveries).toEqual([
       "林远察觉账本暗页暴露了外院账目。",
       "林远发现账册暗号指向账房。",
       "林远发现园圃灵土里藏着账本残页。",
     ]);
-    expect(continuity?.recentLocations).toEqual(["账房", "外院", "库房", "园圃", "后院"]);
+    expect(continuity?.recentLocations).toEqual([]);
     expect(continuity?.recentCharacters).toEqual(["林远", "林婉清"]);
     expect(continuity?.carryForwardInstruction).toContain("下一章必须承接最近未解决线索");
     expect(continuity?.carryForwardInstruction).toContain("后墙");
-    expect(continuity?.openLeads[0]?.length).toBeLessThanOrEqual(101);
     expect(continuity?.recentEvents).toHaveLength(3);
   });
 
@@ -153,16 +143,18 @@ describe("StoryEngine-NG ContextGateway", () => {
     } | undefined;
 
     expect(storyThreads).toBeDefined();
-    expect(storyThreads?.openLeads[0]).toMatchObject({
-      title: "后墙异常响动",
-      lastTouchedChapter: 7,
-    });
+    expect(storyThreads?.openLeads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "后墙异常响动", lastTouchedChapter: 7 }),
+      expect.objectContaining({ title: "另一页账本残页被带走", lastTouchedChapter: 3 }),
+    ]));
+    // 收了的悬念不进开着的线索。
+    expect(storyThreads?.openLeads.map((lead) => lead.title)).not.toContain("园圃灵土里有什么");
     expect(storyThreads?.openIntents[0]).toMatchObject({
       title: "林远夜探账房",
       lastTouchedChapter: 6,
     });
     expect(storyThreads?.staleThreadWarnings).toEqual([
-      expect.objectContaining({ id: "lead-old", chaptersSinceTouched: 5 }),
+      expect.objectContaining({ id: seededThreadId(projectDir, "lead-old"), chaptersSinceTouched: 5 }),
     ]);
     expect(storyThreads?.threadCarryForwardInstruction).toContain("未完成线索/意图");
     expect(storyThreads?.threadCarryForwardInstruction).toContain("后墙异常响动");
@@ -193,23 +185,16 @@ describe("StoryEngine-NG ContextGateway", () => {
     const activeTitles = new Set(arcGoals?.activeGoals.map((goal) => goal.title));
     expect(arcGoals?.recentlyTouchedGoals.some((goal) => activeTitles.has(goal.title))).toBe(false);
     expect(arcGoals?.staleGoalWarnings).toEqual([
-      expect.objectContaining({ id: "arc-stale", chaptersSinceTouched: 6 }),
+      expect.objectContaining({ id: seededThreadId(projectDir, "arc-stale"), chaptersSinceTouched: 6 }),
     ]);
     expect(arcGoals?.arcCarryForwardInstruction).toContain("当前小卷目标");
     expect(arcGoals?.arcCarryForwardInstruction).toContain("查清资源账目");
   });
 
-  it("falls back to TimelineEvent.summary when semanticSummary is missing", async () => {
-    const projectDir = await createFixtureProject();
-    const events: TimelineEvent[] = [
-      {
-        id: "manual-fallback",
-        chapter: 9,
-        summary: "林远在大门外收到一封没有署名的警告信。",
-        participants: ["林远"],
-      },
-    ];
-    await writeJson(join(projectDir, "timeline", "events.json"), events);
+  it("前面只有一章、只记了提要：前情照这句提要承接，不编线索", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-summary-only-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "警告信", genre: "xianxia", logline: "一封警告信。", protagonistName: "林远" });
+    await seedChapters(projectDir, [{ chapter: 9, entries: [{ kind: "summary", text: "林远在大门外收到一封没有署名的警告信。" }] }]);
 
     const envelope = await buildWriterContext({
       projectDir,
@@ -223,6 +208,58 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(continuity?.recentEvents).toEqual(["林远在大门外收到一封没有署名的警告信。"]);
     expect(continuity?.openLeads).toEqual([]);
     expect(continuity?.carryForwardInstruction).toContain("林远在大门外收到一封没有署名的警告信。");
+  });
+
+  it("前面有章账待记：单列一段说清那几章账里没有、以正文为准（预算挤不掉）；故事日历说不知道（P2b）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ledger-pending-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口", protagonistName: "林远" });
+    const outcome = await runCommand(projectDir, chapterCommit, {
+      chapter: 1,
+      text: "# 第1章\n\n林远在渡口等船。",
+      entries: [],
+      ledger: { status: "pending", reasonCodes: ["keeper_failed"] },
+    }, { caller: "author", idempotencyKey: randomUUID() });
+    expect(outcome.ok).toBe(true);
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "船来了。", maxTimelineEvents: 5 });
+    const pending = envelope.sections.find((section) => section.name === "ledger_pending")?.content as { chapters: number[]; note: string } | undefined;
+    expect(pending?.chapters).toEqual([1]);
+    expect(pending?.note).toContain("第 1 章的账还没记上");
+    expect(envelope.sections.find((section) => section.name === "story_calendar")?.content).toEqual({ currentStoryDay: "不知道（前面有章的时间没记上）" });
+    // 最近那章账待记：承接它的正文，不拿「梗概给不出」当要推进的事。
+    const continuity = envelope.sections.find((section) => section.name === "story_continuity")?.content as { recentEvents: string[]; carryForwardInstruction: string } | undefined;
+    expect(continuity?.recentEvents).toEqual(["第 1 章：这章的账还没记上，梗概给不出"]);
+    expect(continuity?.carryForwardInstruction).toContain("优先推进：第 1 章正文结尾接着的事（那章的账还没记上，以正文为准）。");
+
+    // 没有账待记的章：没有这一段。
+    const plain = await buildWriterContext({ projectDir: await createFixtureProject(), chapter: 8, chapterGoal: "推进。", maxTimelineEvents: 3 });
+    expect(plain.trace.sectionNames).not.toContain("ledger_pending");
+  });
+
+  it("没记全、账待记的章不当成什么都没发生：单列一段如实说，线索不算闲置（P2b 出口复核第 2、3 条）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ledger-partial-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口", protagonistName: "林远" });
+    const commit = async (chapter: number, text: string, entries: unknown[], ledger?: unknown) => {
+      const outcome = await runCommand(projectDir, chapterCommit, { chapter, text, entries, ...(ledger ? { ledger } : {}) } as never, { caller: "author", idempotencyKey: randomUUID() });
+      expect(outcome.ok).toBe(true);
+    };
+    await commit(1, "# 第1章\n\n林远在渡口捡到一封信。", [
+      { kind: "time", review: "auto", basis: "author", day: 1 },
+      { kind: "thread", review: "auto", op: "open", type: "question", title: "信是谁写的", note: "捡到一封信", quote: "林远在渡口捡到一封信" },
+    ]);
+    // 第 2 章补摘原句没成，梗概、时间、线索都没记上；第 3、4 章账待记。
+    await commit(2, "# 第2章\n\n船来了。", [], { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: ["summary", "time", "thread"] });
+    for (const chapter of [3, 4]) await commit(chapter, `# 第${chapter}章\n\n又等了一天。`, [], { status: "pending", reasonCodes: ["keeper_failed"] });
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 5, chapterGoal: "拆信。", maxTimelineEvents: 5 });
+    const short = envelope.sections.find((section) => section.name === "ledger_pending")?.content as { chapters: number[]; note: string } | undefined;
+    expect(short?.chapters).toEqual([2, 3, 4]);
+    expect(short?.note).toContain("第 3 章、第 4 章的账还没记上、第 2 章的账没记全");
+    const continuity = envelope.sections.find((section) => section.name === "story_continuity")?.content as { recentEvents: string[] } | undefined;
+    expect(continuity?.recentEvents).toContain("第 2 章：这章的账没记全，梗概给不出");
+    // 按章号相减是「已 4 章没有推进」、要提醒；那 3 章不知道动没动，不数。
+    const threads = envelope.sections.find((section) => section.name === "story_threads")?.content as { staleThreadWarnings: unknown[] } | undefined;
+    expect(threads?.staleThreadWarnings).toEqual([]);
   });
 
   it("does not invent carry-forward pressure when there is no continuity", async () => {
@@ -402,7 +439,8 @@ describe("StoryEngine-NG ContextGateway", () => {
   });
 
   it("没有任何已有章节文件 → 不出 chapter_titles 段（新书写第 1 章不背空清单）", async () => {
-    const projectDir = await createFixtureProject();
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-no-titles-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "新书", genre: "xianxia", logline: "第一章。", protagonistName: "林远" });
     const envelope = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "开局。" });
     expect(envelope.sections.some((section) => section.name === "chapter_titles")).toBe(false);
     const prompt = renderFastDraftPromptText(envelope);
@@ -463,21 +501,10 @@ describe("StoryEngine-NG ContextGateway", () => {
       logline: "林澈被困旧城区。",
       protagonistName: "林澈",
     });
-    await writeJson(join(projectDir, "timeline", "events.json"), [
-      {
-        id: "event-0003",
-        chapter: 3,
-        summary: "林澈修好无线电后听见异常信号。",
-        participants: ["林澈"],
-        effects: {
-          semanticSummary: {
-            mainEvent: "林澈修好无线电后听见异常信号。",
-            mentionedCharacterNames: ["林澈"],
-            locations: ["公寓楼"],
-          },
-        },
-      },
-    ] satisfies TimelineEvent[]);
+    await seedChapters(projectDir, [{ chapter: 3, entries: [
+      { kind: "summary", text: "林澈修好无线电后听见异常信号。" },
+      { kind: "presence", name: "林澈", nameUsed: "林澈" },
+    ] }]);
 
     const envelope = await buildWriterContext({
       projectDir,
@@ -496,91 +523,6 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(estimateTokens({ a: "12345678" })).toBeGreaterThan(1);
   });
 
-  it("early active hook survives selectRelevant and appears in activeHooks (hook not-sinking)", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-hook-nosink-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "古老伏笔测试",
-      genre: "xianxia",
-      logline: "测试早期伏笔不沉底。",
-      protagonistName: "林远",
-    });
-
-    // 1 early hook (ch2) + 6 recent hooks (ch44-49)
-    const hooks: HookPool = {
-      hooks: [
-        {
-          id: "h-early",
-          title: "早期古老伏笔",
-          description: "第2章的伏笔一直没有解决",
-          status: "active",
-          relatedCharacters: [],
-          firstSeenChapter: 2,
-          lastTouchedChapter: 2,
-        },
-        {
-          id: "h-r1",
-          title: "近章钩1",
-          description: "近章伏笔1",
-          status: "active",
-          relatedCharacters: [],
-          lastTouchedChapter: 49,
-        },
-        {
-          id: "h-r2",
-          title: "近章钩2",
-          description: "近章伏笔2",
-          status: "active",
-          relatedCharacters: [],
-          lastTouchedChapter: 48,
-        },
-        {
-          id: "h-r3",
-          title: "近章钩3",
-          description: "近章伏笔3",
-          status: "active",
-          relatedCharacters: [],
-          lastTouchedChapter: 47,
-        },
-        {
-          id: "h-r4",
-          title: "近章钩4",
-          description: "近章伏笔4",
-          status: "active",
-          relatedCharacters: [],
-          lastTouchedChapter: 46,
-        },
-        {
-          id: "h-r5",
-          title: "近章钩5",
-          description: "近章伏笔5",
-          status: "active",
-          relatedCharacters: [],
-          lastTouchedChapter: 45,
-        },
-        {
-          id: "h-r6",
-          title: "近章钩6",
-          description: "近章伏笔6",
-          status: "active",
-          relatedCharacters: [],
-          lastTouchedChapter: 44,
-        },
-      ],
-    };
-    await writeJson(join(projectDir, "story", "hooks.json"), hooks);
-
-    const envelope = await buildWriterContext({ projectDir, chapter: 50, chapterGoal: "继续推进剧情。" });
-    const hookTracking = envelope.sections.find((s) => s.name === "hook_tracking")?.content as
-      | { activeHooks: Array<{ id: string }> }
-      | undefined;
-
-    // With selectRelevant + ancientBonus, h-early (chapter 50 - chapter 2 = 48 >= 10 threshold) gets ancientBonus
-    // so it should survive in the top 8
-    const activeHookIds = hookTracking?.activeHooks.map((h) => h.id) ?? [];
-    expect(activeHookIds).toContain("h-early");
-  });
-
   it("early open lead survives selectRelevant and appears in openLeads (thread not-sinking)", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-thread-nosink-"));
     const { projectDir } = await createStoryProject({
@@ -591,89 +533,11 @@ describe("StoryEngine-NG ContextGateway", () => {
       protagonistName: "林远",
     });
 
-    // 1 early lead (ch2) + 6 recent leads (ch44-49)
-    const threads: import("../book/types.js").ThreadPool = {
-      threads: [
-        {
-          id: "lead-early",
-          type: "lead",
-          title: "早期古老线索",
-          status: "open",
-          firstSeenChapter: 2,
-          lastTouchedChapter: 2,
-          evidence: ["第2章出现的线索一直没有解决。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-        {
-          id: "lead-r1",
-          type: "lead",
-          title: "近章线索1",
-          status: "open",
-          firstSeenChapter: 45,
-          lastTouchedChapter: 49,
-          evidence: ["近章线索1。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-        {
-          id: "lead-r2",
-          type: "lead",
-          title: "近章线索2",
-          status: "open",
-          firstSeenChapter: 44,
-          lastTouchedChapter: 48,
-          evidence: ["近章线索2。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-        {
-          id: "lead-r3",
-          type: "lead",
-          title: "近章线索3",
-          status: "open",
-          firstSeenChapter: 43,
-          lastTouchedChapter: 47,
-          evidence: ["近章线索3。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-        {
-          id: "lead-r4",
-          type: "lead",
-          title: "近章线索4",
-          status: "open",
-          firstSeenChapter: 42,
-          lastTouchedChapter: 46,
-          evidence: ["近章线索4。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-        {
-          id: "lead-r5",
-          type: "lead",
-          title: "近章线索5",
-          status: "open",
-          firstSeenChapter: 41,
-          lastTouchedChapter: 45,
-          evidence: ["近章线索5。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-        {
-          id: "lead-r6",
-          type: "lead",
-          title: "近章线索6",
-          status: "open",
-          firstSeenChapter: 40,
-          lastTouchedChapter: 44,
-          evidence: ["近章线索6。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-      ],
-    };
-    await writeJson(join(projectDir, "story", "threads.json"), threads);
+    // 1 early lead (ch2) + 6 recent leads (ch40-45 开、ch44-49 碰过)
+    await seedThreads(projectDir, [
+      { name: "lead-early", type: "question", title: "早期古老线索", openedAt: 2, quote: "第2章出现的线索一直没有解决。" },
+      ...Array.from({ length: 6 }, (_, index): SeedThread => ({ name: `lead-r${index + 1}`, type: "question", title: `近章线索${index + 1}`, openedAt: 45 - index, touchedAt: 49 - index, quote: `近章线索${index + 1}。` })),
+    ]);
 
     const envelope = await buildWriterContext({ projectDir, chapter: 50, chapterGoal: "继续推进剧情。" });
     const storyThreads = envelope.sections.find((s) => s.name === "story_threads")?.content as
@@ -683,7 +547,7 @@ describe("StoryEngine-NG ContextGateway", () => {
     // With selectRelevant + ancientBonus, lead-early (50 - 2 = 48 >= 10) gets ancientBonus
     // so it should survive in openLeads despite 6 more recent leads
     const openLeadIds = storyThreads?.openLeads.map((l) => l.id) ?? [];
-    expect(openLeadIds).toContain("lead-early");
+    expect(openLeadIds).toContain(seededThreadId(projectDir, "lead-early"));
   });
 
   it("thread matching arcGoal keywords ranks above irrelevant recent thread", async () => {
@@ -698,50 +562,11 @@ describe("StoryEngine-NG ContextGateway", () => {
 
     // early thread (ch2) whose text matches arcGoal keywords ("账房", "账目")
     // vs very recent thread (ch49) with no keyword match
-    const threads: import("../book/types.js").ThreadPool = {
-      threads: [
-        {
-          id: "lead-early-relevant",
-          type: "lead",
-          title: "账房账目查证线索",
-          status: "open",
-          firstSeenChapter: 2,
-          lastTouchedChapter: 2,
-          evidence: ["后墙发现账册。"],
-          relatedCharacters: [],
-          relatedLocations: ["账房"],
-        },
-        {
-          id: "lead-recent-irrelevant",
-          type: "lead",
-          title: "毫不相关的新线索",
-          status: "open",
-          firstSeenChapter: 49,
-          lastTouchedChapter: 49,
-          evidence: ["完全无关的最新线索。"],
-          relatedCharacters: [],
-          relatedLocations: [],
-        },
-      ],
-    };
-    await writeJson(join(projectDir, "story", "threads.json"), threads);
-
-    const arcGoals: ArcGoalPool = {
-      goals: [
-        {
-          id: "arc-ledger",
-          title: "查清外院账房账目",
-          status: "active",
-          scope: "main_arc",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 48,
-          evidence: ["外院账房存在账目。"],
-          relatedLocations: ["账房", "外院"],
-          relatedCharacters: ["林远"],
-        },
-      ],
-    };
-    await writeJson(join(projectDir, "story", "arc-goals.json"), arcGoals);
+    await seedThreads(projectDir, [
+      { name: "lead-early-relevant", type: "question", title: "账房账目查证线索", openedAt: 2, quote: "后墙发现账册。" },
+      { name: "lead-recent-irrelevant", type: "question", title: "毫不相关的新线索", openedAt: 49, quote: "完全无关的最新线索。" },
+      { name: "arc-ledger", type: "goal", title: "查清外院账房账目", openedAt: 1, touchedAt: 48, quote: "外院账房存在账目。", weight: "major" },
+    ]);
 
     const envelope = await buildWriterContext({ projectDir, chapter: 50, chapterGoal: "追查外院账目。" });
     const storyThreads = envelope.sections.find((s) => s.name === "story_threads")?.content as
@@ -750,15 +575,16 @@ describe("StoryEngine-NG ContextGateway", () => {
 
     const openLeadIds = storyThreads?.openLeads.map((l) => l.id) ?? [];
     // The early+relevant thread should rank above the recent but irrelevant thread
-    expect(openLeadIds.indexOf("lead-early-relevant")).toBeLessThan(openLeadIds.indexOf("lead-recent-irrelevant"));
+    const early = openLeadIds.indexOf(seededThreadId(projectDir, "lead-early-relevant"));
+    expect(early).toBeGreaterThanOrEqual(0);
+    expect(early).toBeLessThan(openLeadIds.indexOf(seededThreadId(projectDir, "lead-recent-irrelevant")));
   });
 
-  // P2 铁律④（永不静默）：损坏的 timeline/events.json 此前双重 catch 后静默降级为 []，
-  // 模型拿到「空历史」却毫无知觉，会把已写过的章节当没发生过。降级照做（不炸出稿），
-  // 但失败原因必须以 read_failures 段进上下文，让模型知道自己在盲写并如实转达用户。
-  it("corrupt timeline/events.json degrades to empty but surfaces a read_failures section", async () => {
+  // P2 铁律④（永不静默）：账读坏了此前静默降级为 []，模型拿到「空历史」却毫无知觉，会把已写过的章节当没发生过。
+  // 降级照做（不炸出稿），但失败原因必须以 read_failures 段进上下文、只记一次，让模型知道自己在盲写并如实转达用户。
+  it("账读坏了：降级成空，但 read_failures 段如实说一次", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(join(projectDir, "timeline", "events.json"), "{not-json", "utf-8");
+    await writeFile(join(projectDir, "ledger", "chapters", "0003.json"), "{not-json", "utf-8");
 
     const envelope = await buildWriterContext({
       projectDir,
@@ -771,7 +597,9 @@ describe("StoryEngine-NG ContextGateway", () => {
       | { failures: readonly string[] }
       | undefined;
     expect(failures?.failures.length).toBeGreaterThan(0);
-    expect(failures!.failures.join(" ")).toContain("时间线事件");
+    expect(failures!.failures).toHaveLength(1);
+    expect(failures!.failures[0]).toContain("设定本和账读取失败");
+    expect(failures!.failures.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
     // 健康项目里这一段根本不存在——只有坏读盘才出现，不污染正常上下文
   });
 
@@ -787,7 +615,7 @@ describe("StoryEngine-NG ContextGateway", () => {
   });
 
   // 设定卡坏了：按空设定降级照常出上下文（不炸出稿），原因如实进 read_failures 段、只记一次、不带本地绝对路径。
-  it("corrupt ledger/cards.json degrades to an empty setting and surfaces once in read_failures", async () => {
+  it("设定卡坏了：设定和账都按空写，read_failures 只说一次", async () => {
     const projectDir = await createFixtureProject();
     await writeFile(join(projectDir, "ledger", "cards.json"), "{not-json", "utf-8");
 
@@ -801,12 +629,12 @@ describe("StoryEngine-NG ContextGateway", () => {
     const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as WritingContextPack;
     expect(pack.setting.protagonist).toBeUndefined();
     expect(envelope.trace.selectedCharacters).toEqual([]);
-    // 账（伏笔、线索）照常带
-    expect(envelope.trace.selectedHooks).toEqual(["h-seeded", "h-active"]);
+    // 设定和账是同一份快照：账也按空，原因只说一次。
     const failures = (envelope.sections.find((s) => s.name === "read_failures")?.content as { failures: readonly string[] } | undefined)?.failures ?? [];
-    expect(failures.filter((line) => line.includes("设定本读取失败"))).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("设定本和账读取失败");
     expect(failures.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
-    expect(renderFastDraftPromptText(envelope)).toContain("设定本读取失败");
+    expect(renderFastDraftPromptText(envelope)).toContain("设定本和账读取失败");
   });
 });
 
@@ -827,183 +655,33 @@ async function createFixtureProject(): Promise<string> {
   await writeCards(projectDir, [
     { op: "card.create", kind: "character", name: "林婉清", fields: [{ label: "身份", value: "外院执事助手" }, { label: "说话", value: "简短" }] },
   ]);
-  await mkdir(join(projectDir, "story"), { recursive: true });
-  await mkdir(join(projectDir, "timeline"), { recursive: true });
-  const hooks: HookPool = {
-    hooks: [
-      {
-        id: "h-seeded",
-        title: "失踪矿藏",
-        description: "组织账册里少了一批矿藏。",
-        status: "seeded",
-        relatedCharacters: ["林远"],
-      },
-      {
-        id: "h-active",
-        title: "掌门密令",
-        description: "掌门暗中试探主角。",
-        status: "active",
-        relatedCharacters: ["林远", "林婉清"],
-      },
-      {
-        id: "h-resolved",
-        title: "旧账误会",
-        description: "旧账疑点已被解释。",
-        status: "resolved",
-        relatedCharacters: ["林婉清"],
-      },
-      {
-        id: "h-abandoned",
-        title: "废弃支线",
-        description: "不再推进的假线索。",
-        status: "abandoned",
-        relatedCharacters: [],
-      },
-    ],
+  // 第 1～7 章：线索、打算、目标照老样子开、碰；第 5～7 章收掉三个悬念（= 这章揭开的事）。
+  const summaries: Record<number, string> = {
+    5: "林远被同门打压，被迫离开园圃，并发现园圃灵土里藏着账本残页。",
+    6: "林远在库房遭管事克扣月钱，并发现账册暗号指向账房。",
+    7: "林远在后墙听见异常响动，并察觉账本暗页暴露了外院账目。",
   };
-  await writeJson(join(projectDir, "story", "hooks.json"), hooks);
-  const threads: ThreadPool = {
-    threads: [
-      {
-        id: "lead-wall",
-        type: "lead",
-        title: "后墙异常响动",
-        status: "open",
-        firstSeenChapter: 5,
-        lastTouchedChapter: 7,
-        evidence: ["后墙传来异常响动。"],
-        nextActionHint: "继续查后墙异常响动。",
-        relatedCharacters: ["林远"],
-        relatedLocations: ["账房"],
-      },
-      {
-        id: "intent-night",
-        type: "intent",
-        title: "林远夜探账房",
-        status: "open",
-        firstSeenChapter: 5,
-        lastTouchedChapter: 6,
-        evidence: ["林远打算夜探账房。"],
-        nextActionHint: "安排夜探账房。",
-        relatedCharacters: ["林远"],
-        relatedLocations: ["账房"],
-      },
-      {
-        id: "lead-old",
-        type: "lead",
-        title: "另一页账本残页被带走",
-        status: "open",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 3,
-        evidence: ["另一页账本残页被带走。"],
-        relatedCharacters: ["林远"],
-        relatedLocations: ["后院"],
-      },
-    ],
-  };
-  await writeJson(join(projectDir, "story", "threads.json"), threads);
-  const arcGoals: ArcGoalPool = {
-    goals: [
-      {
-        id: "arc-ledger",
-        title: "查清资源账目",
-        status: "touched",
-        scope: "main_arc",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 7,
-        targetChapters: 10,
-        evidence: ["林远察觉账本暗页暴露了外院账目。"],
-        relatedHooks: ["h-active"],
-        relatedThreads: ["lead-wall"],
-        relatedCharacters: ["林远"],
-        relatedLocations: ["账房", "外院"],
-        nextActionHint: "继续追查外院账目。",
-      },
-      {
-        id: "arc-token",
-        title: "查明破损信物用途",
-        status: "active",
-        scope: "mini_arc",
-        firstSeenChapter: 5,
-        lastTouchedChapter: 6,
-        targetChapters: 5,
-        evidence: ["管事威胁林远交出破损信物。"],
-        relatedCharacters: ["林远"],
-        relatedLocations: ["账房"],
-      },
-      {
-        id: "arc-stale",
-        title: "摆脱外院管事打压",
-        status: "active",
-        scope: "mini_arc",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 2,
-        evidence: ["林远被管事打压。"],
-        relatedCharacters: ["林远"],
-        relatedLocations: ["外院"],
-      },
-    ],
-  };
-  await writeJson(join(projectDir, "story", "arc-goals.json"), arcGoals);
-  const events: TimelineEvent[] = Array.from({ length: 7 }, (_, index) => {
+  const present: Record<number, readonly string[]> = { 5: ["林远"], 6: ["林远", "林婉清"], 7: ["林远"] };
+  const chapters: SeedChapter[] = Array.from({ length: 7 }, (_, index) => {
     const chapter = index + 1;
     return {
-      id: `event-${String(chapter).padStart(4, "0")}`,
       chapter,
-      summary: `第${chapter}章事件`,
-      participants: chapter % 2 === 0 ? ["林婉清"] : ["林远"],
+      entries: [
+        { kind: "summary", text: summaries[chapter] ?? `第${chapter}章事件` },
+        ...(present[chapter] ?? [chapter % 2 === 0 ? "林婉清" : "林远"]).map((name) => ({ kind: "presence" as const, name, nameUsed: name })),
+      ],
     };
   });
-  events[4] = {
-    ...events[4]!,
-    effects: {
-      semanticSummary: {
-        chapter: 5,
-        protagonist: "林远",
-        mainEvent: "林远被同门打压，被迫离开园圃，并发现园圃灵土里藏着账本残页。",
-        conflict: "林远被同门打压，被迫离开园圃。",
-        discovery: "林远发现园圃灵土里藏着账本残页。",
-        nextLead: "后院有人影带走账本残页，留下新的线索。",
-        mentionedCharacterNames: ["林远"],
-        locations: ["园圃", "后院", "园圃"],
-      },
-    },
-  };
-  events[5] = {
-    ...events[5]!,
-    effects: {
-      semanticSummary: {
-        chapter: 6,
-        protagonist: "林远",
-        mainEvent: "林远在库房遭管事克扣月钱，并发现账册暗号指向账房。",
-        conflict: "林远在库房遭管事克扣月钱。",
-        discovery: "林远发现账册暗号指向账房。",
-        nextLead: "明日清晨库房会有人转移账册，林远必须提前守住账房。",
-        mentionedCharacterNames: ["林远", "林婉清"],
-        locations: ["库房", "账房", "外院"],
-      },
-    },
-  };
-  events[6] = {
-    ...events[6]!,
-    effects: {
-      semanticSummary: {
-        chapter: 7,
-        protagonist: "林远",
-        mainEvent: "林远在后墙听见异常响动，并察觉账本暗页暴露了外院账目。",
-        conflict: "管事威胁林远交出破损信物。",
-        discovery: "林远察觉账本暗页暴露了外院账目。",
-        nextLead: "后墙传来异常响动，门后黑影似乎掌握了更完整的账本线索，这条线索非常长很长很长很长很长很长很长很长很长很长很长。",
-        mentionedCharacterNames: ["林远"],
-        locations: ["账房", "外院"],
-      },
-    },
-  };
-  await writeJson(join(projectDir, "timeline", "events.json"), events);
+  await seedThreads(projectDir, [
+    { name: "lead-wall", type: "question", title: "后墙异常响动", openedAt: 5, touchedAt: 7, quote: "后墙传来异常响动。" },
+    { name: "intent-night", type: "intent", title: "林远夜探账房", openedAt: 5, touchedAt: 6, quote: "林远打算夜探账房。" },
+    { name: "lead-old", type: "question", title: "另一页账本残页被带走", openedAt: 1, touchedAt: 3, quote: "另一页账本残页被带走。" },
+    { name: "q-soil", type: "question", title: "园圃灵土里有什么", openedAt: 4, closedAt: 5, closeNote: "林远发现园圃灵土里藏着账本残页。" },
+    { name: "q-code", type: "question", title: "账册暗号指向哪", openedAt: 4, closedAt: 6, closeNote: "林远发现账册暗号指向账房。" },
+    { name: "q-page", type: "question", title: "账本暗页写了什么", openedAt: 4, closedAt: 7, closeNote: "林远察觉账本暗页暴露了外院账目。" },
+    { name: "arc-ledger", type: "goal", title: "查清资源账目", openedAt: 1, touchedAt: 7, quote: "林远察觉账本暗页暴露了外院账目。", weight: "major" },
+    { name: "arc-token", type: "goal", title: "查明破损信物用途", openedAt: 5, touchedAt: 6, quote: "管事威胁林远交出破损信物。" },
+    { name: "arc-stale", type: "goal", title: "摆脱外院管事打压", openedAt: 1, touchedAt: 2, quote: "林远被管事打压。" },
+  ], chapters);
   return projectDir;
-}
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }

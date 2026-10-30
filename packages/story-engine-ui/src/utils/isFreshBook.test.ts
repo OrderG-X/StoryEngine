@@ -7,12 +7,11 @@ import type { StateOverview } from "../api/types.js";
  *
  * 关键：历史上建书会种 1 个 status:"active" 的 arc-goal（旧 V4 漏判的根因——旧 isFreshBook 把这个建书噪声
  * 当成「非空书」）。该种子来源已随极简空建退役（新建不再种 arc-goal），但基线**仍默认带 arcGoalsActiveCount:1**，
- * 以锁住「即便是历史/带噪声的项目，isFreshBook 也不看 hooks/threads/arcGoals 计数」这条护栏。
+ * 以锁住「即便是历史/带噪声的项目，isFreshBook 也不看 threads/arcGoals 计数」这条护栏。
  */
 function freshOverview(overrides: Partial<{
   currentChapter: number | null;
   knownCharacters: readonly { readonly id: string; readonly name: string }[];
-  hooksActiveCount: number;
   threadsTotal: number;
   arcGoalsActiveCount: number;
   uiChapterFiles: readonly { readonly chapter: number; readonly hasDraftFile: boolean; readonly hasCommittedChapter: boolean }[];
@@ -22,7 +21,6 @@ function freshOverview(overrides: Partial<{
     characters: {
       knownCharacters: overrides.knownCharacters ?? [{ id: "protagonist", name: "主角" }],
     },
-    hooks: { activeCount: overrides.hooksActiveCount ?? 0 },
     threads: { total: overrides.threadsTotal ?? 0 },
     arcGoals: { activeCount: overrides.arcGoalsActiveCount ?? 1 },
     ...(overrides.uiChapterFiles !== undefined ? { uiChapterFiles: overrides.uiChapterFiles } : {}),
@@ -40,7 +38,7 @@ describe("isFreshBook", () => {
   });
 
   it("建书种的伏笔/线程/主线目标计数都不算「动过」→ 仍 true（不再用这些噪声判定）", () => {
-    expect(isFreshBook(freshOverview({ hooksActiveCount: 1, threadsTotal: 2, arcGoalsActiveCount: 3 }))).toBe(true);
+    expect(isFreshBook(freshOverview({ threadsTotal: 2, arcGoalsActiveCount: 3 }))).toBe(true);
   });
 
   it("已有章节（currentChapter 非 null）→ false", () => {

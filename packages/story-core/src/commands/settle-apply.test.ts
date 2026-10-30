@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { projectBook, readBible } from "../index.js";
-import type { EntryInput } from "../schema/ledger.js";
+import { entryQuote, type EntryInput, type LedgerEntry } from "../schema/ledger.js";
 import { readChapterLedger, readDecisions, sha256 } from "../store/book.js";
 import { draftPath } from "../store/paths.js";
 import { draftVersionOf, readDraft } from "../draft/draft.js";
@@ -78,9 +78,12 @@ describe("定论并改齐", () => {
     expect(text).toBe("# 第2章 · 来信\n\n“杜叔走了十年了。”孟叔说。许微没接话。\n\n信封上写着杜长顺的名字。");
     const ledger = await readChapterLedger(book, 2);
     expect(ledger?.textSha256).toBe(sha256(text));
-    expect(ledger?.entries.find((entry) => entry.kind === "summary")?.quote).toBe("“杜叔走了十年了。”");
-    expect(ledger?.entries.find((entry) => entry.kind === "thread")?.quote).toBe("“杜叔走了十年了。”");
-    expect(ledger?.entries.find((entry) => entry.kind === "presence" && entry.name === "孟叔")?.quote).toBe("孟叔说。许微没接话");
+    const quoteOf = (entry: LedgerEntry | undefined) => (entry ? entryQuote(entry) : undefined);
+    expect(quoteOf(ledger?.entries.find((entry) => entry.kind === "summary"))).toBe("“杜叔走了十年了。”");
+    expect(quoteOf(ledger?.entries.find((entry) => entry.kind === "thread"))).toBe("“杜叔走了十年了。”");
+    expect(quoteOf(ledger?.entries.find((entry) => entry.kind === "presence" && entry.entityRef.mention === "孟叔"))).toBe("孟叔说。许微没接话");
+    // 证据跟着换到改后的那一版正文。
+    expect(ledger?.entries.every((entry) => entry.evidence.every((item) => item.revision === sha256(text)) || entry.kind === "fact")).toBe(true);
 
     const decisions = await readDecisions(book);
     expect(decisions).toEqual([expect.objectContaining({ type: "fact.retract", note: "定论改齐：原句改了" })]);
@@ -112,7 +115,9 @@ describe("定论并改齐", () => {
     }, author("s2")));
     expect(outcome.result.chapters[0]).toMatchObject({ factsUpdated: ["杜长顺十年前去世"], factsRetracted: [] });
     const after = await readChapterLedger(book, 2);
-    expect(after?.entries.find((entry) => entry.id === fact.id)).toMatchObject({ value: "十年前", quote: "杜叔走了十年了" });
+    const patched = after?.entries.find((entry) => entry.id === fact.id);
+    expect(patched).toMatchObject({ value: "十年前", evidenceStatus: "located" });
+    expect(patched && entryQuote(patched)).toBe("杜叔走了十年了");
     expect(await readDecisions(book)).toEqual([]);
   });
 
@@ -121,9 +126,10 @@ describe("定论并改齐", () => {
     const path = join(book, "ledger/chapters/0002.json");
     // 老书导入的账（origin: import）才允许事实不带原句。
     const raw = { ...(JSON.parse(await readFile(path, "utf-8")) as { entries: Record<string, unknown>[] }), origin: "import" };
+    const legacy = { review: "auto", source: { kind: "unknown" }, transition: "unknown", evidence: [], evidenceStatus: "none", provenance: "migrated" };
     raw.entries.push(
-      { kind: "fact", review: "auto", nature: "event", text: "孟叔说杜叔五年前走的", id: "fact-2-90" },
-      { kind: "fact", review: "auto", nature: "event", text: "许微没接孟叔的话", id: "fact-2-91" },
+      { kind: "fact", ...legacy, nature: "event", text: "孟叔说杜叔五年前走的", id: "fact-2-90" },
+      { kind: "fact", ...legacy, nature: "event", text: "许微没接孟叔的话", id: "fact-2-91" },
     );
     await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`);
     expect(await runCommand(book, settleApply, { label: "定论", cardOps: [], chapters: [fixCh2({ retract: ["fact-2-99"] })], drafts: [] }, author("s-unknown")))

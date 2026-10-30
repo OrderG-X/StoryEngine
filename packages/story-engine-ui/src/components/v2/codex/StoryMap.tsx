@@ -21,6 +21,8 @@ const UNSURE_BASIS: Partial<Record<StoryMapChapter["basis"], string>> = {
 };
 
 export function dayLabel(row: StoryMapChapter): string {
+  if (row.ledgerShort === "pending") return "账待记";
+  if (row.day === undefined || row.dayEnd === undefined) return row.ledgerShort === "partial" ? "账没记全" : "不知道";
   return row.dayEnd > row.day ? `第 ${row.day}～${row.dayEnd} 天` : `第 ${row.day} 天`;
 }
 
@@ -31,7 +33,7 @@ export function dayDetail(row: StoryMapChapter): string {
 
 /** 上一章结束到这章开头过了几天（≥2 才标，隔天、同一天不标）。 */
 export function daysPassed(previous: StoryMapChapter | undefined, row: StoryMapChapter): number {
-  if (!previous) return 0;
+  if (!previous || row.day === undefined || previous.dayEnd === undefined) return 0;
   const passed = row.day - previous.dayEnd;
   return passed >= 2 ? passed : 0;
 }
@@ -130,13 +132,14 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
     );
   }
 
-  const last = map.chapters.at(-1);
+  // 故事走到第几天：按最后一章天数知道的那章算（后面账待记、不知道哪天的章不往上加）。
+  const lastKnown = map.chapters.filter((row) => row.dayEnd !== undefined).at(-1);
   return (
     <section className="se-sm" aria-label="故事地图">
       <PageHead
         title="故事地图"
         sub={map.chapters.length === 0 ? "还没有定稿的章：定稿时记账员会把每章第几天、谁出场记在这里。" : "一行一章，一列一人。点圆点回到他出场那句。"}
-        stats={[{ value: map.chapters.length, label: "章" }, { value: map.chapters.length > 0 ? last?.dayEnd ?? 1 : 0, label: "故事日" }, { value: map.cast.length, label: "人出场" }]}
+        stats={[{ value: map.chapters.length, label: "章" }, { value: lastKnown?.dayEnd ?? 0, label: "故事日" }, { value: map.cast.length, label: "人出场" }]}
       />
       {error ? <p className="se-sm-error">{error} <button type="button" className="se-sm-link" onClick={reload}>再读一次</button></p> : null}
       {map.chapters.length > 0 ? (

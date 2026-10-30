@@ -1,54 +1,55 @@
 /**
- * 老格式镜像：从新核心的投影生成老代码还在读的那几份文件（设计见 docs/rebuild/P3-design.md 第〇、五节）。
+ * 账的几种读法（写作版本 P2b 片 1：删镜像）：写手、章纲、核账、概况要的时间线、事实、线索、目标、各章事件，
+ * 每次从投影现算（读真相 → 投影 → 按读者要的样子摆），不落盘、不同步，也就没有「落后了」这回事。
  *
- * 镜像不是真相：老文件不再有别的写入方，坏了、丢了重生成一遍就好。同样的真相生成同样的文件（纯函数，
- * 不读时钟、不读盘）。它是临时的：读老文件的地方每改一处读投影，就从这里删掉一个文件。
+ * 这几样原来是 book/mirror 生成到书里的老格式文件（story/threads.json 等），读者读文件；现在样子不变、直接给，
+ * 读者不用改，给模型的字一个不差（片 1 前后的材料逐字比对过）。伏笔池、日历时段这些镜像里一直是空的，不再给。
  *
- * 只生成、不猜：投影里没有的东西（老格式的「时段」枚举、冲突、伏笔关键词……）一律不编，留空或给老代码的缺省值。
+ * 设定视图也从同一份快照算：写一章的上下文要设定和账两样，读一次，坏了只坏一处、只说一次。
+ *
+ * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
-import { nameKey, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
-import type {
-  ArcGoal,
-  ArcGoalPool,
-  FactEntry,
-  FactLedger,
-  HookPool,
-  NarrativeThread,
-  StoryCalendar,
-  TimelineEvent,
-  ThreadPool,
-} from "../types.js";
-import type { StoryTimeline, TimelineEntry, TimelineSource } from "../story-timeline.js";
+import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, threadOf, timeDeclarationOf, type BibleView, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
+import type { StoryTimeline, TimelineEntry, TimelineSource, UnknownDay } from "./story-timeline.js";
+import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
-/** 镜像生成的文件（相对书目录）。顺序就是写盘顺序。 */
-export const MIRROR_FILES = {
-  timeline: "story/timeline.json",
-  calendar: "time/calendar.json",
-  facts: "story/fact-ledger.json",
-  threads: "story/threads.json",
-  hooks: "story/hooks.json",
-  goals: "story/arc-goals.json",
-  events: "timeline/events.json",
-} as const;
-
-export interface LegacyMirrorInput {
+export interface LedgerViews {
   readonly projection: BookProjection;
-  readonly ledgers: readonly ChapterLedger[];
-  /** 每章正文的标题（正文第一行的 markdown 标题）；没有就用「第N章」。 */
-  readonly chapterTitles: ReadonlyMap<number, string>;
-}
-
-export interface LegacyMirror {
   readonly timeline: StoryTimeline;
-  readonly calendar: StoryCalendar;
   readonly facts: FactLedger;
   readonly threads: ThreadPool;
-  readonly hooks: HookPool;
   readonly goals: ArcGoalPool;
   readonly events: readonly TimelineEvent[];
 }
 
-const TIME_SOURCE: Record<BookProjection["chapters"][number]["dayBasis"], TimelineSource> = {
+export interface StoryViews extends LedgerViews {
+  readonly bible: BibleView;
+}
+
+/** 读真相、算投影、摆成读者要的几样，连同设定视图（还没有 cards.json 的老书现从老格式文件拼一份，同核心 readBible）。 */
+export async function readStoryViews(projectDir: string): Promise<StoryViews> {
+  const snapshot = await readBookSnapshot(projectDir);
+  const projection = project(snapshot);
+  const cards = snapshot.cards ?? (await readLegacyCards(projectDir, new Date().toISOString())).file;
+  const titles = await readChapterTitles(projectDir, projection.chapters.map((chapter) => chapter.chapter));
+  return { ...storyViewsOf(projection, snapshot.ledgers, titles), bible: bibleView(projection, cards) };
+}
+
+/** 章节文件的章名（核心 parseDraftFile：第一行非空行是一级章名行）。 */
+export function markdownTitle(text: string | undefined): string | undefined {
+  return text === undefined ? undefined : parseDraftFile(text).title;
+}
+
+async function readChapterTitles(projectDir: string, chapters: readonly number[]): Promise<Map<number, string>> {
+  const titles = new Map<number, string>();
+  for (const chapter of chapters) {
+    const title = markdownTitle(await readChapterText(projectDir, chapter));
+    if (title) titles.set(chapter, title);
+  }
+  return titles;
+}
+
+const TIME_SOURCE: Record<Exclude<BookProjection["chapters"][number]["dayBasis"], "unknown">, TimelineSource> = {
   author: "author",
   text: "declared",
   judged: "plan",
@@ -56,9 +57,14 @@ const TIME_SOURCE: Record<BookProjection["chapters"][number]["dayBasis"], Timeli
   missing: "fallback",
 };
 
+/** 账待记的章在「各章事件」里的梗概：如实说给不出（写手、章纲、概况照读这一句，不当成「这章什么都没发生」）。 */
+export const PENDING_CHAPTER_SUMMARY = "这章的账还没记上，梗概给不出";
+/** 账没记全、梗概那条没记上。 */
+export const PARTIAL_CHAPTER_SUMMARY = "这章的账没记全，梗概给不出";
+
 /**
- * 老格式的 stale 意思是「不再追踪」（清理掉的、合并掉的、过期的打算），老代码一律不当开着的读。
- * 投影的 stale 只是「停了好几章」，线索还开着——照搬过去会让老代码把真开着的线索从出稿上下文里藏掉
+ * 读者说的 stale 是「不再追踪」（清理掉的、合并掉的、过期的打算），一律不当开着的读。
+ * 投影的 stale 只是「停了好几章」，线索还开着——照搬过去会把真开着的线索从出稿上下文里藏掉
  * （长篇里伏笔就这样被忘）。所以只分三种：收了 / 推进过 / 刚开。
  */
 function threadStatus(thread: ThreadView): NarrativeThread["status"] {
@@ -71,37 +77,42 @@ function goalStatus(thread: ThreadView): ArcGoal["status"] {
   return thread.touches.some((touch) => touch.op === "advance") ? "touched" : "active";
 }
 
-export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
-  const { projection } = input;
-  const timeEntries = new Map(input.ledgers.flatMap((ledger) => ledger.entries.flatMap((entry) => (entry.kind === "time" ? [[ledger.chapter, entry] as const] : []))));
+export function storyViewsOf(projection: BookProjection, ledgers: readonly ChapterLedger[], chapterTitles: ReadonlyMap<number, string>): LedgerViews {
+  const timeEntries = new Map(ledgers.flatMap((ledger) => {
+    const time = timeDeclarationOf(ledger.entries);
+    return time ? [[ledger.chapter, time] as const] : [];
+  }));
 
+  const unknownDays = projection.chapters.flatMap((chapter): UnknownDay[] => {
+    if (chapter.day !== undefined) return [];
+    const own = chapter.ledgerStatus !== "ready" && chapter.missingKinds?.includes("time") ? chapter.ledgerStatus : undefined;
+    return [{ chapter: chapter.chapter, ...(own ? { own } : {}) }];
+  });
   const timeline: StoryTimeline = {
     schemaVersion: 1,
-    entries: projection.chapters.map((chapter): TimelineEntry => {
+    entries: projection.chapters.flatMap((chapter): TimelineEntry[] => {
+      if (chapter.day === undefined || chapter.dayEnd === undefined || chapter.dayBasis === "unknown") return [];
       const time = timeEntries.get(chapter.chapter);
       const span = chapter.dayEnd - chapter.day;
-      return {
+      return [{
         chapter: chapter.chapter,
         day: chapter.day,
-        // 老格式只存明写的星期，推出来的不存（老代码自己推）。
+        // 只给明写的星期，推出来的不给（读者自己按最近的锚点推）。
         ...(chapter.weekday !== undefined && !chapter.weekdayDerived ? { weekday: chapter.weekday } : {}),
         ...(chapter.timeOfDay ? { timeOfDay: chapter.timeOfDay } : {}),
         ...(time?.daysSincePrevious !== undefined && chapter.dayBasis !== "author" ? { daysSincePrevious: time.daysSincePrevious } : {}),
         ...(span > 0 ? { daysInChapter: span } : {}),
         source: TIME_SOURCE[chapter.dayBasis],
         ...(time?.quote ? { quote: time.quote } : {}),
-      };
+      }];
     }),
+    ...(unknownDays.length > 0 ? { unknownDays } : {}),
   };
-
-  const last = projection.chapters.at(-1);
-  // 老格式的时段是英文枚举；正文的说法不往枚举里猜，一律 unknown（真实说法在 timeline.json 里）。
-  const calendar: StoryCalendar = { currentStoryDay: last?.dayEnd ?? 1, currentTimeOfDay: "unknown" };
 
   const facts: FactLedger = {
     version: "v0",
     facts: projection.facts
-      // 作者说「记错了」的不进老账本：老代码不认作废，留着就当真。
+      // 作者说「记错了」的不给：读者不认作废，给了就当真。
       .filter((fact) => fact.status !== "retracted")
       .map((fact): FactEntry => ({
         id: fact.id,
@@ -143,7 +154,7 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
         id: thread.id,
         title: thread.title,
         status: goalStatus(thread),
-        // 作者标了「重要」的算主线目标，其余算阶段目标（老代码按这个分开数上限）。
+        // 作者标了「重要」的算主线目标，其余算阶段目标（读者按这个分开数上限）。
         scope: thread.weight === "major" ? "main_arc" : "mini_arc",
         firstSeenChapter: thread.openedAt,
         lastTouchedChapter: thread.lastTouchedAt,
@@ -153,9 +164,9 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
 
   const threadTypes = new Map(projection.threads.flatMap((thread) => [thread.id, ...thread.mergedFrom].map((id) => [id, thread.type] as const)));
   const events = projection.chapters.map((chapter): TimelineEvent => {
-    const ledger = input.ledgers.find((item) => item.chapter === chapter.chapter);
-    const summary = chapter.summary ?? "";
-    // 出场人物直接用名字（重构 P9：人物卡没有老格式编号了）。
+    const ledger = ledgers.find((item) => item.chapter === chapter.chapter);
+    const short = chapter.ledgerStatus !== "ready" ? chapter.ledgerStatus : undefined;
+    const summary = chapter.summary ?? (short === "pending" ? PENDING_CHAPTER_SUMMARY : short === "partial" && chapter.missingKinds?.includes("summary") ? PARTIAL_CHAPTER_SUMMARY : "");
     const participants = [...chapter.present];
     const aliases = aliasesOf(ledger, projection);
     const { decision, discovery } = turnsOf(ledger, threadTypes);
@@ -165,12 +176,13 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
     return {
       id: `ch${String(chapter.chapter).padStart(4, "0")}-001`,
       chapter: chapter.chapter,
+      ...(short ? { ledgerShort: short } : {}),
       summary,
       participants,
       effects: {
         semanticSummary: {
           chapter: chapter.chapter,
-          chapterTitle: input.chapterTitles.get(chapter.chapter) ?? `第${chapter.chapter}章`,
+          chapterTitle: chapterTitles.get(chapter.chapter) ?? `第${chapter.chapter}章`,
           ...(summary ? { chapterSummary: summary, timelineSummary: summary } : {}),
           mainEvent: summary,
           participants,
@@ -189,18 +201,12 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
     };
   });
 
-  // 伏笔（悬念）在新核心里就是 question 类线索，统一进 threads.json；hooks.json 留空，免得同一条线两处各算一遍。
-  return { timeline, calendar, facts, threads, hooks: { hooks: [] }, goals, events };
-}
-
-/** 镜像的文件内容（和老代码写盘的格式一致：两格缩进 + 结尾换行）。 */
-export function serializeLegacyMirror(mirror: LegacyMirror): ReadonlyArray<readonly [string, string]> {
-  return (Object.keys(MIRROR_FILES) as (keyof typeof MIRROR_FILES)[]).map((key) => [MIRROR_FILES[key], `${JSON.stringify(mirror[key], null, 2)}\n`] as const);
+  return { projection, timeline, facts, threads, goals, events };
 }
 
 /**
- * 老格式每章的「决定」「发现」：本章新开的打算就是人物做的决定，本章收掉的悬念就是揭开的事。
- * 新账里没有「冲突」，老格式的 conflict 不编。
+ * 每章的「决定」「发现」：本章新开的打算就是人物做的决定，本章收掉的悬念就是揭开的事。
+ * 账里没有「冲突」，不编。
  */
 function turnsOf(ledger: ChapterLedger | undefined, types: ReadonlyMap<string, ThreadView["type"]>): { decision?: string; discovery?: string } {
   const decisions: string[] = [];
@@ -208,7 +214,7 @@ function turnsOf(ledger: ChapterLedger | undefined, types: ReadonlyMap<string, T
   for (const entry of ledger?.entries ?? []) {
     if (entry.kind !== "thread") continue;
     if (entry.op === "open" && entry.type === "intent") decisions.push(entry.note);
-    if (entry.op === "close" && types.get(entry.thread) === "question") discoveries.push(entry.note);
+    if (entry.op === "close" && types.get(threadOf(entry)) === "question") discoveries.push(entry.note);
   }
   return {
     ...(decisions.length > 0 ? { decision: unique(decisions).join("；") } : {}),
@@ -221,10 +227,10 @@ function aliasesOf(ledger: ChapterLedger | undefined, projection: BookProjection
   const out: { name: string; alias: string }[] = [];
   const seen = new Set<string>();
   for (const entry of ledger?.entries ?? []) {
-    if (entry.kind !== "presence" || entry.generic || nameKey(entry.name) === nameKey(entry.nameUsed)) continue;
-    const key = nameKey(entry.name);
+    if (entry.kind !== "presence" || entry.generic || nameKey(presenceName(entry)) === nameKey(entry.nameUsed)) continue;
+    const key = nameKey(presenceName(entry));
     const member = projection.cast.find((item) => item.key === key || item.aliases.some((alias) => nameKey(alias) === key));
-    const name = member?.name ?? entry.name;
+    const name = member?.name ?? presenceName(entry);
     const pair = `${nameKey(name)}\u0000${nameKey(entry.nameUsed)}`;
     if (nameKey(name) === nameKey(entry.nameUsed) || seen.has(pair)) continue;
     seen.add(pair);

@@ -391,7 +391,7 @@ describe("确认改齐", () => {
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toContain("“杜叔走了十年了。”孟叔说。");
     expect(await readFile(join(dir, draftPath(4)), "utf-8")).toContain("说他十年前就没了。");
     const ledger = await readChapterLedger(dir, 2);
-    expect(ledger?.entries.find((entry) => entry.kind === "fact" && entry.subject === "杜长顺")).toMatchObject({ value: "十年前" });
+    expect(ledger?.entries.find((entry) => entry.kind === "fact" && entry.subjectRef?.mention === "杜长顺")).toMatchObject({ value: "十年前" });
     expect((await projectBook(dir)).conflicts).toEqual([]);
     expect((await readBible(dir)).bible.canon.map((item) => item.text)).toEqual(["杜长顺十年前去世"]);
 
@@ -454,11 +454,13 @@ describe("确认改齐", () => {
   });
 
   it("老书的账没记原句的事实也问一次：回 drop 的确认后作废，回 keep / 没回的不动", async () => {
+    // 老书导入迁移来的事实：没原句（evidenceStatus none）。
+    const legacyFact = { kind: "fact", review: "auto", nature: "event", source: { kind: "unknown" }, transition: "unknown", evidence: [], evidenceStatus: "none", provenance: "migrated" };
     const path = join(dir, "ledger/chapters/0002.json");
     const raw = { ...(JSON.parse(await readFile(path, "utf-8")) as { entries: Record<string, unknown>[] }), origin: "import" };
     raw.entries.push(
-      { kind: "fact", review: "auto", nature: "event", text: "孟叔记得杜叔五年前走的", id: "fact-2-90" },
-      { kind: "fact", review: "auto", nature: "event", text: "码头上常年起雾", id: "fact-2-91" },
+      { ...legacyFact, text: "孟叔记得杜叔五年前走的", id: "fact-2-90" },
+      { ...legacyFact, text: "码头上常年起雾", id: "fact-2-91" },
     );
     await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`);
     const model = fakeModel({ factsReply: JSON.stringify({ facts: [

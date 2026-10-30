@@ -13,6 +13,7 @@ import { AuthorDecisionsFile, AUTHOR_DECISIONS_SCHEMA, type AuthorDecision } fro
 import { SettingCardsFile, type SettingCardsFile as SettingCardsFileType } from "../schema/cards.js";
 import { BookHead, BOOK_HEAD_SCHEMA, type BookHead as BookHeadType } from "../schema/book.js";
 import { ChapterLedger } from "../schema/ledger.js";
+import { isLedgerV1 } from "../ledger/migrate-v1.js";
 import {
   CHAPTER_LEDGER_DIR,
   chapterFromFileName,
@@ -73,8 +74,20 @@ export async function readChapterText(bookDir: string, chapter: number): Promise
   return readOptional(bookDir, chapterTextPath(chapter));
 }
 
+/**
+ * 账单还是旧格式（v1）：这本书还没升级。运行期不顺手升、不当空账，如实失败；开书时升（`ledger.migrate`）。
+ */
+export class LedgerNeedsUpgradeError extends BookFileError {
+  readonly needsUpgrade = true;
+  constructor(file: string) {
+    super(file, "这本书的账本格式要升级，重新打开一次这本书");
+    this.name = "LedgerNeedsUpgradeError";
+  }
+}
+
 function parseChapterLedger(chapter: number, raw: string): ChapterLedger {
   const path = chapterLedgerPath(chapter);
+  if (isLedgerV1(raw)) throw new LedgerNeedsUpgradeError(path);
   const ledger = parseJson(path, raw, ChapterLedger);
   if (ledger.chapter !== chapter) throw new BookFileError(path, `里面写的是第 ${ledger.chapter} 章`);
   return ledger;
@@ -83,6 +96,12 @@ function parseChapterLedger(chapter: number, raw: string): ChapterLedger {
 export async function readChapterLedger(bookDir: string, chapter: number): Promise<ChapterLedger | undefined> {
   const raw = await readOptional(bookDir, chapterLedgerPath(chapter));
   return raw === undefined ? undefined : parseChapterLedger(chapter, raw);
+}
+
+/** 一章的账单和它的原样哈希（重记时新账要记下换掉的是哪一份）。 */
+export async function readChapterLedgerFile(bookDir: string, chapter: number): Promise<{ readonly ledger: ChapterLedger; readonly sha256: string } | undefined> {
+  const raw = await readOptional(bookDir, chapterLedgerPath(chapter));
+  return raw === undefined ? undefined : { ledger: parseChapterLedger(chapter, raw), sha256: sha256(raw) };
 }
 
 /** 有账单的章号，按章号排好（只列目录，不读内容）。 */

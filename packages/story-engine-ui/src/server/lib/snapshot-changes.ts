@@ -28,6 +28,12 @@ const AREA_FILES: readonly (readonly [RegExp, string])[] = [
   [/^(?:story\/(?:bible|core)|project)\.json$/u, "书的基本设定"],
 ];
 
+/**
+ * 老镜像文件（写作版本 P2b 删了镜像）：开书时挪出书目录，下一个存档就带着这几个删除——那是整理，不是资料改了，不列。
+ * 早先存档里它们的改动照常按上表列（那时候它们是账的样子）。
+ */
+const RETIRED_MIRROR = /^(?:story\/(?:timeline|fact-ledger|threads|hooks|arc-goals)|time\/calendar|timeline\/events)\.json$/u;
+
 const MAX_LINES = 8;
 
 function chapterList(numbers: readonly number[]): string {
@@ -81,6 +87,7 @@ export function describeSnapshotChanges(
       else updatedCharacters.push(name);
       continue;
     }
+    if (status === "D" && RETIRED_MIRROR.test(path)) continue;
     const area = AREA_FILES.find(([pattern]) => pattern.test(path));
     if (area) areas.add(area[1]);
   }

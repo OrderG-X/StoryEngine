@@ -134,7 +134,6 @@ function contextPackFixture(cast: readonly string[] = []): WritingContextPack {
     setting: buildSettingPack(bibleView(project({ ledgers: [], decisions: [] }), applied.file), { characters: cast }),
     continuityFocus: {
       recentTimelineEvents: ["林序毕业失败"],
-      mustCarryHooks: ["申请表发热"],
       mustCarryThreads: ["申请记录异常"],
       arcGoalFocus: ["突破魂钢阶层门槛"],
       establishedFacts: [],

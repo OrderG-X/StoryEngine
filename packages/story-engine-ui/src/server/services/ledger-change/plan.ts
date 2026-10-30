@@ -148,9 +148,10 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest): 
       if (request.dayEnd !== undefined && request.dayEnd < day) return fail("bad_day", `到第 ${request.dayEnd} 天比第 ${day} 天还早，请说清这一章是第几天到第几天。`);
       const days = (from: number, to: number) => (to > from ? `第 ${from} 天到第 ${to} 天` : `第 ${from} 天`);
       if (current.day === day && current.dayEnd === (dayEnd ?? day)) return fail("unchanged", `第 ${chapter} 章记的就是故事${days(day, dayEnd ?? day)}，不用改。`);
+      const from = current.day !== undefined && current.dayEnd !== undefined ? `从故事${days(current.day, current.dayEnd)}` : "";
       return proposal(
         [{ type: "chapter.day", chapter, day, ...(dayEnd !== undefined ? { dayEnd } : {}) }],
-        [`第 ${chapter} 章从故事${days(current.day, current.dayEnd)}改记为${days(day, dayEnd ?? day)}`],
+        [`第 ${chapter} 章${from}改记为${from ? "" : "故事"}${days(day, dayEnd ?? day)}`],
       );
     }
     case "summary": {

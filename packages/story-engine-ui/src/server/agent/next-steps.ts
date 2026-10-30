@@ -71,6 +71,16 @@ export function commitAction(chapter: number): OperationAction {
   return { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
 }
 
+/** 「补记账」：定稿时账没记上 / 没记全的那章，按定稿那版正文补记（出清单，作者点「确认记账」才记）。 */
+export function fillAction(chapter: number): OperationAction {
+  return { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter, fill: true }, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 下一步里的「补记账」。 */
+export function fillChoice(chapter: number, options: { readonly label?: string; readonly recommended?: boolean } = {}): NextStepChoice {
+  return { label: options.label ?? "补记账", intent: `补记第 ${chapter} 章的账`, ...(options.recommended ? { recommended: true } : {}), action: fillAction(chapter) };
+}
+
 /** 「撤回来」「撤销这次定稿」：撤那一次操作写的；不给号 = 「撤销上一步」（最近一次还没撤的）。 */
 export function undoAction(opId?: string): OperationAction {
   return { kind: "new", type: HISTORY_CHANGE_KIND, mode: "undo", params: opId ? { opId } : {}, requestKey: randomUUID(), issuedAt: new Date().toISOString() };

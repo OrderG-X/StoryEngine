@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cardWrite, chapterCommit, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
+import { seedChapters, seedDecisions, seedThreads } from "../book/ledger-test-helpers.js";
 import { normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
 import { describe, expect, it } from "vitest";
 import type { BrainCallModel } from "./reader-window.js";
@@ -17,16 +18,12 @@ async function makeBook(): Promise<string> {
   const { projectDir } = await createStoryProject({
     rootDir, title: "海州账册", genre: "urban", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈",
   });
-  await mkdir(join(projectDir, "chapters"), { recursive: true });
-  await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈把蓝色账册锁进抽屉，决定明天去档案室。\n", "utf-8");
-  // 老格式镜像文件（线索、硬事实）：建书不再建 story/，要写自己建（P9）。
-  await mkdir(join(projectDir, "story"), { recursive: true });
-  await writeFile(join(projectDir, "story", "threads.json"), JSON.stringify({
-    threads: [
-      { id: "lead-1", type: "lead", title: "账册第三页被谁撕掉了…", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: ["账册第三页被谁撕掉了，撕口很新"] },
-      { id: "lead-2", type: "lead", title: "已经收口的旧事", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
-    ],
-  }), "utf-8");
+  // 第 1 章定稿：一条开着的悬念（标题截断、证据补全），一条作者说已经收了的。
+  await seedThreads(projectDir, [
+    { name: "lead-1", type: "question", title: "账册第三页被谁撕掉了…", openedAt: 1, quote: "账册第三页被谁撕掉了，撕口很新" },
+    { name: "lead-2", type: "question", title: "已经收口的旧事", openedAt: 1 },
+  ], [{ chapter: 1, title: "第1章 · 账册", entries: [{ kind: "summary", text: "林澈锁好账册。", quote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。" }] }]);
+  await seedDecisions(projectDir, [{ type: "thread.close", thread: "lead-2", chapter: 1 }]);
   return projectDir;
 }
 
@@ -86,13 +83,15 @@ describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写�
   it("带上与前文相关的旧事实、前几章章纲里的时间，并把跨章反复的描写确定性并进 avoid", async () => {
     const projectDir = await makeBook();
     const ending = "他把台灯拧暗了一格，一屋子的钟在黑暗里响着。";
+    await seedChapters(projectDir, [2, 3, 4].map((n) => ({
+      chapter: n,
+      entries: n === 3 ? [{ kind: "fact" as const, nature: "event" as const, text: "异议书已在第3章递交并拿到回执编号。" }] : [],
+    })));
+    // 正文换成各章自己写的（结尾那句跨章反复）。
     for (const n of [2, 3, 4]) {
       await writeFile(join(projectDir, "chapters", `000${n}.md`), `# 第${n}章\n\n第${n}章各写各的事，编号${n}。\n\n${ending}\n`, "utf-8");
       await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: `第${n}章`, beats: ["b"], scene: { time: `六月${10 + n}日上午` } }, { chapter: n })!);
     }
-    await writeFile(join(projectDir, "story", "fact-ledger.json"), JSON.stringify({
-      version: "v0", facts: [{ id: "fact-3-0", chapter: 3, text: "异议书已在第3章递交并拿到回执编号。", source: "auto" }],
-    }), "utf-8");
 
     const materials = await collectPlanMaterials(projectDir, 5);
     expect(materials.facts.join("\n")).toContain("异议书已在第3章递交");
@@ -116,12 +115,36 @@ describe("reconcileStoryDay：天数由程序按上一章往后加（第十九�
     expect(reconcileStoryDay(make("清晨", 3), undefined, 12).storyDay).toBe(12);
     expect(reconcileStoryDay(make("清晨"), undefined, 12).storyDay).toBe(12);
     expect(reconcileStoryDay(make("次日"), undefined, undefined).storyDay).toBeUndefined();
+    // 上一章是哪天不知道（有章账待记）：模型给的天数没依据，不留。
+    expect(reconcileStoryDay(make("次日", 9), 1, "unknown").storyDay).toBeUndefined();
     expect(readDayOffset({ dayOffset: 2 })).toBe(2);
     expect(readDayOffset({ dayOffset: "1天" })).toBe(1);
     expect(readDayOffset({ dayOffset: "第二天" })).toBe(1);
     expect(readDayOffset({ dayOffset: "同一天" })).toBe(0);
     expect(readDayOffset({ dayOffset: "" })).toBeUndefined();
     expect(readDayOffset({})).toBeUndefined();
+  });
+});
+
+describe("previousChapterEndDay：上一章是哪天不知道就说不知道，不拿再前一章顶（P2b 设计 3.3）", () => {
+  it("上一章账待记 → unknown；它后面接着记的章也是 unknown；作者定了天数的章之后照常算", async () => {
+    const { previousChapterEndDay } = await import("./plan-materials.js");
+    const rootDir = await mkdtemp(join(tmpdir(), "se-plan-unknown-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口" });
+    const commit = async (chapter: number, text: string, entries: Parameters<typeof chapterCommit.plan>[1]["entries"], pending = false) => {
+      const outcome = await runCommand(projectDir, chapterCommit, {
+        chapter, text, entries, ...(pending ? { ledger: { status: "pending" as const, reasonCodes: ["keeper_failed"] } } : {}),
+      }, { caller: "author", idempotencyKey: `k${chapter}` });
+      expect(outcome.ok).toBe(true);
+    };
+    await commit(1, "# 第1章\n\n周三清晨，渡口起了雾。", [{ kind: "time", review: "auto", basis: "text", quote: "周三清晨" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(1);
+    await commit(2, "# 第2章\n\n雾还没散。", [], true);
+    expect(await previousChapterEndDay(projectDir, 3)).toBe("unknown");
+    await commit(3, "# 第3章\n\n第二天上午，船来了。", [{ kind: "time", review: "auto", basis: "text", quote: "第二天上午", daysSincePrevious: 1 }]);
+    expect(await previousChapterEndDay(projectDir, 4)).toBe("unknown");
+    await commit(4, "# 第4章\n\n到了第六天。", [{ kind: "time", review: "auto", basis: "author", day: 6 }]);
+    expect(await previousChapterEndDay(projectDir, 5)).toBe(6);
   });
 });
 
@@ -163,14 +186,15 @@ describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后�
   it("上一章开场是第几天以时间线为准，章纲只数章内换天（2026-10-28 第 33 章章纲跟着过时的第 32 章章纲少记四天）", async () => {
     const { previousChapterEndDay } = await import("./plan-materials.js");
     const projectDir = await makeBook();
-    const timeline = (entries: object[]) => writeFile(join(projectDir, "story", "timeline.json"), JSON.stringify({ schemaVersion: 1, entries }), "utf-8");
+    // 时间线从账算：作者改第 1 章的天数（chapter.day 裁定，后记的顶掉先记的）。
+    const day = (dayEnd?: number) => seedDecisions(projectDir, [{ type: "chapter.day", chapter: 1, day: 9, ...(dayEnd ? { dayEnd } : {}) }]);
     await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子", "第二天上午，许棠上门"], storyDay: 5 }, { chapter: 1 })!);
-    await timeline([{ chapter: 1, day: 9, source: "declared", quote: "过去三天了。" }]);
+    await day();
     expect(await previousChapterEndDay(projectDir, 2)).toBe(10);
-    await timeline([{ chapter: 1, day: 9, daysInChapter: 2, source: "declared", quote: "过去三天了。" }]);
+    await day(11);
     expect(await previousChapterEndDay(projectDir, 2)).toBe(11);
     await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子"] }, { chapter: 1 })!);
-    await timeline([{ chapter: 1, day: 9, source: "declared", quote: "过去三天了。" }]);
+    await day();
     expect(await previousChapterEndDay(projectDir, 2)).toBe(9);
   });
 });

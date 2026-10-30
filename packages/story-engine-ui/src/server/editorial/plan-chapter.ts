@@ -4,7 +4,7 @@
  */
 import { basisDigestBefore, canonicalJson, sha256 } from "@actalk/story-core";
 import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { readStoryTimeline } from "../book/story-timeline.js";
+import { readStoryViews } from "../book/story-views.js";
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
@@ -170,7 +170,7 @@ async function readPlanBasis(projectDir: string, chapter: number, direction?: st
   try {
     const read = await readWithStableBasisForWork(projectDir, async () => ({
       materials: await collectPlanMaterials(projectDir, chapter, direction || undefined),
-      timeline: (await readStoryTimeline(projectDir)).timeline.entries.filter((entry) => entry.chapter < chapter),
+      timeline: (await readStoryViews(projectDir)).timeline.entries.filter((entry) => entry.chapter < chapter),
     }));
     if (!read.basis) return undefined;
     return { key: sha256(canonicalJson({ truth: basisDigestBefore(read.basis, chapter), ...read.value })), digest: read.basis.digest };

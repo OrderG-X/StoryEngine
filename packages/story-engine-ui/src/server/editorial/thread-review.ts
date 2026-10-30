@@ -14,6 +14,7 @@ import { withStep } from "../lib/token-meter.js";
 import { extractJsonObject } from "./keeper-parse.js";
 import { LEDGER_ROLE, openKeeperWindow } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 import type { BrainCallModel, ColdCoverage } from "./reader-window.js";
 
 /** 一次最多理多少条（再多一次判不细，如实说另有几条这次没看）。 */
@@ -54,10 +55,6 @@ export type ThreadReviewOutcome =
       readonly waited?: ReaderWaited;
     }
   | { readonly ok: false; readonly reason: string };
-
-function oneLine(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
-}
 
 function threadLine(handle: string, thread: ThreadView): string {
   const last = thread.touches.at(-1);
@@ -174,7 +171,7 @@ export async function reviewOpenThreads(input: {
       waitingAs: "理线索",
     });
   } catch (error) {
-    return { ok: false, reason: `记账员读前文没成：${oneLine(error)}` };
+    return { ok: false, reason: `记账员读前文没成：${modelFailureText(error)}` };
   }
   const extra = { ...(opened.cold ? { cold: opened.cold } : {}), ...(opened.waited ? { waited: opened.waited } : {}) };
   const lines = [...handles].map(([handle, thread]) => threadLine(handle, thread));
@@ -182,7 +179,7 @@ export async function reviewOpenThreads(input: {
   try {
     reply = await withStep("记账员理线索", () => input.callModel([...opened.window, { role: "user", content: reviewTask(upTo, lines) }], { json: true }));
   } catch (error) {
-    return { ok: false, reason: `记账员这次没理完：${oneLine(error)}` };
+    return { ok: false, reason: `记账员这次没理完：${modelFailureText(error)}` };
   }
   const verdicts = parseVerdicts(reply, handles);
   if (!verdicts) return { ok: false, reason: "记账员交回来的不是一份能读的结果（不是 JSON）" };
@@ -234,7 +231,7 @@ export async function reviewOpenThreads(input: {
       evidence = parseEvidence(answer);
       if (!evidence) failures.push(`第 ${chapter} 章点收口原句那次交回来的不是 JSON`);
     } catch (error) {
-      failures.push(`第 ${chapter} 章点收口原句没成：${oneLine(error)}`);
+      failures.push(`第 ${chapter} 章点收口原句没成：${modelFailureText(error)}`);
     }
     const byId = new Map(units.map((unit) => [unit.id, unit] as const));
     for (const item of items) {

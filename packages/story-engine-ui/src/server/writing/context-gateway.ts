@@ -2,33 +2,21 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
 import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
-import { formatStaleGoalMessage, formatStaleHookMessage, formatStaleThreadMessage } from "./stale-messages.js";
+import { formatStaleGoalMessage, formatStaleThreadMessage } from "./stale-messages.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
-import {
-  describeErrorBriefly,
-  readArcGoalPool,
-  readHookPool,
-  readProject,
-  readStoryCalendar,
-  readThreadPool,
-  readTimelineEvents,
-} from "../book/project-store.js";
-import { parseDraftFile, readDraftState, selectRelevant } from "@actalk/story-core";
+import { describeErrorBriefly, readProject } from "../book/project-store.js";
+import { shortChapters, shortChaptersText, type ShortChapter } from "../book/ledger-short.js";
+import { readStoryViews, type StoryViews } from "../book/story-views.js";
+import { parseDraftFile, readDraftState, selectRelevant, threadUnknownChapters } from "@actalk/story-core";
 import { readChapterTitles } from "../book/chapter-titles.js";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
-import { readBibleTolerant } from "./setting-pack.js";
 import { resolveInSceneCharacters } from "./presence/in-scene-detector.js";
 
 // token 估算前后端共用一份（src/lib/estimate-tokens.ts，纯函数）。
 export { estimateTokens };
-import type {
-  ArcGoal,
-  HookItem,
-  NarrativeThread,
-  TimelineEvent,
-} from "../book/types.js";
+import type { ArcGoal, NarrativeThread, TimelineEvent } from "../book/types.js";
 
 export interface ContextSection {
   readonly name: string;
@@ -75,29 +63,6 @@ export interface PreviousChapterContext {
 /** 上一章正文给多少：整章不超过这个字符数就整章给，否则只给结尾 PREVIOUS_CHAPTER_TAIL_CHARS。 */
 const PREVIOUS_CHAPTER_FULL_MAX_CHARS = 6000;
 const PREVIOUS_CHAPTER_TAIL_CHARS = 5000;
-
-export interface HookTrackingContext {
-  readonly activeHooks: readonly HookTrackingContextItem[];
-  readonly recentlyTouchedHooks: readonly HookTrackingContextItem[];
-  readonly staleHookWarnings: readonly {
-    readonly id: string;
-    readonly title: string;
-    readonly lastTouchedChapter: number;
-    readonly chaptersSinceTouched: number;
-    readonly message: string;
-  }[];
-  readonly hookCarryForwardInstruction: string;
-}
-
-export interface HookTrackingContextItem {
-  readonly id: string;
-  readonly title: string;
-  readonly lastTouchedChapter?: number;
-  readonly evidence: readonly string[];
-  readonly nextActionHint?: string;
-  readonly relatedLocations: readonly string[];
-  readonly relatedCharacters: readonly string[];
-}
 
 export interface StoryThreadsContext {
   readonly openLeads: readonly StoryThreadContextItem[];
@@ -163,7 +128,6 @@ export interface WriterContextEnvelope {
     readonly stableTokenEstimate: number;
     readonly dynamicTokenEstimate: number;
     readonly selectedCharacters: readonly string[];
-    readonly selectedHooks: readonly string[];
     readonly selectedTimelineEvents: readonly string[];
   };
 }
@@ -176,7 +140,6 @@ export interface BuildWriterContextInput {
   readonly chapterGoal: string;
   /** 本章要带的人物（名字）；不给就按在场检测挑。 */
   readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
   /**
    * `timeline_events` 段（可裁段）取最近 N 条（默认 5）。
    * 注意 `writing_context_pack` 是受保护段，包内时间线摘要另有自限（≤3 条，
@@ -206,19 +169,18 @@ export interface LastDraftConflict {
 
 export async function buildWriterContext(input: BuildWriterContextInput): Promise<WriterContextEnvelope> {
   const project = await readProject(input.projectDir);
-  // P2 铁律④（永不静默）：损坏的 timeline/events.json 此前双重 catch 后静默降级为 [] ——
-  // 模型拿到「空历史」却毫无知觉，会把已写过的章节当没发生过。降级仍要做（不能让一次坏读盘
-  // 炸掉整次出稿），但失败原因必须进上下文，让模型知道并如实转达用户。
+  // P2 铁律④（永不静默）：账读坏了曾静默降级为 [] ——模型拿到「空历史」却毫无知觉，会把已写过的章节
+  // 当没发生过。降级仍要做（不能让一次坏读盘炸掉整次出稿），但失败原因必须进上下文，让模型知道并如实转达用户。
   const readFailures: string[] = [];
   const trackReadFailure = (label: string) => (error: unknown) => {
     // 只给 errno code/错误类型 + 项目内相对文件名——error.message 原文带本地绝对路径，不进上下文（路径泄漏纪律）。
-    readFailures.push(`${label} 读取失败（${describeErrorBriefly(error, input.projectDir)}），已降级为空。`);
+    readFailures.push(`${label}读取失败（${describeErrorBriefly(error, input.projectDir)}），已降级为空。`);
   };
-  // 设定卡坏了按空设定降级 + 留痕（不炸掉整次出稿）。读一次、下游共用：坏了只记这一条，
-  // 不让在场检测、上下文包各自再读一遍、把同一个原因记成三条。
-  const read = await readBibleTolerant(input.projectDir);
-  if (read.failure) readFailures.push(read.failure);
-  const bible = read.projection ? { projection: read.projection, bible: read.bible } : undefined;
+  // 设定和账（线索、目标、各章事件、时间线）从同一份快照现算：读一次、下游共用；读坏了按空降级 + 留痕
+  // （不炸掉整次出稿），只记这一条，不让在场检测、上下文包各自再读一遍、把同一个原因记成三条。
+  const views = await readStoryViews(input.projectDir)
+    .catch((error) => { trackReadFailure("设定本和账")(error); return undefined as StoryViews | undefined; });
+  const bible = views ? { projection: views.projection, bible: views.bible } : undefined;
   const selectedCharacters = input.selectedCharacters && input.selectedCharacters.length > 0
     ? [...input.selectedCharacters]
     // 设定本没读出来：没有可挑的人（原因已在上面那条），不再去读第二遍。
@@ -233,16 +195,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
         return { selected: [] as readonly string[] };
       })).selected]
       : [];
-  const [calendar, hookPool, threadPool, arcGoalPool, allTimelineEvents, previousUncommittedDraft, previousChapter, existingChapterTitles] = await Promise.all([
-    readStoryCalendar(input.projectDir),
-    readHookPool(input.projectDir),
-    readThreadPool(input.projectDir),
-    readArcGoalPool(input.projectDir),
-    // 全量 timeline 只读一次：近 N 段（selectRecentTimelineEvents）与早期分层（buildTimelineLayers）共用，避免重复读盘
-    readTimelineEvents(input.projectDir)
-      // 审计 Low：删掉「旧格式回退」第二跳——它与首读同一文件同一 JSON.parse，首读失败它必失败，
-      // 永远不可能救回，只是把同一故障记两遍（且内层把权限错无痕吞成 []）。单跳：降级 + 留痕一次。
-      .catch((error) => { trackReadFailure("时间线事件")(error); return [] as readonly TimelineEvent[]; }),
+  const [previousUncommittedDraft, previousChapter, existingChapterTitles] = await Promise.all([
     readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
     readPreviousChapterContext(input.projectDir, input.chapter)
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
@@ -250,6 +203,11 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     readChapterTitles(input.projectDir, input.chapter)
       .catch(() => [] as readonly { chapter: number; title: string }[]),
   ]);
+  const threadPool = views?.threads ?? { threads: [] };
+  const arcGoalPool = views?.goals ?? { goals: [] };
+  const allTimelineEvents = views?.events ?? [];
+  // 前面账没记全的章（写作版本 P2b 设计 3.3）：如实告诉写手账里缺那几章。
+  const shortBefore = shortChapters(views?.projection.chapters ?? [], input.chapter);
   const plan = input.chapterPlan;
   const storyClock = plan?.storyDay ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
   const earlierPassages = plan
@@ -263,18 +221,17 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     : [];
   const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
   const storyContinuity = buildStoryContinuityContext(timelineEvents);
-  const selectedHooks = selectHooks(hookPool.hooks, input.selectedHookIds);
-  const hookTracking = buildHookTrackingContext(hookPool.hooks, input.chapter, input.chapterGoal, selectedCharacters);
-  const arcGoals = buildArcGoalsContext(arcGoalPool.goals, input.chapter, input.chapterGoal, selectedCharacters);
-  const storyThreads = buildStoryThreadsContext(threadPool.threads, input.chapter, storyContinuity, arcGoals, input.chapterGoal, selectedCharacters);
+  // 线索账没记全的章不数进「多少章没动」（和核心投影同一把尺子）。
+  const threadUnknown = threadUnknownChapters(views?.projection.chapters ?? []);
+  const arcGoals = buildArcGoalsContext(arcGoalPool.goals, input.chapter, threadUnknown, input.chapterGoal, selectedCharacters);
+  const storyThreads = buildStoryThreadsContext(threadPool.threads, input.chapter, threadUnknown, storyContinuity, arcGoals, input.chapterGoal, selectedCharacters);
   const writingContextPack = await buildWritingContextPack({
     projectDir: input.projectDir,
     chapter: input.chapter,
     userDirection: input.chapterGoal,
     currentChapterGoal: input.chapterGoal,
     selectedCharacters,
-    selectedHookIds: input.selectedHookIds,
-    bible: bible ?? { bible: read.bible },
+    views: views ?? null,
     maxTimelineEvents: input.maxTimelineEvents,
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
     ...(previousChapter?.text ?? previousUncommittedDraft?.excerpt
@@ -308,9 +265,13 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       }, "dynamic")]
       : []),
     section("writing_context_pack", writingContextPack satisfies WritingContextPack, "dynamic"),
-    section("story_calendar", calendar, "dynamic"),
-    section("hook_pool", selectedHooks, "dynamic"),
-    section("hook_tracking", hookTracking, "dynamic"),
+    section("story_calendar", { currentStoryDay: currentStoryDayOf(views?.projection) }, "dynamic"),
+    ...(shortBefore.length > 0
+      ? [section("ledger_pending", {
+        chapters: shortBefore.map((item) => item.chapter),
+        note: `${shortChaptersText(shortBefore, Number.POSITIVE_INFINITY)}：那几章出了什么事、谁在场、线索怎么动的、是哪天，账里没有或不全；要接的地方以那几章正文为准，别当成什么都没发生。`,
+      }, "dynamic")]
+      : []),
     section("story_threads", storyThreads, "dynamic"),
     section("arc_goals", arcGoals, "dynamic"),
     section("story_continuity", storyContinuity, "dynamic"),
@@ -335,7 +296,6 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       stableTokenEstimate,
       dynamicTokenEstimate,
       selectedCharacters,
-      selectedHooks: selectedHooks.map((hook) => hook.id),
       selectedTimelineEvents: timelineEvents.map((event) => event.id),
     },
   };
@@ -436,92 +396,10 @@ function section(name: string, content: unknown, cachePolicy: "stable" | "dynami
   };
 }
 
-function selectHooks(hooks: readonly HookItem[], selectedHookIds?: readonly string[]): readonly HookItem[] {
-  if (selectedHookIds && selectedHookIds.length > 0) {
-    const selected = new Set(selectedHookIds);
-    return hooks.filter((hook) => selected.has(hook.id));
-  }
-  return hooks.filter((hook) => hook.status === "seeded" || hook.status === "active");
-}
-
-function hookSearchText(hook: HookItem): string {
-  return [hook.title, hook.description, ...(hook.evidence ?? []), ...(hook.relatedCharacters ?? []), ...(hook.relatedLocations ?? [])]
-    .filter((value): value is string => value !== undefined)
-    .join(" ");
-}
-
-function buildHookTrackingContext(hooks: readonly HookItem[], chapter: number, chapterGoal?: string, relevantCharacterIds?: readonly string[]): HookTrackingContext {
-  const activeHooks = selectRelevant({
-    items: hooks
-      .filter((hook) => hook.status === "active")
-      .map((hook) => ({ ...hook, text: hookSearchText(hook) })),
-    chapter,
-    chapterGoal,
-    relevantCharacterIds,
-    closedStatuses: [],
-  }).selected.slice(0, 8).map(compactHook);
-  const recentlyTouchedHooks = hooks
-    .filter((hook) => hook.lastTouchedChapter !== undefined)
-    .sort(compareHookRecency)
-    .slice(0, 5)
-    .map(compactHook);
-  // r7 里程碑制（镜像 hook-tracking.findStaleHookWarnings）：写手上下文同样不再每章重复灌同一批停滞告警。
-  const staleHookWarnings = hooks
-    .filter((hook) => hook.status === "active")
-    .filter((hook) => hook.lastTouchedChapter !== undefined)
-    .map((hook) => ({
-      hook,
-      chaptersSinceTouched: chaptersSinceTouched(hook.lastTouchedChapter, chapter),
-    }))
-    .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, 3))
-    .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)
-    .slice(0, 5)
-    .map(({ hook, chaptersSinceTouched }) => ({
-      id: hook.id,
-      title: hook.title,
-      lastTouchedChapter: hook.lastTouchedChapter!,
-      chaptersSinceTouched,
-      message: formatStaleHookMessage({
-        title: hook.title,
-        lastTouchedChapter: hook.lastTouchedChapter!,
-        chaptersSinceTouched,
-      }),
-    }));
-  return {
-    activeHooks,
-    recentlyTouchedHooks,
-    staleHookWarnings,
-    hookCarryForwardInstruction: buildHookCarryForwardInstruction(activeHooks),
-  };
-}
-
-function compareHookRecency(left: HookItem, right: HookItem): number {
-  const leftChapter = left.lastTouchedChapter ?? left.firstSeenChapter ?? 0;
-  const rightChapter = right.lastTouchedChapter ?? right.firstSeenChapter ?? 0;
-  return rightChapter - leftChapter || left.id.localeCompare(right.id);
-}
-
-function compactHook(hook: HookItem): HookTrackingContextItem {
-  return {
-    id: hook.id,
-    title: hook.title,
-    ...(hook.lastTouchedChapter !== undefined ? { lastTouchedChapter: hook.lastTouchedChapter } : {}),
-    evidence: limitText(hook.evidence ?? [hook.description], 2, 100),
-    ...(hook.nextActionHint ? { nextActionHint: truncateText(hook.nextActionHint, 100) } : {}),
-    relatedLocations: limitText(uniqueText(hook.relatedLocations ?? []), 5, 30),
-    relatedCharacters: limitText(uniqueText(hook.relatedCharacters ?? []), 5, 30),
-  };
-}
-
-function buildHookCarryForwardInstruction(activeHooks: readonly HookTrackingContextItem[]): string {
-  if (activeHooks.length === 0) return "";
-  const titles = activeHooks.slice(0, 5).map((hook) => hook.title).join("、");
-  return truncateText(`下一章可优先自然推进这些伏笔，但不要一次性全部解开：${titles}。`, 120);
-}
-
 function buildStoryThreadsContext(
   threads: readonly NarrativeThread[],
   chapter: number,
+  threadUnknown: readonly number[],
   storyContinuity?: StoryContinuityContext,
   arcGoals?: ArcGoalsContext,
   chapterGoal?: string,
@@ -551,7 +429,7 @@ function buildStoryThreadsContext(
   const staleThreadWarnings = ranked
     .map((thread) => ({
       thread,
-      chaptersSinceTouched: chaptersSinceTouched(thread.lastTouchedChapter, chapter),
+      chaptersSinceTouched: chaptersSinceTouched(thread.lastTouchedChapter, chapter, threadUnknown),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, 3))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)
@@ -613,7 +491,7 @@ function arcGoalSearchText(goal: ArcGoal): string {
     .join(" ");
 }
 
-function buildArcGoalsContext(goals: readonly ArcGoal[], chapter: number, chapterGoal?: string, relevantCharacterIds?: readonly string[]): ArcGoalsContext {
+function buildArcGoalsContext(goals: readonly ArcGoal[], chapter: number, threadUnknown: readonly number[], chapterGoal?: string, relevantCharacterIds?: readonly string[]): ArcGoalsContext {
   const activeGoals = selectRelevant({
     items: goals
       .filter((goal) => goal.status === "active" || goal.status === "touched")
@@ -635,7 +513,7 @@ function buildArcGoalsContext(goals: readonly ArcGoal[], chapter: number, chapte
     .filter((goal) => goal.status === "active" || goal.status === "touched")
     .map((goal) => ({
       goal,
-      chaptersSinceTouched: chaptersSinceTouched(goal.lastTouchedChapter, chapter),
+      chaptersSinceTouched: chaptersSinceTouched(goal.lastTouchedChapter, chapter, threadUnknown),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, 5))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)
@@ -725,10 +603,8 @@ function buildStoryContinuityContext(timelineEvents: readonly TimelineEvent[]): 
   const recentEvents = [...timelineEvents]
     .sort((left, right) => right.chapter - left.chapter || right.id.localeCompare(left.id))
     .slice(0, 3);
-  const summaries = recentEvents.map((event) => {
-    const semanticSummary = readSemanticSummary(event);
-    return semanticSummary?.mainEvent ?? event.summary;
-  });
+  // 账没记全的章带上章号（几章都没梗概时分得清是哪章），不当成什么都没发生。
+  const summaries = recentEvents.map((event) => (event.ledgerShort ? `第 ${event.chapter} 章：${event.summary}` : readSemanticSummary(event)?.mainEvent ?? event.summary));
   const openLeads = recentEvents.map((event) => readSemanticSummary(event)?.nextLead);
   const activeConflicts = recentEvents.map((event) => readSemanticSummary(event)?.conflict);
   const discoveries = recentEvents.map((event) => readSemanticSummary(event)?.discovery);
@@ -746,7 +622,7 @@ function buildStoryContinuityContext(timelineEvents: readonly TimelineEvent[]): 
   };
   return {
     ...continuity,
-    carryForwardInstruction: buildCarryForwardInstruction(continuity),
+    carryForwardInstruction: buildCarryForwardInstruction(continuity, recentEvents[0]?.ledgerShort ? { chapter: recentEvents[0].chapter, status: recentEvents[0].ledgerShort } : undefined),
   };
 }
 
@@ -772,11 +648,14 @@ function readSemanticSummary(event: TimelineEvent): Partial<{
   }>;
 }
 
-function buildCarryForwardInstruction(context: Omit<StoryContinuityContext, "carryForwardInstruction">): string {
+/** pendingNewest：最近那章的账还没记上（梗概、线索都给不出）：承接它的正文，不拿更早那章的事当「最近」。 */
+function buildCarryForwardInstruction(context: Omit<StoryContinuityContext, "carryForwardInstruction">, shortNewest?: ShortChapter): string {
   if (isEmptyContinuityContext(context)) {
     return "暂无前情承接要求。";
   }
-  const lead = stripTerminalPunctuation(context.openLeads[0] ?? context.recentEvents[0] ?? "最近事件");
+  const lead = shortNewest !== undefined
+    ? `第 ${shortNewest.chapter} 章正文结尾接着的事（那章的账${shortNewest.status === "pending" ? "还没记上" : "没记全"}，以正文为准）`
+    : stripTerminalPunctuation(context.openLeads[0] ?? context.recentEvents[0] ?? "最近事件");
   const conflict = stripTerminalPunctuation(context.activeConflicts[0] ?? context.discoveries[0] ?? "上一章后果");
   const locations = context.recentLocations.length > 0 ? context.recentLocations.join("、") : "暂无明确地点";
   const characters = context.recentCharacters.length > 0 ? context.recentCharacters.join("、") : "近期出场角色";
@@ -815,4 +694,11 @@ function stripTerminalPunctuation(value: string): string {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+/** 故事现在到第几天（最后定稿那章的结尾）；那章是哪天不知道（它或它前面有章账待记）就如实说不知道，不按第 1 天给。 */
+function currentStoryDayOf(projection: { readonly chapters: readonly { readonly dayEnd?: number }[] } | undefined): number | string {
+  const last = projection?.chapters.at(-1);
+  if (!last) return 1;
+  return last.dayEnd ?? "不知道（前面有章的时间没记上）";
 }

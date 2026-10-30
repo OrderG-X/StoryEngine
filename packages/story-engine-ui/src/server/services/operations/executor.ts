@@ -11,7 +11,7 @@
  *   后台配方登记了自动续 → 接着跑，其余 → paused:interrupted；配方版本对不上 → obsolete。
  */
 import { bookKey, canonicalJson, opCommandKey, readBookEpoch, readCommandReceipt, sha256, withBookLock, type CommandReceipt } from "@actalk/story-core";
-import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../../book/ensure-on-core.js";
 import { clearCandidateTombstones } from "../../lib/draft-candidates.js";
 import { clearFixLogKeys } from "../../lib/fix-log.js";
 import { clearWordStatsKeys } from "../../lib/word-stats.js";

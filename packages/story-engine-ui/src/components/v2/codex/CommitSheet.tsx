@@ -6,6 +6,8 @@
  *  - 另外自动记下 N 条：收起；点开每条也能【不记】。
  *  - 定不了时：照实列阻断原因，只有【知道了】；只差字数下限的多一个【就这么短，照样定稿】（只放这一章）。
  *  - 底：【先不定】【确认定稿】。确认＝接着做出这张清单的那次定稿（带上作者去掉的、确认的、改的天数），不经模型。
+ *  - 补账清单（P2b）：同一份清单，头是「补记第 N 章的账」、按钮是【确认记账】，正文不动。
+ *  - 这章是哪天不知道（前面有章账待记）：天数两栏空着，【填天数】。
  *
  * 作者动过的条目记在 utils/ledgerExclusions（按出清单的那次定稿），关了再开都带得上。
  */
@@ -43,7 +45,7 @@ export function splitChecklist(items: readonly ChecklistItem[]): {
   readonly review: readonly ChecklistItem[];
   readonly auto: readonly ChecklistItem[];
 } {
-  const day = items.find((item) => item.editableDay !== undefined);
+  const day = items.find((item) => item.editableDay !== undefined || item.dayUnknown === true);
   const rest = items.filter((item) => item !== day);
   return {
     day,
@@ -147,9 +149,9 @@ export function CommitSheet({
   /** 正在打的字：删空了先让它空着（不然一删就弹回原来的数，再打成了「114」）。 */
   const [dayText, setDayText] = useState<string | null>(null);
   const [dayEndText, setDayEndText] = useState<string | null>(null);
-  // 记账员记的头一天和跨了几天；作者改了以后按作者的。
+  // 记账员记的头一天和跨了几天；作者改了以后按作者的。哪天不知道的两栏空着，作者填了才有。
   const keptDay = day?.editableDay;
-  const shownDay = dayOverride?.day ?? keptDay ?? 1;
+  const shownDay = dayOverride?.day ?? keptDay;
   const shownEnd = dayOverride ? dayOverride.dayEnd ?? dayOverride.day : day?.editableDayEnd ?? shownDay;
   const changeDay = (value: DayOverride | undefined) => {
     setDayOverride(value);
@@ -165,12 +167,16 @@ export function CommitSheet({
       changeDay(undefined);
       return;
     }
-    const dayEnd = dayEndText !== null ? Math.max(shownEnd, value) : value + Math.max(0, shownEnd - shownDay);
+    const start = shownDay ?? value;
+    const end = shownEnd ?? start;
+    const dayEnd = dayEndText !== null ? Math.max(end, value) : value + Math.max(0, end - start);
     if (dayEndText !== null && Number(dayEndText) !== dayEnd) setDayEndText(null);
     changeDay({ day: value, dayEnd });
   };
   const changeEnd = (value: number | undefined) => {
-    if (value !== undefined) changeDay({ day: shownDay, dayEnd: Math.max(value, shownDay) });
+    if (value === undefined) return;
+    const start = shownDay ?? value;
+    changeDay({ day: start, dayEnd: Math.max(value, start) });
   };
   const dayOverrideLabel = dayOverride
     ? `这一章改记为故事第 ${dayOverride.day} 天${dayOverride.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? `到第 ${dayOverride.dayEnd} 天` : ""}`
@@ -197,8 +203,10 @@ export function CommitSheet({
   const reviewGroups = groupByReason(review);
   const reviewShown = showAllReview ? reviewGroups : takeRows(reviewGroups, REVIEW_VISIBLE);
   const reviewCount = review.length + (day?.needsConfirm ? 1 : 0);
-  const title = `定稿第 ${preview.chapter} 章`;
-  const confirmLabel = removed > 0 ? `确认定稿（不记 ${removed} 条）` : confirmed > 0 ? `确认定稿（改记 ${confirmed} 条）` : "确认定稿";
+  const fill = preview.fill === true;
+  const title = fill ? `补记第 ${preview.chapter} 章的账` : `定稿第 ${preview.chapter} 章`;
+  const confirmWord = fill ? "确认记账" : "确认定稿";
+  const confirmLabel = removed > 0 ? `${confirmWord}（不记 ${removed} 条）` : confirmed > 0 ? `${confirmWord}（改记 ${confirmed} 条）` : confirmWord;
 
   return (
     <>
@@ -210,7 +218,7 @@ export function CommitSheet({
         </header>
 
         <div className="se-cs-body">
-          {firstCommit && editable ? (
+          {firstCommit && editable && !fill ? (
             <p className="se-cs-intro">定稿就是把这章记进账：谁出场、出了什么事、埋了什么线。往后 AI 写、核账，都对着账查。</p>
           ) : null}
           {day ? (
@@ -218,7 +226,7 @@ export function CommitSheet({
               <span>{dayOverrideLabel ?? day.label}</span>
               {day.reason && !dayOverride ? <span className="se-cs-day-why">{day.reason}</span> : null}
               {day.detail ? <span className="se-cs-quote serif">依据「{day.detail}」</span> : null}
-              {editable && keptDay !== undefined ? (
+              {editable && (keptDay !== undefined || day.dayUnknown) ? (
                 editingDay ? (
                   <span
                     className="se-cs-day-edit"
@@ -236,7 +244,7 @@ export function CommitSheet({
                       min={1}
                       autoFocus
                       aria-label="这一章是故事第几天"
-                      value={dayText ?? shownDay}
+                      value={dayText ?? shownDay ?? ""}
                       disabled={busy}
                       onChange={(event) => {
                         setDayText(event.target.value);
@@ -250,7 +258,7 @@ export function CommitSheet({
                       type="number"
                       min={1}
                       aria-label="这一章到故事第几天"
-                      value={dayEndText ?? shownEnd}
+                      value={dayEndText ?? shownEnd ?? ""}
                       disabled={busy}
                       onChange={(event) => {
                         setDayEndText(event.target.value);
@@ -262,7 +270,7 @@ export function CommitSheet({
                     天
                   </span>
                 ) : (
-                  <button type="button" className="se-cs-quiet" disabled={busy} onClick={() => setEditingDay(true)}>改天数</button>
+                  <button type="button" className="se-cs-quiet" disabled={busy} onClick={() => setEditingDay(true)}>{keptDay === undefined && !dayOverride ? "填天数" : "改天数"}</button>
                 )
               ) : null}
             </div>
@@ -276,10 +284,10 @@ export function CommitSheet({
 
           {blocked ? (
             <section className="se-cs-blocked">
-              <div className="se-cs-sec-h">现在还定不了</div>
+              <div className="se-cs-sec-h">{fill ? "现在还补不了" : "现在还定不了"}</div>
               {blocking.length > 0 ? (
                 <ul>{blocking.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-              ) : <p>{preview.summary ?? "这一章现在不满足定稿条件。"}</p>}
+              ) : <p>{preview.summary ?? (fill ? "这一章的账现在补不了。" : "这一章现在不满足定稿条件。")}</p>}
             </section>
           ) : null}
 
@@ -347,7 +355,7 @@ export function CommitSheet({
           <span className="se-cs-hint">{editable ? "写入前自动存档，可撤销" : ""}</span>
           {editable ? (
             <>
-              <button type="button" className="se-cs-btn" onClick={onClose}>先不定</button>
+              <button type="button" className="se-cs-btn" onClick={onClose}>{fill ? "先不补" : "先不定"}</button>
               <button
                 type="button"
                 className="se-cs-btn is-primary"
@@ -383,7 +391,8 @@ export function commitConfirmEcho(preview: CommitPreviewCardData, toggled: reado
     ...(confirmed > 0 ? [`确认改记 ${confirmed} 条`] : []),
     ...(dayOverride ? [`这一章改记为故事第 ${dayOverride.day} 天${dayEnd !== undefined ? `到第 ${dayEnd} 天` : ""}`] : []),
   ];
-  return notes.length > 0 ? `确认定稿第 ${preview.chapter} 章（${notes.join("，")}）` : `确认定稿第 ${preview.chapter} 章`;
+  const head = preview.fill ? `确认记账第 ${preview.chapter} 章` : `确认定稿第 ${preview.chapter} 章`;
+  return notes.length > 0 ? `${head}（${notes.join("，")}）` : head;
 }
 
 /**

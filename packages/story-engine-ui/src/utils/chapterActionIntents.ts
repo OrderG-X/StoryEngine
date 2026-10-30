@@ -86,7 +86,7 @@ function operationActionText(action: import("../api/agentChatClient.js").Operati
     return truth.where === "setting" ? `以设定为准：${truth.label}「${truth.quote}」` : `以第 ${truth.chapter} 章为准：「${truth.quote}」`;
   }
   const chapter = action.params.chapter;
-  if (action.type === "commit.prepare") return action.params.allowShort ? `第 ${chapter} 章就这么短，照样定稿` : `定稿第 ${chapter} 章`;
+  if (action.type === "commit.prepare") return action.params.fill ? `补记第 ${chapter} 章的账` : action.params.allowShort ? `第 ${chapter} 章就这么短，照样定稿` : `定稿第 ${chapter} 章`;
   if (isDraftEditAction(action)) return editActionText(action.params);
   if (action.type === "draft.adopt") return `第 ${chapter} 章换成 AI 写好的那版`;
   if (action.type === "draft.discard") return `第 ${chapter} 章 AI 写好的那版不要了`;

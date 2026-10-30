@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectBook } from "../index.js";
-import type { EntryInput } from "../schema/ledger.js";
+import type { EntryInput, LedgerEntry } from "../schema/ledger.js";
 import { readChapterLedger, readHead } from "../store/book.js";
 import { draftPath, TX_DIR } from "../store/paths.js";
 import { hasPendingTransactions, setAsideBrokenTransactions } from "../store/transaction.js";
@@ -105,7 +105,7 @@ describe("定稿命令", () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
     const first = await readChapterLedger(book, 1);
     const threadId = first?.entries.find((entry) => entry.kind === "thread")?.id;
-    const openedThread = first?.entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []))[0];
+    const openedThread = first?.entries.flatMap((entry) => (entry.kind === "thread" ? [entry.threadRef.id] : []))[0];
     expect(openedThread).toBe("t1-1");
 
     expectOk(await runCommand(book, chapterCommit, {
@@ -114,11 +114,12 @@ describe("定稿命令", () => {
       entries: [{ kind: "thread", review: "auto", op: "advance", thread: "t1-1", note: "想起钟停那天", quote: "沈青禾想起钟停那天" }],
     }, author("k2")));
 
-    // 重定稿第 1 章：线索还在（标题一样）→ 编号不变。
-    const recommit = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: [...CH1_ENTRIES].reverse() }, author("k3")));
+    // 重定稿第 1 章：线索还在（记账员写明旧线索号）→ 编号不变。
+    const reopened = CH1_ENTRIES.map((entry) => (entry.kind === "thread" && entry.op === "open" ? { ...entry, thread: "t1-1" } : entry));
+    const recommit = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: [...reopened].reverse() }, author("k3")));
     expect(recommit.result).toMatchObject({ recommitted: true, orphanedThreads: [] });
     const second = await readChapterLedger(book, 1);
-    expect(second?.entries.find((entry) => entry.kind === "thread")).toMatchObject({ id: threadId, thread: "t1-1" });
+    expect(second?.entries.find((entry) => entry.kind === "thread")).toMatchObject({ id: threadId, threadRef: { id: "t1-1" } });
     expect((await projectBook(book)).threads[0]).toMatchObject({ id: "t1-1", status: "active", lastTouchedAt: 2 });
 
     // 再重定稿：这次没开这条线索 → 第 2 章的推进没了来处，如实列出。
@@ -229,7 +230,10 @@ describe("改已定稿的章名", () => {
     expect(text.split("\n")[0]).toBe("# 回乡");
     expect(text).toContain("她在钟箱里摸到一把铜钥匙，揣进了包里。");
     const after = await readChapterLedger(book, 1);
-    expect(after?.entries).toEqual(before?.entries);
+    // 条目不动，证据换到新一版正文（章名行不切句，句号不变）。
+    const unversioned = (entries: readonly LedgerEntry[] | undefined) => entries?.map((entry) => ({ ...entry, evidence: entry.evidence.map(({ revision: _revision, ...rest }) => rest) }));
+    expect(unversioned(after?.entries)).toEqual(unversioned(before?.entries));
+    expect(after?.entries.every((entry) => entry.evidence.every((item) => item.revision === after.textSha256))).toBe(true);
     expect(after?.textSha256).not.toBe(before?.textSha256);
     expect((await projectBook(book)).chapters[0]).toMatchObject({ editedSinceCommit: false });
     expect((await readDraft(book, 1))?.title).toBe("回乡");

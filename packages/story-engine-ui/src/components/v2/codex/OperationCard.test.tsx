@@ -127,6 +127,32 @@ describe("OperationCard：改设定碰了作者写的、AI 提的改账，等作
   });
 });
 
+describe("OperationCard：停下请作者挑一个（记账没成，P2b）", () => {
+  it("说明照服务端的字摆，按钮照服务端列的；点了交回挑的那个；「不要了」停掉", () => {
+    const onAction = vi.fn();
+    render(<OperationCard op={op({
+      kind: "commit.prepare",
+      what: "定稿·第 3 章",
+      state: "waiting_author",
+      stateText: "等你定",
+      pending: {
+        kind: "choice",
+        actionId: "ledger-failed",
+        decisions: ["retry", "pending"],
+        lines: ["第 3 章的账这次没记成：记账员没交上账单。"],
+        choices: [{ decision: "retry", label: "再记一次", primary: true }, { decision: "pending", label: "先定正文、账待记" }],
+      },
+    })} inLiveTurn={false} busy={false} onAction={onAction} />);
+    expect(screen.getByText("第 3 章的账这次没记成：记账员没交上账单。")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "先定正文、账待记" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "ledger-failed", decision: "pending" } }, { echo: "先定正文、账待记" });
+    fireEvent.click(screen.getByRole("button", { name: "再记一次" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "resume", opId: OP_ID, answer: { actionId: "ledger-failed", decision: "retry" } }, { echo: "再记一次" });
+    fireEvent.click(screen.getByRole("button", { name: "不要了" }));
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "cancel", opId: OP_ID });
+  });
+});
+
 describe("runningOperationCaption", () => {
   it("排着、在做才有字幕", () => {
     expect(runningOperationCaption(op({ state: "queued" }))).toBe("正在核账·第 3 章…");

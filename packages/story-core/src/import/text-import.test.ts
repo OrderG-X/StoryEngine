@@ -102,7 +102,7 @@ describe("通读记账", () => {
     const thread = (await readChapterLedger(book, 1))!.entries.find((entry) => entry.kind === "thread");
     const outcome = ok(await runCommand(book, ledgerReread, {
       chapter: 2,
-      entries: [{ kind: "thread", review: "auto", op: "advance", thread: thread?.kind === "thread" ? thread.thread : "", note: "外乡人又来", quote: "外乡人又来了" }],
+      entries: [{ kind: "thread", review: "auto", op: "advance", thread: thread?.kind === "thread" ? thread.threadRef.id : "", note: "外乡人又来", quote: "外乡人又来了" }],
     }, author("reread:2")));
     expect(outcome.result.recorded).toBe(1);
     expect((await projectBook(book)).threads[0]).toMatchObject({ title: "钟为什么停", lastTouchedAt: 2 });

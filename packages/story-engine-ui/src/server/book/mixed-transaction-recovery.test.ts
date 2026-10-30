@@ -29,7 +29,7 @@ import {
   withSettledBook,
 } from "@actalk/story-core";
 import { createStoryProject } from "./project-store.js";
-import { ensureBookOnCore } from "./mirror/ensure.js";
+import { ensureBookOnCore } from "./ensure-on-core.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 
 const sha = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex");

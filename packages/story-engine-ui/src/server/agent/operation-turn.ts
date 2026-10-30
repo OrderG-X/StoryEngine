@@ -14,7 +14,7 @@ import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { LEDGER_CHANGE_KIND } from "../services/operations/recipes/ledger-change.js";
 import { CANON_PROPOSE_KIND, canonInputOf, type CanonConfirmPreview, type CanonProposeBody, type CanonProposeParams } from "../services/operations/recipes/canon-propose.js";
-import { COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
+import { AUTHOR_CHOICE_KIND, COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
 import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
 import { HISTORY_CHANGE_KIND, type HistoryChangeBody } from "../services/operations/recipes/history-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
@@ -22,7 +22,7 @@ import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { DRAFT_ADOPT_KIND, DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
 import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
-import { checkChapterAction, commitChoice, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, undoAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { checkChapterAction, commitChoice, fillChoice, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, undoAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
@@ -234,9 +234,10 @@ export async function finishOperationTurn(args: {
         const params = record.params as CanonProposeParams;
         sendNextSteps(args.sendEvent, "接下来？", [{ label: "重新查", intent: "重新查这条定论", recommended: true, action: newCanonAction(params.mode, canonInputOf(params)) }]);
       }
-      // 定稿没成（记账员没交成、清单出来之后正文或前文改过）：再出一次清单（新的一次）。
+      // 定稿 / 补账没成（清单出来之后正文或前文改过……）：再出一次清单（新的一次）。
       if (record.kind === COMMIT_PREPARE_KIND && chapter !== undefined && view.failure?.retryable !== false) {
-        sendNextSteps(args.sendEvent, "接下来？", [commitChoice(chapter, { label: "再来一次", recommended: true })]);
+        const again = { label: "再来一次", recommended: true } as const;
+        sendNextSteps(args.sendEvent, "接下来？", [isFillRecord(record) ? fillChoice(chapter, again) : commitChoice(chapter, again)]);
       }
       // 想走法没想出来：照原来的想法、避开的走法再想一次（新的一次，请求号另给）。
       const plan = record.kind === PLAN_PROPOSE_KIND ? readPlanProposeParams(record.params) : undefined;
@@ -264,8 +265,7 @@ export async function finishOperationTurn(args: {
               : record.kind === HISTORY_CHANGE_KIND
                 ? (record.mode === "prune" ? "要裁的在卡上：点「确认裁剪」才裁。" : "撤之前要你看一眼，在卡上：点「全撤」才撤。")
               : record.kind === COMMIT_PREPARE_KIND && chapter !== undefined
-                // 清单（要你看的、自动记下的、提醒）在弹窗和对话小卡里，回话只说一句（刷新后弹窗没开也说得通）。
-                ? `第 ${chapter} 章可以定稿，清单在卡上：点「确认定稿」才定。`
+                ? commitWaitingText(record, chapter)
                 : `${what}在等你点卡上的按钮。`);
       return;
     default:
@@ -286,16 +286,42 @@ async function finishCommit(
   sendEvent: SendEvent,
 ): Promise<void> {
   if (body?.committed !== true) {
-    emitText(`第 ${chapter} 章现在还定不了，原因在清单里。`);
+    emitText(body?.fill ? `第 ${chapter} 章的账现在补不了，原因在卡上。` : `第 ${chapter} 章现在还定不了，原因在清单里。`);
     return;
   }
   emitText(humanizeToolNames(conclusion));
+  const status = body.done?.report?.ledger.status;
+  const next = await resolveNextDraftTarget(projectDir, chapter);
+  // 补上了：接着写；账待记 / 没记全：「补记账」摆在写下一章旁边（补之前接着写也行，写作上下文里说清那章账没记上）。
+  if (body.fill) {
+    sendNextSteps(sendEvent, "接下来？", [
+      ...(status === "partial" ? [fillChoice(chapter, { label: "再补一次" })] : []),
+      { ...writeNextChoice(next), recommended: true },
+    ]);
+    return;
+  }
+  if (status === "pending" || status === "partial") {
+    sendNextSteps(sendEvent, `第 ${chapter} 章正文定了，接下来？`, [fillChoice(chapter, { recommended: true }), writeNextChoice(next)]);
+    return;
+  }
   const rename = await buildProtagonistRenameSuggestion(projectDir).catch(() => undefined);
   sendNextSteps(sendEvent, `第 ${chapter} 章定稿了，接下来？`, [
-    { ...writeNextChoice(await resolveNextDraftTarget(projectDir, chapter)), recommended: true },
+    { ...writeNextChoice(next), recommended: true },
     ...(body.done?.threadMaintenanceHint === "escalated" ? [{ label: "归并线索", intent: "看看开着的线索里有没有讲同一件事的，提一份归并方案给我确认" }] : []),
     ...(rename ? [{ label: rename.label, intent: rename.intent }] : []),
   ]);
+}
+
+/** 这次定稿操作是补账。 */
+function isFillRecord(record: OperationRecord): boolean {
+  return (record.params as { readonly fill?: unknown } | undefined)?.fill === true;
+}
+
+/** 定稿停着等作者：记账没成的卡（再记一次 / 先定正文）、定稿清单、补账清单。清单在弹窗和对话小卡里，回话只说一句（刷新后弹窗没开也说得通）。 */
+function commitWaitingText(record: OperationRecord, chapter: number): string {
+  const waiting = record.pendingActions.find((action) => !action.decisionHash);
+  if (waiting?.kind === AUTHOR_CHOICE_KIND) return `第 ${chapter} 章的账这次没记成，怎么办在卡上。`;
+  return isFillRecord(record) ? `第 ${chapter} 章的账可以补上，清单在卡上：点「确认记账」才记。` : `第 ${chapter} 章可以定稿，清单在卡上：点「确认定稿」才定。`;
 }
 
 /** 定论查完等作者点：卡上面那句话（查到几处、在哪几章、没查全的），定论本身卡上有。 */

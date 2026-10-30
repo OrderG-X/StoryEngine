@@ -13,8 +13,10 @@
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import type { ChapterLedger, FactEntry, ThreadEntry, TimeEntry } from "../schema/ledger.js";
+import { entryQuote, missingKindsOf, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
+import { timeDeclarationOf } from "../ledger/entries.js";
 import { nameKey } from "../text/quote.js";
+import { idleChaptersBetween, threadUnknownChapters } from "./coverage.js";
 import { Names } from "./names.js";
 import type {
   BookProjection,
@@ -59,7 +61,7 @@ function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[
   for (const ledger of ledgers) {
     for (const entry of ledger.entries) {
       if (entry.kind !== "presence") continue;
-      const { key, name } = names.resolve(entry.name);
+      const { key, name } = names.resolve(presenceName(entry));
       let member = members.get(key);
       if (!member) {
         member = { name, aliases: new Set(), chapters: new Set(), viewpoint: new Set(), quotes: new Map() };
@@ -68,7 +70,8 @@ function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[
       if (nameKey(entry.nameUsed) !== key && !entry.generic) member.aliases.add(entry.nameUsed);
       member.chapters.add(ledger.chapter);
       if (entry.viewpoint) member.viewpoint.add(ledger.chapter);
-      if (entry.quote && !member.quotes.has(ledger.chapter)) member.quotes.set(ledger.chapter, entry.quote);
+      const quote = entryQuote(entry);
+      if (quote && !member.quotes.has(ledger.chapter)) member.quotes.set(ledger.chapter, quote);
     }
   }
   return [...members.entries()]
@@ -113,9 +116,14 @@ function buildFacts(
       id: decision.id,
       kind: "fact",
       review: "author",
+      source: { kind: "author_ruling", decision: decision.id },
+      transition: "unknown",
+      evidence: [],
+      evidenceStatus: "none",
+      provenance: "native",
       nature: decision.nature,
-      ...(decision.subject ? { subject: decision.subject } : {}),
-      ...(decision.attribute ? { attribute: decision.attribute } : {}),
+      ...(decision.subject ? { subjectRef: { mention: decision.subject } } : {}),
+      ...(decision.attribute ? { predicate: decision.attribute } : {}),
       ...(decision.value ? { value: decision.value } : {}),
       text: decision.text,
     });
@@ -228,16 +236,18 @@ function buildFacts(
 }
 
 function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean): MutableFact {
-  const subject = entry.subject ? names.resolve(entry.subject) : undefined;
+  const mention = subjectOf(entry);
+  const subject = mention ? names.resolve(mention) : undefined;
+  const quote = entryQuote(entry);
   return {
     id: entry.id,
     chapter,
     nature: entry.nature,
     ...(subject ? { subject: subject.name, subjectKey: subject.key } : {}),
-    ...(entry.attribute ? { attribute: entry.attribute, attributeKey: nameKey(entry.attribute) } : {}),
+    ...(entry.predicate ? { attribute: entry.predicate, attributeKey: nameKey(entry.predicate) } : {}),
     ...(entry.value ? { value: entry.value } : {}),
     text: entry.text,
-    ...(entry.quote ? { quote: entry.quote } : {}),
+    ...(quote ? { quote } : {}),
     review: entry.review,
     status: retracted ? "retracted" : "current",
   };
@@ -256,7 +266,8 @@ interface MutableThread {
 }
 
 function touchOf(entry: ThreadEntry, chapter: number): ThreadTouch {
-  return { chapter, op: entry.op, note: entry.note, ...(entry.quote ? { quote: entry.quote } : {}), entry: entry.id };
+  const quote = entryQuote(entry);
+  return { chapter, op: entry.op, note: entry.note, ...(quote ? { quote } : {}), entry: entry.id };
 }
 
 function buildThreads(
@@ -272,12 +283,13 @@ function buildThreads(
     // 同一章里先开后推：本章开、本章就推进的也接得上。
     for (const entry of entries) {
       if (entry.op !== "open") continue;
-      if (threads.has(entry.thread)) {
-        dangling.push({ kind: "thread", ref: entry.thread, chapter: ledger.chapter, source: entry.id });
+      const id = threadOf(entry);
+      if (threads.has(id)) {
+        dangling.push({ kind: "thread", ref: id, chapter: ledger.chapter, source: entry.id });
         continue;
       }
-      threads.set(entry.thread, {
-        id: entry.thread,
+      threads.set(id, {
+        id,
         type: entry.type ?? "question",
         title: entry.title ?? entry.note,
         openedAt: ledger.chapter,
@@ -288,9 +300,9 @@ function buildThreads(
     }
     for (const entry of entries) {
       if (entry.op === "open") continue;
-      const thread = threads.get(entry.thread);
+      const thread = threads.get(threadOf(entry));
       if (!thread) {
-        dangling.push({ kind: "thread", ref: entry.thread, chapter: ledger.chapter, source: entry.id });
+        dangling.push({ kind: "thread", ref: threadOf(entry), chapter: ledger.chapter, source: entry.id });
         continue;
       }
       thread.touches.push(touchOf(entry, ledger.chapter));
@@ -341,12 +353,16 @@ function buildThreads(
     }
   }
 
+  // 「多少章没动」不数线索没记全的章（账待记、没记全）：不知道那几章动没动。
+  const unknown = threadUnknownChapters(ledgers.map((ledger) => ({ chapter: ledger.chapter, missingKinds: missingKindsOf(ledger) })));
+  const idleSince = (chapter: number): number => idleChaptersBetween(chapter, upTo, unknown);
   const views = [...threads.values()].map((thread): ThreadView => {
     const lastTouchedAt = Math.max(thread.openedAt, ...thread.touches.map((touch) => touch.chapter));
+    const idleChapters = Math.max(0, idleSince(lastTouchedAt));
     const idleLimit = thread.weight === "major" ? staleAfter * MAJOR_STALE_FACTOR : staleAfter;
     const status = thread.closedAt !== undefined
       ? "closed"
-      : thread.weight !== "minor" && upTo - lastTouchedAt >= idleLimit
+      : thread.weight !== "minor" && idleChapters >= idleLimit
         ? "stale"
         : thread.touches.some((touch) => touch.op === "advance")
           ? "active"
@@ -357,6 +373,7 @@ function buildThreads(
       title: thread.title,
       openedAt: thread.openedAt,
       lastTouchedAt,
+      idleChapters,
       ...(thread.closedAt !== undefined ? { closedAt: thread.closedAt, closedBy: thread.closedBy ?? "ledger" } : {}),
       status,
       weight: thread.weight,
@@ -380,13 +397,15 @@ function buildChapters(
   const summaryRulings = new Map<number, string>();
   for (const decision of decisions) if (decision.type === "chapter.summary") summaryRulings.set(decision.chapter, decision.text);
   const views: ChapterView[] = [];
-  let previousEnd = 0;
+  // 上一章结尾是第几天；不知道（账待记的章、接着它算的）= undefined，直到下一个作者定的天数。
+  let previousEnd: number | undefined = 0;
   for (const ledger of ledgers) {
-    const time = ledger.entries.find((entry): entry is TimeEntry => entry.kind === "time");
+    const missing = missingKindsOf(ledger);
+    const time = timeDeclarationOf(ledger.entries);
     const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
     const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
     const ruling = dayRulings.get(ledger.chapter);
-    let day: number;
+    let day: number | undefined;
     let basis: ChapterView["dayBasis"];
     let dayEnd: number | undefined;
     if (ruling) {
@@ -396,6 +415,9 @@ function buildChapters(
     } else if (time?.basis === "author" && time.day !== undefined) {
       day = time.day;
       basis = "author";
+    } else if ((!time && missing.includes("time")) || previousEnd === undefined) {
+      // 这章的时间没记上（账待记、没记全）：没有时间可依；上一章就不知道：相对它算的也不知道（不按 +1 估）。
+      basis = "unknown";
     } else if (time?.daysSincePrevious !== undefined) {
       day = Math.max(1, previousEnd + time.daysSincePrevious);
       basis = time.basis;
@@ -405,14 +427,14 @@ function buildChapters(
       // 定稿清单请作者看一眼（换题材长篇实跑第 21 章：标成「正文明写」，暑假记成了上一章的第二天）。
       basis = !time ? "missing" : views.length > 0 ? "estimated" : time.basis;
     }
-    dayEnd ??= day + (time?.daysInChapter ?? 0);
+    if (day !== undefined) dayEnd ??= day + (time?.daysInChapter ?? 0);
     previousEnd = dayEnd;
 
     const present: string[] = [];
     let viewpoint: string | undefined;
     for (const entry of ledger.entries) {
       if (entry.kind !== "presence") continue;
-      const { name } = names.resolve(entry.name);
+      const { name } = names.resolve(presenceName(entry));
       if (!present.includes(name)) present.push(name);
       if (entry.viewpoint && viewpoint === undefined) viewpoint = name;
     }
@@ -422,8 +444,9 @@ function buildChapters(
       origin: ledger.origin,
       committedAt: ledger.committedAt,
       ...(summary !== undefined ? { summary } : {}),
-      day,
-      dayEnd,
+      ledgerStatus: ledger.status,
+      ...(missing.length > 0 ? { missingKinds: missing } : {}),
+      ...(day !== undefined && dayEnd !== undefined ? { day, dayEnd } : {}),
       dayBasis: basis,
       ...(time?.weekday !== undefined ? { weekday: time.weekday } : {}),
       weekdayDerived: false,
@@ -434,14 +457,15 @@ function buildChapters(
       textMissing: textHashes ? hash === undefined : false,
     });
   }
-  // 星期：没明写的，从天数最近的一个明写星期推。
-  const anchors = views.filter((view) => view.weekday !== undefined);
+  // 星期：没明写的，从天数最近的一个明写星期推（天数不知道的两头都不算）。
+  const anchors = views.flatMap((view) => (view.weekday !== undefined && view.day !== undefined ? [{ day: view.day, weekday: view.weekday }] : []));
   if (anchors.length === 0) return views;
   return views.map((view) => {
-    if (view.weekday !== undefined) return view;
-    let best = anchors[0] as ChapterView;
-    for (const anchor of anchors) if (Math.abs(anchor.day - view.day) < Math.abs(best.day - view.day)) best = anchor;
-    return { ...view, weekday: mod7((best.weekday as number) + view.day - best.day), weekdayDerived: true };
+    const day = view.day;
+    if (view.weekday !== undefined || day === undefined) return view;
+    let best = anchors[0]!;
+    for (const anchor of anchors) if (Math.abs(anchor.day - day) < Math.abs(best.day - day)) best = anchor;
+    return { ...view, weekday: mod7(best.weekday + day - best.day), weekdayDerived: true };
   });
 }
 

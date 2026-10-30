@@ -17,8 +17,6 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { draftApplyGenerated, draftPath, fail, opCommandKey, readCommandReceipt, runCommand, withBookLock, withSettledBook, type TruthBasis } from "@actalk/story-core";
 import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
-import { MIRROR_FILES } from "../book/mirror/build.js";
-import { MIRROR_MARKER } from "../book/mirror/sync.js";
 import { keepOperationCandidateLocked, type ApplyKeptReason, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
 import { publishFixLogLocked, type FixRecord } from "./fix-log.js";
 import { currentOperation, OperationStopped, type OperationContext } from "./operations/context.js";
@@ -91,12 +89,9 @@ function whyNotApplied(reason: DraftKeptReason, detail?: string): string {
   return "写的途中这一章的稿子改过（存稿、撤销或恢复）";
 }
 
-const MIRROR_PATHS: ReadonlySet<string> = new Set([MIRROR_MARKER, ...Object.values(MIRROR_FILES)]);
-
 function describeMovedMaterial(moved: MovedMaterial): string {
   if (moved.kind === "plan") return "本章章纲";
   if (moved.kind === "files") {
-    if (moved.path !== undefined && MIRROR_PATHS.has(moved.path)) return "按账整理的时间线和线索";
     return moved.path === "project.json" ? "书的资料" : "书里的其他资料";
   }
   const what = moved.kind === "drafts" ? "的稿子" : "的章纲";
