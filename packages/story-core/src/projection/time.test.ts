@@ -328,6 +328,20 @@ describe("旧账（P2b 及更早）只是推定", () => {
     expect(timeOf(midnight, 3).start).toBeUndefined();
   });
 
+  it("作者把换天定成半夜：旧账里记账员判断的章内天数也失效（出口复核 R5），作者定的那头照用", () => {
+    const ledgers = [legacy(1, { basis: "judged", daysSincePrevious: 0, daysInChapter: 1 }), legacy(2, { basis: "text", daysSincePrevious: 1, daysInChapter: 1 })];
+    expect(timeOf(view(ledgers), 1)).toMatchObject({ end: { lo: 2, hi: 2 }, boundaryInvalidated: false });
+    const midnight = view(ledgers, { boundary: "midnight" });
+    expect(timeOf(midnight, 1)).toMatchObject({ boundaryInvalidated: true });
+    expect(timeOf(midnight, 1).end).toBeUndefined();
+    // 正文明写的章内天数照用。
+    expect(timeOf(midnight, 2)).toMatchObject({ boundaryInvalidated: false });
+    expect(timeOf(midnight, 2).span).toEqual({ lo: 1, hi: 1 });
+    // 作者定的天数（连它带的章内天数）照用。
+    const authored = view([legacy(1, { basis: "judged", daysSincePrevious: 0, daysInChapter: 1 }), legacy(2, { basis: "author", day: 5, daysInChapter: 1 })], { boundary: "midnight" });
+    expect(timeOf(authored, 2)).toMatchObject({ start: { lo: 5, hi: 5 }, end: { lo: 6, hi: 6 }, boundaryInvalidated: false });
+  });
+
   it("盘点判成不可信的：不知道，原值留着", () => {
     const v = view([legacy(1, { daysSincePrevious: 0 }), legacy(2, { basis: "estimated", legacy: { relation: "at", day: 5, basis: "estimated", reason: "estimated" } })]);
     expect(timeOf(v, 2)).toMatchObject({ basis: "unknown", legacyDay: { day: 5, reason: "estimated" } });

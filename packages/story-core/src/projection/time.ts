@@ -86,7 +86,7 @@ export interface ChapterTime {
   readonly authorEnd?: number;
   /** 老书里的天数判成不可信、记成了不知道：原来的值（给作者看「约第 N 天」）。 */
   readonly legacyDay?: { readonly day: number; readonly reason: LegacyTime["reason"] };
-  /** 旧账里记账员按「天亮换日」判的相对天数，作者把换天规矩定成了半夜，这章的天数现在不知道（设计 2.4，要作者改天数）。 */
+  /** 旧账里记账员按「天亮换日」判的相对天数（开头、章内过了几天），作者把换天规矩定成了半夜，这章哪头作者没定就不知道了（设计 2.4，要作者改天数）。 */
   readonly boundaryInvalidated: boolean;
   readonly dayChanges: readonly DayChangeView[];
   readonly segments: readonly SegmentView[];
@@ -222,17 +222,22 @@ function declOf(
 
   // 作者定的：定稿后改的（裁定，最后一次）盖过清单上的；旧账里作者定的开头没写结尾，当年的意思是同一天。
   const authorStart = ruling?.day ?? authorStartEntry?.day;
-  const legacyAuthorEnd = !native && authorStartEntry?.day !== undefined && !ruling ? authorStartEntry.day + (end?.offset?.min ?? 0) : undefined;
+  // 旧账是照「天亮换日」记的：作者定了半夜换天，记账员判断的相对天数（开头隔几天、章内过了几天）就不能用了，正文明写的照用（出口复核 R5）。
+  const boundaryJudged = (entry: TimeEntry | undefined): boolean =>
+    !native && policy === "midnight" && entry?.relation === "offset" && entry.basis === "judged" && !entry.legacy;
+  const endInvalid = boundaryJudged(end);
+  // 旧账里作者定的开头没写结尾：结尾 = 开头 + 记账员记的章内天数，那个天数失效了结尾也就不知道。
+  const legacyAuthorEnd = !native && authorStartEntry?.day !== undefined && !ruling && !endInvalid ? authorStartEntry.day + (end?.offset?.min ?? 0) : undefined;
   const authorEnd = ruling ? ruling.dayEnd : (authorEndEntry?.day ?? legacyAuthorEnd);
 
   const usable = (entry: TimeEntry | undefined): boolean => {
     if (!entry || entry.relation !== "offset" || entry.legacy || entry.basis === "estimated") return false;
-    // 旧账是照「天亮换日」记的：作者定了半夜换天，记账员判断的相对天数就不能用了（正文明写的照用）。
-    return native || policy !== "midnight" || entry.basis !== "judged";
+    return !boundaryJudged(entry);
   };
   const base = {
     chapter: ledger.chapter,
-    boundaryInvalidated: !native && policy === "midnight" && start?.relation === "offset" && start.basis === "judged" && !start.legacy,
+    // 作者定了的那头不算失效。
+    boundaryInvalidated: (boundaryJudged(start) && authorStart === undefined) || (endInvalid && authorEnd === undefined),
     ...(authorStart !== undefined ? { authorStart } : {}),
     ...(authorEnd !== undefined ? { authorEnd } : {}),
     ...(start ? { start } : {}),
@@ -258,7 +263,7 @@ function declOf(
   // 旧账：只推定。有相对天数（含估的）的章、全书第一章推定在当下线上；旧的不知道、没时间条目、账待记都算没识别。
   const presumedPresent = !missing && ((start?.relation === "offset") || (first && ledger.status !== "pending"));
   // 本章内过了几天照 P2b 当年的意思：记了就是那么多，没记 = 同一天；盘点判成不可信的（结尾那条已去掉）不知道。
-  const legacySpan = presumedPresent && !start?.legacy ? (end?.offset?.min ?? 0) : undefined;
+  const legacySpan = presumedPresent && !start?.legacy && !endInvalid ? (end?.offset?.min ?? 0) : undefined;
   return {
     ...base,
     presentLine: authorStart !== undefined ? true : presumedPresent ? true : "unknown",

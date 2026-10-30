@@ -205,8 +205,7 @@ export interface TimeCheck {
 export function timeChecksOf(projection: Pick<BookProjection, "chapters" | "timeConflicts">): TimeCheck[] {
   const checks: TimeCheck[] = [];
   for (const { chapter, time } of projection.chapters) {
-    if (time.authorStart !== undefined) continue;
-    if (time.legacyDay?.reason === "unproven") {
+    if (time.authorStart === undefined && time.legacyDay?.reason === "unproven") {
       checks.push({ chapter, kind: "unproven", day: time.legacyDay.day, text: `导入时记成你定的第 ${time.legacyDay.day} 天，证明不了是你定的，现在算不知道` });
     } else if (time.boundaryInvalidated) {
       checks.push({ chapter, kind: "boundary", text: "天数是按天亮换日判的，换天规矩改成过了半夜就算之后，是哪天不知道了" });

@@ -85,10 +85,10 @@ export type UnitRange = z.infer<typeof UnitRange>;
 // —— 交给「定稿」命令的条目（记账员、定稿清单的声明） ——
 
 const declared = { review: ReviewMark };
-/** 记账员标的来源：叙述（正文直接写的）/ 某个人物说的（带正文里对他的称呼）。拿不准不标。 */
+/** 记账员标的来源：叙述（正文直接写的）/ 某个人物说的（带正文里对他的称呼；明说是人物说的、没写是谁的，照人物说的记、说话人空着）。拿不准不标。 */
 export const DeclaredSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("narration") }),
-  z.object({ kind: z.literal("character_claim"), speaker: text }),
+  z.object({ kind: z.literal("character_claim"), speaker: text.optional() }),
 ]);
 export type DeclaredSource = z.infer<typeof DeclaredSource>;
 
@@ -444,7 +444,7 @@ function sourceProblem(entry: LedgerEntry, timeModel: TimeModel | undefined): st
   const { kind } = entry.source;
   if (kind === "unknown") return undefined;
   if (timeModel !== TIME_MODEL) return "旧账的来源只记 unknown";
-  if (kind === "character_claim") return entry.source.speaker && (entry.kind === "fact" || entry.kind === "thread") ? undefined : "人物说的只用在事实、线索上，且要写清是谁说的";
+  if (kind === "character_claim") return entry.kind === "fact" || entry.kind === "thread" ? undefined : "人物说的只用在事实、线索上";
   if (kind === "author_ruling") return entry.kind === "time" && entry.basis === "author" ? undefined : "作者裁定只用在作者定的天数上";
   return entry.kind === "time" ? "时间不标叙述来源" : undefined;
 }
@@ -544,18 +544,6 @@ export const LedgerCoverage = z.object({
 export type LedgerCoverage = z.infer<typeof LedgerCoverage>;
 
 /**
- * 重记同一章时带上的旧账身份（P2b 设计 3.1）：这一章以前各版账单里出现过的全部条目（同一编号留最近那版），
- * 新账分配编号时照它沿用、跳过（不复用证明不了是同一件事的旧号），补账时照它接回上次开的线索、上次的天数。
- * 每次重记都带、一路继承（新 carry = 旧账的条目 ∪ 旧 carry）。投影不读。
- */
-export const LedgerPrevious = z.object({
-  /** 被换掉的那份账单的原样哈希。 */
-  ledgerSha256: sha,
-  carry: z.object({ entries: z.array(LedgerEntry) }),
-});
-export type LedgerPrevious = z.infer<typeof LedgerPrevious>;
-
-/**
  * 一章里不在当下线上的一段（设计 2.1）：句子范围、frame、首末句原句（代码从正文取的，定论改文后按它重新对回编号）、
  * 段的时间（timeRefs 指向 appliesTo = scene 的那条，最多一条；other 段没有）。stale = 改文后对不回了，按「段未知」处理。
  * 旧账一律空 = 没切段，不是「整章当下」的证明。
@@ -570,6 +558,33 @@ export const LedgerScene = z.object({
   stale: z.literal(true).optional(),
 });
 export type LedgerScene = z.infer<typeof LedgerScene>;
+
+/**
+ * 最近一份记了时间的账单那一套时间（出口复核 R6）：时间条目、段、时间格式原样一份。
+ * carry 的条目是几版的并集，段只对得上其中一版；重记时上一份是账待记的，就照这份读回上次记账员记的时间。
+ */
+export const LedgerCarryTime = z
+  .object({
+    timeModel: z.literal(TIME_MODEL).optional(),
+    entries: z.array(TimeEntry),
+    scenes: z.array(LedgerScene),
+  })
+  .superRefine((time, ctx) => {
+    for (const issue of timeLayoutIssues(time)) ctx.addIssue({ code: "custom", ...issue });
+  });
+export type LedgerCarryTime = z.infer<typeof LedgerCarryTime>;
+
+/**
+ * 重记同一章时带上的旧账身份（P2b 设计 3.1）：这一章以前各版账单里出现过的全部条目（同一编号留最近那版），
+ * 新账分配编号时照它沿用、跳过（不复用证明不了是同一件事的旧号），补账时照它接回上次开的线索、上次的天数。
+ * 每次重记都带、一路继承（新 carry = 旧账的条目 ∪ 旧 carry；time 取最近一份记了时间的那版）。投影不读。
+ */
+export const LedgerPrevious = z.object({
+  /** 被换掉的那份账单的原样哈希。 */
+  ledgerSha256: sha,
+  carry: z.object({ entries: z.array(LedgerEntry), time: LedgerCarryTime.optional() }),
+});
+export type LedgerPrevious = z.infer<typeof LedgerPrevious>;
 
 /**
  * 一条时间条目在本章里管什么：作者定的开头 / 结尾、记账员记的开头、结尾（P3 起只记「整章同一天」；旧账是本章内过了几天）、

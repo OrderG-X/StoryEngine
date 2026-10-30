@@ -13,6 +13,7 @@ export {
   FactEntry,
   FactInput,
   FactNature,
+  LedgerCarryTime,
   LedgerCoverage,
   LedgerEntry,
   LedgerOrigin,
@@ -79,7 +80,7 @@ export {
   type StoredDeclaration,
 } from "./ledger/entries.js";
 export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";
-export { assignIds, entryKey, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
+export { assignIds, carriedTime, entryKey, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
 export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {

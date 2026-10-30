@@ -290,6 +290,30 @@ describe("撤销核引用：基准按引用者自己接着的那一刻", () => {
       expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
     });
 
+    // 出口复核 R4：回忆里那件事相对本章开头，本章开头挪了，它也跟着挪（编号、原句都没变）。
+    const recall = "# 第2章\n\n今日抵达。想起昨天丢了钥匙。";
+    const lost = { id: "c2-2", kind: "fact", review: "auto", nature: "event", text: "钥匙丢了", quote: "想起昨天丢了钥匙" };
+    const arrive = (offset: number, inSegment = true) => timeOf(2, 1, {
+      start: { offset: days(offset), basis: "text", quote: "今日抵达" },
+      sameDay: true,
+      segments: [{ frame: "past", firstQuote: inSegment ? "想起昨天丢了钥匙" : "今日抵达", lastQuote: inSegment ? "想起昨天丢了钥匙" : "今日抵达", when: { offset: days(-1) } }],
+    });
+    const replacing = { id: "c3-1", kind: "fact", review: "auto", nature: "event", text: "钥匙没丢", quote: quote(3), replaces: ["c2-2"] };
+
+    it("段的时间相对本章开头：本章开头挪了，段里那条事实后文接着 → 拦", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", chapter(2, [arrive(2), lost], { text: recall, stamp: "stamp-2b" }));
+      await write("B", chapter(3, [replacing]));
+      expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
+    });
+
+    it("那条事实不在有时间的段里：本章开头挪了也不拦", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0, false), lost], { text: recall })]);
+      await write("A", chapter(2, [arrive(2, false), lost], { text: recall, stamp: "stamp-2b" }));
+      await write("B", chapter(3, [replacing]));
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+    });
+
     it("段划在别的句子上：这条线索的范围没变，照撤", async () => {
       await write("P", chapter(1, [opened, start()], { text }));
       await write("A", chapter(1, [opened, start("那夜他梦见钟又走了")], { text, stamp: "stamp-1b" }));

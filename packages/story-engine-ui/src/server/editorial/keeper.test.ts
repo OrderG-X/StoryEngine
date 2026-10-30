@@ -197,7 +197,8 @@ describe("记账员交回的账单", () => {
         { frame: "other", firstQuote: "梦里", lastQuote: "梦醒" },
       ],
     });
-    // 按换天规矩各写的那份里又套了一层 offset：拆开照收。
+    // 按换天规矩各写的那份里又套了一层 offset：拆开照收；外层写的单位照留（月、年不能按换天规矩分记，开头按说不出）。
+    expect(time({ start: { byBoundary: { midnight: { unit: "month", offset: 1 }, dawn: { unit: "month", offset: 1 } }, basis: "text", quote: "一个月后" } })?.entries[0]).toMatchObject({ start: "unknown" });
     expect(time({ start: { byBoundary: { midnight: { offset: { unit: "day", min: 0, max: 0 } }, dawn: { offset: 1 } }, basis: "text", quote: "第二天一早" } })?.entries[0]).toMatchObject({
       start: { byBoundary: { midnight: { unit: "day", min: 0, max: 0 }, dawn: { unit: "day", min: 1, max: 1 } }, basis: "text" },
     });
@@ -250,10 +251,11 @@ describe("记账员交回的账单", () => {
     expect(parsed?.entries.map((entry) => ("source" in entry ? entry.source : undefined))).toEqual([
       { kind: "character_claim", speaker: "老甲" },
       { kind: "narration" },
-      undefined,
+      // 明说是人物说的、没写是谁：照人物说的记（不改现状、不收线索），说话人空着。
+      { kind: "character_claim" },
       { kind: "character_claim", speaker: "老甲" },
     ]);
-    expect(parsed?.adjusted).toEqual([{ where: "facts 第 3 条", reason: expect.stringContaining("来源按不知道记") }]);
+    expect(parsed?.adjusted).toEqual([]);
   });
 
   it("说明里混进的短号换成名字（只换认得的、不粘着英文的），不让「T1」进定稿清单", () => {

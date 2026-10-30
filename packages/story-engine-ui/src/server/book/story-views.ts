@@ -9,7 +9,7 @@
  *
  * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
-import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, rightsOf, threadOf, timelineTable, type BibleView, type BookProjection, type ChapterLedger, type ThreadView, type TimelineRow } from "@actalk/story-core";
+import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, rightsOf, scopeOf, timelineTable, type BibleView, type BookProjection, type ChapterLedger, type ThreadView, type TimelineRow } from "@actalk/story-core";
 import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
 export interface LedgerViews {
@@ -131,17 +131,18 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
       })),
   };
 
-  const threadTypes = new Map(projection.threads.flatMap((thread) => [thread.id, ...thread.mergedFrom].map((id) => [id, thread.type] as const)));
+  const touches = new Map(projection.threads.flatMap((thread) => thread.touches.map((touch) => [touch.entry, { touch, type: thread.type }] as const)));
   const events = projection.chapters.map((chapter): TimelineEvent => {
     const ledger = ledgers.find((item) => item.chapter === chapter.chapter);
     const short = chapter.ledgerStatus !== "ready" ? chapter.ledgerStatus : undefined;
     const summary = chapter.summary ?? (short === "pending" ? PENDING_CHAPTER_SUMMARY : short === "partial" && chapter.missingKinds?.includes("summary") ? PARTIAL_CHAPTER_SUMMARY : "");
     const participants = [...chapter.present];
     const aliases = aliasesOf(ledger, projection);
-    const { decision, discovery } = turnsOf(ledger, threadTypes);
+    const { decision, discovery } = turnsOf(ledger, touches);
+    // 梦里、回忆里、人物说的事带上说明（出口复核 R3：不带就成了当下发生的事）；说明放前头，写手材料截短也截不掉。
     const keyEvents = projection.facts
       .filter((fact) => fact.chapter === chapter.chapter && fact.nature === "event" && fact.status !== "retracted")
-      .map((fact) => fact.text);
+      .map((fact) => scoped(fact.text, scopeLabel(fact.scope)));
     return {
       id: `ch${String(chapter.chapter).padStart(4, "0")}-001`,
       chapter: chapter.chapter,
@@ -184,21 +185,32 @@ function scopeLabel(scope: BookProjection["facts"][number]["scope"]): string | u
 
 /**
  * 每章的「决定」「发现」：本章新开的打算就是人物做的决定，本章收掉的悬念就是揭开的事。
+ * 照投影里实际生效的动作（出口复核 R3）：梦里、回忆里、人物说的收口按推进记，不算揭开；梦里、回忆里开的打算带上说明。
  * 账里没有「冲突」，不编。
  */
-function turnsOf(ledger: ChapterLedger | undefined, types: ReadonlyMap<string, ThreadView["type"]>): { decision?: string; discovery?: string } {
+function turnsOf(
+  ledger: ChapterLedger | undefined,
+  touches: ReadonlyMap<string, { readonly touch: ThreadView["touches"][number]; readonly type: ThreadView["type"] }>,
+): { decision?: string; discovery?: string } {
+  if (!ledger) return {};
   const decisions: string[] = [];
   const discoveries: string[] = [];
-  for (const entry of ledger?.entries ?? []) {
+  for (const entry of ledger.entries) {
     if (entry.kind !== "thread") continue;
-    if (entry.op === "open" && entry.type === "intent") decisions.push(entry.note);
-    if (entry.op === "close" && types.get(threadOf(entry)) === "question") discoveries.push(entry.note);
+    const applied = touches.get(entry.id);
+    if (!applied) continue;
+    if (entry.op === "open" && entry.type === "intent") {
+      decisions.push(scoped(entry.note, scopeLabel(scopeOf(entry, ledger))));
+    }
+    if (applied.touch.op === "close" && applied.type === "question") discoveries.push(entry.note);
   }
   return {
     ...(decisions.length > 0 ? { decision: unique(decisions).join("；") } : {}),
     ...(discoveries.length > 0 ? { discovery: unique(discoveries).join("；") } : {}),
   };
 }
+
+const scoped = (text: string, scope: string | undefined): string => (scope ? `（${scope}）${text}` : text);
 
 /** 本章正文里换了叫法的人：name = 已确立名，alias = 本章的叫法。 */
 function aliasesOf(ledger: ChapterLedger | undefined, projection: BookProjection): { name: string; alias: string }[] {

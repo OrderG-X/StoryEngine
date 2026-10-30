@@ -31,6 +31,17 @@ describe("时间声明存进账、读回来", () => {
     });
   });
 
+  // 出口复核 R1：重定稿读回上次的段（带上次的句子编号），正文前头插了一句，句号挪了：照首末句重新对，不信旧编号。
+  it("读回的段带着旧编号、正文挪了句号：照首末句重新对上", () => {
+    const old = ledgerOf({ chapter: 2, text: TEXT, committedAt: "x", entries: [{ ...time, id: "c2-1" }] });
+    const readBack = declarationsOf(old);
+    const moved = TEXT.replace("第二天傍晚他到了渡口。", "第二天傍晚他到了渡口。风很大。");
+    const again = ledgerOf({ chapter: 2, text: moved, committedAt: "y", entries: readBack });
+    expect(again.scenes).toMatchObject([{ units: { from: 3, to: 4 }, frame: "past" }]);
+    const view = project({ ledgers: [again], decisions: [] });
+    expect(view.chapters[0]?.time.segments).toMatchObject([{ units: { from: 3, to: 4 } }]);
+  });
+
   it("整章是段（没写开头）：编号从段号推回来；作者定的天数单独读回、给了结尾才有结尾", () => {
     const whole: TimeInput = { kind: "time", review: "auto", segments: [{ frame: "other", firstQuote: "第二天傍晚他到了渡口", lastQuote: "第三天一早雨停了" }] };
     const ledger = ledgerOf({ chapter: 2, text: TEXT, committedAt: "x", entries: [{ ...whole, id: "c2-4" }, { kind: "day", review: "auto", day: 7, id: "c2-5" }] });

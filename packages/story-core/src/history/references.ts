@@ -20,14 +20,14 @@
  *  | 设定卡 · 关系 | a、b | 卡 |
  *
  * 被引用那条的身份（Resolver）：事实 / 线索 = 定义它的条目的整条内容摘要 + 有效范围（P3a 设计 2.3：它在当下还是哪个段、
- * 碰到的段的范围 / frame / 段的时间；来源在整条内容里）——同一条事实编号、原句都没变、只是被划进了梦段，身份也变；
+ * 碰到的段的范围 / frame / 段的时间，和段的时间相对的那头：本章开头或前一个当下章；来源在整条内容里）——同一条事实编号、原句都没变、只是被划进了梦段，身份也变；
  * 章 = 那章账单的 (committedAt, origin)；名字 = 解析链（起点的键 + 每一跳的出处：哪张卡、哪章哪条出场，带内容摘要；和投影同一个 Names）；
  * 前一个当下章 = 往前到它为止每一章的身份 + 时间摘要（时间条目、段、记没记全），或「没有」；卡 = 卡的内容摘要；
  * 时间冲突（`time-start:<章>:<天>`）= 那章的时间摘要。
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import { missingKindsOf, presenceName, subjectOf, threadOf, timeRoleOf, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
+import { missingKindsOf, presenceName, subjectOf, threadOf, timeRoleOf, type ChapterLedger, type LedgerEntry, type TimeEntry } from "../schema/ledger.js";
 import { canonicalJson } from "../store/basis.js";
 import { CARDS_PATH, chapterLedgerPath, DECISIONS_PATH } from "../store/paths.js";
 import { sha256Bytes } from "../store/transaction.js";
@@ -71,21 +71,6 @@ export const entryDigest = (entry: LedgerEntry): string => {
   const { evidence, evidenceStatus: _status, ...rest } = entry;
   return digestOf({ ...rest, quotes: evidence.map((item) => item.quote) });
 };
-
-/**
- * 一条事实 / 线索的有效范围摘要：它在当下还是哪种段，和它的原句碰到的段（范围、frame、段的时间）；定位不了就是本章全部的段。
- */
-function scopeDigest(entry: LedgerEntry, ledger: ChapterLedger): string {
-  const scope = scopeOf(entry, ledger);
-  const ranges = entry.evidenceStatus === "located" ? entry.evidence.flatMap((item) => (item.units ? [item.units] : [])) : [];
-  const touched = ranges.length === 0 ? ledger.scenes : ledger.scenes.filter((scene) => ranges.some((range) => range.from <= scene.units.to && range.to >= scene.units.from));
-  const sceneTimes = new Set(touched.flatMap((scene) => scene.timeRefs));
-  return digestOf({
-    frame: scope.frame,
-    scenes: touched,
-    times: ledger.entries.filter((item) => item.kind === "time" && sceneTimes.has(item.id)).map(entryDigest),
-  });
-}
 
 /** 账单里一条条目指向什么（穷尽）。 */
 export function refsOfEntry(entry: LedgerEntry, chapter: number): Ref[] {
@@ -208,14 +193,55 @@ export class Resolver {
       }));
       for (const entry of ledger.entries) {
         if (entry.kind === "presence") this.names.addPresence(entry, `presence:${ledger.chapter}:${entry.id}@${entryDigest(entry)}`);
-        if (entry.kind === "fact") add(this.facts, entry.id, `${ledger.chapter}@${entryDigest(entry)}#${scopeDigest(entry, ledger)}`);
-        if (entry.kind === "thread" && entry.op === "open") add(this.threads, threadOf(entry), `${ledger.chapter}@${entryDigest(entry)}#${scopeDigest(entry, ledger)}`);
       }
     }
+    this.order = ledgers.map((ledger) => ledger.chapter);
     const time = projectTime(ledgers, truth.decisions, truth.cards?.calendar?.dayBoundary, new Set());
     for (const [chapter, view] of time.chapters) this.presentLine.set(chapter, view.presentLine === true);
+    for (const ledger of ledgers) {
+      for (const entry of ledger.entries) {
+        if (entry.kind === "fact") add(this.facts, entry.id, `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger, truth.decisions)}`);
+        if (entry.kind === "thread" && entry.op === "open") add(this.threads, threadOf(entry), `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger, truth.decisions)}`);
+      }
+    }
     for (const decision of truth.decisions) if (decision.type === "fact.assert") add(this.facts, decision.id, `decision@${digestOf(decision)}`);
-    this.order = ledgers.map((ledger) => ledger.chapter);
+  }
+
+  /**
+   * 一条事实 / 线索的有效范围摘要：它在当下还是哪种段，和它的原句碰到的段（范围、frame、段的时间）；定位不了就是本章全部的段。
+   * 段的时间相对谁，那头也算（出口复核 R4）：相对本章开头的 = 本章开头那几条（记账员记的、作者定的、定稿后改的天数）；
+   * 相对前一个当下章结尾的 = 往前到它为止每一章的时间摘要。本章开头挪了两天，回忆里那件事跟着挪，后文接着它的要拦。
+   */
+  private scopeDigest(entry: LedgerEntry, ledger: ChapterLedger, decisions: readonly AuthorDecision[]): string {
+    const scope = scopeOf(entry, ledger);
+    const ranges = entry.evidenceStatus === "located" ? entry.evidence.flatMap((item) => (item.units ? [item.units] : [])) : [];
+    const touched = ranges.length === 0 ? ledger.scenes : ledger.scenes.filter((scene) => ranges.some((range) => range.from <= scene.units.to && range.to >= scene.units.from));
+    const sceneTimes = new Set(touched.flatMap((scene) => scene.timeRefs));
+    const times = ledger.entries.filter((item): item is TimeEntry => item.kind === "time" && sceneTimes.has(item.id));
+    const anchors = new Set(times.flatMap((item) => (item.anchor ? [item.anchor] : [])));
+    const starts = anchors.has("chapterStart")
+      ? {
+        entries: ledger.entries.filter((item) => item.kind === "time" && (timeRoleOf(item) === "start" || timeRoleOf(item) === "authorStart")).map(entryDigest),
+        rulings: decisions.filter((decision) => decision.type === "chapter.day" && decision.chapter === ledger.chapter).map(digestOf),
+      }
+      : undefined;
+    return digestOf({
+      frame: scope.frame,
+      scenes: touched,
+      times: times.map(entryDigest),
+      ...(starts ? { starts } : {}),
+      ...(anchors.has("previousChapterEnd") ? { previous: this.timeChain(ledger.chapter) } : {}),
+    });
+  }
+
+  /** 往前到最近一个在当下线上的章为止，每一章的时间摘要。 */
+  private timeChain(chapter: number): string {
+    const chain: string[] = [];
+    for (const before of this.order.filter((item) => item < chapter).reverse()) {
+      chain.push(`${before}|${this.timeDigests.get(before)}`);
+      if (this.presentLine.get(before)) break;
+    }
+    return chain.length === 0 ? "none" : chain.join(",");
   }
 
   private fact(id: string): string {

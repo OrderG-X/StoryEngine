@@ -322,6 +322,28 @@ describe("定稿编排", () => {
     expect(moved.time).toMatchObject({ row: { start: { lo: 4, hi: 4 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 } } } });
   });
 
+  // 出口复核 R6：中间有一次账待记（记账没成先定正文），再定稿时也照最近那次记的时间比，段也读得回。
+  it("重定稿天数：中间账待记过，照最近那次记的时间比、段一起读回", async () => {
+    await commitChapter1();
+    const ch2Ledger = (time: Record<string, unknown>) => fakeModel({ time, presence: [{ name: "周守义", nameUsed: "老周", quote: "老周" }] });
+    const segment = { frame: "past", firstQuote: "她终于明白了", lastQuote: "她终于明白了" };
+    const first = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: CH2,
+      callModel: ch2Ledger({ start: { offset: 1, basis: "judged", quote: "第二天上午" }, sameDay: true, segments: [segment] }),
+    }));
+    expect(await confirmNow(first.ticket, CH2)).toMatchObject({ ok: true });
+    const typo = CH2.replace("没让他进", "没让他进门");
+    const pending = await runCommand(book, chapterCommit, { chapter: 2, text: typo, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: "pending-2" });
+    expect(pending).toMatchObject({ ok: true });
+
+    const same = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: typo,
+      callModel: ch2Ledger({ start: { offset: 0, basis: "judged", quote: "外乡人又来了" }, sameDay: true }),
+    }));
+    expect(same.time).toMatchObject({ row: { start: { lo: 2, hi: 2 } }, needsConfirm: true, sinceLast: { kept: true, other: { start: { lo: 1, hi: 1 } } } });
+    expect(same.ticket.entries.find((entry) => entry.kind === "time")).toMatchObject({ segments: [expect.objectContaining({ frame: "past" })] });
+  });
+
   it("重定稿：上次定稿认过的出场人物（含泛称）不再当第一次出场问；这次新冒出来的照问", async () => {
     const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1) }));
     expect(first.review.map((item) => item.label)).toEqual(expect.arrayContaining(["出场：沈青禾，视角人物", "出场：周守义（正文叫「老周」）"]));

@@ -109,7 +109,7 @@ export interface StoredDeclaration {
 }
 
 const storedSource = (source: DeclaredSource | undefined): EntrySource =>
-  source?.kind === "narration" ? { kind: "narration" } : source?.kind === "character_claim" ? { kind: "character_claim", speaker: { mention: source.speaker } } : { kind: "unknown" };
+  source?.kind === "narration" ? { kind: "narration" } : source?.kind === "character_claim" ? { kind: "character_claim", ...(source.speaker ? { speaker: { mention: source.speaker } } : {}) } : { kind: "unknown" };
 
 /**
  * 一条声明 → 账单条目（时间声明还有段）。原句按冻结正文算证据；正文里找不到的（不该发生：定稿前核过）记成没证据，
@@ -185,10 +185,26 @@ const quotedOnly = (quote: string, source: ChapterSource) => ({
   evidenceStatus: "quoted" as const,
 });
 
-/** 一段在正文里是第几句到第几句：给了编号就用编号（补摘那步点的）；否则首句、末句各自在正文里只有一处才算定位上。 */
+/** 编号上那一句还对得上原句：原句在正文里只有一处就要正落在这一句，有几处就要这一句里有（没原句不核）。 */
+function unitAgrees(quote: string, unit: number, side: "from" | "to", source: ChapterSource): boolean {
+  if (!quote) return true;
+  const located = locateQuote(quote, source);
+  if (!located) return false;
+  if (located.units) return located.units[side] === unit;
+  const at = source.units.find((item) => item.id === unit);
+  return at !== undefined && quoteInText(quote, source.text.slice(at.start, at.end));
+}
+
+/**
+ * 一段在正文里是第几句到第几句：给了编号、首末句也对得上那两句就用编号（补摘那步点的）；
+ * 编号对不上原句（重定稿读回的是上一版正文的编号）就按原句重新找：首句、末句各自在正文里只有一处才算定位上。
+ */
 export function locateSegment(segment: Pick<SegmentInput, "firstQuote" | "lastQuote" | "units">, source: ChapterSource): UnitRange | string {
   const count = source.units.length;
-  if (segment.units) return segment.units.to <= count ? segment.units : "段的句子编号超出了本章";
+  if (segment.units && segment.units.to <= count && unitAgrees(segment.firstQuote, segment.units.from, "from", source) && unitAgrees(segment.lastQuote, segment.units.to, "to", source)) {
+    return segment.units;
+  }
+  if (segment.units && !segment.firstQuote && !segment.lastQuote) return "段的句子编号超出了本章";
   const first = locateQuote(segment.firstQuote, source);
   const last = locateQuote(segment.lastQuote, source);
   if (!first || !last) return "段的首句或末句在正文里找不到";
@@ -447,8 +463,8 @@ export function declarationOf(entry: LedgerEntry): EntryInput | undefined {
   const q = quote !== undefined ? { quote } : {};
   const source = entry.source.kind === "narration"
     ? { source: { kind: "narration" as const } }
-    : entry.source.kind === "character_claim" && entry.source.speaker
-      ? { source: { kind: "character_claim" as const, speaker: entry.source.speaker.mention } }
+    : entry.source.kind === "character_claim"
+      ? { source: { kind: "character_claim" as const, ...(entry.source.speaker ? { speaker: entry.source.speaker.mention } : {}) } }
       : {};
   switch (entry.kind) {
     case "summary":

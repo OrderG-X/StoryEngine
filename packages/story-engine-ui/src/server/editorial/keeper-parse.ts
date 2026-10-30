@@ -125,8 +125,13 @@ function offsetOf(value: unknown): TimeOffset | string {
     return n === undefined ? "相对多少不是整数" : offsetOf({ min: n, max: n });
   }
   if (!isRecord(value)) return "相对多少写得不对";
-  // 按换天规矩各写的那份里又套了一层 offset（照着 start 的写法套的）：拆开。
-  if (value.offset !== undefined && value.min === undefined && value.max === undefined && value.value === undefined && value.days === undefined) return offsetOf(value.offset);
+  // 按换天规矩各写的那份里又套了一层 offset（照着 start 的写法套的）：拆开，外层写了的单位照留（里层另写了单位就对不上，不收）。
+  if (value.offset !== undefined && value.min === undefined && value.max === undefined && value.value === undefined && value.days === undefined) {
+    const inner = isRecord(value.offset) ? value.offset : { value: value.offset };
+    if (value.unit === undefined) return offsetOf(inner);
+    if (inner.unit !== undefined && str(inner.unit)?.toLowerCase() !== str(value.unit)?.toLowerCase()) return "相对多少里外写的单位不一样";
+    return offsetOf({ ...inner, unit: value.unit });
+  }
   const unitText = str(value.unit)?.toLowerCase();
   const unit = unitText === undefined ? "day" : UNITS[unitText];
   if (!unit) return `单位写成了「${unitText}」，认不出（只认天、月、年）`;
@@ -162,12 +167,13 @@ const NARRATION_WORDS = new Set(["narration", "narrator", "叙述"]);
 const CLAIM_WORDS = new Set(["claim", "character", "character_claim", "speech", "人物说的"]);
 
 /** 事实、线索的来源：speaker = 人物说的；source = narration = 叙述直接写的；拿不准不标。 */
-function sourceOf(item: Raw, where: string, adjusted: KeeperDrop[]): DeclaredSource | undefined {
+function sourceOf(item: Raw): DeclaredSource | undefined {
   const speaker = str(item.speaker);
   const kind = str(item.source)?.toLowerCase();
   if (speaker) return { kind: "character_claim", speaker };
   if (kind && NARRATION_WORDS.has(kind)) return { kind: "narration" };
-  if (kind && CLAIM_WORDS.has(kind)) adjusted.push({ where, reason: "说是人物说的、却没写是谁说的，来源按不知道记" });
+  // 明说是人物说的、没写是谁：照人物说的记（不改现状、不收线索），说话人空着。
+  if (kind && CLAIM_WORDS.has(kind)) return { kind: "character_claim" };
   return undefined;
 }
 
@@ -320,7 +326,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       } else drop(`${where}.replaces`, "要推翻的那条不在列出的事实里，这一项没记（事实本身照记）");
     }
     if (replaces.length > 0) fact.replaces = replaces;
-    const source = sourceOf(item, where, adjusted);
+    const source = sourceOf(item);
     if (source) fact.source = source;
     entries.push(fact);
   }
@@ -356,7 +362,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       if (!type && typeText) adjusted.push({ where, reason: `类型写成了「${typeText}」，按悬念记` });
       // 重定稿沿用上次的编号：只认这次列出的 R 短号，别的写法当新开（核心再按标题兜一次）。
       const reopen = handleList(item.thread).map((handle) => handles.reopenHandles?.get(handle)).find((id) => id !== undefined);
-      const source = sourceOf(item, where, adjusted);
+      const source = sourceOf(item);
       entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote: quote ?? "", ...(reopen ? { thread: reopen } : {}), ...(source ? { source } : {}) } satisfies ThreadInput);
       continue;
     }
@@ -366,7 +372,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       continue;
     }
     const seen = new Set<string>();
-    const source = sourceOf(item, where, adjusted);
+    const source = sourceOf(item);
     for (const handle of targets) {
       // 短号对不上：原样交下去，checkEntries 会以「前文没有这条线索」如实列出来。
       // R 短号（这一章上次开的）报成推进 / 收口：换成真编号交下去，定稿编排认得出是这章自己开的那条。

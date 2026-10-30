@@ -1,5 +1,6 @@
 // @vitest-environment node
 import {
+  ChapterLedger as LedgerSchema,
   ledgerOf,
   project,
   type AuthorDecision,
@@ -145,6 +146,31 @@ describe("账的几种读法（从投影现算）", () => {
     const views = storyViewsOf(project({ ledgers, decisions }), ledgers, new Map());
     expect(views.events[0]?.effects?.semanticSummary).toMatchObject({ decision: "她决定去开门", characterAliases: [{ name: "周守义", alias: "老周" }] });
     expect(views.events[1]?.effects?.semanticSummary).toMatchObject({ characterAliases: [{ name: "周守义", alias: "周伯" }] });
+  });
+
+  // 出口复核 R3：梦里、回忆里、人物说的事件和收口，不能在写手材料里当成当下发生、揭开了的。
+  it.each(["past", "other", "claim"] as const)("%s：事件、打算前头带说明，收口按推进记、不算「发现」", (frame) => {
+    const text = "# 二\n\n她走进门。老周死了。门外是老周。她决定去开门。她转身离开。";
+    const source = frame === "claim" ? { source: { kind: "character_claim" as const, speaker: "阿姨" } } : {};
+    const ledgers = [
+      ledger(1, [{ kind: "thread", thread: "t-door", op: "open", type: "question", title: "门外是谁", note: "有人敲门", quote: q }]),
+      LedgerSchema.parse(ledgerOf({
+        chapter: 2,
+        text,
+        committedAt: "2026-10-18T00:00:00.000Z",
+        entries: [
+          { kind: "time", review: "auto", start: { offset: days(0), basis: "text", quote: "她走进门。" }, sameDay: true, ...(frame === "claim" ? {} : { segments: [{ frame, firstQuote: "老周死了。", lastQuote: "她决定去开门。" }] }) },
+          { kind: "fact", review: "auto", nature: "event", text: "老周死了", quote: "老周死了。", ...source },
+          { kind: "thread", review: "auto", op: "close", thread: "t-door", note: "门外是老周", quote: "门外是老周。", ...source },
+          { kind: "thread", review: "auto", op: "open", type: "intent", title: "去开门", note: "她决定去开门", quote: "她决定去开门。", ...source },
+        ],
+      })),
+    ];
+    const semantic = storyViewsOf(project({ ledgers, decisions: [] }), ledgers, new Map()).events[1]?.effects?.semanticSummary as { keyEvents?: string[]; discovery?: string; decision?: string } | undefined;
+    const label = frame === "past" ? "回忆里的，不是现状" : frame === "other" ? "梦里、想象或传闻里的，不是现状" : "阿姨说的，不一定是真的";
+    expect(semantic?.keyEvents).toEqual([`（${label}）老周死了`]);
+    expect(semantic?.discovery).toBeUndefined();
+    expect(semantic?.decision).toBe(`（${label}）她决定去开门`);
   });
 
   it("空书：每样都是空的", () => {

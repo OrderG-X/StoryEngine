@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { paceReport, projectBook, threadsForPrompt, timelineTable, timelineText } from "../index.js";
+import { declarationsOf, paceReport, projectBook, threadsForPrompt, timelineTable, timelineText } from "../index.js";
 import type { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readChapterLedgerFile } from "../store/book.js";
 import { chapterCommit } from "./chapter-commit.js";
@@ -97,6 +97,25 @@ describe("先定正文、账待记", () => {
 });
 
 describe("重记一章时编号沿用（carry）", () => {
+  it("连着两次账待记：carry 带着最近那份记了时间的整套时间，读得回原来的段（出口复核 R6）", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const withSegment: EntryInput = {
+      ...nextDay("第二天上午"),
+      segments: [{ frame: "past", firstQuote: "沈青禾想起钟停那天，爷爷也这样站着", lastQuote: "沈青禾想起钟停那天，爷爷也这样站着" }],
+    } as EntryInput;
+    expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [withSegment, ...CH2_ENTRIES.slice(1)] }, author("k2")));
+    const ready = (await readChapterLedger(book, 2))!;
+    expect(ready.scenes).toHaveLength(1);
+    expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: `${CH2}\n`, entries: [], ledger: PENDING }, author("k3")));
+    expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: `${CH2}\n\n`, entries: [], ledger: PENDING }, author("k4")));
+    const pending = (await readChapterLedger(book, 2))!;
+    const time = pending.previous?.carry.time;
+    expect(time).toEqual({ timeModel: ready.timeModel, entries: ready.entries.filter((entry) => entry.kind === "time"), scenes: ready.scenes });
+    expect(declarationsOf(time!).find((entry) => entry.kind === "time")).toMatchObject({
+      start: { offset: { unit: "day", min: 1, max: 1 } },
+      segments: [{ frame: "past", firstQuote: "沈青禾想起钟停那天，爷爷也这样站着。" }],
+    });
+  });
   it("中间账待记再补上：同一条声明拿回原来的编号、线索号；后文接得上", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
     const first = await readChapterLedger(book, 1);

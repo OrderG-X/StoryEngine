@@ -476,25 +476,29 @@ interface PreviousRecord {
   readonly entries: readonly LedgerEntry[];
   readonly scenes?: readonly LedgerScene[];
   readonly timeModel?: typeof TIME_MODEL;
+  /** 上次记账员记的时间读得全（老的账待记 carry 没带那套时间：只有作者定的天数）。 */
+  readonly timeComplete: boolean;
 }
 
 /**
  * 这章上次记下的条目（沿用线索、天数、认过的人都照它）。账待记的那份是空的：照它带着的 carry 里最近那版
- * （carry 里上一份账单的条目排在前面；梗概只留最前那条）。carry 不带段，记账员记的时间读不全，只留作者定的天数
- * （按 P3 的读法：作者给了结尾才有结尾），时间不拿来比（见 prepareChapterCommit）。
+ * （carry 里上一份账单的条目排在前面；梗概只留最前那条）；时间照 carry 带的最近那套（条目、段、格式原样，出口复核 R6）。
+ * 老账的 carry 没带那套时间：只留作者定的天数（按 P3 的读法：作者给了结尾才有结尾），时间不拿来比（见 prepareChapterCommit）。
  */
 function lastRecorded(ledger: ChapterLedger | undefined): PreviousRecord {
-  if (!ledger) return { entries: [] };
-  if (ledger.status !== "pending") return { entries: ledger.entries, scenes: ledger.scenes, ...(ledger.timeModel ? { timeModel: ledger.timeModel } : {}) };
+  if (!ledger) return { entries: [], timeComplete: true };
+  if (ledger.status !== "pending") return { entries: ledger.entries, scenes: ledger.scenes, ...(ledger.timeModel ? { timeModel: ledger.timeModel } : {}), timeComplete: true };
+  const time = ledger.previous?.carry.time;
   let summary = false;
   const entries = knownEntries(ledger).filter((entry) => {
-    if (entry.kind === "time") return entry.relation === "at";
+    if (entry.kind === "time") return !time && entry.relation === "at";
     if (entry.kind !== "summary") return true;
     if (summary) return false;
     summary = true;
     return true;
   });
-  return { entries, timeModel: TIME_MODEL };
+  if (!time) return { entries, timeModel: TIME_MODEL, timeComplete: false };
+  return { entries: [...entries, ...time.entries], scenes: time.scenes, ...(time.timeModel ? { timeModel: time.timeModel } : {}), timeComplete: true };
 }
 
 export async function prepareChapterCommit(input: PrepareInput): Promise<CommitPreview | PrepareFailure> {
@@ -540,8 +544,8 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const recommit = committed.includes(input.chapter);
   const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
   const withAuthorDay = recommit ? keepAuthorDay(record, opens?.accepted ?? checked.accepted) : checked.accepted;
-  // 账待记那份读不全上次记账员记的时间（carry 不带段）：不比，照这次的记。
-  const kept = recommit && current?.status !== "pending" ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before) : undefined;
+  // 读不全上次记账员记的时间（老的账待记）：不比，照这次的记。
+  const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before) : undefined;
   const accepted = kept?.accepted ?? withAuthorDay;
   const rejected = opens?.rejected ?? checked.rejected;
   const missingKinds = keeper.quoteRepair?.failed
