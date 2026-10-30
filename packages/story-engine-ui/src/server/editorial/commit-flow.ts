@@ -1,32 +1,24 @@
 /**
- * 定稿编排（重构 P3）：预览 → 定稿清单 → 作者确认 → 「定稿」命令。
+ * 定稿编排（重构 P3；写作版本 P2a 片 4A 起是执行器 commit.prepare 的两步，配方在 services/operations/recipes/commit-prepare.ts）：
  *
  *   prepareChapterCommit：读真相 → 投影（算到上一章）→ 记账员交账单 → checkEntries 核原句 → classifyForReview 分流
- *                         → 存预览票（条目、正文哈希）→ 返回清单（要你看的 / 自动记下的 / 没记上的 / 这章是第几天）
- *   confirmChapterCommit：取票 → 正文哈希对得上 → 减掉作者去掉的、套上作者改的天数 → chapter.commit（幂等键 = 票号；
- *                         带预览时读到的真相依据：预览之后前面的章、账、设定、裁定有一样变了，核心不写、如实说哪里变了）
+ *                         → 返回清单（要你看的 / 自动记下的 / 没记上的 / 这章是第几天）+ 预览票（条目、正文指纹、依据；存在操作的检查点里）
+ *   commitEntriesOf：照票减掉作者去掉的、套上作者改的天数 → 交给「定稿」命令的条目（配方带着预览时的依据交命令：
+ *                    预览之后前面的章、账、设定、裁定有一样变了，核心不写、如实说哪里变了）
  *
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
-import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
   CHAPTER_LEDGER_SCHEMA,
-  chapterCommit,
   checkEntries,
   classifyForReview,
   nameKey,
   project,
   readBookSnapshot,
-  runCommand,
   sha256,
-  type BookEvent,
   type BookProjection,
-  type ChapterCommitResult,
   type ChapterLedger,
   type ClassifiedEntry,
-  type CommandFailure,
   type EntryInput,
   type LedgerEntry,
   type ReviewReason,
@@ -35,11 +27,10 @@ import {
   type TimeInput,
   type TruthBasis,
 } from "@actalk/story-core";
-import { describeBasisChanges } from "../lib/truth-basis-store.js";
 import type { KeeperDrop } from "./keeper-parse.js";
 import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";
-import { writeAtomically, type BrainCallModel, type ColdCoverage } from "./reader-window.js";
+import type { BrainCallModel, ColdCoverage } from "./reader-window.js";
 
 // —— 预览票 ——
 
@@ -52,8 +43,8 @@ export function draftFingerprint(text: string): string {
   return sha256(lines.join("\n").replace(/\n{3,}/gu, "\n\n").trim());
 }
 
+/** 预览票：定稿要记的条目和预览时的样子（存在 commit.prepare 那一步的检查点里，作者点「确认定稿」时照它定）。 */
 export interface PreviewTicket {
-  readonly id: string;
   readonly chapter: number;
   /** 预览时正文的指纹（见 draftFingerprint）。 */
   readonly textSha256: string;
@@ -62,50 +53,10 @@ export interface PreviewTicket {
   /** 要作者看的条目下标。 */
   readonly reviewIndexes: readonly number[];
   /** 默认不写、作者勾上才写的条目下标（和前文不会变的事实对不上、要推翻前文不会变的事实）。 */
-  readonly optInIndexes?: readonly number[];
-  /** 预览时读到的真相（写作版本 P1a）：条目、天数都是照它算的。老票没有这栏，当过期。 */
-  readonly basis?: TruthBasis;
+  readonly optInIndexes: readonly number[];
+  /** 预览时读到的真相：条目、天数都是照它算的。 */
+  readonly basis: TruthBasis;
   readonly createdAt: string;
-}
-
-export interface TicketStore {
-  put(ticket: PreviewTicket): Promise<void>;
-  get(id: string): Promise<PreviewTicket | undefined>;
-}
-
-export function memoryTicketStore(): TicketStore {
-  const tickets = new Map<string, PreviewTicket>();
-  return {
-    async put(ticket) {
-      tickets.set(ticket.id, ticket);
-    },
-    async get(id) {
-      return tickets.get(id);
-    },
-  };
-}
-
-const TICKET_ID = /^[0-9a-f]{16}$/u;
-
-/** 存到一个目录里（进程重启后确认定稿也不用重新调模型）。票只是缓存，不算真相，丢了就重新预览。 */
-export function fileTicketStore(dir: string): TicketStore {
-  const memory = memoryTicketStore();
-  return {
-    async put(ticket) {
-      await memory.put(ticket);
-      await writeAtomically(join(dir, `${ticket.id}.json`), `${JSON.stringify(ticket)}\n`);
-    },
-    async get(id) {
-      if (!TICKET_ID.test(id)) return undefined;
-      const cached = await memory.get(id);
-      if (cached) return cached;
-      try {
-        return JSON.parse(await readFile(join(dir, `${id}.json`), "utf-8")) as PreviewTicket;
-      } catch {
-        return undefined;
-      }
-    },
-  };
 }
 
 // —— 清单 ——
@@ -135,7 +86,7 @@ export interface NotRecorded {
 
 export interface CommitPreview {
   readonly ok: true;
-  readonly ticket: string;
+  readonly ticket: PreviewTicket;
   readonly chapter: number;
   readonly recommit: boolean;
   readonly review: readonly CommitItem[];
@@ -436,7 +387,6 @@ export interface PrepareInput {
   /** 要定稿的完整正文（含标题行）。 */
   readonly text: string;
   readonly callModel: BrainCallModel;
-  readonly tickets: TicketStore;
   /**
    * 调用方读字数下限、人物名单这些材料之前取的依据（book/truth-basis.ts，第 8 轮复核 V4），记进票里。
    * 这里读到的真相和它对不上（取完之后书上有写）就不出票，请调用方重新预览。
@@ -446,6 +396,8 @@ export interface PrepareInput {
   readonly knownNames?: readonly string[];
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 补笔记时当场最多新生成几个卷节点（缺省不限）。 */
+  readonly maxVolumeBuilds?: number;
   /** 记账员原始输出（考卷、排查用）。 */
   readonly onRawOutput?: (text: string) => void;
   readonly now?: () => Date;
@@ -463,7 +415,8 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   }
   const last = committed.length > 0 ? Math.max(...committed) : 0;
   if (input.chapter > last + 1) {
-    return { ok: false, code: "chapter_gap", reason: `第 ${last + 1} 章到第 ${input.chapter - 1} 章还没定稿，先定稿前面的章` };
+    const gap = last + 1 === input.chapter - 1 ? `第 ${last + 1} 章` : `第 ${last + 1} 章到第 ${input.chapter - 1} 章`;
+    return { ok: false, code: "chapter_gap", reason: `${gap}还没定稿，先定稿前面的章` };
   }
   const before = project(snapshot, { upTo: input.chapter - 1 });
   const previous = snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter)?.entries ?? [];
@@ -480,6 +433,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     callModel: input.callModel,
     ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
     ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+    ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
     ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
   });
   const extra = { ...(keeper.cold ? { cold: keeper.cold } : {}), ...(keeper.waited ? { waited: keeper.waited } : {}) };
@@ -512,7 +466,6 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const entries = accepted.map((item) => item.entry);
   const day = previewDay(snapshot.ledgers, input.chapter, entries, textSha);
   const ticket: PreviewTicket = {
-    id: randomBytes(8).toString("hex"),
     chapter: input.chapter,
     textSha256: draftFingerprint(input.text),
     entries,
@@ -521,10 +474,9 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     basis: input.basis,
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
-  await input.tickets.put(ticket);
   return {
     ok: true,
-    ticket: ticket.id,
+    ticket,
     chapter: input.chapter,
     recommit,
     review: plan.review.map(toItem),
@@ -553,57 +505,34 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
 
 // —— 确认 ——
 
-export interface ConfirmInput {
-  readonly bookDir: string;
-  readonly ticket: string;
-  /** 现在要定稿的正文：和预览时的哈希对不上（作者又改过）就不定稿。 */
-  readonly text: string;
+/** 作者在清单上的选择：去掉的、勾上的「默认不写」条目序号，改的天数。 */
+export interface CommitChoices {
   /** 作者去掉的清单序号。 */
-  readonly excluded?: readonly unknown[];
+  readonly excluded?: readonly number[];
   /** 作者勾上的「默认不写」条目序号（见 CommitItem.optIn）。 */
-  readonly optedIn?: readonly unknown[];
+  readonly optedIn?: readonly number[];
   /** 作者改的「故事第几天」。 */
-  readonly day?: unknown;
+  readonly day?: number;
   /** 作者改的「到第几天」（这一章跨天；没给或不比 day 大＝就这一天）。 */
-  readonly dayEnd?: unknown;
-  readonly tickets: TicketStore;
-  /** 写盘前存撤销点（失败就不写）。 */
-  readonly snapshot?: (label: string, command: string) => Promise<void>;
-  readonly emit?: (event: BookEvent) => void;
-  readonly now?: () => Date;
+  readonly dayEnd?: number;
 }
 
-export type ConfirmOutcome =
-  | { readonly ok: true; readonly result: ChapterCommitResult; readonly version: number; readonly replayed: boolean }
-  | { readonly ok: false; readonly code: string; readonly reason: string };
-
-/** 序号宽进：数字或数字字符串，非负整数才收。 */
-function indexOf(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-export async function confirmChapterCommit(input: ConfirmInput): Promise<ConfirmOutcome> {
-  const ticket = await input.tickets.get(input.ticket);
-  if (!ticket || !ticket.basis) return { ok: false, code: "ticket_missing", reason: "这次预览已经过期了，请重新点「定稿」预览一次" };
-  if (draftFingerprint(input.text) !== ticket.textSha256) {
-    return { ok: false, code: "text_changed", reason: "预览之后正文又改过，请重新点「定稿」预览一次" };
-  }
-  const optedIn = new Set((input.optedIn ?? []).map(indexOf).filter((index) => index !== undefined));
+/** 照票和作者的选择算出交给「定稿」命令的条目：去掉作者去掉的、默认不写的没勾就不写、套上作者改的天数。 */
+export function commitEntriesOf(ticket: PreviewTicket, choices: CommitChoices): EntryInput[] {
+  const optedIn = new Set(choices.optedIn ?? []);
   const excluded = new Set([
-    ...(input.excluded ?? []).map(indexOf).filter((index) => index !== undefined),
+    ...(choices.excluded ?? []),
     // 默认不写的，作者没勾上就不写。
-    ...(ticket.optInIndexes ?? []).filter((index) => !optedIn.has(index)),
+    ...ticket.optInIndexes.filter((index) => !optedIn.has(index)),
   ]);
   const review = new Set(ticket.reviewIndexes);
-  const day = indexOf(input.day);
-  const dayEnd = indexOf(input.dayEnd);
-  const span = day !== undefined && dayEnd !== undefined && dayEnd > day ? dayEnd - day : undefined;
+  const day = choices.day !== undefined && choices.day >= 1 ? choices.day : undefined;
+  const span = day !== undefined && choices.dayEnd !== undefined && choices.dayEnd > day ? choices.dayEnd - day : undefined;
   const entries: EntryInput[] = [];
   let timeSet = false;
   ticket.entries.forEach((entry, index) => {
     if (excluded.has(index)) return;
-    if (entry.kind === "time" && day !== undefined && day >= 1) {
+    if (entry.kind === "time" && day !== undefined) {
       // 作者改了天数：这一条改成作者定的，星期、时段、原句照留。章内过了几天也照作者填的「到第几天」——
       // 只填一天（或两头一样）就是这一天，记账员记的跨天一并去掉（P6 第 7 步：不然改完还是「第 N～N+1 天」，改不掉）；
       // 跨天的章改了头一天、两头都填（长篇实跑：第 24 章改成第 21 天，章里第二天那段丢了，后面的章跟着错一天）。
@@ -615,30 +544,6 @@ export async function confirmChapterCommit(input: ConfirmInput): Promise<Confirm
     // 作者在清单上看过的，记成作者确认过。
     entries.push(review.has(index) ? { ...entry, review: "author" } : entry);
   });
-  if (!timeSet && day !== undefined && day >= 1) entries.push({ kind: "time", review: "author", basis: "author", day, ...(span ? { daysInChapter: span } : {}) });
-
-  const outcome = await runCommand(
-    input.bookDir,
-    chapterCommit,
-    { chapter: ticket.chapter, text: input.text, entries },
-    {
-      caller: "author",
-      idempotencyKey: `chapter-commit:${ticket.id}`,
-      // 作者的选择：正文按指纹比（存稿只差行尾空白不算换了），清单是照票和作者的勾选算的。
-      intent: { text: draftFingerprint(input.text), entries },
-      basis: ticket.basis,
-      ...(input.snapshot ? { snapshot: input.snapshot } : {}),
-      ...(input.emit ? { emit: input.emit } : {}),
-      ...(input.now ? { now: input.now } : {}),
-    },
-  );
-  if (!outcome.ok) {
-    const failure = outcome as CommandFailure;
-    if (failure.code === "basis_changed") {
-      const changes = (failure.details as { readonly changes?: Parameters<typeof describeBasisChanges>[0] } | undefined)?.changes ?? [];
-      return { ok: false, code: failure.code, reason: `预览之后${describeBasisChanges(changes)}改过，这张预览是照改之前算的，请重新点「定稿」预览一次` };
-    }
-    return { ok: false, code: failure.code, reason: failure.message };
-  }
-  return { ok: true, result: outcome.result, version: outcome.version, replayed: outcome.replayed };
+  if (!timeSet && day !== undefined) entries.push({ kind: "time", review: "author", basis: "author", day, ...(span ? { daysInChapter: span } : {}) });
+  return entries;
 }

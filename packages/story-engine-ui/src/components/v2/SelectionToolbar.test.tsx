@@ -82,3 +82,27 @@ describe("SelectionToolbar 问 AI", () => {
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["问 AI"]);
   });
 });
+
+describe("SelectionToolbar 焦点离开", () => {
+  afterEach(() => cleanup());
+
+  it("打字时焦点去了浮动条和正文以外才收起；在浮动条里、回到正文都不收", () => {
+    const onLeave = vi.fn();
+    const { container } = render(
+      <div>
+        <div className="se-v2-draft-editor" tabIndex={-1} data-testid="editor" />
+        <button type="button" data-testid="outside">别处</button>
+        <SelectionToolbar top={0} left={0} busyKey={null} onPick={vi.fn()} onPickCustom={vi.fn()} onLeave={onLeave} />
+      </div>,
+    );
+    fireEvent.mouseDown(screen.getByRole("button", { name: "自己说" }));
+    const input = screen.getByLabelText("改写要求");
+    const toolbar = container.querySelector(".se-v2-selection-toolbar")!;
+    fireEvent.blur(input, { relatedTarget: screen.getByRole("button", { name: "返回" }) });
+    fireEvent.blur(input, { relatedTarget: screen.getByTestId("editor") });
+    expect(onLeave).not.toHaveBeenCalled();
+    fireEvent.blur(input, { relatedTarget: screen.getByTestId("outside") });
+    expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(toolbar).toBeDefined();
+  });
+});

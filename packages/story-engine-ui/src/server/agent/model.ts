@@ -363,7 +363,10 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
 /** 一个模型的整条请求链：思考方言 / 工具 schema 改造 → 限流闸 → 上游静默防线。 */
 async function buildAgentModelFetch(configured: ResolvedChatModel, thinking: boolean): Promise<typeof fetch> {
   const outboundHeaders = await buildProviderRequestHeaders({ baseUrl: configured.provider.baseUrl, customHeaders: configured.customHeaders });
-  return makeAgentRequestFetch(thinking, configured.thinkingDialect, configured.profile.model, providerGate.wrap(withUpstreamSilenceGuard(fetch)), outboundHeaders);
+  return makeAgentRequestFetch(thinking, configured.thinkingDialect, configured.profile.model, providerGate.wrap(
+    withUpstreamSilenceGuard(fetch),
+    configured.provider.quotaGroup ? { quotaGroup: configured.provider.quotaGroup } : {},
+  ), outboundHeaders);
 }
 
 export interface AgentModelFallback {

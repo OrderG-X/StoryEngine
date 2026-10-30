@@ -6,7 +6,7 @@
  *  1. 记账员拿读过的全书（跟读窗口）把开着的线索逐条再判一次：收了 / 还开着 / 拿不准，收了的说在第几章收的；
  *  2. 判收了的，把那一章正文按编号句子交给它，点出写明收口的那一两句——原句由代码按编号取，不让模型抄；
  *     点不出句子、说的章不对的不列，如实说。
- * 结果只是建议：作者点「确认改账」才记成作者裁定（manage_ledger 出按钮）。不按停了几章、不按标题字面判收没收。
+ * 结果只是建议：作者点「确认改账」才记成作者裁定（ledger.change 操作停下等作者点）。不按停了几章、不按标题字面判收没收。
  */
 import { numberedText, projectBook, readChapterText, splitUnits, type ThreadView } from "@actalk/story-core";
 import { positiveIntLike } from "../lib/lenient-args.js";
@@ -147,6 +147,9 @@ export async function reviewOpenThreads(input: {
   readonly callModel: BrainCallModel;
   /** 笔记存放的根目录；缺省就是书目录（考卷传临时目录）。 */
   readonly notesRoot?: string;
+  /** 当场最多补几章笔记、几个卷节点（操作里先在 notes 步补过，这里给 0：缺的按冷窗口判）。缺省是记账员的老上限。 */
+  readonly maxCatchUp?: number;
+  readonly maxVolumeBuilds?: number;
 }): Promise<ThreadReviewOutcome> {
   const projection = await projectBook(input.projectDir);
   const upTo = projection.upTo;
@@ -166,6 +169,8 @@ export async function reviewOpenThreads(input: {
       upTo,
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: "理线索",
     });
   } catch (error) {

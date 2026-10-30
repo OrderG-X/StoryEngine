@@ -8,13 +8,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { useChatStore } from "../../../stores/chatStore.js";
-import { useUiStore } from "../../../stores/uiStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { flushAllSaves } from "../../../sync/saveAll.js";
 import { markChatLoaded } from "../../../sync/chatSync.js";
 import * as api from "../../../api/chatSessionsClient.js";
 import type { ChatSession, ChatSessionIndex } from "../../../type-defs/workspace.js";
 import { formatRelativeSessionTime } from "./formatRelativeSessionTime.js";
+import { reconnectOperations } from "../../../workspace/operationReconnect.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -49,8 +49,7 @@ export function ChatSessionBar({ onClear }: {
   const projectPath = useNavigationStore((s) => s.projectPath);
   // 审查 #6：生成进行中禁用会话操作，避免把 A 会话的流式内容存进刚切过去的 B。
   const chatLoading = useChatStore((s) => s.chatLoading);
-  const draftActionLoading = useUiStore((s) => s.draftActionLoading);
-  const workspaceBusy = chatLoading || Boolean(draftActionLoading) || isWorkspaceBusy();
+  const workspaceBusy = chatLoading || isWorkspaceBusy();
 
   function notify(message: string) {
     useNavigationStore.getState().showToast(message, 3200);
@@ -80,6 +79,8 @@ export function ChatSessionBar({ onClear }: {
     // 刚从会话文件读来的：记成已存，免得原样回写一遍。
     if (projectPath) markChatLoaded(projectPath, result.index.activeSessionId, messages);
     setMessages(messages);
+    // 这个会话里还没结束的操作：挂回去接着看（写作版本 P2a）。
+    if (projectPath) reconnectOperations(projectPath);
     setActiveArchivedCount(result.session.archivedCount ?? 0);
   }
 

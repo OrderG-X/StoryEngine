@@ -14,11 +14,13 @@
  */
 import { describeTimelineForChapter, readStoryTimeline } from "../book/story-timeline.js";
 import { findEarlierPassages } from "../writing/earlier-passages.js";
-import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
+import { MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 import {
   containsQuote,
   dropLiteralEscapes,
+  HEDGE_MAX_COPIES,
   hedged,
   normalize,
   parseFullReadIssues,
@@ -164,6 +166,19 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  */
 export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 };
 
+/** 核账员（含跟读笔记、卷笔记）一次调用最多几次占额度的发送：对冲份数 × 每份（主 + 备用）。写作版本 P2a 4.5。 */
+export const READER_CALL_MAX_SENDS = HEDGE_MAX_COPIES * MODEL_CALL_MAX_SENDS;
+
+/** 整章核一次最多几次核账员调用：翻原文 1 + 对设定本 1 + 三遍 × 每遍次数 + 自复核 1（额度按它算）。 */
+export function readerCheckCalls(variant: ReaderCheckVariant): number {
+  return 1 + 1 + CHECKER_PASSES.length * Math.max(1, variant.passRepeats ?? 1) + (variant.selfReview ? 1 : 0);
+}
+
+/** 只核改过的句子一次最多几次：翻原文 1 + 并行次数 + 自复核 1。 */
+export function readerRecheckCalls(variant: ReaderCheckVariant): number {
+  return 1 + Math.max(1, variant.recheckRepeats ?? variant.passRepeats ?? 1) + (variant.selfReview ? 1 : 0);
+}
+
 /** 翻原文那一轮的问法：窗口里有看不到原文的章（折叠只剩笔记，或冷窗口没给到）时，问它要翻哪些词的前文原文。 */
 export function keywordTask(chapter: number, cold = false): string {
   return [
@@ -204,10 +219,10 @@ function passagesMessage(passages: readonly { readonly chapter: number; readonly
 /**
  * 核账员 / 跟读用的模型调用（qualityCheck 槽）：关思考、低随机性、流式。
  * 不传 max_tokens，不设总时长上限（超时铁律）：只有「光想不写」超过 maxThinkingMs 和输出超过 maxContentChars 两道闸，
- * 外面套对冲（一次调用迟迟不回就并行再发一份，谁先回来用谁）。空内容抛错，不当成没问题。
+ * 外面套对冲（一次调用迟迟不回就并行再发一份，谁先回来用谁、掐掉另一份）。空内容由调用层按「产物不能用」抛，不当成没问题。
  */
 export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
-  const once = async () => {
+  const once = async (signal: AbortSignal) => {
     const resolved = await resolveConfiguredChatModel("qualityCheck");
     const { content } = await streamChatModelToText({
       configured: { ...resolved, thinking: false },
@@ -216,8 +231,8 @@ export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
       ...(options.json ? { responseFormat: { type: "json_object" as const } } : {}),
       maxThinkingMs: 180_000,
       maxContentChars: 60_000,
+      signal,
     });
-    if (!content.trim()) throw new Error("模型返回了空内容");
     return content;
   };
   return hedged(once, 120_000);
@@ -527,6 +542,7 @@ async function lookupEarlierPassages(input: {
     });
     return { prefix: [...input.window, ask, { role: "assistant", content: reply }], passages: passagesMessage(passages) };
   } catch (error) {
+    rethrowIfStopped(error);
     const message = error instanceof Error ? error.message : String(error);
     return { prefix: input.window, failure: `翻原文那一轮没跑成（${message}），这次只按窗口核` };
   }
@@ -540,12 +556,19 @@ interface ReaderCheckInput {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 这次最多新生成几个卷节点（见 ensureReaderWindow）；到了走冷窗口。 */
+  readonly maxVolumeBuilds?: number;
   /** 窗口字数预算；缺省 READER_WINDOW_MAX_CHARS（测试用小值，好让折叠和翻原文真的发生）。 */
   readonly maxChars?: number;
   /** 前面各章原文（核账服务已读过就传进来，省得再读一遍）；缺省从书目录读。 */
   readonly earlier?: EarlierText;
   /** T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛）；缺省全关＝第 1 步的原样。产品默认见 DEFAULT_READER_VARIANT。 */
   readonly variant?: ReaderCheckVariant;
+  /**
+   * 前文笔记已经在前一步补过（写作版本 P2a inspect.run 的 notes 步，额度分开算）：这里不再当场补（缺了就照冷窗口核），
+   * 等读那一句按那一步的 waited 说。
+   */
+  readonly notesReady?: { readonly waited?: ReaderWaited };
 }
 
 /** 核之前备好的：读完前文的窗口（翻过原文的接在后面）、新稿那条消息（三遍用 / 自复核用）、设定本、前文原文。 */
@@ -573,20 +596,24 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
     // 等过了（笔记是谁补上的都算）由 ensureReaderWindow 带回 waited，回执如实说等了哪几章。
     const root = input.notesRoot ?? input.projectDir;
     const waiting = readerWaitingHandlers(root, role.id, input.chapter - 1);
+    // 笔记前一步补过：这里一章、一个卷节点都不补（缺了照冷窗口核），这一步的额度只算核。
+    const maxCatchUp = input.notesReady ? 0 : input.maxCatchUp;
+    const maxVolumeBuilds = input.notesReady ? 0 : input.maxVolumeBuilds;
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role,
       upTo: input.chapter - 1,
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
-      ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(maxCatchUp !== undefined ? { maxCatchUp } : {}),
+      ...(maxVolumeBuilds !== undefined ? { maxVolumeBuilds } : {}),
       ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
       waitingAs: "核账",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
       onCatchUpEnd: waiting.onCatchUpEnd,
     }));
-    waited = ready.waited;
+    waited = input.notesReady ? input.notesReady.waited : ready.waited;
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：要补的笔记太多（后台补读还在跑）不再跳过——已有笔记 + 最近 K 章原文先核，范围如实带回执。
       const built = await buildColdReaderWindow({
@@ -603,6 +630,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
       foldedChapters = ready.foldedChapters;
     }
   } catch (error) {
+    rethrowIfStopped(error);
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成（上一稿的问题照带）。
     return { failure: `核账员读前文没成：${error instanceof Error ? error.message : String(error)}` };
   }
@@ -660,6 +688,7 @@ async function runReaderPasses(
   const passes: (readonly ContinuityIssueV2[])[] = [];
   const failures: string[] = [];
   settled.forEach((result, index) => {
+    if (result.status === "rejected") rethrowIfStopped(result.reason);
     if (result.status === "fulfilled") passes.push(result.value);
     else failures.push(`${plans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
@@ -743,6 +772,7 @@ async function selfReviewIssues(
       .filter((_, index) => rulingOf(index)?.verdict !== "no");
     return { issues };
   } catch (error) {
+    rethrowIfStopped(error);
     return { issues: [...candidates], failure: `自复核没跑成：${error instanceof Error ? error.message : String(error)}` };
   }
 }
@@ -971,6 +1001,7 @@ export async function checkPlanByReader(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  readonly maxVolumeBuilds?: number;
   /** 前面各章原文（调用方已读过就传进来）；缺省从书目录读。 */
   readonly earlier?: EarlierText;
 }): Promise<ReaderPlanCheckResult> {
@@ -988,6 +1019,7 @@ export async function checkPlanByReader(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: "拟纲",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
@@ -1008,6 +1040,7 @@ export async function checkPlanByReader(input: {
       window = ready.messages;
     }
   } catch (error) {
+    rethrowIfStopped(error);
     return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.plan.chapter);
@@ -1018,6 +1051,7 @@ export async function checkPlanByReader(input: {
     ));
     return { problems: parsePlanProblems(text, input.plan, earlier), failures: [], ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   } catch (error) {
+    rethrowIfStopped(error);
     return { problems: [], failures: [`审章纲没跑成：${error instanceof Error ? error.message : String(error)}`] };
   }
 }

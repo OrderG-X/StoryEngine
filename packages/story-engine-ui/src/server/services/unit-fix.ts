@@ -1,5 +1,5 @@
 /**
- * 按核账改（P12 第二期「编号句子」）：核账卡「改这处 / 改掉这 N 处」和出稿流程里的「按核账改」共用这一条。
+ * 按核账改（P12 第二期「编号句子」）：核账卡「改这处 / 改掉这 N 处」（draft.change fix）和出稿流程里的「按核账改」共用这一条。
  *
  * 核账引的原句先在稿里找到是哪几句（逐字；不计空白引号；「A……B」两截），整章按句编号交给修订模型，
  * 只许改点名的那几句；模型按编号回新句，代码按编号整句换（核心 applyUnitEdits：引号对齐原句、抄进来的邻句去掉）。
@@ -8,11 +8,9 @@
  */
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, numberedText, parseDraftFile, prepareUnitReplacement, readDraftFile, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
-import { appendFixLog } from "../editorial/continuity/check-memory.js";
-import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
-import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
-import { readTruthBasisForWork } from "../book/truth-basis.js";
+import { applyUnitEdits, numberedText, prepareUnitReplacement, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { locateRevisionSpan, type RevisionModelCaller } from "./draft-change/revise-text.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 
 export interface UnitFix {
   /** 核账引的原句。 */
@@ -41,6 +39,8 @@ const MAX_UNITS_PER_FIX = 4;
  * 本章另两句还说「四个字」，再核又报两处）。
  */
 const MAX_ALSO_EDITS = 3;
+/** 一批改句最多调几次：一次 + 格式不对再要一次（写作版本 P2a 4.5 额度从这里算）。 */
+export const UNIT_FIX_MAX_CALLS = 2;
 
 /** 原句落在哪几句（编号）；找不到 / 不唯一 / 太长给原因。 */
 export function unitsOfQuote(text: string, units: readonly TextUnit[], quote: string): readonly number[] | string {
@@ -165,9 +165,11 @@ export async function fixByUnits(input: {
 
   let edits: UnitEdit[] | undefined;
   try {
-    edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
-    if (!edits) edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
+    for (let call = 0; call < UNIT_FIX_MAX_CALLS && !edits; call += 1) {
+      edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
+    }
   } catch (error) {
+    rethrowIfStopped(error);
     for (const target of targets) for (const fix of target.fixes) failed.push({ fix, why: `AI 没改成（${errorText(error)}）` });
     return unchanged();
   }
@@ -203,58 +205,4 @@ export async function fixByUnits(input: {
     changes: result.applied.map((edit) => ({ from: edit.from, to: edit.to })),
     alsoChanged: result.applied.filter((edit) => !allowed.has(edit.id)).length,
   };
-}
-
-export interface DraftUnitFixResult extends UnitFixOutcome {
-  /** 真改了：写回的版本号和改前存档点。 */
-  readonly draftVersion?: number;
-  readonly snapshotId?: string;
-  /** 改好了但没换上（改的途中作者存过稿、撤销过，或前文变了）：留成候选，message 是给作者看的一句。 */
-  readonly kept?: { readonly candidateId: string; readonly message: string };
-}
-
-/**
- * 改工作稿（核账卡「改这处 / 改掉这 N 处」）：读依据 → 读稿 → 改 → 改成了就走 AI 写稿唯一通道换上（换上前存档）。
- * 模型跑着时不占书锁（作者照常存稿）；读稿之后稿子或前文变了，换上时对不上就留成候选、如实说。同一章的 AI 改稿排队。
- * 没有工作稿照实说。
- */
-export async function fixDraftByUnits(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly fixes: readonly UnitFix[];
-  readonly callModel: RevisionModelCaller;
-}): Promise<DraftUnitFixResult> {
-  const { projectDir, chapter } = input;
-  return oneAiWriterPerChapter(projectDir, chapter, async () => {
-    const basis = await readTruthBasisForWork(projectDir);
-    const file = await readDraftFile(projectDir, chapter).catch(() => undefined);
-    const text = file?.text;
-    if (file === undefined || text === undefined || !text.trim()) {
-      return { text: text ?? "", applied: [], failed: input.fixes.map((_, fix) => ({ fix, why: "这一章没有工作稿了" })), changes: [], alsoChanged: 0 };
-    }
-    const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
-    if (outcome.applied.length === 0) return outcome;
-    const fixed = parseDraftFile(outcome.text);
-    const written = await applyAiDraft(projectDir, {
-      chapter,
-      // 改的是文件原文（带章名行）：拆一次，章名照原文的。
-      title: fixed.title ?? "",
-      body: fixed.body,
-      baseVersion: file.version,
-      basis,
-      materials: [],
-      source: "unit-fix",
-      snapshotLabel: `第${chapter}章按核账改前快照`,
-    });
-    if (!written.applied) return { ...outcome, kept: { candidateId: written.candidateId, message: written.message } };
-    await recordUnitFixes(projectDir, chapter, outcome);
-    return { ...outcome, draftVersion: nextDraftVersion(), ...(written.snapshotId ? { snapshotId: written.snapshotId } : {}) };
-  });
-}
-
-/** 按核账改出来的句子记下来：再核时核账员又说这句不对，就知道是两遍说法相反（check-memory 的改句记录）。记不上不影响改稿。 */
-export async function recordUnitFixes(projectDir: string, chapter: number, outcome: Pick<UnitFixOutcome, "changes">): Promise<void> {
-  await appendFixLog(projectDir, chapter, outcome.changes).catch((error) => {
-    console.warn("[unit-fix] 改句记录没存上（不影响这次改稿）", error);
-  });
 }

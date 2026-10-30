@@ -6,15 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { callRoute } from "./test-helpers.js";
 
-const editorial = vi.hoisted(() => ({ startBookReread: vi.fn(async () => undefined), runBookReread: vi.fn(async () => undefined) }));
-vi.mock("../editorial/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../editorial/index.js")>()),
-  startBookReread: editorial.startBookReread,
-  runBookReread: editorial.runBookReread,
+type ContinueOutcome = import("../services/operations/recipes/index.js").ContinueRereadOutcome;
+const reread = vi.hoisted(() => ({
+  startReread: vi.fn(async (_book: string, _total: number) => undefined),
+  continueReread: vi.fn(async (_book: string): Promise<ContinueOutcome> => ({ ok: true, status: "running" })),
+}));
+vi.mock("../services/operations/recipes/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/operations/recipes/index.js")>()),
+  startReread: reread.startReread,
+  continueReread: reread.continueReread,
 }));
 
 const { registerBookImportRoutes } = await import("./book-import.js");
-const { beginReread } = await import("../editorial/reread.js");
 
 const TEXT = [
   "作品相关：本书纯属虚构。",
@@ -29,8 +32,8 @@ const TEXT = [
 let rootDir: string;
 beforeEach(async () => {
   rootDir = await makeHomeTempDir("book-import-route-");
-  editorial.startBookReread.mockClear();
-  editorial.runBookReread.mockClear();
+  reread.startReread.mockClear();
+  reread.continueReread.mockClear();
 });
 afterEach(async () => {
   await rm(rootDir, { recursive: true, force: true });
@@ -70,7 +73,7 @@ describe("导入已写的书", () => {
     expect(view.chapters.map((chapter) => [chapter.chapter, chapter.origin])).toEqual([[1, "import"], [2, "import"]]);
     expect(await readFile(join(projectDir, "chapters", "0001.md"), "utf8")).toBe("# 第1章\n\n作品相关：本书纯属虚构。\n");
     expect(await readFile(join(projectDir, "chapters", "0002.md"), "utf8")).toBe("# 第2章 · 雨夜\n\n钟停在三点十五分。\n\n沈青禾推开门。\n");
-    expect(editorial.startBookReread).toHaveBeenCalledWith(projectDir, 2);
+    expect(reread.startReread).toHaveBeenCalledWith(projectDir, 2);
   });
 
   it("勾选和文件对不上（文件变了）、一章没选：不建书", async () => {
@@ -81,11 +84,11 @@ describe("导入已写的书", () => {
     const none = await callRoute(registerBookImportRoutes, "POST", "/api/books/import", { rootDir, files, include: [false, false, false] });
     expect(none.payload.error).toContain("一章都没选");
     expect(await readdir(rootDir)).toEqual([]);
-    expect(editorial.startBookReread).not.toHaveBeenCalled();
+    expect(reread.startReread).not.toHaveBeenCalled();
   });
 
   it("导到一半出错：整本删掉、如实报错", async () => {
-    editorial.startBookReread.mockRejectedValueOnce(new Error("记账员起不来"));
+    reread.startReread.mockRejectedValueOnce(new Error("记账员起不来"));
     const { statusCode, payload } = await callRoute(registerBookImportRoutes, "POST", "/api/books/import", {
       rootDir,
       files: [{ name: "a.txt", text: TEXT }],
@@ -95,15 +98,16 @@ describe("导入已写的书", () => {
     expect(await readdir(join(rootDir, "story-engine"))).toEqual([]);
   });
 
-  it("接着记：停下的接着记；没在通读的如实说", async () => {
+  it("接着记：交给执行器（停着的接着做、没成的重交）；没在通读的如实说", async () => {
     const imported = await callRoute(registerBookImportRoutes, "POST", "/api/books/import", { rootDir, files: [{ name: "a.txt", text: TEXT }] });
     const projectDir = imported.payload.projectDir as string;
+    reread.continueReread.mockResolvedValueOnce({ ok: false, message: "这本书没有在通读记账。" });
     const idle = await callRoute(registerBookImportRoutes, "POST", "/api/books/reread", { projectPath: projectDir });
+    expect(idle.statusCode).toBe(400);
     expect(idle.payload.error).toBe("这本书没有在通读记账。");
 
-    await beginReread(projectDir, 2);
     const resumed = await callRoute(registerBookImportRoutes, "POST", "/api/books/reread", { projectPath: projectDir });
     expect(resumed.payload).toEqual({ ok: true, status: "running" });
-    expect(editorial.runBookReread).toHaveBeenCalledWith(projectDir);
+    expect(reread.continueReread).toHaveBeenLastCalledWith(projectDir);
   });
 });

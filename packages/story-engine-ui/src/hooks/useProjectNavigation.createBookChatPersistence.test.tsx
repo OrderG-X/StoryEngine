@@ -19,7 +19,6 @@ import {
 } from "../api/chatSessionsClient.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
-import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
 import { resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
@@ -99,7 +98,6 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
     useNavigationStore.setState({ projectPath: "/tmp/test-book", toast: null });
     useBookStore.getState().setWorkspace(mockWorkspaceData);
     useChatStore.setState({ chatLoading: false, sessions: [], activeSessionId: "" });
-    useUiStore.setState({ draftActionLoading: null });
     saveAll.flushAllSaves.mockImplementation(async () => ({ ok: true as const }));
     vi.mocked(createStoryProjectFromDraft).mockReset();
   });

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
-import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
 import type { NamePeekCard } from "./bibleIndex.js";
 import { ContinuityMarks } from "./ContinuityMarks.js";
@@ -34,6 +33,7 @@ import { acceptPaperIncoming, keepPaperMine, refreshPaper, scheduleDraftSave, ty
 import { countTextWords } from "../../../utils/textUtils.js";
 import type { PaperIncoming } from "../../../stores/draftStore.js";
 import { retitleCommittedChapter } from "../../../api/workingDraftClient.js";
+import { newPlanAction } from "../../../api/agentChatClient.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { updateChapterListTitle } from "../../../utils/bookUtils.js";
 
@@ -118,14 +118,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   }, [paperTitle, props.workspace.currentChapter.chapterNumber, props.workspace.currentChapter.title]);
   const committedBody = useDraftStore((state) => state.committed?.body ?? "");
   const draftCandidates = useUiStore((state) => state.draftCandidates);
-  const draftActionLoading = useUiStore((state) => state.draftActionLoading);
-  const workspaceBusy = Boolean(
-    props.chatLoading
-    || draftActionLoading
-    || isWorkspaceBusy(),
-  );
-  const rerolling = draftActionLoading === "reroll-candidates";
-  const applyingCandidate = draftActionLoading === "apply-candidate";
+  const workspaceBusy = Boolean(props.chatLoading || isWorkspaceBusy());
   const canReroll = draft.status !== "committed" && Boolean(props.onReroll) && !workspaceBusy;
   const draftWordCount = draft.wordCount ?? 0;
   // 「作者写、AI 管账」：新书首屏第一个按钮是「自己动笔写」——点了直接出稿纸（2026-10-10 验收：新书原先只有三个让 AI 写的按钮，作者没地方下笔）。
@@ -275,7 +268,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
                       disabled={!props.onSendUserAction || workspaceBusy}
                       onClick={() => {
                         setAskedDirections(true);
-                        props.onSendUserAction?.({ toolName: "brainstorm_chapter", chapter: draft.chapterNumber });
+                        props.onSendUserAction?.(newPlanAction({ chapter: draft.chapterNumber }));
                       }}
                     >
                       {askedDirections && workspaceBusy ? "AI 在想几种走法，要一两分钟……" : "给我几种走法"}
@@ -306,7 +299,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             </div>
           ) : (
             <>
-            <PaperIncomingBanner />
+            <PaperIncomingBanner {...(props.onPendingCandidate ? { onPendingCandidate: props.onPendingCandidate } : {})} />
             {/* 头脑风暴：空章问「往哪走」、给几种走法挑；挑中后收成一条「这章打算」（见 Brainstorm）。 */}
             <BrainstormPanel
               chapter={draft.chapterNumber}
@@ -344,7 +337,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
                         disabled={workspaceBusy || draftWordCount <= 0}
                         // 结构化动作（和稿纸底下的「定稿」同一个）：以前发一句「生成定稿预览」给模型，
                         // 模型照抄前文回「预览好了，清单打开着」却没调工具（2026-10-19 试写）。
-                        onClick={() => props.onChapterButton?.("commit_preview")}
+                        onClick={() => props.onChapterButton?.("commit")}
                       >
                         预览定稿改动
                       </button>
@@ -405,9 +398,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             {...(canReroll && draft.content.trim() ? {
               reroll: {
                 label: "AI 另写几版",
-                running: rerolling,
                 onClick: () => props.onReroll?.(),
-                title: "会保留当前版本，再生成 2–3 个候选版本供你挑选",
+                title: "你的稿子不动，AI 另写两版摆出来给你挑",
               },
             } : {})}
           />
@@ -423,15 +415,12 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
       {draftCandidates && draftCandidates.length > 0 ? (
         <DraftCandidatesPanel
           candidates={draftCandidates}
-          busy={workspaceBusy || applyingCandidate}
+          busy={workspaceBusy}
           onPick={(candidate) => props.onApplyCandidate?.(candidate)}
           onClose={() => props.onCloseCandidates?.()}
         />
       ) : null}
 
-      {/* 选区改写预览：覆盖稿纸区居中模态（相对 .codex-desk 绝对定位）。
-          activeRevisionTask 非空才渲染；行为（零差异/生成态）不变。 */}
-      <RevisionPreviewModal {...props} />
     </div>
   );
 }
@@ -466,7 +455,10 @@ function incomingCopy(incoming: PaperIncoming): { readonly text: string; readonl
  * 稿纸上方的提示条：盘上的稿子在别处变了（AI 改稿、撤销）而作者手上还有没存的字；
  * 或者有一份等作者选的（AI 写好没换上的、上次没存进去的）。两边都不悄悄覆盖，让作者选。
  */
-function PaperIncomingBanner() {
+function PaperIncomingBanner({ onPendingCandidate }: {
+  /** AI 写好、没换上的那份：换上 / 不要了交操作进对话（片 2D）；没给就不能点。 */
+  readonly onPendingCandidate?: (decision: "adopt" | "discard") => Promise<PaperDecisionResult>;
+}) {
   const incoming = useDraftStore((state) => state.incoming);
   const saveStatus = useDraftStore((state) => state.saveStatus);
   const saveError = useDraftStore((state) => state.saveError);
@@ -482,12 +474,14 @@ function PaperIncomingBanner() {
     };
     // 撞版本时作者手上的字最要紧（主按钮是保留）；候选、恢复稿主按钮是换上。
     const authorFirst = incoming.cause === "conflict" || incoming.cause === "update";
+    // AI 写好没换上的那份：换上 / 不要了是作者的操作，进对话一轮（片 2D）。
+    const candidate = incoming.cause === "candidate";
     return (
       <div className="cd-incoming" role="alert">
         <span>{copy.text}</span>
         <div className="cd-incoming-actions">
-          <button type="button" disabled={busy} className={authorFirst ? undefined : "is-primary"} onClick={() => pick(acceptPaperIncoming)}>{copy.accept}</button>
-          <button type="button" disabled={busy} className={authorFirst ? "is-primary" : undefined} onClick={() => pick(keepPaperMine)}>{copy.keep}</button>
+          <button type="button" disabled={busy || (candidate && !onPendingCandidate)} className={authorFirst ? undefined : "is-primary"} onClick={() => pick(candidate ? () => onPendingCandidate!("adopt") : acceptPaperIncoming)}>{copy.accept}</button>
+          <button type="button" disabled={busy || (candidate && !onPendingCandidate)} className={authorFirst ? "is-primary" : undefined} onClick={() => pick(candidate ? () => onPendingCandidate!("discard") : keepPaperMine)}>{copy.keep}</button>
         </div>
       </div>
     );

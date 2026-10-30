@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterAgentCard } from "../../api/types.js";
 import type { ChapterMessage } from "../../types.js";
-import { buildTimelineModel, liveFlowFromMessage, timelineStepStatusLabel } from "./agentTimelineModel.js";
+import { buildTimelineModel, timelineStepStatusLabel } from "./agentTimelineModel.js";
 
 function message(overrides: Partial<ChapterMessage>): ChapterMessage {
   return { id: "m1", role: "assistant", content: "回复正文", ...overrides };
@@ -184,74 +184,12 @@ describe("buildTimelineModel", () => {
   });
 });
 
-describe("liveFlowFromMessage（四步实时态）", () => {
-  it("无消息 / 无 toolSteps / 无可映射工具 → null（退回 flowStatus 基线）", () => {
-    expect(liveFlowFromMessage(undefined)).toBeNull();
-    expect(liveFlowFromMessage(message({}))).toBeNull();
-    expect(liveFlowFromMessage(message({
-      toolSteps: [{ id: "a", label: "读资料", toolName: "read_state_overview", status: "completed", startedAt: 1 }],
-    }))).toBeNull();
-  });
-
-  it("按 toolName 映射四步 + running/done/idle + 落地物 detail", () => {
-    const live = liveFlowFromMessage(message({
-      toolSteps: [
-        { id: "a", label: "生成正文", toolName: "generate_draft", status: "completed", startedAt: 1, detail: "已生成 1820 字" },
-        { id: "b", label: "AI 审稿", toolName: "ai_review", status: "running", startedAt: 2 },
-      ],
-    }))!;
-    expect(live.draft).toEqual({ status: "done", detail: "已生成 1820 字" });
-    expect(live.polish.status).toBe("running");
-    expect(live.understand.status).toBe("idle");
-    expect(live.commit.status).toBe("idle");
-  });
-
-  it("同一相多条 → 取时间序最后一条（入库覆盖入库预览）", () => {
-    const live = liveFlowFromMessage(message({
-      toolSteps: [
-        { id: "b", label: "正式入库", toolName: "commit_apply", status: "completed", startedAt: 2, detail: "第1章已正式入库（更新：林远）" },
-        { id: "a", label: "入库预览", toolName: "commit_preview", status: "completed", startedAt: 1 },
-      ],
-    }))!;
-    expect(live.commit).toEqual({ status: "done", detail: "第1章已正式入库（更新：林远）" });
-  });
-
-  it("failed 如实透出 failed（不当成 done）", () => {
-    const live = liveFlowFromMessage(message({
-      toolSteps: [{ id: "a", label: "生成正文", toolName: "generate_draft", status: "failed", startedAt: 1 }],
-    }))!;
-    expect(live.draft.status).toBe("failed");
-  });
-
-  // 复审 T4 三轮：commit_preview 否定裁决（ok:false=canCommit:false → verdict）落定成 done+detail——
-  // 四步环不亮红（不是 failed），字幕如实显示「暂不可定稿」的工具真实 summary。
-  it("verdict（裁决未过）落定成 done 且透出 detail，环不亮红", () => {
-    const live = liveFlowFromMessage(message({
-      toolSteps: [{ id: "a", label: "定稿预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2, detail: "第 99 章还没有工作稿，无法生成定稿预览。" }],
-    }))!;
-    expect(live.commit.status).toBe("done");
-    expect(live.commit.detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
-  });
-
-  it("stopped 如实透出 stopped（A-5：人喊停腰斩的步不再转圈、也不混进 done/failed）", () => {
-    const live = liveFlowFromMessage(message({
-      toolSteps: [
-        { id: "a", label: "生成章节方向", toolName: "generate_chapter_steering", status: "completed", startedAt: 1 },
-        { id: "b", label: "生成正文", toolName: "generate_draft", status: "stopped", startedAt: 2, endedAt: 3 },
-      ],
-    }))!;
-    expect(live.understand.status).toBe("done");
-    expect(live.draft.status).toBe("stopped");
-    expect(live.polish.status).toBe("idle");
-  });
-});
-
 describe("stopped 步骤的时间线归并（A-5）", () => {
   it("含 stopped 步 → state=attention 且摘要说「已停止」（不说「待确认/已完成」）", () => {
     const model = buildTimelineModel(message({
       toolSteps: [
         { id: "a", label: "读取", toolName: "read_state_overview", status: "completed", startedAt: 1, endedAt: 2 },
-        { id: "b", label: "生成正文", toolName: "generate_draft", status: "stopped", startedAt: 3, endedAt: 4 },
+        { id: "b", label: "生成正文", toolName: "change_draft", status: "stopped", startedAt: 3, endedAt: 4 },
       ],
     }))!;
     expect(model.state).toBe("attention");
@@ -261,7 +199,7 @@ describe("stopped 步骤的时间线归并（A-5）", () => {
   it("stopped 与 failed 并存 → failed 优先（真失败如实报失败）", () => {
     const model = buildTimelineModel(message({
       toolSteps: [
-        { id: "a", label: "生成正文", toolName: "generate_draft", status: "stopped", startedAt: 1, endedAt: 2 },
+        { id: "a", label: "生成正文", toolName: "change_draft", status: "stopped", startedAt: 1, endedAt: 2 },
         { id: "b", label: "质检", toolName: "quality_check", status: "failed", startedAt: 3, endedAt: 4 },
       ],
     }))!;

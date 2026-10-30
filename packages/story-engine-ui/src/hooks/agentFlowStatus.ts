@@ -1,5 +1,4 @@
 import type { ChapterWorkflowState } from "../type-defs/workflow.js";
-import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
 
 /**
  * agentFlowStatusForTool — 纯 agent 流程里，据「刚完成的工具」把本章流程状态推进到对应阶段。
@@ -11,57 +10,37 @@ import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
  * 题材中立、纯逻辑、无副作用：给 (toolName, info, current) → 下一个 flowStatus（不该推进就原样返回 current）。
  *  - ok===false（工具失败）不推进——绝不把失败当进度。
  *  - 已入库（committed/ready_for_next）后，打磨/预览类工具不再把状态往回拨。
- *  - 读类/资料类/check_ai_flavor 等不改本章生命周期，返回 current。
+ *  - 读类/资料类等不改本章生命周期，返回 current。写稿、改稿、检查、定稿是操作，见 flowAfterOperation。
  */
 
 const TERMINAL: ReadonlySet<ChapterWorkflowState> = new Set<ChapterWorkflowState>(["committed", "ready_for_next"]);
 
 export function agentFlowStatusForTool(
   toolName: string,
-  info: { readonly committed?: boolean; readonly ok?: boolean },
+  info: { readonly ok?: boolean },
   current: ChapterWorkflowState,
 ): ChapterWorkflowState {
-  const failed = info.ok === false;
-  switch (toolName) {
-    case "generate_chapter_steering":
-      // 理解/构思：给了本章方向方案 → 进入「可以写稿」。
-      return failed ? current : "steering_ready";
-    case "generate_draft":
-    case "revise_draft":
-      // 写稿：出/改了正文 → 草稿待打磨。
-      return failed ? current : "draft_ready";
-    case "quality_check":
-    case "ai_review":
-      // 打磨：质检/审稿过了（且尚未入库）→ 已打磨、可考虑入库。
-      return failed || TERMINAL.has(current) ? current : "quality_checked";
-    case "commit_preview":
-      // 入库前一步：预览生成 → 等你确认入库。
-      return failed || TERMINAL.has(current) ? current : "waiting_commit_confirmation";
-    case "commit_apply":
-      // 入库：真入库成功（committed=true 且未失败）才标已入库；失败/未入库保持原状（不推进）。
-      // committed=true 本就蕴含成功，这里显式 && !failed 是为与其它分支一致 + 防御工具偶发字段不一致。
-      return info.committed && !failed ? "committed" : current;
-    default:
-      return current;
-  }
+  // 理解/构思：给了本章方向方案 → 进入「可以写稿」。
+  return toolName === "generate_chapter_steering" && info.ok !== false ? "steering_ready" : current;
 }
 
 /**
- * nextFlowAfterToolResult — onToolResult 用：在 agentFlowStatusForTool 之上多管一件事——
- * 出稿工具返回 ok=false（守卫拒绝这类「诚实失败」走的是 tool-result，不是 tool-error）时，
- * flowStatus 还卡在 onToolCall 乐观置的 draft_generating，而 agentFlowStatusForTool 对失败一律返回
- * current=原样保留=继续卡在「正在生成草稿」（Codex 复测命中：「继续写下一章」被 25ms 守卫拒、标题/输入框卡死）。
- * 这里据当前章是否已有草稿内容把它复位（draft_ready/idle），绝不停在生成态谎报。其余一切照旧委托。
+ * 写稿、检查、定稿又变了（写作版本 P2a：都是操作，不再是工具结果）：
+ * - 写稿、改稿换上了工作稿 → 草稿待打磨（重写已定稿的章也一样：工作稿和定稿不一样了）；没换上的（作者期间改过稿、留成候选）不推进。
+ * - 硬伤检查 / 内容审阅做完、本章还没定稿 → 已打磨、可考虑定稿。核账、查 AI 味不改本章生命周期。
+ * - 定稿出了清单、等作者点 → 等你确认定稿（已定稿的不往回拨）；定成了 → 已定稿；定不了的不推进。
+ * 别的没做完的不推进。
  */
-export function nextFlowAfterToolResult(
-  toolName: string,
-  info: { readonly committed?: boolean; readonly ok?: boolean },
+export function flowAfterOperation(
+  operation: { readonly kind: string; readonly mode?: string; readonly state: string; readonly draft?: { readonly applied: boolean }; readonly commit?: { readonly committed: boolean } },
   current: ChapterWorkflowState,
-  hasDraftContent: boolean,
 ): ChapterWorkflowState {
-  if (toolName === "generate_draft" && info.ok === false) {
-    const unstuck = flowStatusAfterGenerateFailure(current, hasDraftContent);
-    if (unstuck) return unstuck;
+  if (operation.kind === "commit.prepare") {
+    if (operation.state === "waiting_author") return TERMINAL.has(current) ? current : "waiting_commit_confirmation";
+    return operation.state === "succeeded" && operation.commit?.committed ? "committed" : current;
   }
-  return agentFlowStatusForTool(toolName, info, current);
+  if (operation.state !== "succeeded") return current;
+  if (operation.kind === "draft.change") return operation.draft?.applied ? "draft_ready" : current;
+  if (operation.kind !== "inspect.run" || TERMINAL.has(current)) return current;
+  return operation.mode === "quality" || operation.mode === "review" ? "quality_checked" : current;
 }

@@ -121,30 +121,30 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
     expect(endsOnNextSteps({ steps: [] })).toBe(false);
   });
 
-  it("稿写成了：交回章号、结果和要不要写完就预览（结论、核账卡、下一步由服务端接着出）；不转述摘要、不报「步数用完」", async () => {
-    const output = { ok: true, chapter: 26, thenPreview: true, summary: "第 26 章写好了，1700 字。" };
-    const written = await run([
+  it("写稿交上了：交回操作号（正文流、结论、核账卡、下一步由服务端跟着操作出）；不转述回执、不报「步数用完」", async () => {
+    const receipt = { ok: true, accepted: true, opId: "op-0123456789abcdef0123", kind: "draft.change", chapter: 26, summary: "交出去了：写稿·第 26 章。" };
+    const accepted = await run([
       textChunk("好，我来写第 26 章。"),
-      ...toolChunks("commit_preview", { ok: false, skipped: true, summary: "这一轮在写工作稿，这一步先不做，等稿写完、作者看过再说。" }),
-      ...toolChunks("generate_draft", output),
+      ...toolChunks("commit_preview", { ok: false, skipped: true, code: "ambiguous_plan", summary: "这一步同时要做好几件写的事，一件都没做：一次只交一件，交完这一轮就停。" }),
+      ...toolChunks("change_draft", receipt),
       { type: "finish", payload: { stepResult: { reason: "tool-calls" } } },
     ], () => true);
-    expect(written.result.writtenDraft).toEqual({ chapter: 26, output, thenPreview: true });
-    expect(written.result.emittedText).toBe(true);
-    expect(collectText(written.events)).toBe("好，我来写第 26 章。");
-    // 模型一个字没说：也不兜底转述（服务端接着出结论）
-    const silent = await run([...toolChunks("generate_draft", { ok: true, chapter: 26, summary: "写好了。" })], () => true);
-    expect(silent.result).toMatchObject({ emittedText: false, writtenDraft: { chapter: 26, thenPreview: false } });
+    expect(accepted.result.acceptedOperation).toEqual({ opId: "op-0123456789abcdef0123" });
+    expect(accepted.result.emittedText).toBe(true);
+    expect(collectText(accepted.events)).toBe("好，我来写第 26 章。");
+    // 模型一个字没说：也不兜底转述（服务端接着出）
+    const silent = await run([...toolChunks("change_draft", receipt)], () => true);
+    expect(silent.result).toMatchObject({ emittedText: false, acceptedOperation: { opId: "op-0123456789abcdef0123" } });
     expect(collectText(silent.events)).toBe("");
   });
 
-  it("出稿没写成 / 没执行：不算写成，照常兜底转述", async () => {
-    const failed = await run([...toolChunks("generate_draft", { ok: false, chapter: 26, summary: "第 26 章还没章纲。" })]);
-    expect(failed.result.writtenDraft).toBeUndefined();
-    expect(collectText(failed.events)).toBe("第 26 章还没章纲。");
-    const skipped = await run([...toolChunks("generate_draft", { ok: false, skipped: true, summary: "一轮只写一章，这一章这一轮先不写。" })]);
-    expect(skipped.result.writtenDraft).toBeUndefined();
-    expect(collectText(skipped.events)).not.toContain("一轮只写一章");
+  it("写稿没受理 / 没执行：不算交上，照常兜底转述", async () => {
+    const refused = await run([...toolChunks("change_draft", { ok: false, code: "chapter_has_text", chapter: 26, summary: "第 26 章已经有稿了。" })]);
+    expect(refused.result.acceptedOperation).toBeUndefined();
+    expect(collectText(refused.events)).toBe("第 26 章已经有稿了。");
+    const skipped = await run([...toolChunks("change_draft", { ok: false, skipped: true, summary: "这一轮已经交了一件事，这一步先不做，等它做完、作者看过再说。" })]);
+    expect(skipped.result.acceptedOperation).toBeUndefined();
+    expect(collectText(skipped.events)).not.toContain("这一轮已经交了一件事");
   });
 
   it("一轮结束把对话 AI 的用量记进全局用量账（P10，记在主对话名下、带模型）", async () => {
@@ -364,11 +364,15 @@ describe("historyToModelMessages 历史里的工具（长篇实跑第 17 章：�
     ]);
   });
 
-  it("出的卡作者点了「不改了」：工具结果照实说这张作废、再提就重新调", () => {
-    const messages = readChatMessages([{ role: "assistant", content: "查完了。", tools: [{ name: "settle_fact", ok: true, dropped: true }] }]);
-    expect(messages[0]).toMatchObject({ tools: [{ name: "settle_fact", ok: true, dropped: true }] });
-    const [, result] = historyToModelMessages(messages);
-    expect(result).toMatchObject({ role: "tool", content: [{ output: { value: "出了卡，作者在卡上点了「不改了」：这张作废、书里没动。作者再提就重新调。" } }] });
+  it("给了现有工具名：老会话里已经合并掉的工具不还原（写作版本 P2a），回复文字照留", () => {
+    const messages = readChatMessages([
+      { role: "assistant", content: "核了一遍。", tools: [{ name: "check_continuity", ok: true }] },
+      { role: "assistant", content: "写好了，核了。", tools: [{ name: "generate_draft", ok: true }, { name: "quality_check", ok: true }] },
+    ]);
+    const history = historyToModelMessages(messages, new Set(["generate_draft", "run_check"]));
+    expect(history[0]).toEqual({ role: "assistant", content: "核了一遍。" });
+    expect(history[1]).toMatchObject({ role: "assistant", content: [{ type: "tool-call", toolName: "generate_draft" }] });
+    expect(JSON.stringify(history)).not.toContain("quality_check");
   });
 
   it("工具记录读进来只认有名字的；用户消息带了也不认", () => {

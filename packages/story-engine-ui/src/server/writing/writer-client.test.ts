@@ -39,7 +39,10 @@ describe("createOpenAICompatibleWriterClient（出稿走流式·afterfix 治非�
   });
 
   it("绝不传 max_tokens（铁律：思考吃额度会截断/写空正文）", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "正文。" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]));
     await createOpenAICompatibleWriterClient(writerConfigured()).generateDraft({ context: ctx, maxOutputTokens: 4096 });
     const body = JSON.parse((spy.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.max_tokens).toBeUndefined();

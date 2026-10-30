@@ -1,13 +1,11 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { bumpRevision, recoverTransactions, REVISION_PATH, SAVED_COPIES_DIR, withBookLock } from "@actalk/story-core";
-import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
+import { recoverTransactions, REVISION_PATH, SAVED_COPIES_DIR, withBookLock } from "@actalk/story-core";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
-import { resyncWordStats } from "./word-stats.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,12 +57,9 @@ function parseLogLine(line: string): SnapshotEntry {
 /* ---------------------------------------------------------------------------
  * 对话历史不入快照（P2·2026-10-02）
  *
- * 快照用 `git add -A` 把项目目录整个卷进去，`.story-engine-ui/chat-sessions/`（右侧 AI 对话的持久化）也在内。
- * 于是 undo_last_change / 块级撤销在回退写作状态的同时，把用户**已经看到过的聊天记录**也回退掉——
- * 对话是「控制面日志」不是「写作状态」，撤销应只回退后者。
- * 做法：写进 `<gitdir>/info/exclude`（不碰用户可见的 .gitignore）；旧书里已被跟踪的会话文件 `git rm --cached` 摘出索引
- * （磁盘不动）；restore 的 diff/checkout 用 `:(exclude)` 路径魔法跳过该目录，连历史快照里的旧会话文件也不会被 checkout 盖回来。
- * 幂等回执目录 `.story-engine-ui/commit-idempotency/` 仍随快照（设计如此：撤销定稿要连回执一起回退，见 commit-service 不变量⑦）。
+ * 快照用 `git add -A` 把项目目录整个卷进去；对话、事务目录、统计这些不是写作状态，不进存档（存档只当撤销、整本恢复
+ * 取前像的地方，写作版本 P2a 起撤销 / 恢复只按撤销范围的白名单写回，不从存档整份 checkout）。
+ * 做法：写进 `<gitdir>/info/exclude`（不碰用户可见的 .gitignore）；旧书里已被跟踪的 `git rm --cached` 摘出索引（磁盘不动）。
  * ------------------------------------------------------------------------- */
 
 /** 对话历史目录（相对项目根，无前后斜杠）。 */
@@ -88,9 +83,6 @@ const METRICS_EXCLUDE_MARKER = "# story-engine-ui: 分步计量记录不入快�
 const AGENTS_EXCLUDE_DIR = "agents";
 const AGENTS_EXCLUDE_MARKER = "# story-engine-ui: 专员读书笔记不入快照（按正文哈希自校验的缓存）";
 
-/** 新核心的定稿预览票（重构 P3）：只是缓存，丢了重新预览；进快照的话撤销会把过期的票翻回来。 */
-const CORE_PREVIEW_DIR = "ledger/.preview";
-const CORE_PREVIEW_MARKER = "# story-engine-ui: 定稿预览票不入快照（缓存）";
 /** 新核心的写盘事务目录：核心自己收拾，和旧引擎的 .story-engine-tx 同理。 */
 const CORE_TX_DIR = ".story-core-tx";
 const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（核心自管）";
@@ -107,21 +99,18 @@ const CORE_REVISION_MARKER = "# story-engine-ui: 写入代次不入快照（撤�
 const WORD_STATS_DIR = ".story-engine-ui/stats";
 const WORD_STATS_MARKER = "# story-engine-ui: 写作统计不入快照（撤销不回退统计）";
 
-/** 快照排除的目录（info/exclude 一行 + diff/checkout 路径魔法）。 */
+/** 快照排除的目录（info/exclude 一行）。 */
 const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: string; readonly marker: string }[] = [
   { dir: SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR, line: CHAT_SESSIONS_EXCLUDE_LINE, marker: CHAT_SESSIONS_EXCLUDE_MARKER },
   { dir: SNAPSHOT_EXCLUDED_TX_DIR, line: TX_EXCLUDE_LINE, marker: TX_EXCLUDE_MARKER },
   { dir: METRICS_EXCLUDE_DIR, line: `/${METRICS_EXCLUDE_DIR}/`, marker: METRICS_EXCLUDE_MARKER },
   { dir: AGENTS_EXCLUDE_DIR, line: `/${AGENTS_EXCLUDE_DIR}/`, marker: AGENTS_EXCLUDE_MARKER },
-  { dir: CORE_PREVIEW_DIR, line: `/${CORE_PREVIEW_DIR}/`, marker: CORE_PREVIEW_MARKER },
   { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
   { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
   { dir: CORE_SAVED_DIR, line: `/${CORE_SAVED_DIR}/`, marker: CORE_SAVED_MARKER },
   { dir: WORD_STATS_DIR, line: `/${WORD_STATS_DIR}/`, marker: WORD_STATS_MARKER },
   { dir: CORE_REVISION_DIR, line: `/${CORE_REVISION_DIR}/`, marker: CORE_REVISION_MARKER },
 ];
-/** git 路径魔法：diff / checkout 时跳过这些目录。 */
-const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);
 
 function excludeFileHasLine(text: string, line: string): boolean {
   return text.split(/\r?\n/u).some((entry) => entry.trim() === line);
@@ -198,6 +187,21 @@ async function createSnapshotUnlocked(projectDir: string, label: string): Promis
   return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
 }
 
+/** 一个提交的内容树号（回执记它，撤销从这里取前像）。 */
+async function treeOfUnlocked(projectDir: string, commit: string): Promise<string> {
+  return git(projectDir, ["rev-parse", `${commit}^{tree}`]);
+}
+
+/**
+ * 写之前那一刻的树号，不进操作历史（写作版本 P2a）：不打存档点的命令（通读记账、存稿）、一批里第二条起的命令，回执也要树号。
+ * 工作树和上一个存档一样就用它的树；不一样就打一个「落盘收尾」提交（操作历史、撤销都跳过它）留住这棵树（裁剪重建提交链照样留着）。
+ */
+async function hiddenTreeUnlocked(projectDir: string, label: string): Promise<string> {
+  await ensureRepoUnlocked(projectDir);
+  if (await hasUncommittedChanges(projectDir)) await createSnapshotUnlocked(projectDir, `${POST_WRITE_LABEL_PREFIX}${label}`);
+  return treeOfUnlocked(projectDir, "HEAD");
+}
+
 /**
  * 存档类入口（建存档点、存档里写、恢复、裁剪）先收拾上次写到一半的事务；有收拾不了的就停下、不动稿、不报成功
  * （P1 第 22 轮 AJ3：恢复接口不看收拾结果，作者刚选的那版之后又被那份没退完的事务退掉）。老格式收拾不了照样抛。
@@ -218,48 +222,19 @@ export async function createSnapshot(projectDir: string, label: string): Promise
   });
 }
 
-/**
- * 原子地「建快照 + 执行落盘」：把 createSnapshot 与紧随其后的写操作 fn 罩进同一 project 锁，
- * 令二者成为一个不可分割的临界区——治撤销竞态。
- *
- * 旧 withSnapshot 是「createSnapshot（持锁、原子）→ run（锁外落盘）」：快照边界与落盘不在同一临界区，
- * 同一 project 并发时，另一操作的 createSnapshot/restoreSnapshot 会切进 run 中间 → 捕获不一致的部分态、
- * 或撤销逃逸/过度回滚（线性快照史被并发打乱）。本函数把写操作纳入同一把锁，彻底消除该窗口；
- * 撤销（restoreSnapshot 同走 withProjectLock）也会排在写之后，不再插进写中间。
- *
- * The canonical project lock is re-entrant, so formal-commit code may safely
- * call engine operations while this snapshot boundary remains held.
- */
-export async function runWithSnapshot<T>(
-  projectDir: string,
-  label: string,
-  fn: (snapshotId: string) => Promise<T>,
-): Promise<{ readonly snapshot: SnapshotEntry; readonly result: T }> {
-  return withProjectLock(projectDir, async () => {
-    await settleOrStop(projectDir);
-    await ensureRepoUnlocked(projectDir);
-    const snapshot = await createSnapshotUnlocked(projectDir, label);
-    const result = await fn(snapshot.id);
-    // 落盘收尾（afterfix #2）：把 fn 写出的文件即时收进 git，令工作树在每次写操作后保持干净——否则最后一次
-    // 写操作的产物会长期以 dirty/untracked 残留（Codex 三轮误判「入库已完成但 git 还脏=没写盘」）。
-    // 这条 commit 标成「落盘收尾」产物：undo 与操作历史都跳过它（isUndoSkippableArtifact / 路由过滤），
-    // 撤销目标仍是 fn 之前的 `snapshot`、撤销语义完全不变。无改动则不建（避免空 commit 噪声）。
-    if (await hasUncommittedChanges(projectDir)) {
-      await createSnapshotUnlocked(projectDir, `${POST_WRITE_LABEL_PREFIX}${label}`);
-    }
-    return { snapshot, result };
-  });
-}
+/** 交给核心 runCommand 的存档回调：返回写之前那一刻的树号；`"tree"` = 只要树号、不打存档点（核心 RunOptions.snapshot）。 */
+export type CoreSnapshot = (label: string, command: string, mode?: "tree") => Promise<string>;
 
 /**
  * 「真要写盘才打存档点」（重构 P9）：fn 拿到一个存档回调交给核心 runCommand——核心在书锁里、算出确实要写之后才调它，
  * 指错了、没变化、按钮点第二次（回执重放）都不打，操作历史里不会多出什么都没改的一条。
  * 一批里多条命令只打第一次（一批改动撤销一步）；有 fixedLabel 就用它，没有就用核心给的命令名 + 人话。
+ * 每次都返回写之前那一刻的树号（第二条起、只要树号的打不进操作历史的存档，hiddenTreeUnlocked）。
  * 整段在同一把书锁里，写完照 runWithSnapshot 落盘收尾，撤销不会插进中间。
  */
 export async function runWithLazySnapshot<T>(
   projectDir: string,
-  fn: (snapshot: (label: string, command: string) => Promise<void>) => Promise<T>,
+  fn: (snapshot: CoreSnapshot) => Promise<T>,
   fixedLabel?: string,
 ): Promise<{ readonly snapshotId?: string; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
@@ -267,15 +242,28 @@ export async function runWithLazySnapshot<T>(
     // 留到要打存档点才收拾，核心已经照没收拾的半截真相核过依据了（第 4 轮复核 R9）。
     await settleOrStop(projectDir);
     let taken: SnapshotEntry | undefined;
-    const result = await fn(async (label, command) => {
-      if (taken) return;
+    const result = await fn(async (label, command, mode) => {
+      if (taken || mode === "tree") return hiddenTreeUnlocked(projectDir, coreSnapshotLabel(command, label));
       await ensureRepoUnlocked(projectDir);
       taken = await createSnapshotUnlocked(projectDir, fixedLabel ?? coreSnapshotLabel(command, label));
+      return treeOfUnlocked(projectDir, taken.id);
     });
     if (taken && (await hasUncommittedChanges(projectDir))) {
       await createSnapshotUnlocked(projectDir, `${POST_WRITE_LABEL_PREFIX}${taken.label}`);
     }
     return { ...(taken ? { snapshotId: taken.id } : {}), result };
+  });
+}
+
+/** 一个存档点的树号和标签（整本恢复按它算）；存档点不在了（裁剪换过号、号不对）返回 undefined。 */
+export async function snapshotInfoOf(projectDir: string, id: string): Promise<{ readonly tree: string; readonly label: string } | undefined> {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(id)) return undefined;
+  return withProjectLock(projectDir, async () => {
+    await ensureRepoUnlocked(projectDir);
+    const tree = await git(projectDir, ["rev-parse", "--verify", "--quiet", `${id}^{tree}`]).catch(() => "");
+    if (!tree) return undefined;
+    const label = await git(projectDir, ["log", "-1", "--pretty=format:%s", id]);
+    return { tree, label };
   });
 }
 
@@ -287,188 +275,9 @@ export async function listSnapshots(projectDir: string, limit = 100): Promise<Sn
   });
 }
 
-/** 恢复实际退回的内容：目标存档点与「恢复前自动快照」之间的文件差异 + 哪些是「目标那一步之后才写的」。 */
-export interface RestoreOutcome {
-  /** 「恢复到：X」那条提交（历史最新一条）。 */
-  readonly restored: SnapshotEntry;
-  /**
-   * 这次恢复实际动到的全部文件（状态方向=目标→恢复前：A=恢复后不再有、D=被恢复回来、M=内容回退）。
-   * R4.2（验收 3.2）：撤销/恢复的回执必须写清实际退回了什么——只说「只撤了这一步」会给了模型
-   * 编「没受影响」的空间（真机实锤：第 5 章草稿被删了，模型却说「还在磁盘上」）。
-   */
-  readonly reverted: readonly CommitFileChange[];
-  /** reverted 里属于「目标那一步之后才写的」文件——超出所撤步骤本身的连带退回，回执要单独说明。 */
-  readonly revertedLater: readonly CommitFileChange[];
-}
-
 /**
- * 恢复到目标快照。先校验目标存在，再把当前状态自动存档（可反悔），
- * 然后删掉目标之后新增的文件、还原全部内容，最后记一条"恢复到：X"。
- * 历史永不丢失，恢复操作本身也能被恢复。
- */
-export async function restoreSnapshot(projectDir: string, id: string): Promise<RestoreOutcome> {
-  return withProjectLock(projectDir, async () => {
-    if (!/^[0-9a-f]{40}$/.test(id)) {
-      throw new Error("无效的快照 id");
-    }
-    // Recovery must happen before git add/commit/checkout; otherwise a partial
-    // formal transaction becomes part of the pre-restore history and may be
-    // resurrected by a later undo.
-    // 老格式和新核心的写盘事务都先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
-    await settleOrStop(projectDir);
-    await ensureRepoUnlocked(projectDir);
-    // 先解析目标：失败即抛，不污染历史
-    const target = parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`, id]));
-    await git(projectDir, ["add", "-A"]);
-    await git(projectDir, ["commit", "--allow-empty", "-m", "恢复前自动快照"]);
-    // 恢复前自动快照即此刻 HEAD；回执的「实际退回了什么」= 它与目标之间的全部文件差异。
-    const preRestoreId = (await git(projectDir, ["rev-parse", "HEAD"]));
-    // --no-renames：禁用 rename 侦测，改名产生的新文件按 A 计，否则会被判为 R 而残留
-    // 对话目录用 :(exclude) 跳过：旧快照里曾被跟踪的会话文件既不被 unlink、也不被下面的 checkout 盖回磁盘。
-    const addedSince = await git(projectDir, [
-      "diff", "--name-only", "--no-renames", "--diff-filter=A", `${id}..HEAD`, "--", ".", ...EXCLUDE_PATHSPECS,
-    ]);
-    for (const file of addedSince.split("\n").filter(Boolean)) {
-      await unlink(join(projectDir, file)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
-      });
-    }
-    // unlink 只删文件不删目录：.story-engine-tx/commit-chapter-N 被掏空后会留下无 manifest 的
-    // 空目录壳，引擎 recover 撞「目录在、manifest 不在」会 fail-closed 抛错把书搞砖（P1-B）。
-    // 当场把零文件空壳收掉；有内容的目录 rmdir 不动（ENOTEMPTY 停手），漏网壳由引擎 recover 兜底。
-    await removeEmptiedTransactionShells(projectDir);
-    await git(projectDir, ["checkout", id, "--", ".", ...EXCLUDE_PATHSPECS]);
-    // 真相换回去了：换一个新代次，恢复前照着书算的预览、提议按钮一律作废（哪怕又回到了和它一模一样的内容）。
-    await bumpRevision(projectDir);
-    await git(projectDir, ["add", "-A"]);
-    await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
-    // 账单和老格式镜像同在快照里，恢复后本该一致；万一对不上（镜像那次没写完就存了快照），按恢复后的账重生成一遍。
-    if (await mirrorIsStale(projectDir)) {
-      const mirror = await syncLegacyMirror(projectDir);
-      if (!mirror.ok) console.warn(`[snapshot] 恢复后重生成老格式镜像没成：${mirror.reason}`);
-    }
-    const receipt = await buildRestoreReceiptFacts(projectDir, id, preRestoreId);
-    // 写作统计不进存档点：恢复后全书重数一遍。
-    await resyncWordStats(projectDir);
-    return { restored: parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`])), ...receipt };
-  });
-}
-
-/** 两个提交之间的文件差异（--name-status，状态方向 from→to；排除对话/事务/笔记等非写作状态目录）。 */
-async function diffFileChangesBetween(projectDir: string, fromId: string, toId: string): Promise<CommitFileChange[]> {
-  const out = await git(projectDir, [
-    "diff", "--name-status", "--no-renames", `${fromId}..${toId}`, "--", ".", ...EXCLUDE_PATHSPECS,
-  ]);
-  return parseFileStatusLines(out);
-}
-
-/** `--name-status` 输出 → CommitFileChange[]（认不出的行丢弃，绝不猜）。 */
-function parseFileStatusLines(out: string): CommitFileChange[] {
-  const files: CommitFileChange[] = [];
-  for (const line of out.split("\n")) {
-    const match = /^([A-Z])[0-9]*\t(.+)$/u.exec(line.trim());
-    if (match) files.push({ status: match[1]!, path: match[2]!.trim() });
-  }
-  return files;
-}
-
-/** 提交区间（fromId..toId，新→旧）里每个提交：id + label + 它改动的文件。 */
-interface RangeCommit {
-  readonly id: string;
-  readonly label: string;
-  readonly files: readonly CommitFileChange[];
-}
-
-async function readRangeCommits(projectDir: string, fromId: string, toId: string): Promise<RangeCommit[]> {
-  const out = await git(projectDir, [
-    "log", "--name-status", "--no-renames", `--pretty=format:@@%H%x1f%s`, `${fromId}..${toId}`,
-  ]);
-  const commits: RangeCommit[] = [];
-  let current: { id: string; label: string; files: CommitFileChange[] } | null = null;
-  for (const line of out.split("\n")) {
-    if (line.startsWith("@@")) {
-      const [id, label] = line.slice(2).split("\x1f");
-      current = { id: (id ?? "").trim(), label: label ?? "", files: [] };
-      commits.push(current);
-      continue;
-    }
-    const match = /^([A-Z])[0-9]*\t(.+)$/u.exec(line);
-    if (current && match) current.files.push({ status: match[1]!, path: match[2]!.trim() });
-  }
-  return commits;
-}
-
-/**
- * 回执事实：这次恢复实际退回了哪些文件、其中哪些是「目标那一步之后才写的」。
- *
- * 归因沿用操作历史的既有约定（attachSnapshotChanges）：一个存档点所-guard 的操作，其写出的文件
- * 落在它上方更旧侧的第一段提交里（「落盘收尾」工程提交，或没有收尾时被下一个存档点的 add -A 收走）。
- * 从目标往上找到第一个真存档点（非落盘收尾/恢复产物）为止收「这一步」的文件；它之上（更新侧）的
- * 一律算「这步之后写的」。中间没有真存档点 = 没有别的写操作插进来，全部差异都算这一步本身。
- */
-async function buildRestoreReceiptFacts(
-  projectDir: string,
-  targetId: string,
-  preRestoreId: string,
-): Promise<Pick<RestoreOutcome, "reverted" | "revertedLater">> {
-  const reverted = await diffFileChangesBetween(projectDir, targetId, preRestoreId).catch(() => [] as CommitFileChange[]);
-  if (reverted.length === 0) return { reverted: [], revertedLater: [] };
-  const commits = await readRangeCommits(projectDir, targetId, preRestoreId).catch(() => [] as RangeCommit[]);
-  // commits 新→旧；从最旧端（紧贴目标）往上找第一个真存档点 = boundary（含它，它的提交承载上一步未收尾的写产物）。
-  let boundary = -1;
-  for (let index = commits.length - 1; index >= 0; index -= 1) {
-    const label = commits[index]!.label;
-    if (!isRestoreArtifact(label) && !isPostWriteSettlementSnapshot(label)) { boundary = index; break; }
-  }
-  const laterPaths = new Set<string>();
-  if (boundary >= 0) {
-    for (let index = 0; index < boundary; index += 1) {
-      for (const file of commits[index]!.files) laterPaths.add(file.path);
-    }
-  }
-  const revertedLater = reverted.filter((file) => laterPaths.has(file.path));
-  return { reverted, revertedLater };
-}
-
-/**
- * 自底向上收掉「递归零文件」的目录壳：rmdir 只对空目录生效——有文件/有非空子目录即 ENOTEMPTY 停手，
- * 绝不会误删内容（也不用 recursive rm，Node 无 unlinkat、递归删除无法做到竞态安全）。
- */
-async function rmdirIfEmptyRecursive(dir: string): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
-  if (!entries) return; // 已消失/读不到——没有壳可收
-  for (const entry of entries) {
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      await rmdirIfEmptyRecursive(join(dir, entry.name));
-    }
-  }
-  await rmdir(dir).catch(() => undefined); // 非空即停手，留给引擎 recover 按 fail-closed 判
-}
-
-/**
- * 恢复/撤销 unlink 新增文件后，清扫 .story-engine-tx 下被掏空的空目录壳（典型：commit-chapter-N
- * 的 manifest/暂存/备份全被删掉只剩空目录）。只动空壳；txRoot 本身保留（引擎容忍空根目录）。
- */
-async function removeEmptiedTransactionShells(projectDir: string): Promise<void> {
-  const txRoot = join(projectDir, ".story-engine-tx");
-  const entries = await readdir(txRoot, { withFileTypes: true }).catch(() => undefined);
-  if (!entries) return; // 没有 tx 目录即无事可做
-  for (const entry of entries) {
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      await rmdirIfEmptyRecursive(join(txRoot, entry.name));
-    }
-  }
-}
-
-/** 撤销操作自身写下的两条 commit（恢复前自动快照 / 恢复到：…）——逐步撤销时要跳过、否则卡在原地。 */
-function isRestoreArtifact(label: string): boolean {
-  return label.startsWith("恢复到：") || label === "恢复前自动快照";
-}
-
-/**
- * 落盘收尾 commit 前缀（afterfix #2）：runWithSnapshot 在写操作后把产物即时收进 git 的那条工程 commit。
- * 它内容==当时工作树（本就无差异、会被 undo 的 differing 判定跳过），但 undo 回退后工作树会变——届时它会「有差异」、
- * 可能被误当撤销目标（变成重做）；故显式纳入 undo 跳过名单。操作历史也据此过滤、不显这条工程 commit。
+ * 落盘收尾 commit 前缀（afterfix #2）：写完把产物即时收进 git 的那条工程 commit（也留住回执要的树号，hiddenTreeUnlocked）。
+ * 不是作者的动作：操作历史据此过滤、不显这条。
  */
 const POST_WRITE_LABEL_PREFIX = "落盘收尾：";
 /**
@@ -539,45 +348,10 @@ export function isPostWriteSettlementSnapshot(label: string): boolean {
   return label.startsWith(POST_WRITE_LABEL_PREFIX);
 }
 
-/** 逐步撤销时要跳过的工程产物：恢复产物 + 落盘收尾 commit。 */
-function isUndoSkippableArtifact(label: string): boolean {
-  return isRestoreArtifact(label) || isPostWriteSettlementSnapshot(label);
-}
-
-/** 最近 limit 个提交的内容树 hash（id → tree），撤销据此认出「恢复到：X」恢复的是哪个存档点。 */
-async function readCommitTrees(projectDir: string, limit: number): Promise<Map<string, string>> {
-  const out = await git(projectDir, ["log", `-${limit}`, "--pretty=format:%H %T"]).catch(() => "");
-  const trees = new Map<string, string>();
-  for (const line of out.split("\n")) {
-    const [id, tree] = line.trim().split(" ");
-    if (id && tree) trees.set(id, tree);
-  }
-  return trees;
-}
-
-/** 工作树是否有未跟踪文件（工具新写的草稿/资料在下一次快照前是 untracked，git diff 看不到，须单独探）。 */
-async function hasUntrackedFiles(projectDir: string): Promise<boolean> {
-  const out = await git(projectDir, ["ls-files", "--others", "--exclude-standard"]);
-  return out.length > 0;
-}
-
 /** 工作树是否有任何未提交改动（含未跟踪文件）——决定写操作后是否需要补一条落盘收尾 commit。 */
 async function hasUncommittedChanges(projectDir: string): Promise<boolean> {
   const out = await git(projectDir, ["status", "--porcelain"]);
   return out.trim().length > 0;
-}
-
-/** 快照 id 的内容是否与当前工作树不同（含未跟踪文件：有 untracked 即视为不同——比任何已提交快照都多东西）。 */
-async function snapshotDiffersFromWorkingTree(projectDir: string, id: string, untracked: boolean): Promise<boolean> {
-  if (untracked) return true;
-  try {
-    // 对话目录不参与「有没有可撤销改动」的判定：旧书里曾被跟踪的会话文件在摘索引后与旧快照永远有差异，不排除会让
-    // 「没东西可撤」被误判成「有」、把一次 no-op 恢复报成撤销。
-    await git(projectDir, ["diff", "--quiet", id, "--", ".", ...EXCLUDE_PATHSPECS]);
-    return false; // exit 0：无差异
-  } catch {
-    return true; // 非零：有差异
-  }
 }
 
 const UNDO_TOOL_LABELS: Record<string, string> = {
@@ -637,6 +411,7 @@ const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "card.fill": "bible",
   "cards.import": "bible",
   "settle.apply": "commit",
+  "history.apply": "restore",
 };
 
 /** 早于命令名进标签时（P3～P7 之间）核心打的存档点，整串认。 */
@@ -651,9 +426,16 @@ export function coreSnapshotLabel(command: string, label: string): string {
   return `${CORE_LABEL_PREFIX}${command}:${label}`;
 }
 
-/** 交给核心 runCommand / ensureBookOnCore 的存档回调（标签带上命令名）。 */
-export function coreSnapshotFor(projectDir: string): (label: string, command: string) => Promise<void> {
-  return (label, command) => createSnapshot(projectDir, coreSnapshotLabel(command, label)).then(() => undefined);
+/** 交给核心 runCommand / ensureBookOnCore 的存档回调（标签带上命令名），返回写之前那一刻的树号。 */
+export function coreSnapshotFor(projectDir: string): CoreSnapshot {
+  return (label, command, mode) => withProjectLock(projectDir, async () => {
+    if (mode === "tree") {
+      await settleOrStop(projectDir);
+      return hiddenTreeUnlocked(projectDir, coreSnapshotLabel(command, label));
+    }
+    const entry = await createSnapshot(projectDir, coreSnapshotLabel(command, label));
+    return treeOfUnlocked(projectDir, entry.id);
+  });
 }
 
 function splitHead(rest: string): readonly [string, string] {
@@ -697,84 +479,11 @@ export function humanizeUndoLabel(label: string): string {
   return label;
 }
 
-/**
- * 撤销「上一步真实改动」：恢复到最近一个『内容与当前工作树不同、且非撤销产物』的检查点。
- * 每个 agent 写操作前都建检查点（runWithSnapshot/createSnapshot），故恢复到最近一个 differing 检查点即撤销上一步；
- * 跳过恢复操作自身的产物，使「连续撤销」逐步回退、不卡在原地。无可撤销改动 → null（诚实，调用方据此如实回报）。
- * restoreSnapshot 会先存档当前态，故「撤销」本身也能被再撤销，历史永不丢。
- *
- * R7.2：带 turnHint（前端「上一个有写盘回合的首个快照」= 该回合第一次写盘前）时优先整回合回退——
- * 作者说「撤销上一步」指的是上一回合的全部改动，默认按工具步回退会把一回合改的两处只撤掉最后一处。
- * 锚点不在回看窗口里 / 与当前工作树一致（已撤过）→ 落回默认逐步回退，viaTurnHint=false 如实标记。
- */
-export interface TurnUndoHint {
-  /** 上一个有写盘回合第一次写盘前的快照 id（git commit）。 */
-  readonly snapshotId: string;
-  /** 该回合写盘改动的处数，供调用方回执「只撤了最后 1 处」时说清 N。 */
-  readonly changes: number;
-}
-
-export async function undoLastChange(
-  projectDir: string,
-  turnHint?: TurnUndoHint,
-): Promise<{
-  readonly undoneLabel: string;
-  readonly restored: SnapshotEntry;
-  /** 这次撤销实际退回的文件（R4.2：回执要写清，不能只说「只撤了这一步」）。 */
-  readonly reverted: readonly CommitFileChange[];
-  /** 其中「撤的那一步之后才写的」——连带退回，回执要单独说明。 */
-  readonly revertedLater: readonly CommitFileChange[];
-  /** true=按前端带的整回合锚点回退；false=默认逐步回退（hint 缺失/失效，或已撤到锚点继续往前走）。 */
-  readonly viaTurnHint: boolean;
-} | null> {
-  await ensureSnapshotRepo(projectDir);
-  const snaps = await listSnapshots(projectDir, 200);
-  const untracked = await hasUntrackedFiles(projectDir);
-  if (turnHint && snaps.some((snap) => snap.id === turnHint.snapshotId)) {
-    // 与当前工作树一致（这回合已整回合撤过）→ 不重复 no-op 恢复，落回默认逻辑继续往前走（连续撤销）。
-    if (await snapshotDiffersFromWorkingTree(projectDir, turnHint.snapshotId, untracked)) {
-      const outcome = await restoreSnapshot(projectDir, turnHint.snapshotId);
-      return { undoneLabel: "上一回合全部改动", ...outcome, viaTurnHint: true };
-    }
-  }
-  const trees = await readCommitTrees(projectDir, 200);
-  let lostRestoreTarget = false;
-  const findTarget = async (followRestores: boolean): Promise<SnapshotEntry | undefined> => {
-    // 连续撤销要接着往回走：遇到「恢复到：X」就跳到它恢复的那个存档点 X 之下再找。
-    // 否则第三次撤销会把第一次撤掉的那步又恢复回来（在两个状态之间来回跳，2026-10-07 真机实锤）。
-    // 认 X 用「标签相同 + 内容树相同」，裁剪历史改写了提交 hash 也认得出。
-    let skipTo: { readonly label: string; readonly tree: string } | null = null;
-    for (const snap of snaps) {
-      if (skipTo) {
-        if (snap.label === skipTo.label && trees.get(snap.id) === skipTo.tree) skipTo = null;
-        continue;
-      }
-      // 不猜白名单：自家格式
-      const restored = /^恢复到：(.+)$/u.exec(snap.label);
-      if (followRestores && restored) {
-        const tree = trees.get(snap.id);
-        if (tree) skipTo = { label: restored[1]!, tree };
-        continue;
-      }
-      if (isUndoSkippableArtifact(snap.label)) continue;
-      if (await snapshotDiffersFromWorkingTree(projectDir, snap.id, untracked)) return snap;
-    }
-    if (skipTo) lostRestoreTarget = true;
-    return undefined;
-  };
-  // 恢复目标在回看窗口外认不出时，才退回老规则（最近一个与当前不同的存档点），不误报「没有可撤销的」；
-  // 认出来了、只是下面没有更早的改动 = 真到头了，如实返回 null。
-  const target = (await findTarget(true)) ?? (lostRestoreTarget ? await findTarget(false) : undefined);
-  if (!target) return null;
-  const { restored, reverted, revertedLater } = await restoreSnapshot(projectDir, target.id);
-  return { undoneLabel: humanizeUndoLabel(target.label), restored, reverted, revertedLater, viaTurnHint: false };
-}
-
 // ---------------------------------------------------------------------------
-// 磁盘治理：历史裁剪（append-only「历史永不丢」保留，但旧史折叠成 base 提交，给磁盘一个收口）
+// 磁盘治理：历史裁剪（写作版本 P2a 片 4C，设计 8.3：先算、再做，对账只认两个号）
 // ---------------------------------------------------------------------------
 
-/** 默认保留窗口：对齐 undoLastChange 的撤销回看窗口（200），裁掉它之外的历史不破坏撤销语义。 */
+/** 默认保留最近多少条存档。 */
 export const SNAPSHOT_PRUNE_DEFAULT_KEEP = 200;
 /** keep 下限夹逼：防误传小值把历史裁光。 */
 export const SNAPSHOT_PRUNE_MIN_KEEP = 20;
@@ -783,36 +492,8 @@ const PRUNE_BASE_LABEL_PREFIX = "base: 已裁剪";
 // 不猜白名单：自家格式
 const PRUNE_BASE_LABEL_PATTERN = new RegExp(`^${PRUNE_BASE_LABEL_PREFIX} (\\d+) 条更早快照$`, "u");
 
-export interface SnapshotPruneOptions {
-  /** 保留最近多少条快照（默认 200，下限夹逼到 20） */
-  readonly keep?: number;
-  /** true 只预览不落盘；缺省即 true（保守），真裁须显式传 false */
-  readonly dryRun?: boolean;
-  /** bundle 备份目录，默认 ~/.story-engine/snapshot-backups/（在项目目录之外） */
-  readonly backupDir?: string;
-}
-
-export interface SnapshotPruneResult {
-  readonly dryRun: boolean;
-  readonly keep: number;
-  /** 裁前 HEAD 链全部提交数（含既有 base 提交） */
-  readonly totalBefore: number;
-  /** 本次折进 base 的更早快照条数；0 = no-op（dry-run 时为预计值） */
-  readonly prunedCount: number;
-  /** 裁后提交总数（dry-run 为预计值）= totalBefore - prunedCount + 1 */
-  readonly totalAfter: number;
-  /** 净释放的提交数 = prunedCount - 1（被裁条目折成一条 base） */
-  readonly freedCommits: number;
-  /** 真裁时新建的 base 提交 id */
-  readonly baseCommitId?: string;
-  /** 真裁时裁前完整历史的 bundle 备份路径 */
-  readonly backupBundlePath?: string;
-  /** 非致命降级警告：update-ref 成功（裁剪已完成）后 reflog expire / gc 回收失败时如实写在这里 */
-  readonly warnings?: readonly string[];
-}
-
-function clampPruneKeep(keep: number | undefined): number {
-  if (keep === undefined || !Number.isFinite(keep)) return SNAPSHOT_PRUNE_DEFAULT_KEEP;
+export function clampPruneKeep(keep: number | undefined): number {
+  if (keep === undefined || !Number.isFinite(keep) || keep <= 0) return SNAPSHOT_PRUNE_DEFAULT_KEEP;
   return Math.max(SNAPSHOT_PRUNE_MIN_KEEP, Math.trunc(keep));
 }
 
@@ -898,99 +579,113 @@ function commitEnv(commit: RawCommitMeta): Record<string, string> {
   };
 }
 
-function snapshotBackupBundlePath(projectDir: string, backupDir: string): string {
+/** 裁前完整历史的备份放哪（项目目录外）：按书和这次裁剪定，同一次裁剪重来还是这个文件。 */
+export function snapshotBackupBundlePath(projectDir: string, key: string, backupDir = join(resolveGlobalDataDir(), "snapshot-backups")): string {
   const projectHash = createHash("sha1").update(projectDir).digest("hex").slice(0, 8);
-  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
-  return join(backupDir, `snapshot-backup-${projectHash}-${stamp}.bundle`);
+  const keyHash = createHash("sha1").update(key).digest("hex").slice(0, 12);
+  return join(backupDir, `snapshot-backup-${projectHash}-${keyHash}.bundle`);
+}
+
+/** 算好的一次裁剪（存进操作的检查点）：裁前链头、分界、确定的新链头。 */
+export interface PrunePlan {
+  readonly keep: number;
+  readonly branch: string;
+  readonly oldHead: string;
+  /** 被裁的最后一条（新 base 承载它的树）。 */
+  readonly boundaryId: string;
+  readonly newHead: string;
+  /** 裁前提交数（含既有 base）。 */
+  readonly totalBefore: number;
+  /** 折进 base 的条数。 */
+  readonly prunedCount: number;
+  readonly totalAfter: number;
+}
+
+export type PrunePlanOutcome =
+  | { readonly kind: "noop"; readonly keep: number; readonly totalBefore: number }
+  | { readonly kind: "plan"; readonly plan: PrunePlan };
+
+/**
+ * 按分界重建新链：更早的折成一条 base（承载分界的树，消息「base: 已裁剪 N 条更早快照」），保留窗口逐条按原树、原作者 / 提交时间、
+ * 原说明重放。同样的分界算出同样的新链（提交号是确定的）。只写 git 对象（没有引用指着之前都是悬空的），不动引用、不动工作树。
+ */
+async function buildPrunedChain(projectDir: string, boundaryId: string, rootSubject: string, prunedCount: number): Promise<string> {
+  const priorFolded = PRUNE_BASE_LABEL_PATTERN.test(rootSubject) ? Number(PRUNE_BASE_LABEL_PATTERN.exec(rootSubject)?.[1] ?? 0) : 0;
+  const baseLabel = `${PRUNE_BASE_LABEL_PREFIX} ${priorFolded + prunedCount} 条更早快照`;
+  const boundaryMeta = parseLogMeta(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_META_FORMAT}`, boundaryId]))[0]!;
+  const baseTree = await git(projectDir, ["rev-parse", `${boundaryId}^{tree}`]);
+  let parent = await git(projectDir, ["commit-tree", baseTree, "-m", baseLabel], commitEnv(boundaryMeta));
+  // boundary..oldHead 恰为保留窗口（boundary 自身被裁、不入新链）
+  const kept = parseLogMeta(await git(projectDir, ["log", "--reverse", `--pretty=format:${LOG_META_FORMAT}`, `${boundaryId}..HEAD`]));
+  for (const commit of kept) {
+    const tree = await git(projectDir, ["rev-parse", `${commit.id}^{tree}`]);
+    parent = await git(projectDir, ["commit-tree", tree, "-p", parent, "-m", commit.message], commitEnv(commit));
+  }
+  return parent;
 }
 
 /**
- * 把快照 git 史裁到最近 keep 条：更早的 prunedCount 条压成一条 orphan base 提交
- * （承载被裁边界提交的完整 tree，消息「base: 已裁剪 N 条更早快照」），保留窗口内的撤销链逐条可用；
- * 更旧的不可逐条撤销，但 base 本身是合法恢复目标（完整状态不丢），裁前完整历史另有 bundle 备份兜底。
- *
- * 安全边界：全程只动 git 引用与对象库，绝不 checkout/reset——工作树（正稿文件）分毫不动。
- * 真裁前先把裁前完整历史打成 bundle 存到项目目录之外；引用用 CAS 更新（持锁期间 HEAD 被移动即失败中止）。
- * 只有 update-ref 本身（及其之前的建链步骤）失败才回滚分支引用到裁前 HEAD——此时旧链分毫未动，回滚是
- * no-op 级安全，bundle 仅作对象级兜底；update-ref 成功即视为裁剪完成（新链完整合法），其后的
- * reflog expire + gc 失败绝不回滚引用（旧链对象可能已被 gc 部分回收，回滚会让 HEAD 指向丢失对象、
- * 把可用仓库搞坏），只降级为 warning 写进返回值，磁盘晚点回收无妨。keep 不足 / 已有 base 之上真实快照数
- * ≤ keep 时 no-op（重复 prune 天然幂等）。reflog expire + gc 之后旧链才真正不可达、磁盘才真正回收。
+ * 算一次裁剪（不动引用、不动工作树）：存档数不超过 keep（既有 base 不算一条）就不用裁；否则定分界、算出确定的新链头。
  */
-export async function pruneSnapshots(projectDir: string, options: SnapshotPruneOptions = {}): Promise<SnapshotPruneResult> {
-  const keep = clampPruneKeep(options.keep);
-  const dryRun = options.dryRun !== false;
+export async function planPrune(projectDir: string, keepInput?: number): Promise<PrunePlanOutcome> {
+  const keep = clampPruneKeep(keepInput);
   return withProjectLock(projectDir, async () => {
     await settleOrStop(projectDir);
     await ensureRepoUnlocked(projectDir);
     const branch = await assertRepoHealthyForPrune(projectDir);
-
     const revs = (await git(projectDir, ["rev-list", "--reverse", "HEAD"])).split("\n").filter(Boolean);
     const rootSubject = await git(projectDir, ["log", "-1", "--pretty=format:%s", revs[0]!]);
     const rootIsBase = PRUNE_BASE_LABEL_PATTERN.test(rootSubject);
-    // 既有 base 只占 1 条位、不参与「是否够裁」计数——重复 prune 因此是 no-op（幂等）。
+    // 既有 base 只占 1 条位、不参与「是否够裁」计数——重复裁剪因此不用再裁。
     const snapshotCount = revs.length - (rootIsBase ? 1 : 0);
-    if (snapshotCount <= keep) {
-      return { dryRun, keep, totalBefore: revs.length, prunedCount: 0, totalAfter: revs.length, freedCommits: 0 };
-    }
+    if (snapshotCount <= keep) return { kind: "noop", keep, totalBefore: revs.length };
     const prunedCount = snapshotCount - keep;
-    const firstPrunedIndex = rootIsBase ? 1 : 0;
-    const boundaryId = revs[firstPrunedIndex + prunedCount - 1]!;
-    // 裁后新链 = 保留窗口（revs.length - prunedCount - (rootIsBase ? 1 : 0)）+ 1 条新 base；
-    // rootIsBase 时旧 base 一并出链（被新 base 顶替），别再把它算进裁后总数（复审实锤的 off-by-one）。
+    const boundaryId = revs[(rootIsBase ? 1 : 0) + prunedCount - 1]!;
+    // 裁后新链 = 保留窗口 + 1 条新 base；rootIsBase 时旧 base 一并出链（被新 base 顶替）。
     const totalAfter = revs.length - prunedCount + (rootIsBase ? 0 : 1);
-    const freedCommits = revs.length - totalAfter;
+    const newHead = await buildPrunedChain(projectDir, boundaryId, rootSubject, prunedCount);
+    return { kind: "plan", plan: { keep, branch, oldHead: revs[revs.length - 1]!, boundaryId, newHead, totalBefore: revs.length, prunedCount, totalAfter } };
+  });
+}
 
-    if (dryRun) {
-      return { dryRun, keep, totalBefore: revs.length, prunedCount, totalAfter, freedCommits };
-    }
+export type PruneApplyOutcome =
+  | { readonly kind: "done"; readonly warnings: readonly string[] }
+  /** 存档链在算好之后动过（又多了存档、别处改过）：一处没动，重新算。 */
+  | { readonly kind: "moved" };
 
-    const backupDir = options.backupDir ?? join(resolveGlobalDataDir(), "snapshot-backups");
-    await mkdir(backupDir, { recursive: true });
-    const bundlePath = snapshotBackupBundlePath(projectDir, backupDir);
-    await git(projectDir, ["bundle", "create", bundlePath, "HEAD"]);
-
-    const priorFolded = rootIsBase ? Number(PRUNE_BASE_LABEL_PATTERN.exec(rootSubject)?.[1] ?? 0) : 0;
-    const baseLabel = `${PRUNE_BASE_LABEL_PREFIX} ${priorFolded + prunedCount} 条更早快照`;
-    const boundaryMeta = parseLogMeta(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_META_FORMAT}`, boundaryId]))[0]!;
-    const baseTree = await git(projectDir, ["rev-parse", `${boundaryId}^{tree}`]);
-    const baseCommitId = await git(projectDir, ["commit-tree", baseTree, "-m", baseLabel], commitEnv(boundaryMeta));
-
-    // boundary..HEAD 恰为保留窗口（boundary 自身被裁、不入新链）
-    const kept = parseLogMeta(await git(projectDir, ["log", "--reverse", `--pretty=format:${LOG_META_FORMAT}`, `${boundaryId}..HEAD`]));
-    const oldHead = revs[revs.length - 1]!;
+/**
+ * 照算好的裁：书锁里看分支现在指着谁，只认两个号（设计 8.3）——
+ * - 新链头：已经裁完（之前崩在回收那步），只补回收；
+ * - 裁前链头：按同一个分界重建，核出来的链头 = 记下的新链头（对不上停下、如实说），裁前完整历史打成备份（项目目录外），
+ *   再比较交换移引用；
+ * - 都不是：存档链在这期间动过，一处不动。
+ * 引用移成了就算裁完：之后的 reflog expire / gc 只管回收磁盘，失败只记一句，绝不再碰引用。全程不动工作树。
+ */
+export async function applyPrune(projectDir: string, plan: PrunePlan, bundlePath: string): Promise<PruneApplyOutcome> {
+  return withProjectLock(projectDir, async () => {
+    await settleOrStop(projectDir);
+    const branch = await assertRepoHealthyForPrune(projectDir);
+    if (branch !== plan.branch) return { kind: "moved" };
     const branchRef = `refs/heads/${branch}`;
-    // update-ref 是全程唯一移动引用的步骤：它失败 = 旧链分毫未动（CAS 校验 oldHead，持锁期间 HEAD 被移动即拒绝），
-    // 此时回滚到 oldHead 是 no-op 级安全；它成功即视为裁剪完成，之后的回收步骤失败不得再碰引用。
-    try {
-      let parent = baseCommitId;
-      for (const commit of kept) {
-        const tree = await git(projectDir, ["rev-parse", `${commit.id}^{tree}`]);
-        parent = await git(projectDir, ["commit-tree", tree, "-p", parent, "-m", commit.message], commitEnv(commit));
-      }
-      await git(projectDir, ["update-ref", branchRef, parent, oldHead]);
-    } catch (error) {
-      await git(projectDir, ["update-ref", branchRef, oldHead]).catch(() => undefined);
-      throw new Error(`快照历史裁剪失败，已恢复到裁前状态；裁前完整历史备份：${bundlePath}。原始错误：${error instanceof Error ? error.message : String(error)}`);
+    const head = await git(projectDir, ["rev-parse", branchRef]);
+    if (head !== plan.newHead) {
+      if (head !== plan.oldHead) return { kind: "moved" };
+      const revs = (await git(projectDir, ["rev-list", "--reverse", "HEAD"])).split("\n").filter(Boolean);
+      const rootSubject = await git(projectDir, ["log", "-1", "--pretty=format:%s", revs[0]!]);
+      const rebuilt = await buildPrunedChain(projectDir, plan.boundaryId, rootSubject, plan.prunedCount);
+      if (rebuilt !== plan.newHead) throw new Error("重建出来的存档链和算好的对不上，没裁。");
+      await mkdir(dirname(bundlePath), { recursive: true });
+      await git(projectDir, ["bundle", "create", bundlePath, "HEAD"]);
+      // 比较交换：引用还是裁前链头才移（不是就失败、一处没动）。
+      await git(projectDir, ["update-ref", branchRef, plan.newHead, plan.oldHead]);
     }
-    // 裁剪已完成：reflog expire / gc 只负责磁盘回收，失败降级为 warning（旧链对象暂留磁盘、仓库保持可用）。
     const warnings: string[] = [];
     try {
       await git(projectDir, ["reflog", "expire", "--expire=now", "--all"]);
       await git(projectDir, ["gc", "--prune=now", "--quiet"]);
     } catch (error) {
-      warnings.push(`快照历史裁剪已完成，但旧对象回收失败（磁盘暂不释放，不影响仓库可用性，可稍后重试）：${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`裁好了，但旧存档占的空间这次没收回来（不影响使用，下次裁剪再收）：${error instanceof Error ? error.message : String(error)}`);
     }
-    return {
-      dryRun,
-      keep,
-      totalBefore: revs.length,
-      prunedCount,
-      totalAfter,
-      freedCommits,
-      baseCommitId,
-      backupBundlePath: bundlePath,
-      ...(warnings.length > 0 ? { warnings } : {}),
-    };
+    return { kind: "done", warnings };
   });
 }

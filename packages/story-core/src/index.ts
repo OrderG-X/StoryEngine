@@ -149,7 +149,7 @@ export {
   type BookSnapshot,
 } from "./store/book.js";
 export { bumpRevision, revisionWrite } from "./store/revision.js";
-export { draftStampOf, freshDraftGensWrite, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
+export { bookEpochWrite, draftStampOf, opBookEpoch, freshDraftGensWrite, readBookEpoch, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
 export {
@@ -161,7 +161,7 @@ export {
   setLegacyTxIoHookForTests,
   type LegacyRecoveryNotice,
 } from "./store/legacy-transaction.js";
-export { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR } from "./store/paths.js";
+export { BOOK_EPOCH_PATH, CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, isUndoablePath, KEPT_TX_DIR, LEDGER_DIR, planChapterOfPath, planPath, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR, UNDOABLE_DIRS, UNDOABLE_FILES } from "./store/paths.js";
 export { isSavedCopyId, listSavedDrafts, readSavedDraft, settleSavedCopy, type SavedDraft } from "./store/saved-copies.js";
 export {
   hasPendingTransactions,
@@ -169,7 +169,9 @@ export {
   recoverBookTransactions,
   recoverTransactions,
   setAsideBrokenTransactions,
+  sha256Bytes,
   type RecoveryReport,
+  type TxEffect,
 } from "./store/transaction.js";
 
 export { DEFAULT_STALE_AFTER, project, type ProjectionInput, type ProjectionOptions } from "./projection/project.js";
@@ -211,13 +213,19 @@ export {
 export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
-export { runCommand, withSettledBook } from "./commands/runner.js";
+export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
 export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { decisionRecord, DecisionRecordArgs, MAX_DECISIONS_PER_RECORD, type DecisionRecordResult } from "./commands/decision-record.js";
 export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
+export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
+export { historyApply, HistoryApplyArgs, receiptOnDisk, type HistoryApplyResult } from "./history/apply.js";
+export { BOOK_START_KEYS, HISTORY_APPLY_COMMAND, lastUndoable, lastUndoableIn, planRevert, readReceipts, revertTargetOf, undoUnsure, undoUnsureIn, type ImpactItem, type UnsureFile, type LaterWrite, type PlannedChange, type RevertPlan, type RevertTarget } from "./history/revert.js";
+export { planRestore, type RestorePlan } from "./history/restore.js";
+export { HISTORY_FILE_MAX_BYTES, ledgerChapterOfPath, rangeDigestOf, readUndoableFiles, type HistoryReader } from "./history/store.js";
+export { refsOfDecision, refsOfEntry, type Ref, type RefWhere } from "./history/references.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
 export { bookImportText, BookImportTextArgs, TEXT_IMPORT_MAX_CHAPTERS, type BookImportTextResult } from "./import/text-import.js";
 export {

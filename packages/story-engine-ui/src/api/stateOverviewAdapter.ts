@@ -7,7 +7,7 @@ import type { ChapterNavItem, ChapterWorkspaceData } from "../types.js";
 type UiChapterFileState = NonNullable<StateOverview["uiChapterFiles"]>[number];
 
 /**
- * 选定工作区当前章：写类工具（generate_draft/revise_draft/commit_apply）回传的 chapter 是「这次实际操作的章」，
+ * 选定工作区当前章：写类工具（revise_draft/commit_apply）、写稿操作回传的 chapter 是「这次实际操作的章」，
  * 它是权威——必须盖过 store 里用户停留的旧章号，否则 UI 停在旧章、autosave 把新章正文写回旧章草稿文件（跨章污染）。
  * 只读刷新不带 toolChapter → 退回 store 旧章，不把用户从正在看的章弹走。两者都缺/退化值 → undefined 交给 overview 推导。
  * 模型无关：toolChapter 即便被传成 0 / 负数 / 小数等退化值也安全忽略。

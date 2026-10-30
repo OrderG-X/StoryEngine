@@ -87,6 +87,15 @@ describe("buildModelSettingsConfig 表单路径保留 provider 上表单不认�
     expect(providers.deepseek?.apiKeyEnv).toBe("DEEPSEEK_API_KEY");
   });
 
+  it("额度组归表单管：填了就写；清空了不留磁盘上的旧值", () => {
+    const { config: filled } = buildModelSettingsConfig([{ ...provider, quotaGroup: "套餐甲" }], tasks);
+    expect((filled.providers as Record<string, Record<string, unknown>>).deepseek?.quotaGroup).toBe("套餐甲");
+    const { config: cleared } = buildModelSettingsConfig([provider], tasks, {
+      previousRawText: previousRawTextWith({ id: "deepseek", type: "openai-compatible", baseUrl: provider.baseUrl, quotaGroup: "旧组" }),
+    });
+    expect(JSON.parse(JSON.stringify(cleared.providers)).deepseek.quotaGroup).toBeUndefined();
+  });
+
   it("无 customHeaders：磁盘对象只有已知字段时，输出与不传 previousRawText 深相等（零行为漂移）", () => {
     const { config: baseline } = buildModelSettingsConfig([provider], tasks, { chatHistoryBudgetTokens: 300_000 });
     const { config: merged } = buildModelSettingsConfig([provider], tasks, {

@@ -2,6 +2,8 @@
 // 编辑部 R3 后这里只测确定性工具集（原句核对 / 通读解析 / 核账记忆 / 合并去重 / 账本对账 / 对冲）；
 // 调模型的编排（组合查错 combo）已删，核账员那一路的行为见 editorial/checker.test.ts 和 check-service.test.ts。
 import { describe, expect, it, vi } from "vitest";
+import { ModelCallError } from "../../lib/ai-errors.js";
+import { StopSignal } from "../../lib/operations/context.js";
 import {
   containsQuote,
   hedged,
@@ -116,6 +118,45 @@ describe("模型调用的对冲 hedged", () => {
     const broken = vi.fn(async () => { throw new Error("一直断"); });
     await expect(hedged(broken, 10_000)).rejects.toThrow("一直断");
     expect(broken).toHaveBeenCalledTimes(2);
+  });
+
+  it("第一份结果不明 / 被拒：不补发（写作版本 P2a 4.2：可能已经在算），如实失败", async () => {
+    for (const error of [new ModelCallError("断了", "unknown"), new ModelCallError("422", "rejected", 422)]) {
+      const run = vi.fn(async () => { throw error; });
+      await expect(hedged(run, 10_000)).rejects.toBe(error);
+      expect(run).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("赢家一到就掐输家（hedge_loser），等输家结完才交结果", async () => {
+    const order: string[] = [];
+    let calls = 0;
+    const run = vi.fn(async (signal: AbortSignal) => {
+      calls += 1;
+      if (calls === 1) {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        order.push(`输家结了：${String((signal.reason as StopSignal).stop.type)}/${String(((signal.reason as StopSignal).stop as { policy?: string }).policy)}`);
+        throw signal.reason;
+      }
+      await sleep(5);
+      order.push("赢家到了");
+      return "赢家";
+    });
+    const value = await hedged(run, 20);
+    order.push("交出结果");
+    expect(value).toBe("赢家");
+    expect(order).toEqual(["赢家到了", "输家结了：policy/hedge_loser", "交出结果"]);
+  });
+
+  it("被停（取消）优先报出去", async () => {
+    const stop = new StopSignal({ type: "cancel" });
+    let calls = 0;
+    const run = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) { await sleep(30); throw stop; }
+      throw new ModelCallError("断了", "unknown");
+    });
+    await expect(hedged(run, 5)).rejects.toBe(stop);
   });
 });
 

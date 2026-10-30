@@ -3,13 +3,13 @@
  * → 有问题交回章纲员改一轮（不循环）。材料和天数归一这些纯函数在 plan-materials.ts。
  */
 import { basisDigestBefore, canonicalJson, sha256 } from "@actalk/story-core";
-import { readChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 import { readStoryTimeline } from "../book/story-timeline.js";
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
-  catchUpReaders,
   checkPlanByReader,
+  coldPausedNote,
   describeReaderWait,
   planChapterByPlanner,
   revisePlanByPlanner,
@@ -19,6 +19,7 @@ import {
 import { containsQuote, normalize } from "./continuity/check-chapter.js";
 import { collectPlanMaterials } from "./plan-materials.js";
 import { withStep } from "../lib/token-meter.js";
+import { requestReaderBackfill } from "../lib/reader-backfill.js";
 import { readWithStableBasisForWork } from "../book/truth-basis.js";
 
 export interface ResolvedChapterPlan {
@@ -27,10 +28,12 @@ export interface ResolvedChapterPlan {
   readonly note: string;
   /** 沿用了这章已有的章纲（同一方向重写时不重拟）。 */
   readonly reused: boolean;
+  /** 新拟的这份要落盘（只在内存里拟，落盘由调用方定：出稿操作走核心 plan.save）。沿用的、没拟成的没有。 */
+  readonly save?: true;
 }
 
 /** 章纲员 / 核账员审纲当场最多补多少章笔记；超过就如实说「还在读前文」，笔记在后台补，这次不硬等。 */
-const PLANNER_MAX_CATCH_UP = 10;
+export const PLANNER_MAX_CATCH_UP = 10;
 
 /**
  * 编辑部拟章纲：章纲员窗口拟纲 → 核账员窗口审纲 → 有问题交回章纲员改一轮（不循环）。
@@ -43,14 +46,19 @@ async function planByEditorialRoom(input: {
   readonly direction?: string;
   readonly plannerCallModel?: BrainCallModel;
   readonly planCheckReaderCallModel?: BrainCallModel;
+  readonly maxCatchUp?: number;
+  readonly maxVolumeBuilds?: number;
 }, direction: string): Promise<ResolvedChapterPlan> {
   const plannerCallModel = input.plannerCallModel ?? callConfiguredPlannerModel;
+  const maxCatchUp = input.maxCatchUp ?? PLANNER_MAX_CATCH_UP;
+  const volumes = input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {};
   const planned = await withStep("拟", () => planChapterByPlanner({
     projectDir: input.projectDir,
     chapter: input.chapter,
     ...(direction ? { direction } : {}),
     callModel: plannerCallModel,
-    maxCatchUp: PLANNER_MAX_CATCH_UP,
+    maxCatchUp,
+    ...volumes,
   }));
   if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
   // 等读那一句（R5.2 必做 2）：拟纲前先等章纲员当场补了笔记，如实说补了哪几章、花了多久。
@@ -60,13 +68,13 @@ async function planByEditorialRoom(input: {
   //   数字见 scripts/eval/results/r52-cold-gap-*.json。）
   let planColdNote = "";
   if (planned.cold) {
-    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: plannerCallModel });
+    requestReaderBackfill(input.projectDir, { roles: ["planner"], upTo: input.chapter - 1 });
     planColdNote = `章纲员还没读完全书（第 ${planned.cold.notedThrough} / ${input.chapter - 1} 章），这次按${
       [
         ...(planned.cold.notedThrough > 0 ? ["已读笔记"] : []),
         ...(planned.cold.rawTo > 0 ? [`第 ${planned.cold.rawFrom}～${planned.cold.rawTo} 章原文`] : []),
       ].join(" + ")
-    }拟的纲，更早的细节可能漏。`;
+    }拟的纲，更早的细节可能漏。${coldPausedNote(planned.cold)}`;
   }
   // 动笔前核账员先审章纲：它读过前文，找章纲里和前文对不上的要点（照片那种：第 5 章已带回家，章纲又安排来取）。
   const checkCallModel = input.planCheckReaderCallModel ?? callConfiguredBrainModel;
@@ -74,7 +82,8 @@ async function planByEditorialRoom(input: {
     projectDir: input.projectDir,
     plan: planned.plan,
     callModel: checkCallModel,
-    maxCatchUp: PLANNER_MAX_CATCH_UP,
+    maxCatchUp,
+    ...volumes,
   }));
   const brief = (lines: readonly string[]) => `${lines.slice(0, 2).join("；")}${lines.length > 2 ? "等" : ""}`;
   const coldBasis = (cold: { readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number }): string =>
@@ -87,8 +96,8 @@ async function planByEditorialRoom(input: {
   // 冷窗口审纲：核账员还没读完全书，这次按已有笔记 + 最近 K 章原文审的，笔记后台接着补（点名 checker）。
   let checkColdNote = "";
   if (checked.cold) {
-    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: checkCallModel, roles: ["checker"] });
-    checkColdNote = `核账员还没读完全书（第 ${checked.cold.notedThrough} / ${input.chapter - 1} 章），这次按${coldBasis(checked.cold)}审的纲，更早的细节可能漏。`;
+    requestReaderBackfill(input.projectDir, { roles: ["checker"], upTo: input.chapter - 1 });
+    checkColdNote = `核账员还没读完全书（第 ${checked.cold.notedThrough} / ${input.chapter - 1} 章），这次按${coldBasis(checked.cold)}审的纲，更早的细节可能漏。${coldPausedNote(checked.cold)}`;
   }
   const coldNote = [planColdNote, checkColdNote].filter(Boolean).map((note) => `（${note}）`).join("");
   const waitNote = `${planWaitNote}${checkWaitNote}`;
@@ -124,7 +133,8 @@ async function planByEditorialRoom(input: {
     plan: planned.plan,
     problems: autoFix,
     callModel: plannerCallModel,
-    maxCatchUp: PLANNER_MAX_CATCH_UP,
+    maxCatchUp,
+    ...volumes,
   }));
   if (revised.ok) {
     const reviseColdNote = revised.cold && !planned.cold ? "（改纲这次按最近几章原文改的。）" : "";
@@ -169,10 +179,28 @@ async function readPlanBasis(projectDir: string, chapter: number, direction?: st
   }
 }
 
+async function existingPlanState(projectDir: string, chapter: number, direction: string) {
+  const existing = await readChapterPlan(projectDir, chapter).catch(() => undefined);
+  return { existing, start: await readPlanBasis(projectDir, chapter, direction) };
+}
+
+/** 作者方向没变（同为空或原话相同），而且是作者给的、或拟纲后前文没改。 */
+function reusable(existing: ChapterPlan, direction: string, basis: string | undefined): boolean {
+  return (existing.direction ?? "") === direction && (existing.source === "author" || (basis !== undefined && existing.basis === basis));
+}
+
+/** 这次出稿会不会沿用本章已有章纲（出稿操作据此定要不要先让章纲员读前文；拟纲那步还会再判一次）。 */
+export async function chapterPlanReusable(projectDir: string, chapter: number, direction?: string): Promise<boolean> {
+  const trimmed = direction?.trim() ?? "";
+  const { existing, start } = await existingPlanState(projectDir, chapter, trimmed);
+  return existing !== undefined && reusable(existing, trimmed, start?.key);
+}
+
 /**
  * 出稿前拿到本章章纲：这章已有章纲、作者方向没变（同为空或原话相同）、拟纲后前文也没改 → 沿用（「重写这一章」保持同一份章纲）；
  * 否则编辑部重拟。前文改过（定论、改了前面哪章、记了裁定）还沿用，章纲就可能和前文对不上又没人审（外部审查 2026-10-28）。
  * 作者给的章纲照旧沿用。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
+ * 只在内存里拟、审、改（写作版本 P2a 3.1）：新拟的带 save，调用方落盘。
  */
 export async function resolveChapterPlanForDraft(input: {
   readonly projectDir: string;
@@ -183,37 +211,25 @@ export async function resolveChapterPlanForDraft(input: {
   readonly plannerCallModel?: BrainCallModel;
   /** 核账员审章纲的模型调用（测试注入）；缺省走 qualityCheck 槽。 */
   readonly planCheckReaderCallModel?: BrainCallModel;
+  /** 章纲员、核账员当场最多补几章笔记（出稿操作给 0：笔记在 notes 那一步补过了）；缺省 10。 */
+  readonly maxCatchUp?: number;
+  /** 当场最多新生成几个卷节点（出稿操作给 0）；缺省不限。 */
+  readonly maxVolumeBuilds?: number;
 }): Promise<ResolvedChapterPlan> {
   const direction = input.direction?.trim() ?? "";
-  const existing = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
-  const start = await readPlanBasis(input.projectDir, input.chapter, direction);
+  const { existing, start } = await existingPlanState(input.projectDir, input.chapter, direction);
   const basis = start?.key;
   const sameDirection = existing !== undefined && (existing.direction ?? "") === direction;
-  if (existing && sameDirection && (existing.source === "author" || (basis !== undefined && existing.basis === basis))) {
+  if (existing && reusable(existing, direction, basis)) {
     return { plan: existing, note: `沿用本章已有章纲：${existing.summary}${directionChangeNote(existing)}`, reused: true };
   }
   const planned = await planByEditorialRoom(input, direction);
   if (!planned.plan) return planned;
   // 拟完再读一遍：拟纲那段时间里材料没变、书上也没写过，这份章纲才挂指纹（变了就不挂，下次重拟）。
   const end = start ? await readPlanBasis(input.projectDir, input.chapter, direction) : undefined;
-  const plan = basis && end?.key === basis && end.digest === start?.digest
-    ? await writeChapterPlan(input.projectDir, { ...planned.plan, basis })
-    : planned.plan;
+  const plan = basis && end?.key === basis && end.digest === start?.digest ? { ...planned.plan, basis } : planned.plan;
   const staleNote = sameDirection && existing.basis !== undefined && basis !== undefined ? "前文改过，章纲按现在的重拟了。" : "";
-  return { ...planned, plan, note: `${staleNote}${planned.note}${directionChangeNote(plan)}` };
-}
-
-/**
- * 「AI 另写几版」拿章纲：作者没给新方向 = 照本章已有章纲另写，方向沿用章纲里记着的作者原话；
- * 不拿空方向重拟——那会把作者给这章的方向冲掉（长篇实跑第 16 章：两版候选都没写作者点名的事，章纲也被覆盖）。
- */
-export async function resolveChapterPlanForReroll(
-  input: Parameters<typeof resolveChapterPlanForDraft>[0],
-): Promise<ResolvedChapterPlan & { readonly direction?: string }> {
-  const given = input.direction?.trim();
-  const direction = given || (await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined))?.direction;
-  const resolved = await resolveChapterPlanForDraft({ ...input, direction: direction ?? "" });
-  return direction ? { ...resolved, direction } : resolved;
+  return { ...planned, plan, save: true, note: `${staleNote}${planned.note}${directionChangeNote(plan)}` };
 }
 
 /** 章纲员没照方向原话安排的地方，回执如实告诉作者（P7：方向里的「铜盒」被悄悄改成「怀表」，作者不知道）。 */

@@ -1,6 +1,7 @@
-import type { ChapterAgentCard, DraftReviewView, DraftRevisionPreview, QualityCardReport, ToolStep } from "../api/types.js";
+import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { SuggestedAction, ChapterWorkflowState } from "./workflow.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
+import type { CanonResultData, PendingActionData } from "../api/agentChatClient.js";
 
 /** Async work is owned by the exact book, chapter, chat session and operation. */
 export interface WorkspaceOperationTarget {
@@ -10,17 +11,11 @@ export interface WorkspaceOperationTarget {
   readonly operationId: string;
 }
 
-export type WorkspaceRevisionPreview = DraftRevisionPreview & {
-  readonly originTarget: WorkspaceOperationTarget;
-};
-
 /** 一份候选稿（拆开的：正文 + 章名；没章名 = 选用时沿用作者眼前的）。 */
-export interface WorkspaceDraftCandidate {
-  readonly body: string;
-  readonly title?: string;
-  readonly originTarget: WorkspaceOperationTarget;
-  /** AI 出稿时一起写的第几版（对话「另外几版」卡打开的）；没有＝「再来一版」现抽的候选。 */
-  readonly version?: number;
+/** 并排面板上的一版（「另外几版」卡点开的）：哪一章、哪本书的，点「用这版」带着候选号和指纹交 draft.adopt。 */
+export interface WorkspaceDraftCandidate extends DraftVersionData {
+  readonly chapter: number;
+  readonly projectPath: string;
 }
 
 export interface ChapterNavItem {
@@ -74,6 +69,11 @@ export interface ChapterMessage {
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
   /** 作者发这句时在看哪一章（只记在作者的话上；右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
   readonly chapter?: number;
+  /**
+   * 作者这句发出的时间（写作版本 P2a，只记在作者的话上）：和消息号一起随请求发，服务端按「消息号」认这一句交的操作；
+   * 重发沿用存下的这个，不重新取时间。
+   */
+  readonly issuedAt?: string;
 }
 
 /**
@@ -81,44 +81,70 @@ export interface ChapterMessage {
  * 老会话读的时候把老字段转成这里的卡。一条消息上同一种卡最多一张。
  */
 export type MessageCard =
-  /** 定稿预览（commit_preview）：裁决照实显示，不靠模型转述。 */
-  /** 定稿预览。checkedVersion＝预览时稿纸的版本号：稿子没再变就直接打开这份清单，不再重跑记账员（重构 P6）。 */
-  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData; readonly checkedVersion?: string | null }
-  /** 定稿回执（commit_apply 的入库报告）：这章改了哪些账。原样存，渲染侧防御解析。 */
+  /**
+   * 定稿清单（写作版本 P2a 片 4A：commit.prepare 出的清单或定不了的原因）：裁决照实显示，不靠模型转述。opId＝出它的那次定稿
+   * （在等作者点「确认定稿」时，确认就是接着做它）；checkedVersion＝清单到时稿纸的版本号：稿子没再变就直接打开这份，不再重跑记账员。
+   */
+  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData; readonly opId?: string; readonly checkedVersion?: string | null }
+  /** 定稿回执（定成了的那次定稿记了多少账）：原样存，渲染侧防御解析。 */
   | { readonly type: "commit-report"; readonly report: unknown }
   /**
    * 核账（check_continuity）。dismissed＝作者点过「不是问题」的条目（continuityItemKey），对话卡和稿纸划线共用；
    * checkedVersion＝结果到时稿纸的版本号（核的是这一版），稿纸版本变了就是「核过后改过稿」。
    */
   | { readonly type: "continuity"; readonly check: ContinuityCheckData; readonly dismissed?: readonly string[]; readonly checkedVersion?: string | null }
-  /** 审稿（ai_review）问题清单。 */
-  | { readonly type: "draft-review"; readonly review: DraftReviewView }
-  /** 硬伤检查（quality_check）。 */
-  | { readonly type: "quality"; readonly report: QualityCardReport }
-  /** 机器腔体检（check_ai_flavor）；fixedIds＝已点「改掉这句」改成功的几条。 */
-  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[] }
+  /** 内容审阅问题清单。checkedVersion＝审的是工作稿哪一版（审定稿时没有），和核账卡同一口径。 */
+  | { readonly type: "draft-review"; readonly review: DraftReviewView; readonly checkedVersion?: string | null }
+  /** 硬伤检查。 */
+  | { readonly type: "quality"; readonly report: QualityCardReport; readonly checkedVersion?: string | null }
+  /** 机器腔体检；fixedIds＝已点「改掉这句」改成功的几条。 */
+  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[]; readonly checkedVersion?: string | null }
+  /** 一次操作（写作版本 P2a：对话里、按钮交上的检查）：在做到哪、停着为什么停、能点什么。做完的结果另挂一张卡。 */
+  | { readonly type: "operation"; readonly op: OperationCardData }
   /** AI 提的「下一步」选项（suggest_next_steps）。 */
   | { readonly type: "next-steps"; readonly prompt: NextStepPrompt }
   /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错，reason＝服务端分的类（P11，老消息没有）。 */
   | { readonly type: "error"; readonly detail?: string; readonly reason?: AiErrorReason }
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
   | { readonly type: "status-notes"; readonly notes: readonly string[] }
-  /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
+  /** 想走法（plan.propose，写作版本 P2a；P6 起的头脑风暴）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
   | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number }
-  /** AI 一次写几版（generate_draft candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
-  | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData }
-  /**
-   * 定论（P12：核账卡「以第 N 章为准」、对话里「以这个为准」）：定论 + 前文要改的几句、账和设定本跟着改的。
-   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）；
-   * dropped＝作者点了「不改了」（整张不要，书里没动；能撤回）。
-   */
-  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string; readonly dropped?: true };
+  /** AI 一次写几版（写稿 candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
+  | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData };
 
 export type MessageCardType = MessageCard["type"];
 
-/** 定论卡：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
+/** 操作卡（服务端操作视图里给界面的那几样；中文说法都是服务端给的，界面不自己拼）。 */
+export interface OperationCardData {
+  readonly opId: string;
+  readonly kind: string;
+  readonly mode?: string;
+  readonly chapter?: number;
+  /** 做的什么（「核账·第 3 章」）。 */
+  readonly what: string;
+  readonly state: "queued" | "running" | "waiting_author" | "paused" | "succeeded" | "failed" | "cancelled" | "obsolete";
+  /** 状态的中文说法（停着的带为什么停）。 */
+  readonly stateText: string;
+  /** 作者能点的。 */
+  readonly allowed: readonly ("resume" | "cancel")[];
+  /** 结论或没成的原因。 */
+  readonly summary: string;
+  /** 结束了的那一句（服务端拼好的，卡上照显示）；没结束是空串。 */
+  readonly conclusion?: string;
+  /** 在做的时候最新的一句进度（「核账员在读第 3 章」）；结束了清掉。 */
+  readonly progress?: string;
+  /** 记录到第几条事件（迟到的旧记录不盖新的）。 */
+  readonly eventSeq: number;
+  /** 结束时这一轮的话里已经说了结论（卡上不再重复）；后台做完、重开才收到的没有。 */
+  readonly announced?: true;
+  /** 停着等作者点的（改写的改前改后 +「换上 / 再改一版」）：只挂在最近交它、点它的那条消息上。 */
+  readonly pending?: PendingActionData;
+  /** 定论做完了：卡、作者划掉的、改没改（核账卡认哪几条被它改掉了；存进消息）。 */
+  readonly canon?: CanonResultData;
+}
+
+/** 定论卡（canon.propose 的预览、结果）：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
 export interface SettleCardData {
-  readonly token: string;
   readonly canon: string;
   /** 设定本里已经有这条定论了（不再记一次）。 */
   readonly canonExists: boolean;
@@ -144,9 +170,21 @@ export interface SettleCardData {
 }
 
 /** 「另外几版」卡：哪一章、落选的几版（index＝第几版，1 起）。 */
+/** 「另外几版」卡（写作版本 P2a 片 2D）：几版都留成了候选，带候选号和指纹，点「用这版」交 draft.adopt 换上。 */
 export interface DraftVersionsCardData {
   readonly chapter: number;
-  readonly versions: readonly { readonly index: number; readonly body: string }[];
+  /** 作者要自己挑的几版（一版都没换上）；没有 = 选优换上了一版，这是落选的几版。 */
+  readonly pick?: true;
+  readonly versions: readonly DraftVersionData[];
+}
+
+export interface DraftVersionData {
+  /** 第几版（1 起）。 */
+  readonly index: number;
+  readonly candidateId: string;
+  readonly sha: string;
+  readonly title?: string;
+  readonly body: string;
 }
 
 /** 头脑风暴卡：章纲员出的几种走法 + 核账员核前文的结果（线索只带名字，不带编号）。 */
@@ -203,25 +241,19 @@ export interface ContinuityCheckItemData {
   readonly revisited?: { readonly from: string };
 }
 
-/** 「定稿预览」卡的确定性数据（commit_preview 工具输出的投影子集，渲染侧防御解析）。 */
+/** 定稿清单卡的数据（服务端 services/commit-view.ts 的 CommitPreviewView；防御解析见 utils/commitPreviewCard.ts）。 */
 export interface CommitPreviewCardData {
   readonly chapter: number;
   readonly canCommit: boolean;
-  /** 阻断理由（引擎确定性判定：缺稿/质检硬伤/名字漂移等）。非空时 canCommit 必为 false。 */
+  /** 定不了的原因（引擎确定性判定：缺稿 / 硬伤 / 记账员没记成等）。非空时 canCommit 必为 false。 */
   readonly blockingReasons?: readonly string[];
   readonly summary?: string;
-  /** 质量问题分层计数；缺省时不渲染该行。 */
-  readonly draftIssueCount?: number;
-  readonly semanticIssueCount?: number;
-  /** R7.7·报告 4.3：质量问题明细文案，卡内默认折叠展开；不再指向界面上不存在的「质检卡」。 */
+  /** 正文硬闸没过的地方（卡内默认折叠）。 */
   readonly draftIssues?: readonly string[];
-  readonly semanticIssues?: readonly string[];
   /** 记账员交了、但原句在正文里找不到或指向前文没有的东西，这次没记上的（带原因，人话）。 */
   readonly notRecorded?: readonly string[];
   /** 要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……）。 */
   readonly notes?: readonly string[];
-  /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
-  readonly previewToken?: string;
   /** 只差字数下限：定稿窗口给「就这么短，照样定稿」。 */
   readonly shortOnly?: boolean;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */

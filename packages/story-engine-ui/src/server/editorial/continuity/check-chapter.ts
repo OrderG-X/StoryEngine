@@ -13,6 +13,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDraftFile, splitUnits } from "@actalk/story-core";
+import { canCallAgain } from "../../lib/llm-client.js";
+import { OperationStopped, StopSignal } from "../../lib/operations/context.js";
 import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js";
 import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
 import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
@@ -274,44 +276,59 @@ function spanBetween(text: string, a: string, b: string): string | undefined {
   return text.slice(Math.min(at, bt), Math.max(at + a.length, bt + b.length));
 }
 
-/** 先发一份；afterMs 后还没结果就再发一份；先成功的为准，两份都失败才算失败。 */
-export function hedged<T>(run: () => Promise<T>, afterMs: number): Promise<T> {
+/**
+ * 先发一份；afterMs 后还没结果就并行再发一份（定时对冲：两份都记账、都占额度）；先成功的为准。
+ * 赢家一到用 `hedge_loser` 掐掉另一份，等它结算完才交出结果（写作版本 P2a 4.2：输家不会迟到成「结果不明」）。
+ * 第一份失败、对冲还没发：只有 canCallAgain 放行（产物不能用、没发出去、不是模型调用的错）才马上补发一份；
+ * 结果不明、被拒、被停的不再发，等已经发出的另一份，或如实失败。
+ */
+/** 对冲最多几份（额度按它算，写作版本 P2a 4.5）。 */
+export const HEDGE_MAX_COPIES = 2;
+
+export function hedged<T>(run: (signal: AbortSignal) => Promise<T>, afterMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    let started = 0;
-    let failed = 0;
-    let lastError: unknown;
-    const attempt = () => {
-      started += 1;
-      run().then(
+    const copies: AbortController[] = [];
+    const errors: unknown[] = [];
+    let running = 0;
+    let winner: { readonly value: T } | undefined;
+    const finish = () => {
+      if (running > 0) return;
+      clearTimeout(timer);
+      if (winner) resolve(winner.value);
+      // 被停（取消 / 暂停 / 额度）优先报出去，上层按它停下，不当成一次普通失败。
+      else reject(errors.find((error) => error instanceof StopSignal || error instanceof OperationStopped) ?? errors.at(-1));
+    };
+    const start = () => {
+      const controller = new AbortController();
+      copies.push(controller);
+      running += 1;
+      void Promise.resolve().then(() => run(controller.signal)).then(
         (value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(value);
+          running -= 1;
+          if (!winner) {
+            winner = { value };
+            for (const other of copies) if (other !== controller) other.abort(new StopSignal({ type: "policy", policy: "hedge_loser" }));
+          }
+          finish();
         },
         (error: unknown) => {
-          failed += 1;
-          lastError = error;
-          if (!settled && failed >= started && (started >= 2 || timerFired)) {
-            settled = true;
-            reject(lastError);
-          } else if (!settled && started < 2) {
-            // 第一份先失败了：不用等对冲时间，马上补发一份（就是原先的「失败重试一次」）。
-            clearTimeout(timer);
-            timerFired = true;
-            attempt();
+          running -= 1;
+          if (!winner) {
+            errors.push(error);
+            if (running === 0 && copies.length < HEDGE_MAX_COPIES && canCallAgain(error)) {
+              start();
+              return;
+            }
           }
+          finish();
         },
       );
     };
-    let timerFired = false;
     const timer = setTimeout(() => {
-      timerFired = true;
-      if (!settled && started < 2) attempt();
+      if (!winner && running > 0 && copies.length < HEDGE_MAX_COPIES) start();
     }, afterMs);
     (timer as unknown as { unref?: () => void }).unref?.();
-    attempt();
+    start();
   });
 }
 

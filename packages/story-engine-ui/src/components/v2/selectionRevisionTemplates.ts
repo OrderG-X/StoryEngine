@@ -1,8 +1,6 @@
-import type { DraftRevisionTask } from "../../api/types.js";
-
 /**
  * 选区浮动操作条的 6 个固定指令模板（阶段三块②）。
- * 每个按钮 = 一条固定的 revisionGoal，喂给现成的 draft-revision 路由（按选中片段改写、写前快照、可撤销）。
+ * 每个按钮 = 一条固定的 revisionGoal，交改写操作（片 2C：先给作者看改法、点「换上」才换，换前存档、可撤销）。
  * 这些是 V2「Skill 系统」的地基；V1 不开放用户自建。模板**题材中立**——只写作工艺、不含任何题材专名。
  */
 
@@ -86,40 +84,12 @@ export const VISIBLE_SELECTION_REVISION_TEMPLATES: readonly SelectionRevisionTem
   SELECTION_REVISION_TEMPLATES.filter((template) => !template.hidden);
 
 /**
- * 由选区文本 + 模板键构建一条 DraftRevisionTask（喂给 /api/draft/revision/preview）。
- * 选区为空或模板键非法 → 返回 null（调用方据此明示，不发请求）。targetText 保持选区原样
- * （路由侧自己 trim 做唯一性匹配），只在整体空白时拒绝。
+ * 选区改写的改法：模板目标，作者另说了要求（「自己说」、AI 味卡给这句的方向）拼在后面、不替换模板目标。
+ * 模板键不对是 null（调用方据此明示，不交）。
  */
-/**
- * 选区改写的 preview 是不是「没改动」（模型调用失败时 draft-revision 会返回 afterText===beforeText 的安全兜底，
- * 或模型没产出改动）。选区改写是用户显式要求改写，no-op 一律视为「没改成」——调用方据此**跳过 apply、诚实报失败**，
- * 绝不把兜底 no-op 当成功 apply、绝不谎报「已改写」。
- */
-export function isNoOpRevisionPreview(preview: { readonly beforeText: string; readonly afterText: string }): boolean {
-  return preview.afterText.trim() === preview.beforeText.trim();
-}
-
-export function buildSelectionRevisionTask(input: {
-  readonly selectionText: string;
-  readonly key: SelectionRevisionKey;
-  readonly chapter: number;
-  /** 额外改写方向（如去 AI 味体检给这句的 suggestedFix）。非空时拼在模板目标之后，不替换模板目标。 */
-  readonly extraGoal?: string;
-}): DraftRevisionTask | null {
-  const template = SELECTION_REVISION_TEMPLATES.find((item) => item.key === input.key);
-  if (!template || !input.selectionText.trim()) return null;
-  const extra = input.extraGoal?.trim();
-  const revisionGoal = extra
-    ? `${template.revisionGoal}\n\n针对本句的具体方向：${extra}`
-    : template.revisionGoal;
-  return {
-    id: `selection-rewrite-${template.key}-ch${input.chapter}`,
-    chapter: input.chapter,
-    targetType: "section",
-    targetText: input.selectionText,
-    problemSummary: template.problemSummary,
-    revisionGoal,
-    constraints: [],
-    status: "pending",
-  };
+export function selectionEditGoal(key: SelectionRevisionKey, extraGoal?: string): string | null {
+  const template = SELECTION_REVISION_TEMPLATES.find((item) => item.key === key);
+  if (!template) return null;
+  const extra = extraGoal?.trim();
+  return extra ? `${template.revisionGoal}\n\n针对本句的具体方向：${extra}` : template.revisionGoal;
 }

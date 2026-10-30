@@ -1,16 +1,14 @@
 /**
- * SettleCard —— 「定论」卡（P12「前文一次定死」）：核账卡上点「以第 N 章为准」、设定本「查前文」、对话里说「以这个为准」都出这张。
+ * SettleCard —— 「定论」卡（P12「前文一次定死」；写作版本 P2a 片 3C 起是 canon.propose 停下等作者点时的样子）：
+ * 核账卡上点「以第 N 章为准」、设定本「查前文」、对话里说「以这个为准」都出这张。
  *
  * 上面一句定论；下面按章列要改的句子（原句划掉 → 新句），每句右边 × 划掉不改；设定本、账里跟着改的另列。
- * 主按钮「确认」= 一条作者档命令一次改齐（改前存档、能撤销）；没要改的句子只「记下定论」。
- * 改齐了按钮收起，标题旁写「改齐了」（改了什么对话里那句说了，卡上不再说一遍）。没查全如实说，给「重新查」。
- * 「不改了」= 整张不要（长篇实跑：作者发现是自己记错了，说「这张不要了」，卡上「确认」还一直亮着）；能撤回。
+ * 主按钮「确认」= 一条作者档命令一次改齐（改前存档、能撤销）；没要改的句子只「记下定论」。没查全如实说，给「重新查」。
+ * 「不改了」= 整张不要（这次操作停掉，书里没动）。
  */
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import type { SettleCardData } from "../../../type-defs/workspace.js";
-import { useChatStore } from "../../../stores/chatStore.js";
 
 type Edit = SettleCardData["edits"][number];
 
@@ -31,7 +29,7 @@ function Row({ from, to, why, excluded, disabled, onToggle }: {
   readonly why?: string;
   readonly excluded: boolean;
   readonly disabled: boolean;
-  /** 划掉 / 恢复；改齐了就不给。 */
+  /** 划掉 / 恢复；没给就不能划。 */
   readonly onToggle: (() => void) | undefined;
 }) {
   return (
@@ -50,41 +48,34 @@ function Row({ from, to, why, excluded, disabled, onToggle }: {
   );
 }
 
-export function SettleCard({ messageId, data, excluded = [], applied, dropped = false, busy, onAction }: {
-  readonly messageId: string;
+export function SettleCard({ data, excluded, busy, onToggle, onConfirm, onDrop, onRecheck }: {
   readonly data: SettleCardData;
-  readonly excluded?: readonly string[];
-  /** 改齐了：服务端回的那句结果（有它 = 改齐了）。 */
-  readonly applied?: string;
-  /** 作者点了「不改了」。 */
-  readonly dropped?: boolean;
+  /** 作者划掉不改的几处（key）。 */
+  readonly excluded: readonly string[];
   readonly busy: boolean;
-  readonly onAction?: (action: AgentUserAction) => void;
+  /** 划掉 / 改回来一处；没给就不能划。 */
+  readonly onToggle?: (key: string) => void;
+  readonly onConfirm?: () => void;
+  readonly onDrop?: () => void;
+  readonly onRecheck?: () => void;
 }) {
-  const setExcluded = useChatStore((s) => s.setSettleExcluded);
-  const setDropped = useChatStore((s) => s.setSettleDropped);
   const [factsOpen, setFactsOpen] = useState(false);
   const skip = new Set(excluded);
-  const done = Boolean(applied);
-  const off = !done && dropped;
-  const toggle = (key: string) => (done || off || !onAction ? undefined : () => setExcluded(messageId, key, !skip.has(key)));
+  const toggle = (key: string) => (onToggle ? () => onToggle(key) : undefined);
   const editsLeft = data.edits.filter((edit) => !skip.has(edit.key)).length;
   const fieldsLeft = data.fields.filter((field) => !skip.has(field.key)).length;
   const changes = editsLeft + fieldsLeft;
   const recordsCanon = !data.canonExists && !data.sceneOnly;
-  const canConfirm = !done && !off && Boolean(onAction) && (changes > 0 || recordsCanon);
-  const recheck = () => onAction?.({ toolName: "settle_preview", statement: data.canon, ...(data.chapter ? { chapter: data.chapter } : {}) });
+  const canConfirm = Boolean(onConfirm) && (changes > 0 || recordsCanon);
   const incomplete = data.failures.length > 0 || data.missed.length > 0;
-  // 只记定论、哪儿都没改：说「记下了」，不说「改齐了」（换题材长篇实跑第 22 章）。
-  const doneLabel = data.edits.length + data.fields.length + data.facts.length > 0 ? "改齐了" : "记下了";
-  const statusLabel = done ? doneLabel : off ? "不改了" : data.edits.length > 0 ? `${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
+  const statusLabel = data.edits.length > 0 ? `${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
   return (
-    <StepCard title={data.sceneOnly ? "改齐" : "定论"} status={done || off ? "done" : changes > 0 ? "attention" : "done"} statusLabel={statusLabel} defaultOpen keepOpen={canConfirm}>
+    <StepCard title={data.sceneOnly ? "改齐" : "定论"} status={changes > 0 ? "attention" : "done"} statusLabel={statusLabel} defaultOpen keepOpen={canConfirm}>
       <p className="stc-canon serif">{data.canon}</p>
       {data.canonExists ? <p className="drc-summary">设定本里已经记着这条。</p> : null}
       {data.sceneOnly ? <p className="drc-summary">只是那一场的事，改句子，不记进设定本。</p> : null}
       {data.replaces && recordsCanon ? <p className="drc-summary">换掉设定本里原来那条：{data.replaces}</p> : null}
-      {off ? null : groupByChapter(data.edits).map((group) => (
+      {groupByChapter(data.edits).map((group) => (
         <section key={`${group.chapter}:${group.draft}`} className="stc-group">
           <h4>第 {group.chapter} 章{group.draft ? "（工作稿）" : ""}</h4>
           <ul className="stc-list">
@@ -94,7 +85,7 @@ export function SettleCard({ messageId, data, excluded = [], applied, dropped = 
           </ul>
         </section>
       ))}
-      {!off && data.fields.length > 0 ? (
+      {data.fields.length > 0 ? (
         <section className="stc-group">
           <h4>设定本</h4>
           <ul className="stc-list">
@@ -105,7 +96,7 @@ export function SettleCard({ messageId, data, excluded = [], applied, dropped = 
           </ul>
         </section>
       ) : null}
-      {!off && data.facts.length > 0 ? (
+      {data.facts.length > 0 ? (
         <>
           <button type="button" className="chip stc-facts-toggle" aria-expanded={factsOpen} onClick={() => setFactsOpen((open) => !open)}>
             {factsOpen ? "收起" : `账里跟着改 ${data.facts.length} 条`}
@@ -119,28 +110,22 @@ export function SettleCard({ messageId, data, excluded = [], applied, dropped = 
           ) : null}
         </>
       ) : null}
-      {off ? (
-        <p className="drc-summary">不改了，书里没动。{onAction ? <> <button type="button" className="se-sm-link" disabled={busy} onClick={() => setDropped(messageId, false)}>撤回</button></> : null}</p>
-      ) : null}
-      {!done && !off && incomplete ? (
+      {incomplete ? (
         <p className="drc-summary stc-warn">
           {data.missed.length > 0 ? `核账报的${data.missed.length > 1 ? ` ${data.missed.length} 句` : "那句"}（${[...new Set(data.missed.map((item) => `第 ${item.chapter} 章`))].join("、")}）这次没查出改法。` : ""}
           {data.failures.length > 0 ? `没查全：${data.failures.join("；")}。` : ""}
-          {onAction ? <> <button type="button" className="se-sm-link" disabled={busy} onClick={recheck}>重新查</button></> : null}
+          {onRecheck ? <> <button type="button" className="se-sm-link" disabled={busy} onClick={onRecheck}>重新查</button></> : null}
         </p>
       ) : null}
-      {canConfirm ? (
+      {canConfirm || onDrop ? (
         <div className="cpc-actions">
-          <span className="cpc-counts">{changes > 0 ? `改 ${changes} 处，改前存档、能撤销` : data.replaces ? "换掉设定本里原来那条定论" : "记进设定本「定论」"}</span>
-          <button type="button" className="se-sm-link stc-drop" disabled={busy} onClick={() => setDropped(messageId, true)}>不改了</button>
-          <button
-            type="button"
-            className="cpc-confirm"
-            disabled={busy}
-            onClick={() => onAction!({ toolName: "settle_apply", token: data.token, excluded: [...skip] })}
-          >
-            {changes > 0 ? "确认" : data.replaces ? "换掉旧的" : "记下定论"}
-          </button>
+          <span className="cpc-counts">{changes > 0 ? `改 ${changes} 处，改前存档、能撤销` : data.replaces ? "换掉设定本里原来那条定论" : recordsCanon ? "记进设定本「定论」" : "要改的都划掉了"}</span>
+          {onDrop ? <button type="button" className="se-sm-link stc-drop" disabled={busy} onClick={onDrop}>不改了</button> : null}
+          {canConfirm ? (
+            <button type="button" className="cpc-confirm" disabled={busy} onClick={onConfirm}>
+              {changes > 0 ? "确认" : data.replaces ? "换掉旧的" : "记下定论"}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </StepCard>

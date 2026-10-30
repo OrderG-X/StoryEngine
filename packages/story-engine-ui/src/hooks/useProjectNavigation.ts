@@ -21,6 +21,7 @@ import { flushAllSaves } from "../sync/saveAll.js";
 import { clearPaperNow, drainPaper, paperReadMark, replacePaperNow, UnsavedPaperError } from "../drafts/draftSync.js";
 import { markChatLoaded } from "../sync/chatSync.js";
 import { flowStatusForPaper } from "../workspace/applyOverview.js";
+import { reconnectOperations, stopOperationReconnect } from "../workspace/operationReconnect.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -331,8 +332,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     setSteeringDirection,
     setCommitPreviewReport,
     setDraftAIReview,
-    setActiveRevisionTask,
-    setActiveRevisionPreview,
     setCommitSelections,
     resetTransientUiState,
   } = useUiStore.getState();
@@ -491,14 +490,14 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         chapters,
       });
       setMessages(entryMessages);
+      // 关页、重开书之前还没结束的操作（检查……）：挂回原来那条消息接着看（写作版本 P2a）。
+      reconnectOperations(nextProjectPath);
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
-      setActiveRevisionTask(null);
-      setActiveRevisionPreview(null);
       setWorkspaceReady(true);
       if (options.updateUrl !== false) {
         pushWorkspaceUrlForProject(nextProjectPath);
@@ -552,8 +551,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
-      setActiveRevisionTask(null);
-      setActiveRevisionPreview(null);
       resetTransientUiState();
       setSessions([], "");
       setActiveArchivedCount(0);
@@ -561,6 +558,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         const bookWorkspace = workspaceFromBook(book);
         setWorkspace({ ...workspace, ...bookWorkspace });
         setMessages([]);
+        stopOperationReconnect();
       }
       setWorkspaceReady(true);
       if (options.updateUrl !== false) pushWorkspaceUrlForBook(book.id);
@@ -596,8 +594,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
-      setActiveRevisionTask(null);
-      setActiveRevisionPreview(null);
       setSessions([], "");
       setActiveArchivedCount(0);
       if (options.updateUrl !== false) pushHomeUrl();
@@ -657,8 +653,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
-      setActiveRevisionTask(null);
-      setActiveRevisionPreview(null);
       setCommitSelections(emptyCommitSelections());
     } catch (error) {
       // 在写作台里点的：说在写作台里（书架那栏错误这里看不见，第 6 轮复核 T8）。稿纸、工作区都还在原来那章。
@@ -794,8 +788,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       pushWorkspaceUrlForProject(created.projectDir);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
-      setActiveRevisionTask(null);
-      setActiveRevisionPreview(null);
       if (!activeSessionLoaded) {
         // 会话没读成功 → epoch 未登记 → 本次运行聊天自动保存会被短路（另有客户端一次性 toast 兜底）。
         // 开书照旧放行（重开本书 openProject 会补正），但成功 toast 必须让位给如实告警。

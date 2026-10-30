@@ -64,17 +64,6 @@ describe("AiFlavorCard", () => {
     expect(screen.getAllByRole("button", { name: /改掉这句/ })).toHaveLength(1);
   });
 
-  it("改写草案已生成、在等用户去写作台应用时显「待应用」（不再误标「改写中…」=系统已闲、在等人）", () => {
-    // 生成中（preview 未就绪）：仍是「改写中…」。
-    const { rerender } = render(<AiFlavorCard report={REPORT} pendingViolationId="v2" onFix={vi.fn()} />);
-    expect(screen.getByText("改写中…")).toBeTruthy();
-    expect(screen.queryByText("待应用")).toBeNull();
-    // 草案已生成、等用户在写作台点「应用到草稿」：转「待应用」、不再显「改写中…」。
-    rerender(<AiFlavorCard report={REPORT} pendingViolationId="v2" awaitingApply onFix={vi.fn()} />);
-    expect(screen.getByText("待应用")).toBeTruthy();
-    expect(screen.queryByText("改写中…")).toBeNull();
-  });
-
   it("有违规时点明『文风体检·不拦入库』，避免与质检『可入库』读着自相矛盾（afterfix3）", () => {
     render(<AiFlavorCard report={REPORT} onFix={vi.fn()} />);
     expect(screen.getByText(/不影响定稿/)).toBeTruthy();

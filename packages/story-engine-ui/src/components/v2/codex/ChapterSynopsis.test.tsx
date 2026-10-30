@@ -15,17 +15,19 @@ describe("本章梗概", () => {
     const box = screen.getByLabelText("改本章梗概");
     fireEvent.change(box, { target: { value: "离云州南下。" } });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect(onAction).toHaveBeenCalledWith(synopsisAction(41, "离云州南下。"));
-    expect(synopsisAction(41, "离云州南下。")).toMatchObject({
-      toolName: "ledger_decision",
-      decisions: [{ type: "chapter.summary", chapter: 41, text: "离云州南下。" }],
-    });
+    expect(onAction).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "new",
+      type: "ledger.change",
+      mode: "author",
+      params: { changes: [{ op: "summary", chapter: 41, text: "离云州南下。" }] },
+    }));
     expect(screen.queryByLabelText("改本章梗概")).toBeNull();
   });
 
-  it("同一句点两次是同一个动作（只记一次），换了说法是新的", () => {
-    expect(synopsisAction(3, "甲").key).toBe(synopsisAction(3, "甲").key);
-    expect(synopsisAction(3, "甲").key).not.toBe(synopsisAction(3, "乙").key);
+  it("每点一次是新的一次（请求号点的时候给；改的和现在一样服务端如实说不用改）", () => {
+    const first = synopsisAction(3, "甲");
+    const second = synopsisAction(3, "甲");
+    expect("kind" in first && "kind" in second && first.kind === "new" && second.kind === "new" && first.requestKey !== second.requestKey).toBe(true);
   });
 
   it("没改就存＝算了；没有动作通道时不给「改」", () => {

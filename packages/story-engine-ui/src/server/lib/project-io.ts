@@ -41,7 +41,7 @@ export function writeJson(res: ServerResponse, statusCode: number, payload: DevA
 }
 
 // ---------------------------------------------------------------------------
-// 原子写盘（审查 #5/#8：防半写文件 + 多文件「全备齐再提交」）
+// 原子写盘（审查 #5：防半写文件；几份一起换走 config-commit）
 // ---------------------------------------------------------------------------
 
 /**
@@ -61,45 +61,6 @@ export async function writeFileAtomic(
     await rename(tmp, path);
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-export interface AtomicFileEntry {
-  readonly path: string;
-  readonly content: string;
-  readonly mode?: number;
-}
-
-/**
- * 多文件「全备齐再提交」（审查 #8：模型设置/密钥/任务分配三文件不再各自裸写）。
- * 先把每个文件写到各自同目录的临时文件（任一失败即清理全部临时文件并抛错，原文件分毫未动）；
- * 全部临时文件就绪后再逐个 rename 提交。真正的多文件事务需 FS 支持（没有），此法把「部分提交」
- * 的窗口压到仅剩「连续几个 rename 之间」的极小时刻，远好于旧的「边算边裸写」中途失败留下混合态。
- * 提交段中途失败同样清理尚未 rename 的临时文件（tmp 名带 randomUUID，只属本次调用，不会误删
- * 并发调用各自的临时文件）；已成功 rename 的文件不回滚——「部分提交」窗口的语义不变，只是不留残渣。
- */
-export async function commitFilesAtomically(entries: readonly AtomicFileEntry[]): Promise<void> {
-  const staged: { readonly tmp: string; readonly target: string; readonly mode?: number }[] = [];
-  const cleanStaged = (): Promise<unknown[]> => Promise.all(staged.map((s) => rm(s.tmp, { force: true }).catch(() => undefined)));
-  try {
-    for (const entry of entries) {
-      const tmp = join(dirname(entry.path), `.${randomUUID()}.tmp`);
-      await writeFile(tmp, entry.content, entry.mode !== undefined ? { encoding: "utf-8", mode: entry.mode } : "utf-8");
-      if (entry.mode !== undefined) await chmod(tmp, entry.mode).catch(() => undefined);
-      staged.push({ tmp, target: entry.path, ...(entry.mode !== undefined ? { mode: entry.mode } : {}) });
-    }
-  } catch (error) {
-    await cleanStaged();
-    throw error;
-  }
-  try {
-    for (const s of staged) {
-      await rename(s.tmp, s.target);
-    }
-  } catch (error) {
-    // 已 rename 成功的临时文件不复存在，force rm 对其自然空转，只清掉没来得及提交的那部分。
-    await cleanStaged();
     throw error;
   }
 }
@@ -158,8 +119,7 @@ export function parseOptionalPositiveInteger(value: string | null): number | und
 export interface ChatHistoryMessage {
   readonly role: "user" | "assistant";
   readonly content: string;
-  /** dropped＝这个工具出的卡作者点了「不改了」（整张作废、书里没动）。 */
-  readonly tools?: readonly { readonly name: string; readonly ok: boolean; readonly dropped?: true }[];
+  readonly tools?: readonly { readonly name: string; readonly ok: boolean }[];
 }
 
 export function readChatMessages(value: unknown): readonly ChatHistoryMessage[] {
@@ -174,7 +134,7 @@ export function readChatMessages(value: unknown): readonly ChatHistoryMessage[] 
       const tools = Array.isArray(item.tools)
         ? item.tools.filter(isRecord).flatMap((tool) => {
           const name = readString(tool.name);
-          return name ? [{ name, ok: tool.ok !== false, ...(tool.dropped === true ? { dropped: true as const } : {}) }] : [];
+          return name ? [{ name, ok: tool.ok !== false }] : [];
         })
         : [];
       messages.push(tools.length > 0 ? { role: "assistant", content, tools } : { role: "assistant", content });
@@ -213,6 +173,7 @@ export function readWorkspaceMessages(value: unknown): {
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
   readonly cards?: readonly MessageCard[];
   readonly chapter?: number;
+  readonly issuedAt?: string;
 }[] {
   if (!Array.isArray(value)) return [];
   const messages: {
@@ -235,6 +196,7 @@ export function readWorkspaceMessages(value: unknown): {
     tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
     cards?: readonly MessageCard[];
     chapter?: number;
+    issuedAt?: string;
   }[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
@@ -292,6 +254,8 @@ export function readWorkspaceMessages(value: unknown): {
       ...(cards.length > 0 ? { cards } : {}),
       // 作者发这句时在看哪一章（右栏「这一章的对话」按它分）：只收正整数。
       ...(typeof item.chapter === "number" && Number.isInteger(item.chapter) && item.chapter > 0 ? { chapter: item.chapter } : {}),
+      // 作者这句的发出时间（写作版本 P2a：和消息号一起认这句交的操作，重发沿用）：只记在作者的话上。
+      ...(item.role === "user" && readIssuedAt(item.issuedAt) ? { issuedAt: readIssuedAt(item.issuedAt) } : {}),
     });
   }
   // Sanity 上限（防病态膨胀），不是功能性截断。⚠️ 触顶会静默丢最旧消息且【绕过冷归档】
@@ -373,14 +337,10 @@ function readWorkspaceTokenUsage(value: unknown): { readonly input: number; read
 }
 
 
-/** 「确认定稿」按钮目标（commit-apply 的 commitTarget）：章号 + 可选预览令牌。 */
-function readWorkspaceCommitTarget(value: unknown): { chapter?: number; previewToken?: string } | undefined {
-  if (!isRecord(value)) return undefined;
-  const chapter = readPositiveInteger(value.chapter);
-  const previewToken = readString(value.previewToken);
-  if (chapter === undefined && !previewToken) return undefined;
-  return { ...(chapter !== undefined ? { chapter } : {}), ...(previewToken ? { previewToken } : {}) };
-}
+/**
+ * 不再有的按钮：老会话读回来不摆死按钮。片 4A：定稿是一次操作，「确认定稿」在定稿清单上；片 4C：裁剪是一次操作，「确认裁剪」在操作卡上。
+ */
+const RETIRED_ACTION_IDS: ReadonlySet<string> = new Set(["commit-preview", "commit-apply", "commit-short", "prune-confirm"]);
 
 function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
@@ -391,15 +351,11 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const label = readString(item.label);
     const description = readString(item.description);
     const permission = readWorkspacePermission(item.permission);
-    if (!id || !label || !description || !permission) continue;
-    const commitTarget = readWorkspaceCommitTarget(item.commitTarget);
-    // 「确认裁剪」按钮的保留条数：不进白名单的话刷新后丢失，按钮会按默认 200 条裁（与预览不一致）。
-    const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
-    // 「确认改账」按钮带的裁定草案：不进白名单的话刷新后按钮就空了（点了只能如实说过期）。内容由服务端执行前再校验。
-    const ledgerTarget = readWorkspaceLedgerTarget(item.ledgerTarget);
-    // 「重写这一章」「接着往下写」「确认改设定」按钮的参数（重构 P4）：同理要进白名单，内容由服务端执行前再校验。
-    const rewriteTarget = readWorkspaceRewriteTarget(item.rewriteTarget);
-    const foundationTarget = readWorkspaceFoundationTarget(item.foundationTarget);
+    if (!id || !label || !description || !permission || RETIRED_ACTION_IDS.has(id)) continue;
+    // 「重写这一章」「接着往下写」按钮的写稿动作（写作版本 P2a）：同理要进白名单，内容由前端点的时候、服务端执行前再校验。
+    const operationAction = readWorkspaceOperationAction(item.operationAction);
+    // 「重试这一步」重发的那句话的消息号和发出时间（写作版本 P2a）：不进白名单的话重开书后重试就成了一句新话。
+    const retryOf = readMessageRef(item.retryOf);
     actions.push({
       id,
       label,
@@ -407,47 +363,34 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       permission,
       requiresConfirmation: item.requiresConfirmation === true,
       ...(readString(item.endpoint) ? { endpoint: readString(item.endpoint) } : {}),
-      // 「现在还不能点」的原因：不进白名单的话重开书后禁用的按钮（如没预览就「确认定稿」）会变成可点。
+      // 「现在还不能点」的原因：不进白名单的话重开书后禁用的按钮会变成可点。
       ...(readString(item.disabledReason) ? { disabledReason: readString(item.disabledReason) } : {}),
-      ...(commitTarget ? { commitTarget } : {}),
-      ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
-      ...(ledgerTarget ? { ledgerTarget } : {}),
-      ...(rewriteTarget ? { rewriteTarget } : {}),
-      ...(foundationTarget ? { foundationTarget } : {}),
+      ...(operationAction ? { operationAction } : {}),
+      ...(retryOf ? { retryOf } : {}),
     });
   }
   return actions.slice(0, 8);
 }
 
-function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterGoal?: string; continueDraft?: true } | undefined {
+/** 作者一句话的消息号和发出时间（和服务端 parseMessageRef 同一口径）。 */
+function readMessageRef(value: unknown): { messageId: string; issuedAt: string } | undefined {
   if (!isRecord(value)) return undefined;
-  const chapter = readPositiveInteger(value.chapter);
-  if (chapter === undefined) return undefined;
-  const chapterGoal = readString(value.chapterGoal);
-  return { chapter, ...(chapterGoal ? { chapterGoal: chapterGoal.slice(0, 2000) } : {}), ...(value.continueDraft === true ? { continueDraft: true as const } : {}) };
+  const messageId = readString(value.messageId);
+  const issuedAt = readIssuedAt(value.issuedAt);
+  return messageId && /^[A-Za-z0-9_-]{1,64}$/u.test(messageId) && issuedAt ? { messageId, issuedAt } : undefined;
 }
 
-/** 提议按钮的依据摘要（写作版本 P1a）：原样留着，点按钮时服务端拿它核。 */
-function readWorkspaceProposalBasis(value: Record<string, unknown>): { basis?: string; basisFrom?: string } {
-  const basis = readString(value.basis);
-  const basisFrom = readString(value.basisFrom);
-  return { ...(basis ? { basis: basis.slice(0, 128) } : {}), ...(basisFrom ? { basisFrom: basisFrom.slice(0, 128) } : {}) };
+/** 发出时间：读得出的时间（不长于 40 字）才收。 */
+function readIssuedAt(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
-function readWorkspaceFoundationTarget(value: unknown): { key: string; input: Record<string, unknown>; label?: string; basis?: string; basisFrom?: string } | undefined {
-  if (!isRecord(value) || !isRecord(value.input)) return undefined;
-  const key = readString(value.key);
-  if (!key) return undefined;
-  const label = readString(value.label);
-  return { key, input: value.input, ...(label ? { label } : {}), ...readWorkspaceProposalBasis(value) };
-}
-
-function readWorkspaceLedgerTarget(value: unknown): { key: string; decisions: unknown[]; label?: string; basis?: string; basisFrom?: string } | undefined {
-  if (!isRecord(value)) return undefined;
-  const key = readString(value.key);
-  if (!key || !Array.isArray(value.decisions) || value.decisions.length === 0) return undefined;
-  const label = readString(value.label);
-  return { key, decisions: value.decisions.filter(isRecord).slice(0, 20), ...(label ? { label } : {}), ...readWorkspaceProposalBasis(value) };
+/** 按钮上的写稿动作：只认新交的写稿（种类、请求号、发出时间、参数是对象），原样留着；不长于 8000 字。 */
+function readWorkspaceOperationAction(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || value.kind !== "new" || value.type !== "draft.change" || !isRecord(value.params)) return undefined;
+  const requestKey = readString(value.requestKey);
+  if (!readString(value.mode) || !requestKey || requestKey.length > 64 || !readIssuedAt(value.issuedAt)) return undefined;
+  return JSON.stringify(value).length <= 8000 ? value : undefined;
 }
 
 function readWorkspacePermission(value: unknown): string | readonly string[] | undefined {

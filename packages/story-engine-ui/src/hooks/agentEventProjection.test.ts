@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterMessage } from "../types.js";
+import { newDraftAction, type OperationViewData } from "../api/agentChatClient.js";
 import {
   emptyAssistantMessage,
   presentationFor,
@@ -79,11 +80,12 @@ describe("projectAgentEvent", () => {
     expect(message.agentCards![0].status).toBe("completed");
   });
 
-  it("maps foundation_write to the foundationAgent agentName", () => {
-    const message = project([
-      { type: "tool-call", toolCallId: "call-2", toolName: "foundation_write", startedAt: 1 },
-    ]);
-    expect(message.agentCards![0].agentName).toBe("foundationAgent");
+  it("改设定（change_settings，老会话里的 foundation_write）只出步骤「改设定本」，不再出卡（结论在操作卡上）", () => {
+    for (const toolName of ["change_settings", "foundation_write"]) {
+      const message = project([{ type: "tool-call", toolCallId: "call-2", toolName, startedAt: 1 }]);
+      expect(message.toolSteps![0].label).toBe("改设定本");
+      expect(message.agentCards ?? []).toEqual([]);
+    }
   });
 
   it("interleaves text and tool steps for a read-then-write run", () => {
@@ -109,16 +111,13 @@ describe("projectAgentEvent", () => {
     expect(message.content).toBe("已经帮你记好了。");
     expect(message.toolSteps!.map((s) => s.id)).toEqual(["c1", "c2"]);
     expect(message.toolSteps!.every((s) => s.status === "completed")).toBe(true);
-    expect(message.agentCards!.map((c) => c.agentName)).toEqual([
-      "stateOverviewReader",
-      "foundationAgent",
-    ]);
+    expect(message.agentCards!.map((c) => c.agentName)).toEqual(["stateOverviewReader"]);
   });
 
   it("marks the matching toolStep failed and the card failed on tool-error", () => {
     const message = project([
-      { type: "tool-call", toolCallId: "c1", toolName: "foundation_write", startedAt: 10 },
-      { type: "tool-error", toolCallId: "c1", toolName: "foundation_write", endedAt: 20, error: "落盘失败" },
+      { type: "tool-call", toolCallId: "c1", toolName: "read_state_overview", startedAt: 10 },
+      { type: "tool-error", toolCallId: "c1", toolName: "read_state_overview", endedAt: 20, error: "读盘失败" },
     ]);
     expect(message.toolSteps![0].status).toBe("failed");
     expect(message.toolSteps![0].endedAt).toBe(20);
@@ -255,23 +254,6 @@ describe("projectAgentEvent", () => {
     expect(msg.affectedScopes).toEqual(["foundation"]);
   });
 
-  it("foundation_write 带认下 → 挂「认下」按钮（带那几步认下）；有「确认改设定」时只挂确认", () => {
-    const target = { key: "card-a", input: { ops: [{ op: "field.accept", card: "苏晴" }] }, label: "刚写的这几处" };
-    let msg = emptyAssistantMessage("m4");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "f2", toolName: "foundation_write", startedAt: 1 });
-    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "f2", toolName: "foundation_write", endedAt: 2, output: { ok: true, foundationAcceptAction: target } });
-    expect(msg.suggestedActions?.map((action) => [action.id, action.label])).toEqual([["foundation-accept", "认下"]]);
-    expect(msg.suggestedActions?.[0]?.foundationTarget).toEqual(target);
-
-    let both = emptyAssistantMessage("m5");
-    both = projectAgentEvent(both, { type: "tool-call", toolCallId: "f3", toolName: "foundation_write", startedAt: 1 });
-    both = projectAgentEvent(both, {
-      type: "tool-result", toolCallId: "f3", toolName: "foundation_write", endedAt: 2,
-      output: { ok: true, foundationConfirmAction: { key: "card-b", input: { ops: [] }, label: "改名" }, foundationAcceptAction: target },
-    });
-    expect(both.suggestedActions?.map((action) => action.id)).toEqual(["foundation-confirm"]);
-  });
-
   it("generate_draft 出稿（refreshScope:full、无 snapshotId=草稿待保存）→ affectedScopes 含 full 徽标在、但无撤销点", () => {
     // 回归护栏：generate_draft/revise_draft 是「草稿待保存、不建 git 快照」→ 无 snapshotId 但确实影响正文·草稿。
     // 影响范围徽标必须按「是否只读工具」判定，不能用 snapshotId（那会误伤无快照的出稿回合，让「正文·草稿」徽标消失）。
@@ -344,45 +326,15 @@ describe("projectAgentEvent", () => {
     expect(msg.affectedScopes).toBeUndefined(); // 没真删 → 不染「影响范围」
   });
 
-  it("commit_preview 否定裁决(ok:false=canCommit:false) → 步骤落定 verdict「裁决未过」，不红不绿不永转（复审 T4 三轮·副产品 B）", () => {
-    // commit_preview 是只读裁决工具：ok:false 是「暂不可定稿」的真实答案（无稿章/有阻断），不是工具崩了——
-    // 落 verdict（落定、带真实 summary、不算失败），修前落 failed 会让「把第 99 章定稿→核实不可定稿→如实拒绝」
-    // 的合法回合四步环亮红（A-4 亮红实锤）。
-    // fixture 用真实工具 payload 形状（commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons 含 missing_draft）。
-    let msg = emptyAssistantMessage("preview-fail");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        chapter: 99,
-        ok: false,
-        summary: "第 99 章还没有工作稿，无法生成定稿预览。",
-      },
-    });
-    expect(msg.toolSteps![0].status).toBe("verdict");
-    expect(msg.toolSteps![0].label).toBe("定稿预览");
-    // 落定：补 endedAt、带真实 summary 作详情——不再永远 running。
-    expect(msg.toolSteps![0].endedAt).toBe(2);
-    expect(msg.toolSteps![0].detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
-  });
-
-  it("写类工具 ok:false 仍落 failed（commit_apply 被拒不是「裁决未过」，红不回归）", () => {
-    let msg = emptyAssistantMessage("apply-fail");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "a1", toolName: "commit_apply", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "a1",
-      toolName: "commit_apply",
-      endedAt: 2,
-      output: { ok: false, summary: "未定稿：第 99 章工作稿不存在，无法定稿。" },
-    });
+  it("工具 ok:false 落 failed（没有「裁决未过」这一档了：定稿是一次操作，定不了的原因在清单上）", () => {
+    let msg = emptyAssistantMessage("read-fail");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "a1", toolName: "read_draft", startedAt: 1 });
+    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "a1", toolName: "read_draft", endedAt: 2, output: { ok: false, summary: "第 99 章没有工作稿。" } });
     expect(msg.toolSteps![0].status).toBe("failed");
+    expect(msg.toolSteps![0].detail).toBe("第 99 章没有工作稿。");
   });
 
-  it("R7.9：Mastra 校验失败（toolValidationFailure）→ 步骤落 failed、summary 进详情，点开不再空——即便裁决类工具也不是「裁决未过」", () => {
+  it("R7.9：Mastra 校验失败（toolValidationFailure）→ 步骤落 failed、summary 进详情，点开不再空", () => {
     // 服务端 agent-chat normalizeForwardedToolResult 归一后的形状：ok:false + 中文 summary + 标记。
     let msg = emptyAssistantMessage("draft-validation-fail");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
@@ -427,106 +379,6 @@ describe("projectAgentEvent", () => {
     ok = projectAgentEvent(ok, { type: "tool-call", toolCallId: "o1", toolName: "read_state_overview", startedAt: 1 });
     ok = projectAgentEvent(ok, { type: "tool-result", toolCallId: "o1", toolName: "read_state_overview", endedAt: 2, output: {} });
     expect(ok.toolSteps![0].detail).toBeUndefined();
-  });
-
-  it("generate_draft 一次写几版：落选的几版挂成「另外几版」卡；没写成不挂", () => {
-    const versions = { chapter: 38, versions: [{ index: 1, body: "另一版正文。" }] };
-    let msg = emptyAssistantMessage("versions");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
-    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "g1", toolName: "generate_draft", endedAt: 2, output: { ok: true, chapter: 38, draftVersions: versions } });
-    expect(cardOf(msg, "draft-versions")?.versions).toEqual(versions);
-    let failed = emptyAssistantMessage("versions-failed");
-    failed = projectAgentEvent(failed, { type: "tool-call", toolCallId: "g2", toolName: "generate_draft", startedAt: 1 });
-    failed = projectAgentEvent(failed, { type: "tool-result", toolCallId: "g2", toolName: "generate_draft", endedAt: 2, output: { ok: false, draftVersions: versions } });
-    expect(cardOf(failed, "draft-versions")).toBeUndefined();
-  });
-
-  it("check_continuity ok:true 且 0 处 → 消息挂 continuityCheck（照旧出「没发现对不上」卡）、步骤 completed（R4.1）", () => {
-    let msg = emptyAssistantMessage("check-ok");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "c1",
-      toolName: "check_continuity",
-      endedAt: 2,
-      output: {
-        ok: true,
-        chapter: 4,
-        continuityCheck: { chapter: 4, sure: [], maybe: [] },
-        summary: "核了第 4 章，没发现和前文对不上的地方。",
-      },
-    });
-    expect(cardOf(msg, "continuity")?.check).toEqual({ chapter: 4, sure: [], maybe: [] });
-    expect(msg.toolSteps![0].status).toBe("completed");
-  });
-
-  it("check_continuity 没核成（ok:false，还在读/出错）→ 消息上没有 continuityCheck，不出「没发现对不上」卡（R4.1/验收 3.1）", () => {
-    // fixture 模拟「还在读」时投影层真实收到的 payload（客户端层只透传白名单字段：ok/summary/chapter/
-    // continuityPending；sure/maybe 根本不过来）。另故意塞一个 continuityCheck 验证第二道守卫：
-    // 即便某个上游把卡塞进来了，ok:false 也不许挂——空数组不是「没问题」。
-    let msg = emptyAssistantMessage("check-not-ready");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "c1",
-      toolName: "check_continuity",
-      endedAt: 2,
-      output: {
-        ok: false,
-        chapter: 5,
-        continuityPending: { done: 4, total: 57 },
-        continuityCheck: { chapter: 5, sure: [], maybe: [] },
-        summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
-      },
-    });
-    expect(cardOf(msg, "continuity")?.check).toBeUndefined();
-    // 步骤如实落 failed（不是绿色完成），详情带工具的真实 summary——只留工具文字，不装作核过。
-    expect(msg.toolSteps![0].status).toBe("failed");
-    expect(msg.toolSteps![0].detail).toContain("这次没有核");
-  });
-
-  it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
-    let msg = emptyAssistantMessage("preview-verdict");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: false,
-        commitPreview: {
-          chapter: 7,
-          canCommit: false,
-          blockingReasons: ["第 7 章还没有工作稿。"],
-          summary: "暂不可定稿。",
-          draftIssueCount: 2,
-        },
-      },
-    });
-    expect(cardOf(msg, "commit-preview")?.preview).toEqual({
-      chapter: 7,
-      canCommit: false,
-      blockingReasons: ["第 7 章还没有工作稿。"],
-      summary: "暂不可定稿。",
-      draftIssueCount: 2,
-    });
-  });
-
-  it("commit_preview 可定稿（R3）→ 挂 commitPreview", () => {
-    let msg = emptyAssistantMessage("preview-ok");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: true,
-        commitPreview: { chapter: 7, canCommit: true, summary: "可以定稿。" },
-      },
-    });
-    expect(cardOf(msg, "commit-preview")?.preview?.canCommit).toBe(true);
   });
 
   it("status 事件（R4）→ 挂状态说明卡照实展示，且不污染助手正文", () => {
@@ -668,7 +520,7 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     generate_alias_table: "补全别名表",
     generate_chapter_steering: "拟章纲",
     generate_draft: "生成正文",
-    revise_draft: "修改工作稿",
+    revise_draft: "改稿",
     quality_check: "硬伤检查",
     ai_review: "内容审阅",
     check_ai_flavor: "检查机器腔",
@@ -707,13 +559,14 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     const revise = project([
       { type: "tool-call", toolCallId: "r1", toolName: "revise_draft", startedAt: 1 },
     ]);
-    expect(revise.toolSteps![0].label).toBe("修改工作稿");
+    expect(revise.toolSteps![0].label).toBe("改稿");
   });
 
-  it("card 仅保留 read_state_overview / foundation_write；其余工具 card:null（不强造误导卡）", () => {
+  it("card 仅保留 read_state_overview；其余工具 card:null（不强造误导卡）", () => {
     expect(presentationFor("read_state_overview").card).not.toBeNull();
-    expect(presentationFor("foundation_write").card).not.toBeNull();
     for (const toolName of [
+      "foundation_write",
+      "change_settings",
       "read_foundation",
       "generate_chapter_steering",
       "generate_draft",
@@ -757,159 +610,172 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
   });
 });
 
-describe("入库 delta 投影（commit_apply → message 的 commit-report 卡）", () => {
-  it("入库成功带 commitReport → 挂到 message 的 commit-report 卡", () => {
+describe("定稿投影（写作版本 P2a 片 4A：定稿是一次操作）", () => {
+  const OP = "op-0123456789abcdef0123";
+  const checklist = { chapter: 4, canCommit: true, ledgerChecklist: [{ id: "2", kind: "fact", label: "钥匙放回柜台", removable: true }] };
+  const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: OP, kind: "commit.prepare", chapter: 4, what: "定稿·第 4 章", state: "running", stateText: "在做", allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 2, origin: { kind: "chat" },
+    ...overrides,
+  });
+
+  it("出了清单等作者点 → 挂定稿清单卡（记着是哪一次）；同一次再来不重挂", () => {
+    const waiting = view({ state: "waiting_author", allowed: [], eventSeq: 4, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } });
+    let msg = project([{ type: "operation", operation: view() }]);
+    expect(cardOf(msg, "commit-preview")).toBeUndefined();
+    msg = projectAgentEvent(msg, { type: "operation", operation: waiting });
+    expect(cardOf(msg, "commit-preview")).toEqual({ type: "commit-preview", preview: checklist, opId: OP });
+    const again = projectAgentEvent(msg, { type: "operation", operation: { ...waiting, eventSeq: 5 } });
+    expect(again.cards?.filter((card) => card.type === "commit-preview")).toHaveLength(1);
+  });
+
+  it("定不了 → 挂清单卡照实列原因，不挂回执、不记存档点", () => {
+    const blocked = { chapter: 4, canCommit: false, blockingReasons: ["第 4 章还没有工作稿。"] };
+    const msg = project([{ type: "operation", operation: view({ state: "succeeded", allowed: [], commit: { chapter: 4, committed: false, blocked } }) }]);
+    expect(cardOf(msg, "commit-preview")?.preview).toEqual(blocked);
+    expect(cardOf(msg, "commit-report")).toBeUndefined();
+    expect(msg.turnSnapshots).toBeUndefined();
+  });
+
+  it("定成了 → 挂回执、记下存档点（撤销这次定稿用）、整本重读；同一次只记一次", () => {
     const report = { updatedCharacters: ["c1"], timelineEventIds: [], updatedHooks: [] };
-    const message = project([
-      { type: "tool-call", toolCallId: "t1", toolName: "commit_apply", startedAt: 1 },
-      { type: "tool-result", toolCallId: "t1", toolName: "commit_apply", endedAt: 2, output: { ok: true, commitReport: report } },
-    ]);
-    expect(cardOf(message, "commit-report")?.report).toEqual(report);
-  });
-
-  it("入库未通过（无 commitReport）→ 不挂", () => {
-    const message = project([
-      { type: "tool-result", toolCallId: "t2", toolName: "commit_apply", endedAt: 2, output: { ok: false } },
-    ]);
-    expect(cardOf(message, "commit-report")?.report).toBeUndefined();
-  });
-});
-
-describe("定稿待确认投影（模型发起的 commit_apply 只出「确认定稿」按钮）", () => {
-  it("needsConfirmation + commitConfirmAction → 步骤待确认、消息挂「确认定稿」按钮（带目标章与令牌）", () => {
-    const message = project([
-      { type: "tool-call", toolCallId: "a1", toolName: "commit_apply", startedAt: 1 },
-      {
-        type: "tool-result",
-        toolCallId: "a1",
-        toolName: "commit_apply",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 4, previewToken: "t4" }, summary: "等你点确认定稿。" },
-      },
-    ]);
-    expect(message.toolSteps?.[0]?.status).toBe("needs_confirmation");
-    expect(cardOf(message, "commit-report")?.report).toBeUndefined();
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "commit-apply", label: "确认定稿", commitTarget: { chapter: 4, previewToken: "t4" } }),
-    ]);
-  });
-
-  it("同回合多次请求 → 只留最后一个按钮（不堆重复「确认定稿」）", () => {
-    const message = project([
-      { type: "tool-result", toolCallId: "a1", toolName: "commit_apply", endedAt: 2, output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 4 } } },
-      { type: "tool-result", toolCallId: "a2", toolName: "commit_apply", endedAt: 3, output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 5 } } },
-    ]);
-    expect(message.suggestedActions?.map((a) => a.commitTarget?.chapter)).toEqual([5]);
-  });
-});
-
-describe("裁剪待确认投影（prune_snapshots 预览后挂「确认裁剪」按钮）", () => {
-  it("pruneConfirmAction → 消息挂「确认裁剪」按钮（带保留条数）", () => {
-    const message = project([
-      {
-        type: "tool-result",
-        toolCallId: "p1",
-        toolName: "prune_snapshots",
-        endedAt: 2,
-        output: { ok: true, needsConfirmation: true, pruneConfirmAction: { keep: 50 }, summary: "预览：将裁 30 条。" },
-      },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "prune-confirm", label: "确认裁剪", pruneTarget: { keep: 50 } }),
-    ]);
-  });
-});
-
-describe("改账待确认投影（manage_ledger 提草案后挂「确认改账」按钮）", () => {
-  it("ledgerConfirmAction → 消息挂「确认改账」按钮（带裁定草案原样）", () => {
-    const decisions = [{ type: "fact.retract", fact: "c1-1" }];
-    const message = project([
-      {
-        type: "tool-result",
-        toolCallId: "l1",
-        toolName: "manage_ledger",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions, label: "删掉一条" }, summary: "要改的账：…" },
-      },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "ledger-confirm", label: "确认改账", ledgerTarget: { key: "k1", decisions, label: "删掉一条" } }),
-    ]);
-  });
-
-  it("一轮里两次改账提议 → 一个按钮带两次的裁定（不丢前一次）", () => {
-    const first = [{ type: "thread.weight", thread: "t1-1", weight: "major" }];
-    const second = [{ type: "thread.weight", thread: "t1-2", weight: "major" }];
-    const message = project([
-      { type: "tool-result", toolCallId: "l1", toolName: "manage_ledger", endedAt: 2, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions: first }, summary: "…" } },
-      { type: "tool-result", toolCallId: "l2", toolName: "manage_ledger", endedAt: 3, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k2", decisions: second }, summary: "…" } },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "ledger-confirm", ledgerTarget: { key: "k1+k2", decisions: [...first, ...second] } }),
-    ]);
+    const done = view({ state: "succeeded", allowed: [], eventSeq: 7, commit: { chapter: 4, committed: true, report, snapshotId: "s-9" } });
+    let msg = project([{ type: "operation", operation: done }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...done, eventSeq: 8 } });
+    expect(cardOf(msg, "commit-report")?.report).toEqual(report);
+    expect(msg.turnSnapshots).toEqual([{ toolName: "prepare_commit", snapshotId: "s-9", chapterNumber: 4 }]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    expect(presentationFor("prepare_commit").stepLabel).toBe("定稿");
   });
 });
 
 describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {
-  it("generate_draft 遇到有稿的章 → 步骤待确认 + 挂「重写第 N 章」按钮（带方向原样）", () => {
+  it("change_draft 遇到有稿的章 → 照服务端给的按钮挂「接着往下写」「重写第 N 章」（点了交的写稿原样带着）；再来一遍不重复挂", () => {
+    const continueAction = newDraftAction("continue", { chapter: 3 });
+    const rewriteAction = newDraftAction("write", { chapter: 3, direction: "让林溪回来", rewrite: true });
+    const output = {
+      ok: false,
+      chapter: 3,
+      rewriteChoices: [
+        { label: "接着往下写", mode: "continue" as const, action: continueAction },
+        { label: "重写第 3 章", mode: "write" as const, action: rewriteAction },
+      ],
+      summary: "第 3 章已经有工作稿了…",
+    };
     const message = project([
-      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
-      {
-        type: "tool-result",
-        toolCallId: "g1",
-        toolName: "generate_draft",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, rewriteConfirmAction: { chapter: 3, chapterGoal: "让林溪回来" }, summary: "第 3 章已经有工作稿了…" },
-      },
-    ]);
-    expect(message.toolSteps![0].status).toBe("needs_confirmation");
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", rewriteTarget: { chapter: 3, chapterGoal: "让林溪回来" } }),
-    ]);
-  });
-
-  it("有稿没定稿的章（canContinue）→ 先挂「接着往下写」再挂「重写第 N 章」（P13）", () => {
-    const message = project([
-      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
-      {
-        type: "tool-result",
-        toolCallId: "g1",
-        toolName: "generate_draft",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, rewriteConfirmAction: { chapter: 3, canContinue: true }, summary: "第 3 章已经有工作稿了…" },
-      },
+      { type: "tool-call", toolCallId: "g1", toolName: "change_draft", startedAt: 1 },
+      { type: "tool-result", toolCallId: "g1", toolName: "change_draft", endedAt: 2, output },
+      { type: "tool-call", toolCallId: "g2", toolName: "change_draft", startedAt: 3 },
+      { type: "tool-result", toolCallId: "g2", toolName: "change_draft", endedAt: 4, output },
     ]);
     expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "continue-confirm", label: "接着往下写", rewriteTarget: { chapter: 3, continueDraft: true } }),
-      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", rewriteTarget: { chapter: 3 } }),
-    ]);
-  });
-
-  it("foundation_write 作者档 → 挂「确认改设定」按钮（带被拦下的写入原样）", () => {
-    const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
-    const message = project([
-      {
-        type: "tool-result",
-        toolCallId: "f1",
-        toolName: "foundation_write",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, foundationConfirmAction: { key: "fw-1", input, label: "删条目 顾明" }, summary: "删除角色「顾明」要你点…" },
-      },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "foundation-confirm", label: "确认改设定", foundationTarget: { key: "fw-1", input, label: "删条目 顾明" } }),
+      expect.objectContaining({ id: "continue-confirm", label: "接着往下写", operationAction: continueAction }),
+      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", operationAction: rewriteAction }),
     ]);
   });
 });
 
-describe("质检明细投影（quality_check → message 的 quality 卡）", () => {
-  it("带 qualityReport → 挂到 message 的 quality 卡", () => {
-    const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };
-    const message = project([
-      { type: "tool-call", toolCallId: "q", toolName: "quality_check", startedAt: 1 },
-      { type: "tool-result", toolCallId: "q", toolName: "quality_check", endedAt: 2, output: { ok: true, qualityReport: refined } },
+describe("操作投影（写作版本 P2a：检查交给执行器做）", () => {
+  const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: "op-0123456789abcdef0123", kind: "inspect.run", mode: "quality", chapter: 4, what: "硬伤检查·第 4 章",
+    state: "running", stateText: "在做", allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 2, origin: { kind: "chat", messageId: "user-1" },
+    ...overrides,
+  });
+  const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };
+
+  it("改设定、改账做完了：这一轮记下存档点（工具名分开）、块头标「设定本」；同一个存档点只记一次；交的那一步叫「改账」", () => {
+    const ledger = view({ kind: "ledger.change", mode: "edit", chapter: undefined, what: "改账", state: "succeeded", allowed: [], eventSeq: 5, changed: { what: "ledger", snapshotId: "s-1" } });
+    let msg = project([{ type: "operation", operation: ledger }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...ledger, eventSeq: 6 } });
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ opId: "op-11111111111111111111", kind: "settings.change", mode: "ai", chapter: undefined, state: "succeeded", allowed: [], changed: { what: "settings", snapshotId: "s-2" } }) });
+    expect(msg.turnSnapshots).toEqual([{ toolName: "change_ledger", snapshotId: "s-1" }, { toolName: "change_settings", snapshotId: "s-2" }]);
+    expect(msg.affectedScopes).toEqual(["foundation"]);
+    for (const toolName of ["change_ledger", "manage_ledger"]) expect(presentationFor(toolName).stepLabel).toBe("改账");
+  });
+
+  it("撤了 / 恢复了：这一轮记下存档点（「撤销到此」从它退）、块头标整本（正文也动了）；交的那一步叫「撤销 / 裁剪」", () => {
+    const undone = view({ kind: "history.change", mode: "undo", chapter: undefined, what: "撤销", state: "succeeded", allowed: [], eventSeq: 5, changed: { what: "history", snapshotId: "s-3" } });
+    const msg = project([{ type: "operation", operation: undone }]);
+    expect(msg.turnSnapshots).toEqual([{ toolName: "change_history", snapshotId: "s-3" }]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    expect(presentationFor("change_history").stepLabel).toBe("撤销 / 裁剪");
+  });
+
+  it("在做 → 操作卡；进度只记给在做的那次；做完挂结果卡（带查的版本），进度清掉", () => {
+    let msg = project([{ type: "operation", operation: view() }]);
+    msg = projectAgentEvent(msg, { type: "operation-progress", opId: "op-0123456789abcdef0123", text: "在查第 4 章" });
+    msg = projectAgentEvent(msg, { type: "operation-progress", opId: "op-ffffffffffffffffffff", text: "别的那次" });
+    expect(cardOf(msg, "operation")?.op).toMatchObject({ state: "running", progress: "在查第 4 章", what: "硬伤检查·第 4 章" });
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ state: "succeeded", stateText: "做完了", allowed: [], summary: "有 1 处硬伤", eventSeq: 5, inspect: { qualityReport: refined, checkedVersion: "v3" } }), announced: true });
+    expect(cardOf(msg, "operation")?.op).toMatchObject({ state: "succeeded", summary: "有 1 处硬伤", announced: true });
+    expect(cardOf(msg, "operation")?.op).not.toHaveProperty("progress");
+    expect(cardOf(msg, "quality")).toEqual({ type: "quality", report: refined, checkedVersion: "v3" });
+  });
+
+  it("迟到的旧记录不盖新的；同一次做完的再来一遍不重挂结果卡（作者在卡上点过的不被冲掉）", () => {
+    let msg = project([{ type: "operation", operation: view({ state: "succeeded", eventSeq: 5, inspect: { qualityReport: refined } }) }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ state: "running", eventSeq: 3 }) });
+    expect(cardOf(msg, "operation")?.op.state).toBe("succeeded");
+    const marked = { ...msg, cards: msg.cards!.map((card) => (card.type === "quality" ? { ...card, report: { ...refined, summary: "作者看过" } } : card)) };
+    const again = projectAgentEvent(marked, { type: "operation", operation: view({ state: "succeeded", eventSeq: 6, inspect: { qualityReport: refined } }) });
+    expect(cardOf(again, "quality")?.report.summary).toBe("作者看过");
+  });
+
+  it("写稿做完了：一次写几版的挂「另外几版」卡；同一次再来一遍不重挂", () => {
+    const versions = { chapter: 4, versions: [{ index: 1, candidateId: "0004-op-1", sha: "c".repeat(64), body: "另一版正文。" }] };
+    const draftView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.change", mode: "write", what: "写稿·第 4 章", ...overrides });
+    let msg = project([{ type: "operation", operation: draftView() }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, versions } }) });
+    expect(cardOf(msg, "draft-versions")?.versions).toEqual(versions);
+    const again = projectAgentEvent(msg, { type: "operation", operation: draftView({ state: "succeeded", eventSeq: 6, draft: { chapter: 4, applied: true, versions } }) });
+    expect(again.cards!.filter((card) => card.type === "draft-versions")).toHaveLength(1);
+    const single = project([{ type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true } }) }]);
+    expect(cardOf(single, "draft-versions")).toBeUndefined();
+  });
+
+  it("写稿做完了：这一轮记下它打的存档点（章纲在前，「撤销到此」从它退）、换上了的标「影响了正文·草稿」；重来一遍不重记", () => {
+    const draftView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.change", mode: "write", what: "写稿·第 4 章", ...overrides });
+    const done = draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, snapshots: ["s-plan", "s-draft"] } });
+    let msg = project([{ type: "operation", operation: draftView() }, { type: "operation", operation: done }]);
+    expect(msg.turnSnapshots).toEqual([
+      { toolName: "change_draft", snapshotId: "s-plan", chapterNumber: 4 },
+      { toolName: "change_draft", snapshotId: "s-draft", chapterNumber: 4 },
     ]);
-    expect(cardOf(message, "quality")?.report).toEqual(refined);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...done, eventSeq: 6 } });
+    expect(msg.turnSnapshots).toHaveLength(2);
+    const kept = project([{ type: "operation", operation: draftView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: false } }) }]);
+    expect(kept.turnSnapshots).toBeUndefined();
+    expect(kept.affectedScopes).toBeUndefined();
+  });
+
+  it("换上作者挑的 AI 稿：记下存档点、标「影响了正文·草稿」；没换（稿纸上已经是这一版）不记", () => {
+    const adoptView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "draft.adopt", what: "换上 AI 稿·第 4 章", ...overrides });
+    const msg = project([{ type: "operation", operation: adoptView() }, { type: "operation", operation: adoptView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: true, snapshots: ["s-adopt"] } }) }]);
+    expect(msg.turnSnapshots).toEqual([{ toolName: "change_draft", snapshotId: "s-adopt", chapterNumber: 4 }]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    const same = project([{ type: "operation", operation: adoptView({ state: "succeeded", eventSeq: 5, draft: { chapter: 4, applied: false } }) }]);
+    expect(same.turnSnapshots).toBeUndefined();
+  });
+
+  it("想走法做完了：挂走法卡（稿纸上方给作者挑）；同一次再来一遍不重挂、作者挑过的不被冲掉；不记存档点", () => {
+    const plan = { chapter: 4, options: [{ title: "老周开口", steps: ["夜里上楼"], threads: [], problems: [] }], checked: true };
+    const planView = (overrides: Partial<OperationViewData> = {}) => view({ kind: "plan.propose", mode: undefined, what: "想走法·第 4 章", ...overrides });
+    let msg = project([{ type: "operation", operation: planView() }, { type: "operation", operation: planView({ state: "succeeded", eventSeq: 5, plan }) }]);
+    expect(cardOf(msg, "directions")).toEqual({ type: "directions", brainstorm: plan });
+    msg = { ...msg, cards: msg.cards!.map((card) => (card.type === "directions" ? { ...card, picked: 0 } : card)) };
+    const again = projectAgentEvent(msg, { type: "operation", operation: planView({ state: "succeeded", eventSeq: 6, plan }) });
+    expect(again.cards!.filter((card) => card.type === "directions")).toEqual([{ type: "directions", brainstorm: plan, picked: 0 }]);
+    expect(again.turnSnapshots).toBeUndefined();
+    expect(again.affectedScopes).toBeUndefined();
+  });
+
+  it("没做成：只换操作卡，不挂结果卡", () => {
+    const msg = project([
+      { type: "operation", operation: view() },
+      { type: "operation", operation: view({ state: "failed", stateText: "没做成", allowed: [], summary: "模型没回", eventSeq: 4, failure: { message: "模型没回", retryable: true } }) },
+    ]);
+    expect(cardOf(msg, "operation")?.op).toMatchObject({ state: "failed", summary: "模型没回" });
+    expect(cardOf(msg, "quality")).toBeUndefined();
   });
 });
 
@@ -937,9 +803,9 @@ describe("settleUnfinishedAgentTurn（A-5 「停止」收尾结算）", () => {
     expect(settled.agentCards![0].status).toBe("completed");
   });
 
-  it("running 的 agentCard（foundation_write 在飞）→ stopped", () => {
+  it("running 的 agentCard（read_state_overview 在飞）→ stopped", () => {
     const message = project([
-      { type: "tool-call", toolCallId: "f1", toolName: "foundation_write", startedAt: 10 },
+      { type: "tool-call", toolCallId: "f1", toolName: "read_state_overview", startedAt: 10 },
     ]);
     const settled = settleUnfinishedAgentTurn(message, 20);
     expect(settled.toolSteps![0].status).toBe("stopped");

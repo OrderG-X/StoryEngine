@@ -65,15 +65,15 @@ export type WriteInstructionTarget =
 // 对话提取出的低风险资料更新候选；是否自动应用由客户端和写入网关共同裁决。
 /**
  * running=进行中；completed=正常完成；failed=工具失败/被拒绝（红）；needs_confirmation=待确认；
- * partial=部分完成；stopped=人喊停；verdict=裁决类只读工具（commit_preview）正常执行后的「否定裁决」
- * （ok===canCommit:false，如「暂不可定稿」）——落定形态，不红不绿，不是失败。
+ * partial=部分完成；stopped=人喊停；verdict=老会话里裁决类只读工具（P2a 前的 commit_preview）正常执行后的「否定裁决」
+ * （如「暂不可定稿」）——落定形态，不红不绿，不是失败；现在不再产生，只为老会话照原样显示。
  */
 export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped" | "verdict";
 
 export interface ToolStep {
   readonly id: string;
   readonly label: string;
-  /** 触发该步的工具名（如 generate_draft / quality_check / commit_apply）；供进度卡把步骤映射到「构思/写稿/审校/入库」四相。 */
+  /** 触发该步的工具名（如 change_draft / run_check / prepare_commit）；供进度卡把步骤映射到「构思/写稿/审校/入库」四相。 */
   readonly toolName?: string;
   readonly status: ToolStepStatus;
   readonly startedAt: number;
@@ -177,8 +177,9 @@ export type SnapshotListApiResponse =
   | { readonly ok: true; readonly snapshots: readonly SnapshotEntryDto[] }
   | { readonly ok: false; readonly error: string };
 
+/** 恢复的结果：做完了的那次操作（结论、改了哪些在里面，前端按操作视图读）。 */
 export type SnapshotRestoreApiResponse =
-  | { readonly ok: true; readonly restored: SnapshotEntryDto }
+  | { readonly ok: true; readonly operation: unknown }
   | { readonly ok: false; readonly error: string };
 
 export type ModelSettingsStatus = "missing" | "loaded" | "invalid_json" | "invalid_schema";
@@ -234,6 +235,7 @@ export interface ProviderConfigSummary {
   readonly baseUrl: string;
   readonly apiKeyEnv?: string;
   readonly apiKeyStatus: "not_required" | "present" | "missing";
+  readonly quotaGroup?: string;
 }
 
 export interface ModelProfileSummary {
@@ -404,18 +406,6 @@ export type ImportBookApiResponse =
   | { readonly ok: true; readonly projectDir: string; readonly overview: StateOverview; readonly imported: { readonly chapters: number } }
   | { readonly ok: false; readonly error: string };
 
-export interface GenerateDraftRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly chapterGoal?: string;
-  readonly requestedDraftLength?: number;
-  readonly maxOutputTokens?: number;
-  readonly selectedCharacterIds?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
-  readonly maxTimelineEvents?: number;
-  readonly contextTokenBudget?: number;
-}
-
 export interface WriterContextBudgetApiPayload {
   readonly droppedSections: readonly string[];
 }
@@ -525,67 +515,6 @@ export interface DraftAIReviewReport {
   readonly shouldCommit: boolean;
   readonly blockingReasons: readonly string[];
 }
-
-export type DraftRevisionTargetType = "paragraph" | "section" | "dialogue" | "opening" | "ending" | "whole_draft_note";
-export type DraftRevisionStatus = "pending" | "preview_generated" | "applied" | "dismissed";
-
-export interface DraftRevisionTask {
-  readonly id: string;
-  readonly sourceIssueId?: string;
-  readonly sourceSuggestionId?: string;
-  readonly chapter: number;
-  readonly targetType: DraftRevisionTargetType;
-  readonly targetText: string;
-  readonly targetRangeHint?: string;
-  readonly problemSummary: string;
-  readonly revisionGoal: string;
-  readonly constraints: readonly string[];
-  readonly status: DraftRevisionStatus;
-}
-
-export interface DraftRevisionPreview {
-  readonly taskId: string;
-  readonly beforeText: string;
-  readonly afterText: string;
-  readonly changeSummary: string;
-  readonly rationale: string;
-  readonly riskNotes: readonly string[];
-  readonly preservedFacts: readonly string[];
-  readonly warnings: readonly string[];
-  /** 服务端记的生成依据：应用时原样带回。 */
-  readonly basis?: string;
-}
-
-export interface DraftRevisionApplyResult {
-  readonly applied: boolean;
-  readonly chapter: number;
-  readonly draftPath: string;
-  readonly updatedWordCount: number;
-}
-
-export interface DraftRevisionPreviewRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly task: DraftRevisionTask;
-  readonly draftContent?: string;
-}
-
-export interface DraftRevisionApplyRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly preview: DraftRevisionPreview;
-  /** 用户原始点名片段（task.targetText 原样回传）——带上即启用服务端目标级诚实守卫（target_unchanged）；
-   *  服务端在 apply 时的当前草稿上自己重新解析目标区间，不信客户端字符串。 */
-  readonly targetText?: string;
-}
-
-export type DraftRevisionPreviewApiResponse =
-  | { readonly ok: true; readonly task: DraftRevisionTask; readonly preview: DraftRevisionPreview; readonly model?: string; readonly profileId?: string; readonly usedFallback?: boolean }
-  | { readonly ok: false; readonly error: string };
-
-export type DraftRevisionApplyApiResponse =
-  | { readonly ok: true; readonly result: DraftRevisionApplyResult; readonly draftContent: string; readonly overview: StateOverview }
-  | { readonly ok: false; readonly error: string; readonly code?: string };
 
 export interface CommitSelectiveConfirmation {
   readonly assetDecisions?: readonly CommitSelectiveDecision[];

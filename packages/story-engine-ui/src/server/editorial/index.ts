@@ -7,25 +7,14 @@
  * R3（2026-10-12）删旧路后三个专员就是仅有的路（combo 核账 / 旧声明 / 旧拟纲已删，STORY_CHECKER / STORY_LEDGER /
  * STORY_PLANNER 三个开关随之删除）。
  * 核账员默认带 T1 选出的 A 自复核 + R2.1 赢下的 F 时间线只进自复核（DEFAULT_READER_VARIANT，check-service 的产品路传它）。
- * 预热和后台补读对三个角色都生效，且共用同一条补读队列、按角色依次补（见 catch-up.ts）。
+ * 预热和后台补读对三个角色都生效：都交给执行器的 background.backfill（lib/reader-backfill.ts 的提交口），每本书一条补读队列、按角色依次补。
  */
-import {
-  isReaderCatchUpQueued,
-  markReaderCatchUpQueued,
-  readReaderProgress,
-  runInReaderCatchUpQueue,
-  startReaderCatchUp,
-  unmarkReaderCatchUpQueued,
-  writeReaderReadingProgress,
-} from "./catch-up.js";
-import { DEFAULT_READER_VARIANT, callConfiguredBrainModel, checkerRoleFor } from "./checker.js";
+import { DEFAULT_READER_VARIANT, checkerRoleFor } from "./checker.js";
 import { LEDGER_ROLE } from "./ledger-keeper.js";
-import { PLANNER_ROLE, callConfiguredPlannerModel } from "./planner.js";
-import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
-import { beginReread, runReread } from "./reread.js";
-import { writeReaderProgress } from "./reader-progress.js";
+import { PLANNER_ROLE } from "./planner.js";
+import { countCommittedChapters, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 import { readRereadState } from "./reread-state.js";
-import { withUsageBook } from "../lib/usage-scope.js";
+import { requestReaderBackfill, submitReaderBackfill } from "../lib/reader-backfill.js";
 
 export {
   CHECKER_ROLE,
@@ -52,20 +41,15 @@ export {
 } from "./checker.js";
 export { foundationMessage, readFoundationDigest, settingQuoteSource, type FoundationDigest, type SettingSource } from "./foundation-digest.js";
 export {
-  isReaderCatchUpQueued,
-  readReaderProgress,
   readReadersCatchUpStatus,
   runInReaderCatchUpQueue,
-  startReaderCatchUp,
-  writeReaderReadingProgress,
   READER_ROLE_IDS,
   type ReaderCatchUpRoleState,
-  type ReaderProgress,
   type ReadersCatchUpStatus,
   type RereadStatus,
 } from "./catch-up.js";
-export { isRereadActive, REREAD_ATTEMPTS } from "./reread.js";
-export { formatRereadEta, readRereadState, rereadBlocker, rereadEtaMinutes, type RereadState } from "./reread-state.js";
+export { REREAD_ATTEMPTS } from "./reread.js";
+export { formatRereadEta, readRereadProgress, readRereadState, REREAD_KIND, rereadBlocker, type RereadState } from "./reread-state.js";
 export {
   describeReaderWait,
   readerWaitingHandlers,
@@ -75,11 +59,14 @@ export {
 export { LEDGER_ROLE };
 export { MAX_REVIEW_THREADS, reviewOpenThreads, type ThreadCloseSuggestion, type ThreadReviewOutcome } from "./thread-review.js";
 export {
-  brainstormChapter,
   BRAINSTORM_OPTIONS,
+  checkDirections,
+  PROPOSE_CALLS,
+  proposeDirections,
   type BrainstormOption,
   type BrainstormProblem,
-  type BrainstormResult,
+  type CheckedDirections,
+  type ProposeResult,
 } from "./brainstorm.js";
 export {
   PLANNER_ROLE,
@@ -94,11 +81,15 @@ export {
 export {
   assembleReaderWindow,
   buildColdReaderWindow,
+  coldPausedNote,
+  COLD_PAUSED_TEXT,
   COLD_RECENT_CHAPTERS,
   COLD_RECENT_MAX_CHARS,
   countCommittedChapters,
   ensureReaderWindow,
+  readerNotesStatus,
   READER_WINDOW_MAX_CHARS,
+  volumeBuildsBound,
   writeAtomically,
   type BrainCallModel,
   type BrainMessage,
@@ -113,116 +104,34 @@ export {
  * 核账员的笔记格式跟着 T1 默认组合走（选了结构化笔记就按结构化补）。
  * 调用时才组表：planner ↔ plan-chapter 有循环引用（都是调用时才用到对方），顶层读别的模块的常量会在某些加载顺序下踩 TDZ。
  */
-const readerRoles = (): readonly ReaderRole[] => [
+export const readerRoles = (): readonly ReaderRole[] => [
   checkerRoleFor(DEFAULT_READER_VARIANT.structuredNotes),
   LEDGER_ROLE,
   PLANNER_ROLE,
 ];
 
 /**
- * 后台给各专员补笔记到第 upTo 章（每个角色带进度落盘，见 catch-up.ts）。永不抛错：补不成只 console.warn
- * （下次核账或定稿会接着补），所以调用方可以放心 `void`。
- * 三个角色共用同一条补读队列（每本书一条），按 checker → ledger → planner 依次补，不同时并发打服务商；
- * 同一本书、同一组角色已有一轮要读到 ≥ upTo 的补读在队里时，这次不重排（角色不同不算，照排）。
- * R5.3：一轮读的途中作者又定稿了新章的话，这轮自己追到新末尾（见 catch-up.ts 的追新），不靠后面的预热补漏。
- * roles：显式点名要补的角色（调用方自己知道刚才等的是哪个角色，比如核账服务点名 checker），按点名的先后补；缺省补全部三个角色。
- */
-export async function catchUpReaders(
-  projectDir: string,
-  upTo: number,
-  options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string; readonly roles?: readonly string[] } = {},
-): Promise<void> {
-  const all = readerRoles();
-  const wanted = options.roles
-    ? options.roles.flatMap((id) => all.filter((role) => role.id === id))
-    : all;
-  if (wanted.length === 0) return;
-  const root = options.notesRoot ?? projectDir;
-  const roleIds = wanted.map((role) => role.id);
-  if (isReaderCatchUpQueued(root, roleIds, upTo)) return;
-  markReaderCatchUpQueued(root, roleIds, upTo);
-  try {
-    // 后台补读的用量记到这本书名下（P10）：开书、定稿时排的活可能比那次请求活得久。
-    await withUsageBook(projectDir, () => runInReaderCatchUpQueue(root, async () => {
-      // R5.3 追新的基线：这轮真正开跑那一刻的已定稿章数，三个角色共用——读的途中新定稿的章，没轮到的角色也要追。
-      const chaseFrom = await countCommittedChapters(projectDir).catch(() => 0);
-      for (const role of wanted) await startReaderCatchUp(projectDir, role, upTo, { ...options, chaseFrom });
-    }));
-  } finally {
-    unmarkReaderCatchUpQueued(root, roleIds, upTo);
-  }
-}
-
-/**
- * 定稿后预热：后台给三个专员补笔记到刚定稿的这一章（走同一条队列依次补），不阻塞定稿。
+ * 定稿后预热：后台给三个专员补笔记到刚定稿的这一章（交给执行器的 background.backfill），不阻塞定稿。
  * 章纲员排最前：定稿后作者多半接着写下一章，头一步就是拟纲（换题材长篇实跑：拟纲前当场补笔记中位 22 秒）；
  * 核账员接着（审纲、核新稿要它），记账员最后（下次定稿才用）。
  */
-export function warmUpReaders(
-  projectDir: string,
-  chapter: number,
-  options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string } = {},
-): Promise<void> {
+export function warmUpReaders(projectDir: string, chapter: number): void {
   const checker = checkerRoleFor(DEFAULT_READER_VARIANT.structuredNotes);
-  return catchUpReaders(projectDir, chapter, { ...options, roles: [PLANNER_ROLE.id, checker.id, LEDGER_ROLE.id] });
+  requestReaderBackfill(projectDir, { roles: [PLANNER_ROLE.id, checker.id, LEDGER_ROLE.id], upTo: chapter });
 }
 
 /**
- * 打开书（state-overview）时看一眼：哪个专员的笔记还没读齐 → 后台按共用队列接着补。
- * 已经在读（队列里去重）/ 已经读齐就不再排；没有定稿章节的书不排。永不抛错。
- * R4.3：排进队后、返回之前，先把第一个要读的角色标成 reading（done 接着已有的），
- * 这样路由紧接着建的开书概况就带得上进度，不用刷新页面才看到。
+ * 打开书（state-overview）时：导入的书还没通读记完（在记的由开书对账接着做，停着的等作者点「接着记」）就不补读——
+ * 记完它自己交后台补读。其余交一次后台补读到已定稿的最后一章，等交上再返回（开书概况带得上「在读」）。
+ * 三个专员都读齐了就不受理、什么都不起。永不抛错。
  */
-export async function maybeStartReadersCatchUp(
-  projectDir: string,
-  options: { readonly callModel?: BrainCallModel } = {},
-): Promise<void> {
+export async function resumeBackgroundReading(projectDir: string): Promise<void> {
   try {
-    // P8：导入的书还在通读记账（进程重启前在记）→ 接着记；记完它自己排后台补读。停下的等作者点「接着记」。
     const reread = await readRereadState(projectDir);
-    if (reread && reread.status !== "done") {
-      if (reread.status === "running") void runBookReread(projectDir, options);
-      return;
-    }
-    const wanted = readerRoles();
+    if (reread && reread.status !== "done") return;
     const total = await countCommittedChapters(projectDir);
-    if (total <= 0) {
-      // 一章定稿都没有就没有前文可读。补读途中进程被杀、定稿又全撤了的话，盘上留着 reading:true 没人收尾，
-      // 进度行会一直挂「核账员 0/1」（2026-10-23 桌面包走查）：标回不在读。真有补读还在跑，它收尾时自己会再写。
-      for (const role of wanted) {
-        const progress = await readReaderProgress(projectDir, role.id);
-        if (progress?.reading) await writeReaderProgress(projectDir, { role: role.id, reading: false, done: 0, total: 0, updatedAt: new Date().toISOString() });
-      }
-      return;
-    }
-    for (const role of wanted) {
-      const progress = await readReaderProgress(projectDir, role.id);
-      if (!progress || progress.reading || progress.done < total) {
-        // 队列按 checker → ledger → planner 依次补，第一个没读齐的就是第一个要读的；
-        // 它已经在读（上次开着开着又刷新了页面）就不用重写，盘上的进度本来就是真的。
-        await writeReaderReadingProgress(projectDir, role.id, total).catch(() => undefined);
-        void catchUpReaders(projectDir, total, options);
-        return;
-      }
-    }
+    if (total > 0) await submitReaderBackfill(projectDir, { upTo: total });
   } catch (error) {
     console.warn("[brain] 看要不要后台补读时出错（不影响开书）", error);
   }
-}
-
-/**
- * 跑（或接着跑）导入的书的通读记账（P8）。记完排三个专员的后台补读（记账员只差最后一章的笔记，核账员、章纲员从头读）。
- * 永不抛错，调用方放心 `void`。
- */
-export function runBookReread(projectDir: string, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
-  return withUsageBook(projectDir, () => runReread(projectDir, {
-    ...options,
-    onDone: (total) => void catchUpReaders(projectDir, total, options),
-  }));
-}
-
-/** 导入后开一轮新的通读：先落状态（开书那次概况就带得上进度），再在后台跑。 */
-export async function startBookReread(projectDir: string, total: number, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
-  await beginReread(projectDir, total);
-  void runBookReread(projectDir, options);
 }

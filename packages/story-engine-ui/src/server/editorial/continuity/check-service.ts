@@ -10,11 +10,14 @@ import { describeTimelineForChapter, readStoryTimeline, type StoryTimeline } fro
 import { type FactEntry } from "../../book/types.js";
 import {
   callConfiguredBrainModel,
-  catchUpReaders,
   checkChapterByReader,
+  checkerRoleFor,
+  coldPausedNote,
   countCommittedChapters,
   DEFAULT_READER_VARIANT,
   describeReaderWait,
+  ensureReaderWindow,
+  readerWaitingHandlers,
   recheckChangesByReader,
   type BrainCallModel,
   type ChangedSentence,
@@ -33,10 +36,14 @@ import {
   type ContinuityIssueV2,
   type EarlierText,
 } from "./check-chapter.js";
-import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory, type CheckMemory, type FixRecord } from "./check-memory.js";
+import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory, type CheckMemory } from "./check-memory.js";
+import { readFixLog, type FixRecord } from "../../lib/fix-log.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
+import { prepareReaderNotes, type ReaderNotesOutcome } from "../prepare-notes.js";
 import { withStep } from "../../lib/token-meter.js";
+import { requestReaderBackfill } from "../../lib/reader-backfill.js";
+import { rethrowIfStopped } from "../../lib/operations/context.js";
 import { readTruthBasisToCompare, readWithStableBasisForWork } from "../../book/truth-basis.js";
 
 export interface ChapterCheckItem {
@@ -67,7 +74,7 @@ export interface ChapterCheckResult {
   readonly pending?: { readonly done: number; readonly total: number };
   /** 冷窗口核账（R4.4：核账员还没读完全书也先核，不跳过）：notedThrough=已读笔记到第几章、
    *  rawFrom～rawTo=这次给了原文的章（0＝一章都没给）。summary 已如实说明对照范围。 */
-  readonly coverage?: { readonly mode: "cold"; readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number };
+  readonly coverage?: { readonly mode: "cold"; readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number; readonly pausedBackfill?: string };
   /** 这次核账前先当场补了笔记（R5.2）：补了第 from～to 章、花了 ms 毫秒。summary 已带「这次先等核账员读完…再核」。 */
   readonly waited?: ReaderWaited;
   /** 作者标过「不是问题」、这次没再报的条数。 */
@@ -121,7 +128,9 @@ function earlierOpenNote(chapter: number, items: readonly ChapterCheckItem[]): s
 }
 
 /** 核账员那一路最多当场补多少章笔记；超过就如实说「还在读前文」，笔记在后台补（T5），这次不硬核。 */
-const READER_MAX_CATCH_UP = 10;
+export const READER_MAX_CATCH_UP = 10;
+/** 核账员那一路当场最多新生成几个卷节点（写作版本 P2a 4.5 额度按它算）；到了也走冷窗口、剩下的后台补。 */
+export const READER_MAX_VOLUME_BUILDS = 2;
 
 export interface ChapterCheckOptions {
   /** 正文没改也重新核；改过也整章重核（不只核改过的句子）。 */
@@ -130,6 +139,27 @@ export interface ChapterCheckOptions {
   readonly afterFix?: readonly ChangedSentence[];
   /** 核账员的模型调用（测试注入）；缺省走配置的 qualityCheck 模型。 */
   readonly readerCallModel?: BrainCallModel;
+  /** 前文笔记已经在前一步补过（`prepareCheckerNotes`）：核的时候不再当场补，缺了照冷窗口核。 */
+  readonly notesReady?: { readonly waited?: ReaderWaited };
+}
+
+/** 还缺几份（超过当场上限、卷节点到了上限）：缺就照冷窗口核。 */
+export type CheckerNotesOutcome = ReaderNotesOutcome;
+
+/**
+ * 核第 chapter 章之前先让核账员读完前文（写作版本 P2a inspect.run 的 notes 步）：当场最多补 READER_MAX_CATCH_UP 章、
+ * READER_MAX_VOLUME_BUILDS 个卷节点；缺得更多就不补（0 次调用，之后照冷窗口核、交后台补读）。补到一半模型调用失败照实抛。
+ */
+export function prepareCheckerNotes(projectDir: string, chapter: number, callModel: BrainCallModel = callConfiguredBrainModel): Promise<CheckerNotesOutcome> {
+  return prepareReaderNotes({
+    projectDir,
+    role: checkerRoleFor(DEFAULT_READER_VARIANT.structuredNotes),
+    chapter,
+    callModel,
+    maxCatchUp: READER_MAX_CATCH_UP,
+    maxVolumeBuilds: READER_MAX_VOLUME_BUILDS,
+    waitingAs: "核账",
+  });
 }
 
 /**
@@ -146,6 +176,7 @@ async function checkByReader(input: {
   readonly callModel: BrainCallModel;
   /** 只核改过的这几句：上一遍的结果（carryOver）已复核过，原样带上，排在新核出的前面。 */
   readonly changes?: readonly ChangedSentence[];
+  readonly notesReady?: { readonly waited?: ReaderWaited };
 }): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited }> {
   const common = {
     projectDir: input.projectDir,
@@ -153,8 +184,10 @@ async function checkByReader(input: {
     draftBody: input.body,
     callModel: input.callModel,
     maxCatchUp: READER_MAX_CATCH_UP,
+    maxVolumeBuilds: READER_MAX_VOLUME_BUILDS,
     earlier: input.earlier,
     variant: DEFAULT_READER_VARIANT,
+    ...(input.notesReady ? { notesReady: input.notesReady } : {}),
   };
   const reader = input.changes
     ? await recheckChangesByReader({ ...common, changes: input.changes }).then((focused) => ({ ...focused, issues: [...input.carryOver, ...focused.issues] }))
@@ -290,7 +323,7 @@ export async function checkChapterBody(
     // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
     result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
   } else {
-    result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel, ...(changes ? { changes } : {}) }));
+    result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel, ...(changes ? { changes } : {}), ...(options.notesReady ? { notesReady: options.notesReady } : {}) }));
     // 上一遍按核账改过的句子这遍又被报「确定」：两遍说法相反，降成「可能」（不再自动来回改）。
     result = { ...result, issues: settleRevisitedIssues(result.issues, chapter, body, fixes) };
     if (result.coverage) {
@@ -298,7 +331,7 @@ export async function checkChapterBody(
       // 读完后作者再点一次「核账」，就是按读完全书来核的；冷窗口没写任何笔记，两边不会混。
       // 分母统一（R4.3 验收 3.3）：回执和界面进度行同一个口径——共 y 章（已定稿）取已定稿章数。
       coldTotal = Math.max(result.coverage.rawTo, await countCommittedChapters(projectDir));
-      void catchUpReaders(projectDir, coldTotal, { callModel: readerCallModel, roles: ["checker"] });
+      requestReaderBackfill(projectDir, { roles: ["checker"], upTo: coldTotal });
     }
   }
   // 核账记忆：冷窗口的结果不写盘（它对照的范围小，不该被当成全书核过缓存起来；下次点「核账」重核，
@@ -307,6 +340,7 @@ export async function checkChapterBody(
   const bookUnchanged = async (): Promise<boolean> => basisDigest !== undefined && (await readTruthBasisToCompare(projectDir).catch(() => undefined))?.digest === basisDigest;
   if (!reused && !result.coverage && result.failures.length === 0 && earlierHash !== undefined && (await bookUnchanged())) {
     await writeCheckMemory(projectDir, { chapter, bodyHash, body, earlierHash, issues: result.issues }).catch((error) => {
+      rethrowIfStopped(error); // 这次操作停掉了：照原样停，不当成「没存上、照常往下走」
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);
     });
   }
@@ -341,7 +375,7 @@ export async function checkChapterBody(
         ...(result.coverage.rawTo > 0 ? [`第 ${result.coverage.rawFrom}～${result.coverage.rawTo} 章原文`] : []),
         "账本",
       ].join(" + ")
-    }，更早的细节可能漏。`
+    }，更早的细节可能漏。${coldPausedNote(result.coverage)}`
     : "";
   const headline = !ok
     ? `${waitedNote}第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`

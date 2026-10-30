@@ -50,7 +50,7 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} onChapterButton={onChapterButton} />);
     fireEvent.click(btnByText(container, "更多")!);
     fireEvent.click(btnByText(container, "内容审阅")!);
-    expect(onChapterButton).toHaveBeenCalledWith("ai_review");
+    expect(onChapterButton).toHaveBeenCalledWith("review");
     expect(onSend).not.toHaveBeenCalled();
   });
 

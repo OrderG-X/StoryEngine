@@ -11,10 +11,9 @@ import { registerUsageRoutes } from "./routes/usage.js";
 import { registerSearchSettingsRoutes } from "./routes/search-settings.js";
 import { registerAboutRoutes } from "./routes/about.js";
 import { registerStateOverviewRoutes } from "./routes/state-overview.js";
+import { registerOperationsRoutes } from "./routes/operations.js";
+import { registerBuiltInRecipes } from "./services/operations/recipes/index.js";
 import { registerReaderProgressRoutes } from "./routes/reader-progress.js";
-import { registerDraftRoutes } from "./routes/draft.js";
-import { registerDraftRevisionRoutes } from "./routes/draft-revision.js";
-import { registerDeAiFlavorRoutes } from "./routes/de-ai-flavor.js";
 import { registerBooksRoutes } from "./routes/books.js";
 import { registerBookImportRoutes } from "./routes/book-import.js";
 import { registerBookFilesRoutes } from "./routes/book-files.js";
@@ -43,11 +42,10 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   router.use(createSecurityGate());
   // 每个请求一个用量范围：路由过项目路径闸时记下书，这次请求里调模型的用量记到它名下（P10）。
   router.use((_req, _res, next) => runInUsageScope(() => next()));
+  // 写作版本 P2a：配方登记进执行器、补读提交口接上处理函数（路由用到之前）。
+  registerBuiltInRecipes();
   registerStateOverviewRoutes(router);
   registerReaderProgressRoutes(router);
-  registerDraftRoutes(router);
-  registerDraftRevisionRoutes(router);
-  registerDeAiFlavorRoutes(router);
   registerBooksRoutes(router);
   registerBookImportRoutes(router);
   registerBookFilesRoutes(router);
@@ -60,6 +58,7 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerChatSessionsRoutes(router);
   registerSnapshotsRoutes(router);
   registerAgentChatRoutes(router);
+  registerOperationsRoutes(router);
   registerContinuityDismissalsRoutes(router);
   registerStoryThreadsRoutes(router);
   registerStoryMapRoutes(router);

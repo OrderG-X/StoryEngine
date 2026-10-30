@@ -11,8 +11,9 @@ import { useThemeStore } from "./stores/themeStore.js";
 import { useBookManagement } from "./hooks/useBookManagement.js";
 import { usePresence } from "./hooks/usePresence.js";
 import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
-import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
+import { useDraftPicks } from "./hooks/useDraftPicks.js";
 import { useChat } from "./hooks/useChat.js";
+import { useDraftEdits } from "./hooks/useDraftEdits.js";
 import { setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { countTextWords } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
@@ -62,9 +63,6 @@ export function App() {
   const draftAIReview = useUiStore((s) => s.draftAIReview);
   const aiFlavorPending = useUiStore((s) => s.aiFlavorPending);
   const aiFlavorBatchPending = useUiStore((s) => s.aiFlavorBatchPending);
-  const activeRevisionTask = useUiStore((s) => s.activeRevisionTask);
-  const activeRevisionPreview = useUiStore((s) => s.activeRevisionPreview);
-  const draftActionLoading = useUiStore((s) => s.draftActionLoading);
   const projectPath = useNavigationStore((s) => s.projectPath);
   const activeBookId = useNavigationStore((s) => s.activeBookId);
   const openProjectError = useNavigationStore((s) => s.openProjectError);
@@ -94,20 +92,14 @@ export function App() {
 
   const refreshWorkspaceFromOverview = navigation.refreshWorkspaceFromOverview;
 
-  const appendMessage = (message: import("./types.js").ChapterMessage) => {
-    useChatStore.getState().appendMessage(message);
-  };
-
-  const workflow = useWorkflowActions({
-    projectPath,
-    appendMessage,
-  });
 
   const { handleSendMessage, handleSuggestedAction, handleSendUserAction, handleChapterButton, undoToTurn, stopAgent } = useChat({
     projectPath,
-    handleApplyRevisionPreview: workflow.handleApplyRevisionPreview,
     refreshWorkspaceFromOverview,
   });
+
+  const edits = useDraftEdits({ sendUserAction: handleSendUserAction });
+  const picks = useDraftPicks({ sendUserAction: handleSendUserAction });
 
   /* ---- 存盘（重构 P5）：稿子归 draftSync（作者改字时自己排），对话归 chatSync，这里只管「消息变了」和「页面要关」 ---- */
   useEffect(() => {
@@ -241,7 +233,6 @@ export function App() {
             steeringDirection,
             chatLoading,
             chatError,
-            draftActionLoading,
             commitPreview: commitPreviewReport,
             lastFormalCommitApply,
             isCurrentChapterAlreadyFormallyCommitted: isCurrentChapterAlreadyFormallyCommitted(
@@ -252,15 +243,10 @@ export function App() {
             draftAIReview,
             aiFlavorPending,
             aiFlavorBatchPending,
-            activeRevisionTask,
-            activeRevisionPreview,
             themeMode,
             workspace,
-            onFixAiFlavorViolation: workflow.handleFixAiFlavorViolation,
-            onFixAllAiFlavorViolations: workflow.handleFixAiFlavorAll,
-            onGenerateRevisionPreview: () => void workflow.handleGenerateRevisionPreview(),
-            onApplyRevisionPreview: () => void workflow.handleApplyRevisionPreview(),
-            onDismissRevisionTask: workflow.handleDismissRevisionTask,
+            onFixAiFlavorViolation: edits.handleFixAiFlavorViolation,
+            onFixAllAiFlavorViolations: edits.handleFixAiFlavorAll,
             onGoHome: () => navigation.openHome(),
             onOpenSettings: openSettings,
             onSelectChapter: navigation.handleSelectChapter,
@@ -303,11 +289,12 @@ export function App() {
                 wsBook.updateWorkspace({ flowStatus: "draft_ready" });
               }
             },
-            onSelectionRewrite: workflow.handleSelectionRewrite,
-            onSelectionRewriteCustom: workflow.handleSelectionRewriteCustom,
-            onReroll: () => void workflow.handleRerollCandidates(),
-            onApplyCandidate: (candidate) => void workflow.handleApplyCandidate(candidate),
-            onCloseCandidates: workflow.handleCloseCandidates,
+            onSelectionRewrite: edits.handleSelectionRewrite,
+            onSelectionRewriteCustom: edits.handleSelectionRewriteCustom,
+            onReroll: () => void picks.rerollVersions(),
+            onApplyCandidate: (candidate) => void picks.adoptVersion(candidate),
+            onCloseCandidates: () => useUiStore.getState().setDraftCandidates(null),
+            onPendingCandidate: picks.decidePending,
             onToggleTheme: toggleTheme,
             overview: currentOverview,
           }}

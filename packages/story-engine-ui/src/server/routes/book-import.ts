@@ -4,16 +4,16 @@
  * POST /api/books/import-preview  { files: [{ name, text }] }
  *      → 切章预览（不写盘）：{ ok, parts: [{ kind, title, chars, file }], totalChars, emptyDropped, volumeLines, suggestedTitle }
  * POST /api/books/import          { title, files, include?: boolean[] }
- *      → 建书 → 「导入已写的书」命令（每章正文 + 空账单）→ 镜像 → 开一轮通读记账（后台）
+ *      → 建书 → 「导入已写的书」命令（每章正文 + 空账单）→ 镜像 → 交一次通读记账（执行器的 background.reread，后台跑）
  *      → { ok, projectDir, project, overview, imported: { chapters } }
  *      include 和预览的 parts 一一对应（缺省：章节都导、第一章前面的字不导）；对不上就是文件变了，要重新预览。
- * POST /api/books/reread          { projectPath } → 通读停下后「接着记」：{ ok, status }
+ * POST /api/books/reread          { projectPath } → 通读停下后「接着记」（停着的接着做、没成的重交一次）：{ ok, status }
  *
  * 切章两次都在服务端做（同一个纯函数、同样的输入），预览和导入切出来的一定一样。
  */
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { bookImportText, runCommand, serialFileStem, splitSerialText, type SerialFile, type SerialSplit } from "@actalk/story-core";
+import { BOOK_START_KEYS, bookImportText, runCommand, serialFileStem, splitSerialText, type SerialFile, type SerialSplit } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { createStoryProject } from "../book/project-store.js";
@@ -21,7 +21,7 @@ import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { assertStoryEngineProject, guardProjectPath, isRecord, isSafeProjectPath, readJsonBody, readString, requireBodyString, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
-import { readRereadState, runBookReread, startBookReread } from "../editorial/index.js";
+import { continueReread, startReread } from "../services/operations/recipes/index.js";
 import { withUiOverviewDetails } from "../services/ui-overview.js";
 
 type Req = import("node:http").IncomingMessage;
@@ -117,11 +117,11 @@ async function handleImport(body: Record<string, unknown>, res: Res): Promise<vo
   try {
     const outcome = await runCommand(projectDir, bookImportText, {
       chapters: chosen.map((part) => ({ title: part.kind === "preamble" ? "" : part.title, body: part.body })),
-    }, { caller: "author", idempotencyKey: "book-import-text", snapshot: coreSnapshotFor(projectDir) });
+    }, { caller: "author", idempotencyKey: BOOK_START_KEYS.importText, snapshot: coreSnapshotFor(projectDir) });
     if (!outcome.ok) throw new Error(outcome.message);
     const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
     if (!onCore.ok) throw new Error(`这本书没接上新核心：${onCore.reason}`);
-    await startBookReread(projectDir, outcome.result.chapters);
+    await startReread(projectDir, outcome.result.chapters);
   } catch (error) {
     // 导到一半不留半本书：整本删掉，如实报错。
     await rm(projectDir, { recursive: true, force: true }).catch(() => undefined);
@@ -135,11 +135,10 @@ async function handleResume(body: Record<string, unknown>, res: Res): Promise<vo
   const projectDir = requireBodyString(body.projectPath, "项目路径不能为空。");
   if (!guardProjectPath(res, projectDir)) return;
   await assertStoryEngineProject(projectDir);
-  const state = await readRereadState(projectDir);
-  if (!state) {
-    writeJson(res, 400, { ok: false, error: "这本书没有在通读记账。" });
+  const outcome = await continueReread(projectDir);
+  if (!outcome.ok) {
+    writeJson(res, 400, { ok: false, error: outcome.message });
     return;
   }
-  if (state.status !== "done") void runBookReread(projectDir);
-  writeJson(res, 200, { ok: true, status: state.status === "done" ? "done" : "running" });
+  writeJson(res, 200, { ok: true, status: outcome.status });
 }

@@ -1,5 +1,5 @@
 /**
- * 工作稿的读和存（重构 P5；写作版本 P1b 加了恢复稿和 AI 候选）：
+ * 工作稿的读和存（重构 P5；写作版本 P1b 加了恢复稿和 AI 候选，P2a 片 2D 起 AI 候选换上 / 不要了走 draft.adopt / draft.discard 操作）：
  *   GET /api/working-draft?project=…&chapter=…  → { ok, paper: { chapter, draft, committed, editedSinceCommit, pending? } }
  *     draft = { chapter, title?, body, version } | null；committed = { title?, body } | null（定稿正文）
  *     pending = 等作者选的一份：恢复稿（作者上次没存上的字）或 AI 候选（AI 写好、没换上的），和工作稿一样的不给。
@@ -9,9 +9,10 @@
  *     工作稿不动。盘上已经就是这份（同一笔重发）算存上。整段在书锁里。
  *     同一窗口：序号不比上一笔大的（迟到的旧笔）→ 409 stale_save，不写；盘上还是这个窗口最后存成的那版、这笔又是照这个窗口
  *     这一串里的某一版改的（关窗时补发的那笔，在路上那笔先落了盘）→ 顺着接上（第 7 轮复核 U2）。
- *   POST /api/working-draft/pending { projectPath, chapter, kind, id, sha, decision, baseVersion, client?, seq? }
+ *   POST /api/working-draft/pending { projectPath, chapter, kind:"recovery", id, sha, decision, baseVersion, client?, seq? }
+ *     只管作者自己的字（恢复稿、收拾事务时另存的那份）；AI 候选不走这里。
  *     decision=adopt：换上那一份（作者档 draft.adoptCandidate，带作者眼前那份的版本，对不上不换；换前存档、可撤销）；
- *     decision=dismiss：不要了（AI 候选删掉；恢复稿清掉——本窗口自己的直接清，别的窗口的要 sha 对得上）。
+ *     decision=dismiss：不要了（本窗口自己的直接清，别的窗口的要 sha 对得上）。
  *     查那一份、换上、清掉在同一把书锁里。
  *   POST /api/chapter-title { projectPath, chapter, title, requestId } → { ok, title, unchanged, snapshotId? }
  *     改已定稿那一章的章名（作者档 chapter.retitle，改前存档、可撤销；正文和账单条目不动）。requestId 是这次点击的幂等键。
@@ -40,12 +41,10 @@ import {
   dismissDraftRecovery,
   draftSha,
   pendingDraftFor,
-  readDraftCandidate,
   readDraftRecovery,
   ownLineage,
   readSaveMark,
   recoveryClientOf,
-  removeDraftCandidate,
   saveDraftRecovery,
   writeSaveMark,
   type DraftRecovery,
@@ -117,9 +116,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         if (!guardProjectPath(res, projectDir)) return;
         const chapter = requirePositiveBodyInteger(body.chapter, "章节不能为空。");
         const id = requireBodyString(body.id, "缺少是哪一份。");
-        const kind = body.kind === "recovery" ? "recovery" as const : body.kind === "candidate" ? "candidate" as const : undefined;
         const decision = body.decision === "adopt" ? "adopt" as const : body.decision === "dismiss" ? "dismiss" as const : undefined;
-        if (!kind || !decision) {
+        if (body.kind !== "recovery" || !decision) {
           writeJson(res, 400, { ok: false, error: "不知道要对哪一份做什么。" });
           return;
         }
@@ -130,10 +128,10 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         // 先收拾写到一半的事务（P1 第 17 轮）：字数统计、换上都对着收拾过的书。
         const settledReply = await withSettledBook(projectDir, async (): Promise<{ readonly status: number; readonly payload: DevApiResponse }> => {
           // 收拾没写完的事务时另存的那份（P1 第 19 轮 AG3，号是 `kept-…`）：和恢复稿一样是作者自己的字，存在核心的另存区。
-          const savedCopy = kind === "recovery" && isSavedCopyId(id);
-          const entry = kind === "candidate" ? await readDraftCandidate(projectDir, id) : savedCopy ? await readSavedDraft(projectDir, id) : await readDraftRecovery(projectDir, id);
-          // 还等着作者选的：候选是 AI 写了字的那份；恢复稿看有没有清过（只起了章名的也算，第 13 轮复核 AA5）。
-          const waiting = entry && entry.chapter === chapter && ("settled" in entry ? !entry.settled : entry.body.trim().length > 0);
+          const savedCopy = isSavedCopyId(id);
+          const entry = savedCopy ? await readSavedDraft(projectDir, id) : await readDraftRecovery(projectDir, id);
+          // 还等着作者选的：看有没有清过（只起了章名的也算，第 13 轮复核 AA5）。
+          const waiting = entry && entry.chapter === chapter && !entry.settled;
           const live = waiting ? entry : undefined;
           if (decision === "dismiss" && savedCopy) {
             // 不要了：已经清了、不在了也算成；指纹必带（作者看到的就是这一份才清）。
@@ -143,14 +141,6 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
             return { status: 200, payload: { ok: true } };
           }
           if (decision === "dismiss") {
-            if (kind === "candidate") {
-              // 不要了：已经不在也算成（重发、两个窗口各点一次）。
-              if (!live) return { status: 200, payload: { ok: true } };
-              // 指纹必带（第 14 轮复核 AB4）：不带就不知道作者看到的是哪一份，不删。
-              if (sha === undefined || sha !== draftSha(live)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
-              await removeDraftCandidate(projectDir, id);
-              return { status: 200, payload: { ok: true } };
-            }
             // 恢复稿已经清空了（找回了、别处不要了）也算成；清空的那份也交给它推进序号（第 5 轮复核 S10）。
             if (!entry || entry.chapter !== chapter) return { status: 200, payload: { ok: true } };
             const dismissed = await dismissDraftRecovery(projectDir, entry as DraftRecovery, { ...(sha !== undefined ? { sha } : {}), ...(from ? { from } : {}) });
@@ -160,13 +150,13 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           // 作者看到的就是这一份才换（这期间又存进了新字、改了章名之类，整份变了就不换）。
           if (sha !== draftSha(live)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没换。看一眼再选。" } };
           const baseVersion = readBaseVersion(body.baseVersion);
-          const label = kind === "candidate" ? `换上 AI 稿：第${chapter}章` : `找回没存上的稿：第${chapter}章`;
+          const label = `找回没存上的稿：第${chapter}章`;
           const wordsBefore = await chapterWordsNow(projectDir, chapter).catch(() => undefined);
           const { snapshotId, result: outcome } = await runWithLazySnapshot(projectDir, (snapshot) =>
             runCommand(projectDir, draftAdoptCandidate, {
               chapter,
               body: live.body,
-              // 候选、恢复稿都是整份稿：章名照它自己的，没章名就是没有（不借这时盘上的，第 14 轮复核 AB3）。
+              // 恢复稿是整份稿：章名照它自己的，没章名就是没有（不借这时盘上的，第 14 轮复核 AB3）。
               title: live.title ?? "",
               baseVersion,
             }, { caller: "author", snapshot }), label);
@@ -180,12 +170,11 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
               },
             };
           }
-          if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, kind === "candidate" ? "ai" : "author", wordsBefore);
+          if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, "author", wordsBefore);
           // 稿子已经换上了：之后清掉那一份没成，也是换成了（报 500 会让作者以为没换），如实带一句「那一份还在」（P1 第 21 轮 AI1）。
           let warning: string | undefined;
           try {
-            if (kind === "candidate") await removeDraftCandidate(projectDir, id);
-            else if (savedCopy) await settleSavedCopy(projectDir, id);
+            if (savedCopy) await settleSavedCopy(projectDir, id);
             else await consumeDraftRecovery(projectDir, live as DraftRecovery);
           } catch (error) {
             warning = `换好了，但那一份没清掉（下次开这一章还会提示）：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`;

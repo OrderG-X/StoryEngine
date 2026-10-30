@@ -1,25 +1,14 @@
 /**
  * 稿纸顶上的「本章梗概」：点开看全，展开后作者点「改」就地改写（长篇实跑：记账员把方向记反了，定稿后没处改）。
- * 改＝「确认改账」同一个结构化动作（作者档裁定 chapter.summary，改前存档、可撤销），不经模型。
+ * 改＝直接改账（ledger.change，作者档裁定 chapter.summary，改前存档、可撤销），不经模型。
  */
 import { useState } from "react";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { newLedgerAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { InlineEdit } from "./bibleEdit.js";
 
-/** 同一章同一句话点两次只记一次；换了说法就是新的一次。 */
-function textKey(text: string): string {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
-  return hash.toString(36);
-}
-
-export function synopsisAction(chapter: number, text: string): Extract<AgentUserAction, { readonly toolName: "ledger_decision" }> {
-  return {
-    toolName: "ledger_decision",
-    key: `synopsis-${chapter}-${textKey(text)}`,
-    decisions: [{ type: "chapter.summary", chapter, text }],
-    label: `改第 ${chapter} 章的梗概`,
-  };
+/** 改梗概：直接改账（ledger.change，作者档、改前存档可撤销）。改的和现在一样，服务端如实说不用改。 */
+export function synopsisAction(chapter: number, text: string): AgentUserAction {
+  return newLedgerAction([{ op: "summary", chapter, text }]);
 }
 
 export function ChapterSynopsis({ chapter, text, busy, onAction }: {

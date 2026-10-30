@@ -1,18 +1,20 @@
 // @vitest-environment node
 // 编辑部 R3 后核账只有核账员一路（combo 旧路已删）：这里测服务层的收口——账本对账并进、核账记忆、
 // 三遍失败如实说、补笔记太多时「还在读前文」的 T5 语义。核账员本身的行为见 editorial/checker.test.ts。
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../index.js";
-import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReaderCatchUp } from "../index.js";
+import { CHECKER_ROLE, ensureReaderWindow, readerWaitingHandlers, readReadersCatchUpStatus } from "../index.js";
+import { setReaderBackfillHandler, type ReaderBackfillRequest } from "../../lib/reader-backfill.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { describeTimelineForChapter, readStoryTimeline } from "../../book/story-timeline.js";
 import { syncLegacyMirror } from "../../book/mirror/sync.js";
 import { chapterCommit, decisionRecord, readTruthBasis, runCommand } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import type { ContinuityIssueV2 } from "./check-chapter.js";
-import { appendFixLog, hashBody, hashEarlier, readFixLog, writeCheckMemory } from "./check-memory.js";
+import { hashBody, hashEarlier, writeCheckMemory } from "./check-memory.js";
+import { appendFixLog, readFixLog } from "../../lib/fix-log.js";
 import { addDismissal } from "./dismissals.js";
 
 const CH1 = "客人把怀表放在绒布上就走了。周婶说这表是前天送来的。";
@@ -353,9 +355,18 @@ describe("核账服务：改后只核改过的句子（外部审查 2026-10-28�
   });
 });
 
+/** 接住交给执行器的后台补读（单测里没登记执行器）。 */
+function captureBackfill(): ReaderBackfillRequest[] {
+  const requests: ReaderBackfillRequest[] = [];
+  setReaderBackfillHandler(async (_book, request) => { requests.push(request); });
+  return requests;
+}
+afterEach(() => setReaderBackfillHandler(undefined));
+
 describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + 后台补读）", () => {
-  it("要补的笔记超过 10 章 → 冷窗口照核（ok:true、coverage 说清范围），笔记后台接着补；补好后下次按全书核", async () => {
+  it("要补的笔记超过 10 章 → 冷窗口照核（ok:true、coverage 说清范围），点名核账员交后台补读；补好后下次按全书核", async () => {
     const dir = await makeBook(12);
+    const backfills = captureBackfill();
     const reader = readerModel();
     const first = await checkChapterBody(dir, 13, BODY, { readerCallModel: reader.callModel });
     // 不跳过也不装作核了全书：核了（ok:true、问题照出），范围如实说。
@@ -366,10 +377,10 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
     expect(first.summary).toContain("更早的细节可能漏");
     expect(first.sure.map((item) => item.quote)).toContain(AUNT_SENTENCE);
     expect(first.reused).toBe(false);
-    // 冷窗口不写核账记忆（小范围的结果不能当全书核过来缓存）；笔记在后台按顺序补，进度落盘给界面
-    await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
-    const readProgress = () => readFile(join(dir, "agents", "checker", "progress.json"), "utf-8").then((text) => JSON.parse(text));
-    await vi.waitFor(async () => expect(await readProgress()).toMatchObject({ role: "checker", reading: false, done: 12, total: 12 }), { timeout: 5_000 });
+    // 冷窗口不写核账记忆（小范围的结果不能当全书核过来缓存）；笔记交给后台补读（执行器的 background.backfill）。
+    await vi.waitFor(() => expect(backfills).toEqual([{ roles: ["checker"], upTo: 12 }]), { timeout: 5_000 });
+    expect(await notesCount(dir)).toBe(0);
+    await ensureReaderWindow({ projectDir: dir, role: CHECKER_ROLE, upTo: 12, callModel: reader.callModel });
     // 补好了：同一份正文再核就是读完全书的核账员（没有 coverage，也不会拿冷窗口结果复用）
     const second = await checkChapterBody(dir, 13, BODY, { readerCallModel: reader.callModel });
     expect(second.reused).toBe(false);
@@ -380,33 +391,26 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
 
   it("R4.3 分母统一：核已定稿章的稿子时，回执和进度行同口径（共 y 章＝已定稿章数）", async () => {
     const dir = await makeBook(12);
+    const backfills = captureBackfill();
     const reader = readerModel();
     const result = await checkChapterBody(dir, 12, BODY, { readerCallModel: reader.callModel });
     expect(result.ok).toBe(true);
     expect(result.coverage).toEqual({ mode: "cold", notedThrough: 0, rawFrom: 4, rawTo: 11 });
     // 旧口径的分母是「本章 − 1」＝11（验收 3.3 里 57 对 58 就是这个差）；统一成已定稿章数 12。
     expect(result.summary).toContain("第 0 / 12 章");
-    // 后台补读也按统一后的总数排（补齐 12 章，读完就能按读完全书核）。
-    await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
+    // 后台补读也按统一后的总数交（补齐 12 章，读完就能按读完全书核）。
+    await vi.waitFor(() => expect(backfills).toEqual([{ roles: ["checker"], upTo: 12 }]), { timeout: 5_000 });
   });
 
-  it("冷窗口三遍全失败：如实说没核成（ok:false + 范围），后台补读失败只 warn、进度如实记错", async () => {
+  it("冷窗口三遍全失败：如实说没核成（ok:false + 范围），笔记照样交后台补读", async () => {
     const dir = await makeBook(12);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const backfills = captureBackfill();
     const broken: BrainCallModel = async () => { throw new Error("限流了"); };
     const result = await checkChapterBody(dir, 13, BODY, { readerCallModel: broken });
     expect(result.ok).toBe(false);
     expect(result.summary).toContain("核账没跑成");
     expect(result.summary).toContain("还没读完全书");
-    await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5_000 });
-    // 读到哪里记哪里：一章都没写成就是 0 / 12，错误原因落盘（下次接着补）。
-    // 补读失败是先 warn、再落盘，机器忙时要等落盘那一下。
-    await vi.waitFor(async () => {
-      const progress = JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8"));
-      expect(progress).toMatchObject({ reading: false, done: 0, total: 12 });
-      expect(progress.error).toContain("限流了");
-    }, { timeout: 5_000 });
-    warn.mockRestore();
+    await vi.waitFor(() => expect(backfills).toEqual([{ roles: ["checker"], upTo: 12 }]), { timeout: 5_000 });
   });
 });
 
@@ -432,10 +436,8 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
     expect(result.coverage).toBeUndefined();
     // 等读期间：reading:true、waiting:「核账」；分母按 R5.3 现算成已定稿章数（这本书定稿到第 4 章，盘上记的是 3）。
     expect(seenWhileWaiting[0]).toMatchObject({ role: "checker", reading: true, done: 1, total: 4, waiting: "核账" });
-    // 收尾：reading:false、waiting 消失。
-    await expect(readFile(join(dir, "agents", "checker", "progress.json"), "utf-8").then((text) => JSON.parse(text)))
-      .resolves.toMatchObject({ reading: false, done: 3, total: 3 });
-    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).not.toHaveProperty("waiting");
+    // 收尾：不在读、waiting 消失（当场补读的进度只在内存，补完就没了）。
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).toEqual({ role: "checker", reading: false, done: 0, total: 0 });
   });
 
   it("缺 9～10 章仍当场补读（老行为）：等读一句照加", async () => {
@@ -451,8 +453,8 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
 
   it("笔记本来就齐 → 没等就不说（R6.1）：不带 waited、回执不提等、进度不标在等", async () => {
     const dir = await makeBook(4);
-    // 后台补读先把 1～3 章一口气读完（读到第 3 章收尾），再核第 4 章：开口时笔记就齐。
-    await startReaderCatchUp(dir, CHECKER_ROLE, 3, { callModel: async () => "笔记" });
+    // 先把 1～3 章一口气读完，再核第 4 章：开口时笔记就齐。
+    await ensureReaderWindow({ projectDir: dir, role: CHECKER_ROLE, upTo: 3, callModel: async () => "笔记" });
     const reader = readerModel();
     const result = await checkChapterBody(dir, 4, BODY, { readerCallModel: reader.callModel });
     expect(result.ok).toBe(true);
@@ -468,9 +470,9 @@ describe("核账服务：排在后台补读后面等（R6.1，新发现 1）", (
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let started = false;
-    // 后台补读的假模型：第一次调用（写第 1 章笔记）就卡住，把核账员的锁拿在手里。
+    // 别人补读的假模型：第一次调用（写第 1 章笔记）就卡住，把核账员的锁拿在手里（带上进度回调，进度行看得到它在读）。
     const bg: BrainCallModel = async () => { started = true; await gate; return "笔记"; };
-    const bgRound = startReaderCatchUp(dir, CHECKER_ROLE, 10, { callModel: bg });
+    const bgRound = ensureReaderWindow({ projectDir: dir, role: CHECKER_ROLE, upTo: 10, callModel: bg, ...readerWaitingHandlers(dir, CHECKER_ROLE.id, 10) });
     await vi.waitFor(() => expect(started).toBe(true), { timeout: 5_000 });
     // 并发点核账（第 11 章）：开口时一章笔记都还没有（waited.from=1），排在锁后面等。
     const reader = readerModel();

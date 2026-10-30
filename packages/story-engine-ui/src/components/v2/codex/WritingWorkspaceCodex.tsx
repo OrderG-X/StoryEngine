@@ -152,11 +152,7 @@ export function resolveRightPanelOpen(rightOpen: boolean, autoCollapsed: boolean
 }
 
 export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps) {
-  const workspaceBusy = Boolean(
-    props.chatLoading
-    || props.draftActionLoading
-    || isWorkspaceBusy(),
-  );
+  const workspaceBusy = Boolean(props.chatLoading || isWorkspaceBusy());
   const focusWriting = useDisplaySettingsStore((s) => s.focusWriting);
   const [rightOpen, setRightOpen] = useState(() => !focusWriting);
   // T3：用户是否点过右栏展开/收起。点过之后手动意愿覆盖窄视口自动收起（见 resolveRightPanelOpen）。
@@ -215,7 +211,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     setRightOpen(!focusWriting);
   }, [focusWriting]);
 
-  // 出稿/续写一开始（useChat 在 generate_draft tool-call 时 requestCenterView("desk")）→ 自动切到写作台，
+  // 写稿 / 接着写一开始（useChat 跟着的写稿操作开始时 requestCenterView("desk")）→ 自动切到写作台，
   // 让用户看着正文出现，不必手动点。一次性消费后清空，避免之后切走又被拽回。
   const pendingCenterView = useNavigationStore((s) => s.pendingCenterView);
   // 刚定稿还没看过「这章改了什么」：顶栏「设定本」亮小点，点进去先到那一页（看过就清）。
@@ -795,7 +791,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         />
       ) : null}
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
-      <CommitSheetHost busy={workspaceBusy} {...(props.onSuggestedAction ? { onSuggestedAction: props.onSuggestedAction } : {})} />
+      <CommitSheetHost busy={workspaceBusy} {...(props.onSendUserAction ? { onSendUserAction: props.onSendUserAction } : {})} />
       <ExportDialog book={exportOpen && props.projectPath ? { title: projectName, projectPath: props.projectPath } : null} onClose={() => setExportOpen(false)} />
       {settingsPresence.mounted ? <SettingsModal tab={settingsTab ?? lastSettingsTabRef.current} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} presence={settingsPresence} /> : null}
     </div>

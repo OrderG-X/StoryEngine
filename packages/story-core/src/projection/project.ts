@@ -13,8 +13,9 @@
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import type { ChapterLedger, FactEntry, PresenceEntry, ThreadEntry, TimeEntry } from "../schema/ledger.js";
+import type { ChapterLedger, FactEntry, ThreadEntry, TimeEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
+import { Names } from "./names.js";
 import type {
   BookProjection,
   CastMember,
@@ -52,47 +53,6 @@ export const DEFAULT_STALE_AFTER = 5;
 export const MAJOR_STALE_FACTOR = 4;
 
 const mod7 = (value: number): number => ((value % 7) + 7) % 7;
-
-/** 别名表：称呼键 → 已确立名字键。跟着链走到底，防环。 */
-class Names {
-  private readonly aliasTo = new Map<string, string>();
-  private readonly display = new Map<string, string>();
-
-  /**
-   * 设定卡上的别名指向卡名（换题材长篇实跑 2026-10-27：第 1 章记账员把父亲记成「林父」，作者在林国栋的卡上加了别名「林父」，
-   * 投影却还把「林父」当另一个人——写前备忘「最近变了」里林父、林国栋各一条伤势病情）。
-   * 先于出场条目套上；别名正好是另一张卡的名字的不收（那是两个人）。
-   */
-  addCards(cards: SettingCardsFile): void {
-    const cardKeys = new Set(cards.cards.map((card) => nameKey(card.name)));
-    for (const card of cards.cards) {
-      const key = nameKey(card.name);
-      if (!key) continue;
-      if (!this.display.has(key)) this.display.set(key, card.name);
-      for (const alias of card.aliases) {
-        const aliasKey = nameKey(alias);
-        if (aliasKey && aliasKey !== key && !cardKeys.has(aliasKey) && !this.aliasTo.has(aliasKey)) this.aliasTo.set(aliasKey, key);
-      }
-    }
-  }
-
-  addPresence(entry: PresenceEntry): void {
-    const name = nameKey(entry.name);
-    const used = nameKey(entry.nameUsed);
-    if (!this.display.has(name)) this.display.set(name, entry.name);
-    if (used !== name && !entry.generic && !this.aliasTo.has(used)) this.aliasTo.set(used, name);
-  }
-
-  resolve(raw: string): { readonly key: string; readonly name: string } {
-    let key = nameKey(raw);
-    const seen = new Set<string>([key]);
-    for (let next = this.aliasTo.get(key); next !== undefined && !seen.has(next); next = this.aliasTo.get(key)) {
-      seen.add(next);
-      key = next;
-    }
-    return { key, name: this.display.get(key) ?? raw };
-  }
-}
 
 function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[] {
   const members = new Map<string, { name: string; aliases: Set<string>; chapters: Set<number>; viewpoint: Set<number>; quotes: Map<number, string> }>();

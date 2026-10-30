@@ -5,27 +5,27 @@
  *  - 要你看的（≤8 条先露，其余点开）：每条一句 + 原句 +【记下】【不记】；要确认的改记是【改记】【不改】、默认不改。
  *  - 另外自动记下 N 条：收起；点开每条也能【不记】。
  *  - 定不了时：照实列阻断原因，只有【知道了】；只差字数下限的多一个【就这么短，照样定稿】（只放这一章）。
- *  - 底：【先不定】【定稿】。定稿＝现有「确认定稿」结构化动作（带上作者去掉的、确认的、改的天数），不经模型。
+ *  - 底：【先不定】【确认定稿】。确认＝接着做出这张清单的那次定稿（带上作者去掉的、确认的、改的天数），不经模型。
  *
- * 作者动过的条目记在 utils/ledgerExclusions（按章 + 预览令牌），关了再开、从别处点「确认定稿」都带得上。
+ * 作者动过的条目记在 utils/ledgerExclusions（按出清单的那次定稿），关了再开都带得上。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import {
+  clearLedgerExclusions,
   type DayOverride,
-  ledgerDayOverrideForCard,
-  ledgerExclusionsForCard,
+  ledgerDayOverrideFor,
+  ledgerExclusionsFor,
   rememberLedgerDayOverride,
   rememberLedgerExclusions,
 } from "../../../utils/ledgerExclusions.js";
 import { IconClose } from "./icons.js";
-import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewIds } from "./commitConfirm.js";
 import { closeCommitSheet, useCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { cardOf } from "../../../utils/messageCards.js";
-import { commitConfirmAction, commitShortAction } from "../../../utils/workflowHelpers.js";
-import type { SuggestedAction } from "../../../types.js";
+import { newCommitAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { usePresence, type PresenceHandle } from "../../../hooks/usePresence.js";
 
 type ChecklistItem = NonNullable<CommitPreviewCardData["ledgerChecklist"]>[number];
@@ -103,6 +103,7 @@ function ReviewRow({ item, kept, disabled, onSet }: {
 
 export function CommitSheet({
   preview,
+  opId,
   busy,
   onConfirm,
   onClose,
@@ -111,9 +112,11 @@ export function CommitSheet({
   onCommitShort,
 }: {
   readonly preview: CommitPreviewCardData;
+  /** 出这张清单的那次定稿：作者动过的条目、改的天数按它记（关了再开带得上）。 */
+  readonly opId?: string;
   /** 有动作在跑：按钮先不让点。 */
   readonly busy: boolean;
-  /** 传了且能定稿 → 底部有【定稿】；参数是作者去掉 / 确认的条目 id、改过的天数。没传＝只看（旧预览）。 */
+  /** 传了且能定稿 → 底部有【确认定稿】；参数是作者去掉 / 确认的条目 id、改过的天数。没传＝只看（用掉了、作废了的清单）。 */
   readonly onConfirm?: (excluded: readonly string[], dayOverride?: DayOverride) => void;
   readonly onClose: () => void;
   /** 关的时候播退场（usePresence）。 */
@@ -129,17 +132,17 @@ export function CommitSheet({
   const blocked = !preview.canCommit || blocking.length > 0;
   const editable = !blocked && Boolean(onConfirm);
 
-  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => ledgerExclusionsForCard(preview.chapter, preview.previewToken));
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => (opId ? ledgerExclusionsFor(opId) : new Set()));
   const setKept = (item: ChecklistItem, keep: boolean) => setToggled((current) => {
     const next = new Set(current);
     // 默认记的：不记＝进集合；要确认的改记：改记＝进集合。
     const inSet = item.defaultUnchecked ? keep : !keep;
     if (inSet) next.add(item.id);
     else next.delete(item.id);
-    rememberLedgerExclusions(preview.chapter, preview.previewToken, next);
+    if (opId) rememberLedgerExclusions(opId, next);
     return next;
   });
-  const [dayOverride, setDayOverride] = useState<DayOverride | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
+  const [dayOverride, setDayOverride] = useState<DayOverride | undefined>(() => (opId ? ledgerDayOverrideFor(opId) : undefined));
   const [editingDay, setEditingDay] = useState(false);
   /** 正在打的字：删空了先让它空着（不然一删就弹回原来的数，再打成了「114」）。 */
   const [dayText, setDayText] = useState<string | null>(null);
@@ -150,7 +153,7 @@ export function CommitSheet({
   const shownEnd = dayOverride ? dayOverride.dayEnd ?? dayOverride.day : day?.editableDayEnd ?? shownDay;
   const changeDay = (value: DayOverride | undefined) => {
     setDayOverride(value);
-    rememberLedgerDayOverride(preview.chapter, preview.previewToken, value);
+    if (opId) rememberLedgerDayOverride(opId, value);
   };
   /**
    * 改头一天：跨的天数跟着挪（第 20～21 天改成 21 → 第 21～22 天）；要只记一天，把「到第几天」也改成同一天。
@@ -368,13 +371,28 @@ export function CommitSheet({
   );
 }
 
+/** 点「确认定稿」时对话里那句「你：…」：去掉了几条、确认改记几条、改了天数照实说。 */
+export function commitConfirmEcho(preview: CommitPreviewCardData, toggled: readonly string[], dayOverride?: DayOverride): string {
+  const ledger = preview.ledgerChecklist ?? [];
+  const on = new Set(toggled);
+  const removed = ledger.filter((item) => item.removable && !item.defaultUnchecked && on.has(item.id)).length;
+  const confirmed = ledger.filter((item) => item.removable && item.defaultUnchecked && on.has(item.id)).length;
+  const dayEnd = dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? dayOverride.dayEnd : undefined;
+  const notes = [
+    ...(removed > 0 ? [`账本清单去掉了 ${removed} 条`] : []),
+    ...(confirmed > 0 ? [`确认改记 ${confirmed} 条`] : []),
+    ...(dayOverride ? [`这一章改记为故事第 ${dayOverride.day} 天${dayEnd !== undefined ? `到第 ${dayEnd} 天` : ""}`] : []),
+  ];
+  return notes.length > 0 ? `确认定稿第 ${preview.chapter} 章（${notes.join("，")}）` : `确认定稿第 ${preview.chapter} 章`;
+}
+
 /**
- * 弹窗挂在工作台最外层（专注模式、AI 栏收起时也弹得出来）：找到打开的那条消息上的预览。
- * 只有最新一张没用掉的可定稿预览能点【定稿】；旧的只看。
+ * 弹窗挂在工作台最外层（专注模式、AI 栏收起时也弹得出来）：找到打开的那条消息上的清单。
+ * 出它的那次定稿还在等作者点的才能点【确认定稿】（确认＝接着做那次定稿）；用掉了、作废了的只看。
  */
-export function CommitSheetHost({ busy, onSuggestedAction }: {
+export function CommitSheetHost({ busy, onSendUserAction }: {
   readonly busy: boolean;
-  readonly onSuggestedAction?: (action: SuggestedAction) => void;
+  readonly onSendUserAction?: (action: AgentUserAction, options?: { readonly echo?: string }) => void;
 }) {
   const openId = useCommitSheet((state) => state.messageId);
   const messages = useChatStore((state) => state.messages);
@@ -386,31 +404,33 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
   const messageId = openId ?? (presence.mounted ? lastId.current : null);
   if (!messageId) return null;
   const message = messages.find((item) => item.id === messageId);
-  const preview = message ? cardOf(message, "commit-preview")?.preview : undefined;
-  if (!preview) return null;
-  const confirmable = confirmableCommitPreviewMessageId(messages) === messageId && Boolean(onSuggestedAction);
-  const onConfirm = confirmable
-    ? (excluded: readonly string[], dayOverride?: DayOverride) => {
+  const card = message ? cardOf(message, "commit-preview") : undefined;
+  if (!message || !card) return null;
+  const { preview, opId } = card;
+  const pending = cardOf(message, "operation")?.op.pending;
+  const answerTo = opId && pending?.kind === "commit" && confirmableCommitPreviewIds(messages).has(messageId) ? { opId, actionId: pending.actionId } : undefined;
+  const onConfirm = answerTo && onSendUserAction
+    ? (toggled: readonly string[], dayOverride?: DayOverride) => {
       closeCommitSheet();
-      onSuggestedAction!(commitConfirmAction({
-        chapter: preview.chapter,
-        ...(preview.previewToken ? { previewToken: preview.previewToken } : {}),
-        ...(excluded.length > 0 ? { excluded } : {}),
-        ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
-        ...(dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? { dayEndOverride: dayOverride.dayEnd } : {}),
-      }));
+      clearLedgerExclusions(answerTo.opId);
+      const values = dayOverride ? { day: dayOverride.day, ...(dayOverride.dayEnd !== undefined ? { dayEnd: dayOverride.dayEnd } : {}) } : undefined;
+      onSendUserAction(
+        { kind: "resume", opId: answerTo.opId, answer: { actionId: answerTo.actionId, decision: "commit", ...(toggled.length > 0 ? { excluded: [...toggled] } : {}), ...(values ? { values } : {}) } },
+        { echo: commitConfirmEcho(preview, toggled, dayOverride) },
+      );
     }
     : undefined;
-  const onCommitShort = preview.shortOnly && onSuggestedAction
+  const onCommitShort = preview.shortOnly && onSendUserAction
     ? () => {
       closeCommitSheet();
-      onSuggestedAction(commitShortAction(preview.chapter));
+      onSendUserAction(newCommitAction(preview.chapter, { allowShort: true }));
     }
     : undefined;
   return (
     <CommitSheet
       key={messageId}
       preview={preview}
+      {...(opId ? { opId } : {})}
       busy={busy}
       {...(onConfirm ? { onConfirm } : {})}
       {...(onCommitShort ? { onCommitShort } : {})}

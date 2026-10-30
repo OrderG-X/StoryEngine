@@ -12,7 +12,7 @@
  *   - 诚实：not_found / ambiguous / noop / overlap 一律跳过并计数，绝不谎报「全改了」（铁律④）。
  */
 import { z } from "zod";
-import { locateRevisionSpan as locateTargetSpan } from "./revision-service.js";
+import { locateRevisionSpan as locateTargetSpan } from "./draft-change/revise-text.js";
 import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
 
 export interface DeAiRewrite {
@@ -70,7 +70,28 @@ const batchSchema = z.object({
   }).strict().partial({ afterText: true })).default([]),
 }).strict();
 
-/** 解析模型批量改写 JSON；text 必须是草稿子串、afterText 非空且与原句不同，否则丢弃（保证能定位+真有改动）。 */
+/** 改句最多是原句的几倍长：超过的那条作废（去味是改「怎么说」，不是扩写；也是回复长度上限的依据，见 deAiReplyLimit）。 */
+export const DE_AI_MAX_GROWTH = 3;
+
+/**
+ * 去味批量改写的回复最多多少字（正文跑飞守护，写作版本 P2a 4.5）：按输出协议算最长的合法回复——
+ * 每条至多回显原句 1 份、改句至多 DE_AI_MAX_GROWTH 倍长，每个字最坏转义成 `\uXXXX`（6 倍）；键名也能转义，
+ * 每条的键名、引号、分隔符最坏 92，取 DE_AI_ITEM_SHELL = 96；字符串外的空白 4096，根对象（键名也转义）256。
+ * n = 给的原句条数，L = 最长那条的长度（UTF-16 单位，和计数同一口径）。
+ */
+export const DE_AI_ITEM_SHELL = 96;
+export function deAiReplyLimit(violations: readonly Pick<AiFlavorViolation, "text">[]): number {
+  const longest = Math.max(0, ...violations.map((violation) => violation.text.length));
+  return violations.length * ((1 + DE_AI_MAX_GROWTH) * 6 * longest + DE_AI_ITEM_SHELL) + 4096 + 256;
+}
+
+/** 去味的改写模型：带这次回复的字数上限（超了按正文跑飞掐掉）。 */
+export type DeAiCallModel = (prompt: string, limits: { readonly maxContentChars: number }) => Promise<string>;
+
+/**
+ * 解析模型批量改写 JSON；text 必须是草稿子串、afterText 非空且与原句不同、不超过原句 DE_AI_MAX_GROWTH 倍长，
+ * 否则丢弃（保证能定位 + 真有改动 + 没扩写）。
+ */
 export function parseDeAiBatchRewrites(modelText: string, draftText: string): readonly DeAiRewrite[] {
   try {
     const match = modelText.match(/\{[\s\S]*\}/u);
@@ -82,6 +103,7 @@ export function parseDeAiBatchRewrites(modelText: string, draftText: string): re
       if (!afterText) continue;
       if (!draftText.includes(r.text)) continue;
       if (afterText === r.text.trim()) continue;
+      if (afterText.length > DE_AI_MAX_GROWTH * r.text.length) continue;
       out.push({ text: r.text, afterText });
     }
     return out;
@@ -159,7 +181,7 @@ function countApplySkipped(skipped: readonly { readonly reason: DeAiSkipReason }
 export async function runDeAiFlavorBatch(input: {
   readonly draftText: string;
   readonly violations: readonly AiFlavorViolation[];
-  readonly callModel: (prompt: string) => Promise<string>;
+  readonly callModel: DeAiCallModel;
   readonly antiRules?: readonly string[];
 }): Promise<DeAiBatchResult> {
   const draftText = input.draftText;
@@ -172,7 +194,10 @@ export async function runDeAiFlavorBatch(input: {
   }
   let modelText: string;
   try {
-    modelText = await input.callModel(buildDeAiRewriteMessages(input.violations, input.antiRules ?? []).map((m) => m.content).join("\n\n"));
+    modelText = await input.callModel(
+      buildDeAiRewriteMessages(input.violations, input.antiRules ?? []).map((m) => m.content).join("\n\n"),
+      { maxContentChars: deAiReplyLimit(input.violations) },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

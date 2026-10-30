@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { ModelCallError } from "./ai-errors.js";
 
 const resolveConfiguredChatModel = vi.fn();
 const streamChatModelToText = vi.fn();
@@ -32,11 +33,12 @@ describe("模型体检（P10）", () => {
     expect(result.unresolved).toEqual([{ task: "qualityCheck", error: "任务「qualityCheck」指定的模型档案不存在" }]);
   });
 
-  it("连上了但什么也没回：算不通", async () => {
+  it("连上了但什么也没回：算不通；只回了思考、正文没出：算通（关不了思考的模型常这样）", async () => {
     resolveConfiguredChatModel.mockResolvedValue(configured("a", "m1"));
-    streamChatModelToText.mockResolvedValue({ content: "", thinking: "" });
-    const result = await runModelCheckup();
-    expect(result.models[0]).toMatchObject({ ok: false, error: "连上了，但模型什么也没回。" });
+    streamChatModelToText.mockRejectedValue(new ModelCallError("模型返回了空内容。", "unusable", undefined, "empty"));
+    expect((await runModelCheckup()).models[0]).toMatchObject({ ok: false, error: "连上了，但模型什么也没回。" });
+    streamChatModelToText.mockRejectedValue(new ModelCallError("模型把输出全用在思考链上", "unusable", undefined, "thinking_only"));
+    expect((await runModelCheckup()).models[0]).toMatchObject({ ok: true });
   });
 
   it("备用模型也体检：和主模型同一个就并进去；体检不让备用顶上；备用解析不出单列", async () => {

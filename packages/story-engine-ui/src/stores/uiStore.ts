@@ -1,5 +1,5 @@
 /**
- * 只活在界面里的临时态（重构 P5：从 workspaceStore 拆出）：章纲方向、修订预览、高亮、定稿勾选、候选稿、
+ * 只活在界面里的临时态（重构 P5：从 workspaceStore 拆出）：章纲方向、改稿高亮、定稿勾选、候选稿、
  * 资料补全、各种 loading。不存盘；换书、撤销后清掉（resetTransientUiState）。
  */
 import { create } from "zustand";
@@ -8,11 +8,8 @@ import type {
   CommitSelectiveConfirmationState,
   LastFormalCommitApply,
 } from "../types.js";
-import type { WorkspaceDraftCandidate, WorkspaceRevisionPreview } from "../type-defs/workspace.js";
-import type {
-  DraftAIReviewReport,
-  DraftRevisionTask,
-} from "../api/types.js";
+import type { WorkspaceDraftCandidate } from "../type-defs/workspace.js";
+import type { DraftAIReviewReport } from "../api/types.js";
 
 export function emptyCommitSelections(): CommitSelectiveConfirmationState {
   return { assets: {}, locations: {}, characterKnowledge: {} };
@@ -29,22 +26,18 @@ export interface UiStore {
   steeringDirection: string;
   /** 每章没发出去的输入框草稿（P11）：切章时存下离开那章的、换上要去那章的；换书清空。 */
   composerDrafts: Readonly<Record<number, string>>;
-  draftActionLoading: string | null;
   /** AI 出稿进行到哪一步（服务端 draft-delta 带 phase 推过来）：plan=拟章纲，write=写正文；不在出稿为 null。稿纸空着时显示给作者看。 */
   draftPhase: DraftPhase | null;
-  /** 抽卡（块③）：「再来一版」生成的 2–3 个临时候选；非 null 即展开并排候选面板，挑中才落盘。 */
+  /** AI 另写的几版（片 2D：「另外几版」卡上点开）：非 null 即展开并排面板，挑中一版交 draft.adopt 换上。 */
   draftCandidates: readonly DraftCandidate[] | null;
   commitPreviewReport: CommitPreviewUiReport | null;
   commitSelections: CommitSelectiveConfirmationState;
   lastFormalCommitApply: LastFormalCommitApply | null;
   draftAIReview: DraftAIReviewReport | null;
-  /** 体检卡「改掉这句」当前在改的违规（跨 preview→apply 异步间隙保活）：哪条消息的哪条违规。
-   *  应用成功后据它把该违规标「已改」；卡片据它显示「改写中…」。非改写期为 null。 */
+  /** AI 味卡「改掉这句」当前在改的那句：哪条消息的哪条。改好了据它标「已改」；卡片据它显示「改写中…」。没在改为 null。 */
   aiFlavorPending: { readonly messageId: string; readonly violationId: string } | null;
   /** 一键全修进行中的卡片 messageId（非 null 时该卡显示「一键全修中…」、禁重复点）。 */
   aiFlavorBatchPending: string | null;
-  activeRevisionTask: DraftRevisionTask | null;
-  activeRevisionPreview: WorkspaceRevisionPreview | null;
   /** 正文「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）；非空时 WritingPaper 在正文里高亮并滚到首处。用户编辑/切章/新改写时清。 */
   revisionHighlightTexts: readonly string[];
 
@@ -52,7 +45,6 @@ export interface UiStore {
   /** 切章：把输入框里没发的字记到离开的那章，换上要去那章上次没发的字（没有就空）。 */
   switchComposerChapter: (from: number | null, to: number) => void;
   clearComposerDrafts: () => void;
-  setDraftActionLoading: (loading: string | null) => void;
   setDraftPhase: (phase: DraftPhase | null) => void;
   setDraftCandidates: (candidates: readonly DraftCandidate[] | null) => void;
   setCommitPreviewReport: (report: CommitPreviewUiReport | null) => void;
@@ -61,8 +53,6 @@ export interface UiStore {
   setDraftAIReview: (review: DraftAIReviewReport | null) => void;
   setAiFlavorPending: (pending: { readonly messageId: string; readonly violationId: string } | null) => void;
   setAiFlavorBatchPending: (messageId: string | null) => void;
-  setActiveRevisionTask: (task: DraftRevisionTask | null) => void;
-  setActiveRevisionPreview: (preview: WorkspaceRevisionPreview | null) => void;
   setRevisionHighlight: (text: string | null) => void;
   /** 一键全修：一次高亮多处改动（按改后文本定位）；传空清空。 */
   setRevisionHighlights: (texts: readonly string[]) => void;
@@ -77,7 +67,6 @@ export interface UiStore {
 export const useUiStore = create<UiStore>((set) => ({
   steeringDirection: "",
   composerDrafts: {},
-  draftActionLoading: null,
   draftPhase: null,
   draftCandidates: null,
   commitPreviewReport: null,
@@ -86,8 +75,6 @@ export const useUiStore = create<UiStore>((set) => ({
   draftAIReview: null,
   aiFlavorPending: null,
   aiFlavorBatchPending: null,
-  activeRevisionTask: null,
-  activeRevisionPreview: null,
   revisionHighlightTexts: [],
 
   setSteeringDirection: (value) => set({ steeringDirection: value }),
@@ -102,7 +89,6 @@ export const useUiStore = create<UiStore>((set) => ({
     return { composerDrafts: drafts, steeringDirection: next };
   }),
   clearComposerDrafts: () => set({ composerDrafts: {} }),
-  setDraftActionLoading: (loading) => set({ draftActionLoading: loading }),
   setDraftPhase: (phase) => set({ draftPhase: phase }),
   setDraftCandidates: (candidates) => set({ draftCandidates: candidates }),
   setCommitPreviewReport: (report) => set({ commitPreviewReport: report }),
@@ -111,16 +97,12 @@ export const useUiStore = create<UiStore>((set) => ({
   setDraftAIReview: (review) => set({ draftAIReview: review }),
   setAiFlavorPending: (pending) => set({ aiFlavorPending: pending }),
   setAiFlavorBatchPending: (messageId) => set({ aiFlavorBatchPending: messageId }),
-  setActiveRevisionTask: (task) => set({ activeRevisionTask: task }),
-  setActiveRevisionPreview: (preview) => set({ activeRevisionPreview: preview }),
   setRevisionHighlight: (text) => set({ revisionHighlightTexts: text ? [text] : [] }),
   setRevisionHighlights: (texts) => set({ revisionHighlightTexts: texts }),
 
   resetSteeringState: () => set({ steeringDirection: "" }),
   resetCommitState: () => set({ commitPreviewReport: null, commitSelections: emptyCommitSelections() }),
   resetRevisionState: () => set({
-    activeRevisionTask: null,
-    activeRevisionPreview: null,
     revisionHighlightTexts: [],
     aiFlavorPending: null,
     aiFlavorBatchPending: null,
@@ -132,8 +114,6 @@ export const useUiStore = create<UiStore>((set) => ({
     draftAIReview: null,
     aiFlavorPending: null,
     aiFlavorBatchPending: null,
-    activeRevisionTask: null,
-    activeRevisionPreview: null,
     revisionHighlightTexts: [],
   }),
 }));

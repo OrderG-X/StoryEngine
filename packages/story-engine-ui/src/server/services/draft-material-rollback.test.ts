@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * 写手读到的材料是别的写写到一半的那份（写作版本 P1 第 18 轮 AF1）：真出稿、真 draft.save，只在构包前后插调度钩子、
+ * 写手读到的材料是别的写写到一半的那份（写作版本 P1 第 18 轮 AF1）：真写稿操作（draft.change）、真 draft.save，只在构包前后插调度钩子、
  * 在一次真 rename 上注入失败。开工记下 A → 构包时前一章并发存稿已换上 B（青鹭）→ 那笔存稿写 applied 清单时失败、
  * 回滚把正文和工作稿代次都退回 A。材料指纹、工作稿代次都又对上了，但回滚换了写入代次：这版不换上、留成候选。
  * 存稿成功的那种照常按材料变了拦下。
@@ -12,7 +12,9 @@ import { draftSave, readDraft, readDraftState, runCommand, type CommandOutcome }
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { pendingDraftFor } from "../lib/draft-candidates.js";
-import { runGenerateDraft } from "./draft-service.js";
+import { __resetOperationStoreForTests } from "../lib/operations/store.js";
+import { __drainOperationsForTests, __resetRecipesForTests } from "./operations/executor.js";
+import { fakeDraftDeps, runDraftChange } from "./operations/recipes/draft-change-kit.js";
 
 const hooks = vi.hoisted(() => ({
   beforeContext: undefined as undefined | (() => Promise<void>),
@@ -55,12 +57,15 @@ vi.mock("../writing/context-gateway.js", async (importOriginal) => {
 let root: string;
 let book: string;
 beforeEach(async () => {
+  __resetOperationStoreForTests();
+  __resetRecipesForTests();
   root = await makeHomeTempDir("draft-material-rollback-");
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "并发材料", genre: "都市", protagonistName: "林远" }));
   expect((await runCommand(book, draftSave, { chapter: 1, title: "前章原名", body: "林远看见口令是白鹤，他把白鹤二字写在纸上。", baseVersion: null }, { caller: "author" })).ok).toBe(true);
   expect((await runCommand(book, draftSave, { chapter: 2, title: "本章原名", body: "第二章原稿。", baseVersion: null }, { caller: "author" })).ok).toBe(true);
 });
 afterEach(async () => {
+  await __drainOperationsForTests();
   hooks.beforeContext = hooks.afterContext = hooks.beforeRename = hooks.afterRename = undefined;
   await rm(root, { recursive: true, force: true });
 });
@@ -105,8 +110,8 @@ it.each(["写 applied 清单时失败", "存成了"] as const)("构包读到前�
     savingOutcome = await saving!;
   };
   let saw = "";
-  const out = await runGenerateDraft({
-    projectDir: book, chapter: 2, selectedCharacters: ["林远"], requestedDraftLength: 500, autoDeAi: false,
+  // 第 2 章已有原稿、前一章没定稿：作者点了「重写」「仍要先写」。
+  const out = await runDraftChange(book, "write", { chapter: 2, selectedCharacters: ["林远"], length: 500, autoDeAi: false, rewrite: true, allowWriteAhead: true }, fakeDraftDeps({
     writerClient: {
       async generateDraft({ context }) {
         saw = JSON.stringify(context);
@@ -115,10 +120,10 @@ it.each(["写 applied 清单时失败", "存成了"] as const)("构包读到前�
         return { content: [para, para, para, para].join("\n\n") };
       },
     },
-  });
+  }));
   expect(saw).toContain("青鹭");
   expect(savingOutcome?.ok).toBe(!failed);
-  expect(out).toMatchObject({ ok: false, kept: { reason: "basis_moved" } });
+  expect(out.body).toMatchObject({ ok: false, kept: { reason: "basis_moved" } });
   expect((await readDraft(book, 2))?.body).toBe("第二章原稿。");
   expect((await pendingDraftFor(book, 2))?.body).toContain("青鹭");
   if (failed) expect((await readDraft(book, 1))?.body).toContain("白鹤");

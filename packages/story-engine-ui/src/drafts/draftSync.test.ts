@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChapterPaper, PendingDraft } from "../api/workingDraftClient.js";
 import { hasUnsavedEdits, isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, keepPaperMine, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
+import type { AgentUserAction } from "../api/agentChatClient.js";
+import { useDraftPicks } from "../hooks/useDraftPicks.js";
 
 const PROJECT = "/books/钟楼";
 
@@ -374,38 +376,35 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState().incoming).toMatchObject({ cause: "candidate" });
   });
 
-  it("换成 AI 这版：先存掉手上的字，再按眼前的版本换上，读回新稿", async () => {
+  it("换成 AI 这版：先存掉手上的字，再交 draft.adopt（候选号、指纹、存完那版的版本号）；提示条老接口不碰候选", async () => {
     const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
     server.keepCandidate(2, "AI 写的一版。");
     vi.stubGlobal("fetch", server.fetchMock);
     await openPaper(PROJECT, 2);
     editDraft("原稿。作者刚加的。");
+    // 老接口（恢复稿那条路）不处理 AI 候选：不发请求。
     expect(await acceptPaperIncoming()).toEqual({ ok: true });
-    expect(server.puts).toEqual([expect.objectContaining({ body: "原稿。作者刚加的。", baseVersion: "v0" })]);
-    expect(server.decisions).toEqual([expect.objectContaining({ kind: "candidate", decision: "adopt", baseVersion: "v1" })]);
-    expect(useDraftStore.getState()).toMatchObject({ body: "AI 写的一版。", baseVersion: "v2", incoming: null });
-  });
-
-  it("换成 AI 这版时稿子又被改过：不换，如实说，提示还在", async () => {
-    const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
-    server.keepCandidate(2, "AI 写的一版。");
-    vi.stubGlobal("fetch", server.fetchMock);
-    await openPaper(PROJECT, 2);
-    server.disk[2] = { version: "elsewhere", body: "别处改的。" };
-    const result = await acceptPaperIncoming();
-    expect(result).toEqual({ ok: false, error: "又改过了，没换" });
-    expect(server.disk[2]?.body).toBe("别处改的。");
-    expect(server.candidates["2-cand"]).toBeDefined();
-  });
-
-  it("AI 这版不要了：服务端删掉，提示收起，稿子不动", async () => {
-    const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
-    server.keepCandidate(2, "AI 写的一版。");
-    vi.stubGlobal("fetch", server.fetchMock);
-    await openPaper(PROJECT, 2);
     expect(await keepPaperMine()).toEqual({ ok: true });
-    expect(server.candidates["2-cand"]).toBeUndefined();
-    expect(useDraftStore.getState()).toMatchObject({ body: "原稿。", incoming: null });
+    expect(server.decisions).toEqual([]);
+    const sent: AgentUserAction[] = [];
+    const picks = useDraftPicks({ sendUserAction: async (action) => { sent.push(action); } });
+    expect(await picks.decidePending("adopt")).toEqual({ ok: true });
+    expect(server.puts).toEqual([expect.objectContaining({ body: "原稿。作者刚加的。", baseVersion: "v0" })]);
+    expect(sent).toEqual([expect.objectContaining({ kind: "new", type: "draft.adopt", params: { chapter: 2, candidateId: "2-cand", sha: "sha-AI 写的一版。", baseVersion: "v1" } })]);
+    expect(server.decisions).toEqual([]);
+  });
+
+  it("AI 这版不要了：交 draft.discard（候选号、指纹），稿子不动", async () => {
+    const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
+    server.keepCandidate(2, "AI 写的一版。");
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 2);
+    const sent: AgentUserAction[] = [];
+    const picks = useDraftPicks({ sendUserAction: async (action) => { sent.push(action); } });
+    expect(await picks.decidePending("discard")).toEqual({ ok: true });
+    expect(sent).toEqual([expect.objectContaining({ kind: "new", type: "draft.discard", params: { chapter: 2, candidateId: "2-cand", sha: "sha-AI 写的一版。" } })]);
+    expect(server.decisions).toEqual([]);
+    expect(useDraftStore.getState()).toMatchObject({ body: "原稿。" });
   });
 
   it("盘上变了、作者手上有没存的字：马上存一笔进恢复稿，不只留在页面里", async () => {

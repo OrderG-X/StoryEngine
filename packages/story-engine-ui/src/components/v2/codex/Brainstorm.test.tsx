@@ -29,13 +29,13 @@ beforeEach(() => { act(() => useChatStore.getState().setMessages([])); });
 afterEach(cleanup);
 
 describe("头脑风暴面板（稿纸上方，重构 P6 草图 ⑤）", () => {
-  it("空章没走法：问往哪走；填想法点【给我几种走法】发结构化动作；有稿就不出这块", () => {
+  it("空章没走法：问往哪走；填想法点【给我几种走法】发交想走法；有稿就不出这块", () => {
     const onAction = vi.fn();
     const { rerender } = render(<BrainstormPanel chapter={12} draftEmpty hidden={false} busy={false} onAction={onAction} />);
     expect(screen.getByRole("heading", { name: "第 12 章往哪走？" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("你的想法"), { target: { value: " 让老周开口 " } });
     fireEvent.click(screen.getByRole("button", { name: "给我几种走法" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口" });
+    expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "new", type: "plan.propose", params: { chapter: 12, idea: "让老周开口" } }));
     rerender(<BrainstormPanel chapter={12} draftEmpty hidden={false} busy onAction={onAction} />);
     expect(screen.getByText(/AI 在想几种走法/u)).toBeTruthy();
     rerender(<BrainstormPanel chapter={12} draftEmpty={false} hidden={false} busy={false} onAction={onAction} />);
@@ -55,7 +55,7 @@ describe("头脑风暴面板（稿纸上方，重构 P6 草图 ⑤）", () => {
     expect(within(second).getByText("钥匙在她包里")).toBeTruthy();
     expect((screen.getByLabelText("你的想法") as HTMLInputElement).value).toBe("让老周开口");
     fireEvent.click(screen.getByRole("button", { name: "再来几种" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口", avoid: ["老周开口", "夜里上楼", "陆川的难处"] });
+    expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "new", type: "plan.propose", params: { chapter: 12, idea: "让老周开口", avoid: ["老周开口", "夜里上楼", "陆川的难处"] } }));
   });
 
   it("【用这个】只记在卡上（picked），收成「这章打算」；空章可【让 AI 照这个起草】；【换一种】撤回", () => {
@@ -69,7 +69,7 @@ describe("头脑风暴面板（稿纸上方，重构 P6 草图 ⑤）", () => {
     expect(within(plan).getByText("乙 · 夜里上楼")).toBeTruthy();
     expect(within(plan).getByText("钟楼有响动")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "让 AI 照这个起草" }));
-    expect(onAction).toHaveBeenCalledWith({ toolName: "generate_draft", chapter: 12, chapterGoal: "夜里上楼：1. 钟楼有响动 2. 钟箱门被人动过\n作者要走法时说：让老周开口" });
+    expect(onAction).toHaveBeenCalledWith({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 12, direction: "夜里上楼：1. 钟楼有响动 2. 钟箱门被人动过\n作者要走法时说：让老周开口" }, requestKey: expect.any(String), issuedAt: expect.any(String) });
     fireEvent.click(screen.getByRole("button", { name: "换一种" }));
     expect(useChatStore.getState().messages[1]!.cards).toEqual([{ type: "directions", brainstorm: DATA }]);
     expect(screen.getByRole("article", { name: "甲 · 老周开口" })).toBeTruthy();

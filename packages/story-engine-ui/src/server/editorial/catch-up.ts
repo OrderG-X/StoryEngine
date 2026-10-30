@@ -1,44 +1,23 @@
 /**
- * 后台补读（2026-10-12 T5 长书）：老书第一次用专员（或笔记被改动作废）时，后台按顺序把前文笔记补齐。
+ * 后台补读的进度和共用队列（2026-10-12 T5 长书；写作版本 P2a 起补读本身是执行器的 background.backfill 操作）。
  *
- * 补读本身还是 ensureReaderWindow（同一本书同一角色进程内排队，笔记按章落盘）；这里只加三件事：
- *   - 进度写盘（agents/<角色>/progress.json）：读到第几章、共几章、还剩没剩错。界面靠现有的 workspace 刷新（state-overview）看它，
- *     不新开轮询；
- *   - 进程内去重：已经在补就不重复排一遍（服务重启后 progress 残留 reading=true 也照样接着补——笔记在盘上，不会从头来）；
- *   - 每本书一条共用队列（2026-10-12 R1）：三个角色依次补（checker → ledger → planner），
- *     不同时并发打模型服务商；不同轮次也按先来后到排在这条队上。
+ * 补读交给执行器（`lib/reader-backfill.ts` 的提交口 → `services/operations/recipes/background-backfill.ts`）：冻结每个角色的章范围、
+ * 一章一步、有额度、能停、进程没了开书自动接着做。这里只剩两件：
+ *   - 进度：从这本书在跑的 background.backfill 的冻结范围和当前步骤算（原来的 agents/<角色>/progress.json 删了），
+ *     加上核账 / 拟纲 / 记账当场补笔记的进度（只在内存，reader-progress.ts）和「谁在等它读完」（waiting-registry.ts）；
+ *   - 每本书一条共用队列（2026-10-12 R1）：后台补读的每一步和导入后通读记账（background.reread）的每一步排在同一条队上，不同时并发打模型服务商。
  */
-import { callConfiguredBrainModel } from "./checker.js";
-import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
-import { readReaderProgress, writeReaderProgress, type ReaderProgress } from "./reader-progress.js";
+import { listOperations, type OperationRecord, type PauseReason } from "../lib/operations/store.js";
+import { BACKFILL_KIND, parseBackfillStep, readBackfillParams, type BackfillRange } from "../lib/reader-backfill.js";
+import { countCommittedChapters } from "./reader-window.js";
+import { readInPlaceProgress } from "./reader-progress.js";
 import { readerWaitingActions } from "./waiting-registry.js";
-import { readRereadState, rereadEtaMinutes } from "./reread-state.js";
-
-export type { ReaderProgress };
-export { readReaderProgress };
-
-/**
- * 把一个角色标成「在读」（R4.3 开书时显示）：done 接着上次已有的章数、total 按这轮要读到的章（不小于上次的总数）。
- * 排进补读队列和真正开读之间有间隔（队列前面可能还有活），先落这个盘，开书那次概况就带得上进度；
- * 真开读后 startReaderCatchUp 会接着写同一份文件，口径一致。已经在读（reading:true）就不重写。
- */
-export async function writeReaderReadingProgress(root: string, roleId: string, upTo: number): Promise<void> {
-  const previous = await readReaderProgress(root, roleId);
-  if (previous?.reading) return;
-  const total = Math.max(upTo, previous?.total ?? 0);
-  await writeReaderProgress(root, {
-    role: roleId,
-    reading: true,
-    done: Math.min(previous?.done ?? 0, total),
-    total,
-    updatedAt: new Date().toISOString(),
-  });
-}
+import { readRereadProgress } from "./reread-state.js";
 
 /** 编辑部三个跟读角色的 id（跟 index.ts 的 readerRoles() 同序：checker → ledger → planner）。 */
 export const READER_ROLE_IDS: readonly string[] = ["checker", "ledger", "planner"];
 
-/** 一个角色的补读进度（进度行 / 轻量轮询接口用的形状）：没写过 progress.json 的角色当 0/0、不在读。
+/** 一个角色的补读进度（进度行 / 轻量轮询接口用的形状）：没在后台补读里、也没当场补的角色当 0/0、不在读。
  *  waiting＝哪个动作在等它读完（R6.1：进程内登记表合进来的，当场补笔记 / 排在后台补读后面干等都带；那个角色在读才带）。 */
 export interface ReaderCatchUpRoleState {
   readonly role: string;
@@ -46,6 +25,8 @@ export interface ReaderCatchUpRoleState {
   readonly done: number;
   readonly total: number;
   readonly waiting?: string;
+  /** 这个角色的后台补读停着、等作者处理（结果不明、额度到了、被打断），不会自己另起一份重来；为什么停的。 */
+  readonly paused?: PauseReason;
 }
 
 /** 导入已写的书后记账员通读记账的进度（P8）：还没记完才带。stopped＝某章连着记不上，等作者点「接着记」。 */
@@ -65,36 +46,86 @@ export interface ReadersCatchUpStatus {
   readonly reread?: RereadStatus;
 }
 
+interface BackfillView {
+  readonly record: OperationRecord;
+  readonly ranges: readonly BackfillRange[];
+}
+
+/** 这本书的后台补读（排着、跑着的，停着的），新受理的在前。同一个角色同时只在一份排着 / 跑着的里（提交口按角色排）。 */
+async function listBackfills(projectDir: string): Promise<{ readonly active: readonly BackfillView[]; readonly paused: readonly BackfillView[] }> {
+  const records = await listOperations(projectDir).catch(() => [] as OperationRecord[]);
+  const views = records
+    .filter((record) => record.kind === BACKFILL_KIND)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .flatMap((record): BackfillView[] => {
+      const params = readBackfillParams(record.params);
+      return params ? [{ record, ranges: params.ranges }] : [];
+    });
+  return {
+    active: views.filter((view) => view.record.state === "queued" || view.record.state === "running"),
+    paused: views.filter((view) => view.record.state === "paused"),
+  };
+}
+
+/**
+ * 后台补读里各角色读到哪：按冻结的先后，当前步骤那个角色在读（done = 当前章 − 1），前面的读完了（done = to），后面的排队（done = from − 1）。
+ * 还没开始跑（queued）就是第一个角色在读、读到 from − 1。
+ */
+function backfillRoleStates(record: OperationRecord, ranges: readonly BackfillRange[]): Map<string, { readonly reading: boolean; readonly done: number; readonly to: number }> {
+  const step = parseBackfillStep(record.currentStep);
+  const currentIndex = step ? Math.max(0, ranges.findIndex((range) => range.role === step.role)) : 0;
+  const states = new Map<string, { readonly reading: boolean; readonly done: number; readonly to: number }>();
+  ranges.forEach((range, index) => {
+    if (index < currentIndex) states.set(range.role, { reading: false, done: range.to, to: range.to });
+    else if (index > currentIndex) states.set(range.role, { reading: false, done: range.from - 1, to: range.to });
+    else states.set(range.role, { reading: true, done: step && step.role === range.role ? Math.max(range.from - 1, step.chapter - 1) : range.from - 1, to: range.to });
+  });
+  return states;
+}
+
 /** 三个角色的补读进度一览（开书概况和 /api/reader-progress 轮询共用这一份形状）。 */
 export async function readReadersCatchUpStatus(notesRoot: string, roleIds: readonly string[] = READER_ROLE_IDS): Promise<ReadersCatchUpStatus> {
-  // R5.3：total 读的时候现算——progress.json 里记的是开读那一刻的总数，读的途中作者又定稿了新章的话它是旧的。
-  // 分母跟当前已定稿章数走（chapters/ 就在 notesRoot 下；评测把笔记挪去临时目录时那里没有 chapters/，
-  // 数出来是 0、照旧用记下的数）。没写过 progress 的角色当没这回事，不硬造 0/N。
+  // 分母跟当前已定稿章数走（R5.3：读的途中作者又定稿了新章，冻结的范围是旧的）。
   const committed = await countCommittedChapters(notesRoot).catch(() => 0);
-  const roles = await Promise.all(roleIds.map(async (roleId): Promise<ReaderCatchUpRoleState> => {
-    const progress = await readReaderProgress(notesRoot, roleId).catch(() => undefined);
-    if (!progress) return { role: roleId, reading: false, done: 0, total: 0 };
-    // R6.1：「（核账在等它读完）」那截不进 progress.json（后台补读会抹掉它），从进程内登记表合进来——
-    // 自己当场补、排在后台补读后面等，显示一个样。那个角色在读才带：没在读就没有「等它读完」一说。
-    // 盘上残留的 waiting（R5.2 落过的旧文件）不认，进程重启后登记表是空的，不会显示幽灵标注。
+  const backfills = await listBackfills(notesRoot);
+  // 每个角色看含它的那份排着 / 跑着的（新的在前，先到先得）。
+  const fromBackfill = new Map<string, { readonly reading: boolean; readonly done: number; readonly to: number }>();
+  for (const view of backfills.active) {
+    for (const [role, state] of backfillRoleStates(view.record, view.ranges)) if (!fromBackfill.has(role)) fromBackfill.set(role, state);
+  }
+  // 停着的：那个角色读到哪（停在的那一步的前一章）、为什么停。
+  const pausedRoles = new Map<string, { readonly done: number; readonly to: number; readonly reason: PauseReason }>();
+  for (const view of backfills.paused) {
+    for (const [role, state] of backfillRoleStates(view.record, view.ranges)) {
+      if (!pausedRoles.has(role)) pausedRoles.set(role, { done: state.done, to: state.to, reason: view.record.pauseReason ?? "interrupted" });
+    }
+  }
+  const roles = roleIds.map((roleId): ReaderCatchUpRoleState => {
+    // 「（核账在等它读完）」只从进程内登记表来（R6.1），那个角色在读才带。
     const waitingActions = readerWaitingActions(notesRoot, roleId);
-    const waiting = progress.reading && waitingActions.length > 0 ? waitingActions.join("、") : undefined;
-    return { role: roleId, reading: progress.reading, done: progress.done, total: Math.max(progress.total, committed), ...(waiting ? { waiting } : {}) };
-  }));
-  // P8：通读记账没记完时，记账员那一行按通读状态显示——记账员每章当场补笔记的进度回调会把 reading 写成 false，
-  // 照它显示的话进度行一闪就没、前端轮询也跟着停。
-  const reread = await readRereadState(notesRoot);
-  if (!reread || reread.status === "done") return { reading: roles.some((role) => role.reading), roles };
+    const withWaiting = (state: ReaderCatchUpRoleState): ReaderCatchUpRoleState =>
+      (state.reading && waitingActions.length > 0 ? { ...state, waiting: waitingActions.join("、") } : state);
+    const inPlace = readInPlaceProgress(notesRoot, roleId);
+    if (inPlace) return withWaiting({ role: roleId, reading: true, done: inPlace.done, total: Math.max(inPlace.total, committed) });
+    const queued = fromBackfill.get(roleId);
+    if (queued) return withWaiting({ role: roleId, reading: queued.reading, done: queued.done, total: Math.max(queued.to, committed) });
+    const paused = pausedRoles.get(roleId);
+    if (paused) return { role: roleId, reading: false, done: paused.done, total: Math.max(paused.to, committed), paused: paused.reason };
+    return { role: roleId, reading: false, done: 0, total: 0 };
+  });
+  const reading = backfills.active.length > 0 || roles.some((role) => role.reading);
+  // P8：通读记账没记完时，记账员那一行按通读状态显示（片 3D 起从这本书最新那次 background.reread 的记录算）。
+  const reread = await readRereadProgress(notesRoot);
+  if (!reread || reread.status === "done") return { reading, roles };
   const withReread = roles.map((role) => (role.role === LEDGER_ROLE_ID ? { role: role.role, reading: reread.status === "running", done: reread.done, total: reread.total } : role));
-  const eta = rereadEtaMinutes(reread);
   return {
-    reading: withReread.some((role) => role.reading),
+    reading: reading || withReread.some((role) => role.reading),
     roles: withReread,
     reread: {
       status: reread.status,
       done: reread.done,
       total: reread.total,
-      ...(eta !== undefined ? { etaMinutes: eta } : {}),
+      ...(reread.etaMinutes !== undefined ? { etaMinutes: reread.etaMinutes } : {}),
       ...(reread.stoppedReason ? { stoppedReason: reread.stoppedReason } : {}),
     },
   };
@@ -102,10 +133,7 @@ export async function readReadersCatchUpStatus(notesRoot: string, roleIds: reado
 
 const LEDGER_ROLE_ID = "ledger";
 
-/** 正在补的角色（进程内）：同一本书同一角色只排一个，后来的直接回。 */
-const activeCatchUps = new Set<string>();
-
-/** 每本书一条补读队列（R1）：三个角色共用，按角色依次补，不同时并发打模型。 */
+/** 每本书一条补读队列（R1）：后台补读的每一步、通读记账共用，不同时并发打模型。 */
 const bookCatchUpQueues = new Map<string, Promise<unknown>>();
 
 /** 同一本书的补读任务排成一条队：先来后到，一条跑完再跑下一条（前一条失败不拦后面的）。 */
@@ -121,98 +149,7 @@ export async function runInReaderCatchUpQueue<T>(root: string, task: () => Promi
   }
 }
 
-/** 已排队 / 在跑的补读目标（书目录＋角色组 → 要读到的章）。 */
-const queuedCatchUps = new Map<string, number>();
-
-const catchUpQueueKey = (root: string, roles: readonly string[]): string => `${root}\u0000${[...roles].sort().join(",")}`;
-
-/** 这本书这组角色已有一轮要读到 ≥ upTo 的补读在队里 → 不用再排一轮（角色不同不算，照排）。 */
-export function isReaderCatchUpQueued(root: string, roles: readonly string[], upTo: number): boolean {
-  const queued = queuedCatchUps.get(catchUpQueueKey(root, roles));
-  return queued !== undefined && queued >= upTo;
-}
-
-/** 登记 / 撤销一轮补读目标（catchUpReaders 用；导出供测试确认队列状态）。 */
-export function markReaderCatchUpQueued(root: string, roles: readonly string[], upTo: number): void {
-  const key = catchUpQueueKey(root, roles);
-  queuedCatchUps.set(key, Math.max(queuedCatchUps.get(key) ?? 0, upTo));
-}
-
-export function unmarkReaderCatchUpQueued(root: string, roles: readonly string[], upTo: number): void {
-  const key = catchUpQueueKey(root, roles);
-  if (queuedCatchUps.get(key) === upTo) queuedCatchUps.delete(key); // 只撤自己那轮：后面排的更大目标还在
-}
-
-/**
- * 后台补一个角色的前文笔记到第 upTo 章，进度落盘。失败不抛（调用方放心 void）：如实写进 progress 的 error，
- * 已补的笔记都在盘上，下次接着补（服务重启也一样——按笔记文件接着来，不从头读）。
- */
-export async function startReaderCatchUp(
-  projectDir: string,
-  role: ReaderRole,
-  upTo: number,
-  options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string; readonly chaseFrom?: number } = {},
-): Promise<void> {
-  const root = options.notesRoot ?? projectDir;
-  const key = `${root}\u0000${role.id}`;
-  if (activeCatchUps.has(key)) return;
-  activeCatchUps.add(key);
-  let readThrough = 0;
-  try {
-    // 接着上次的进度标（重启 / 上次没成后 done 已经在盘上），别把界面上看到的章数打回 0。
-    const previous = await readReaderProgress(root, role.id);
-    let total = Math.max(upTo, previous?.total ?? 0);
-    await writeReaderProgress(root, {
-      role: role.id,
-      reading: true,
-      done: Math.min(previous?.done ?? 0, total),
-      total,
-      updatedAt: new Date().toISOString(),
-    });
-    // R5.3 追新：一轮读完再看一眼已定稿到第几章——读的途中作者又定稿了新章（定稿预热和正在跑的这轮去重了、
-    // 没延伸到新章）就接着读到新末尾。基线 chaseFrom 是整轮开跑那一刻的已定稿数（catchUpReaders 传下来，
-    // 三个角色共用；直接单点调用时现取），只追「这轮读的途中新出现的」章：开跑前书里就比目标多的不吞
-    // （预热 / 点名补读本来就可能只补到某一章）。已写的笔记哈希对得上会直接复用，不会重复读同一章；
-    // 有章读不到（ensure 停在它前一章）时追了也停在原地，不空转。
-    const committedAtStart = options.chaseFrom ?? (await countCommittedChapters(projectDir).catch(() => 0));
-    for (;;) {
-      const result = await ensureReaderWindow({
-        projectDir,
-        role,
-        upTo: total,
-        callModel: options.callModel ?? callConfiguredBrainModel,
-        ...(options.notesRoot ? { notesRoot: options.notesRoot } : {}),
-        onProgress: async (chapter) => {
-          // 每读完一章落一次盘（等落完再写下一章，进度不回跳）：界面刷新（开书、各工具回包）就能看到最新进度。
-          await writeReaderProgress(root, { role: role.id, reading: true, done: chapter, total, updatedAt: new Date().toISOString() })
-            .catch(() => undefined);
-        },
-      });
-      readThrough = result.readThrough;
-      const committed = await countCommittedChapters(projectDir).catch(() => 0);
-      if (committed <= Math.max(total, committedAtStart) || readThrough < total) break;
-      total = committed;
-    }
-    await writeReaderProgress(root, {
-      role: role.id,
-      reading: false,
-      done: readThrough,
-      total,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    // 失败如实：读到哪里记哪里，下次接着补。
-    console.warn(`[brain] ${role.id} 后台补读没成（不影响别的，下次接着补）`, error);
-    const done = await readReaderProgress(root, role.id);
-    await writeReaderProgress(root, {
-      role: role.id,
-      reading: false,
-      done: done?.done ?? 0,
-      total: done?.total ?? upTo,
-      updatedAt: new Date().toISOString(),
-      error: error instanceof Error ? error.message : String(error),
-    }).catch(() => undefined);
-  } finally {
-    activeCatchUps.delete(key);
-  }
+/** 测试用：模拟进程没了（在飞的那一步还占着队，新进程里没有这条队）。 */
+export function __resetCatchUpQueuesForTests(): void {
+  bookCatchUpQueues.clear();
 }

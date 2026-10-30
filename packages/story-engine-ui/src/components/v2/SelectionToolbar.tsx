@@ -5,7 +5,7 @@ import { VISIBLE_SELECTION_REVISION_TEMPLATES, type SelectionRevisionKey } from 
  * 选区浮动操作条（阶段三块②）：在编辑器里选中一段正文时浮出。
  * 6 个固定预设按钮 + 一个「自己说」入口（+ 可选「问 AI」）——点它就地变成输入行，让用户交代具体改写要求。
  *
- * 选区跟踪/定位/改写动作在 WritingPaper + useWorkflowActions 里；WritingPaper 的 selection 由
+ * 选区跟踪/定位在 WritingPaper，改写交给 useDraftEdits（对话里出改法卡）；WritingPaper 的 selection 由
  * 编辑器 state（ProseMirror）驱动、不受点击工具条影响，故输入态下选区不丢、工具条不消失。
  * 容器 onMouseDown + preventDefault：避免按下按钮时浏览器先清掉编辑器选区（拿不到 targetText）；
  * 唯独输入框用 stopPropagation 隔离，使容器的 preventDefault 不挡住它聚焦。
@@ -20,7 +20,7 @@ const SELECTION_BUTTON_HINTS: Readonly<Partial<Record<SelectionRevisionKey, stri
   continue: "顺着这段往下写一小段",
 };
 
-export default function SelectionToolbar({ top, left, busyKey, askOnly = false, onPick, onPickCustom, onAsk }: {
+export default function SelectionToolbar({ top, left, busyKey, askOnly = false, onPick, onPickCustom, onAsk, onLeave }: {
   readonly top: number;
   readonly left: number;
   readonly busyKey: SelectionRevisionKey | null;
@@ -30,6 +30,8 @@ export default function SelectionToolbar({ top, left, busyKey, askOnly = false, 
   readonly onPickCustom?: (instruction: string) => void;
   /** 「问 AI」：不改稿，把选中段引用进右侧输入框，跟 AI 聊这段。 */
   readonly onAsk?: () => void;
+  /** 「自己说」打字时焦点离开浮动条、也没回正文：收起。 */
+  readonly onLeave?: () => void;
 }) {
   const busy = busyKey !== null;
   const [customMode, setCustomMode] = useState(false);
@@ -53,6 +55,11 @@ export default function SelectionToolbar({ top, left, busyKey, askOnly = false, 
       role="toolbar"
       aria-label="选区改写"
       onMouseDown={(event) => event.preventDefault()}
+      onBlur={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && (event.currentTarget.contains(next) || (next instanceof Element && next.closest(".se-v2-draft-editor")))) return;
+        onLeave?.();
+      }}
     >
       {customMode ? (
         <>

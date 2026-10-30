@@ -20,6 +20,8 @@ import { parseDraftFile } from "@actalk/story-core";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { writeBookCache } from "../lib/operations/fence.js";
+import { pausedBackfillOf, type PausedBackfill } from "../lib/reader-backfill.js";
 import { registerReaderWaiting, unregisterReaderWaiting } from "./waiting-registry.js";
 import type { ReaderWaited } from "./reader-progress.js";
 
@@ -103,7 +105,14 @@ export interface ColdCoverage {
   readonly rawFrom: number;
   /** 这次给了原文到第几章（含）。 */
   readonly rawTo: number;
+  /** 这个角色的后台补读停着等作者处理（那份补读的操作号，界面据此出按钮；不给作者看）：处理前谁都不接着补。 */
+  readonly pausedBackfill?: string;
 }
+
+/** 冷窗口是因为后台补读停着：回执补一句，别让作者以为它还在读。 */
+export const COLD_PAUSED_TEXT = "后台补读停着，等你处理后才接着读";
+export const coldPausedNote = (cold: Pick<ColdCoverage, "pausedBackfill"> | undefined): string =>
+  cold?.pausedBackfill ? `${COLD_PAUSED_TEXT}。` : "";
 
 export interface ColdReaderWindow {
   readonly messages: BrainMessage[];
@@ -171,9 +180,15 @@ export async function buildColdReaderWindow(input: {
     ]),
     { role: "user", content: rawText },
   ];
+  const paused = await pausedBackfillOf(input.projectDir, input.role.id);
   return {
     messages,
-    coverage: { notedThrough: state.valid.length, rawFrom: recent[0]?.chapter ?? 0, rawTo: recent[recent.length - 1]?.chapter ?? 0 },
+    coverage: {
+      notedThrough: state.valid.length,
+      rawFrom: recent[0]?.chapter ?? 0,
+      rawTo: recent[recent.length - 1]?.chapter ?? 0,
+      ...(paused ? { pausedBackfill: paused.opId } : {}),
+    },
     foldedChapters: Math.max(0, state.upTo - recent.length),
   };
 }
@@ -244,8 +259,7 @@ export async function writeAtomically(path: string, text: string): Promise<void>
 }
 
 async function writeNote(projectDir: string, root: string, roleId: string, file: NoteFile): Promise<void> {
-  await stat(projectDir); // 书已删就别再写（免得建出幽灵目录）
-  await writeAtomically(noteFile(root, roleId, file.chapter), `${JSON.stringify(file, null, 2)}\n`);
+  await writeBookCache(projectDir, () => writeAtomically(noteFile(root, roleId, file.chapter), `${JSON.stringify(file, null, 2)}\n`));
 }
 
 const readUserContent = (role: ReaderRole, chapter: number, body: string): string =>
@@ -272,6 +286,21 @@ interface WindowLayout {
   /** 第 1..foldedThrough 章原文已折掉（只剩笔记或卷笔记）。 */
   readonly foldedThrough: number;
   readonly volumes: readonly LayoutVolume[];
+}
+
+/**
+ * 窗口里的笔记数从 fromEntries 涨到 toEntries（含两头）期间，最多要新生成几个卷节点（写作版本 P2a 4.5 算额度用，
+ * Astra P2a 第 9 轮第 5 条）。规划是一串固定的动作：先按顺序把每个完整的十块换成一条卷笔记（叶子），全换完还超才从前往后
+ * 合同层相邻的；字数只决定这串动作做到第几步停，估得准不准都不会用到这串之外的卷节点。所以同样 B = ⌊笔记数/10⌋ 个十块时，
+ * 用到的卷节点最多是 B 个叶子 + B-1 次合并（每合一次至少少一条）。笔记数变时叶子只往后加（前面的不变），
+ * 合并按每个不同的 B 各算一次。卷笔记是按内容键的缓存，同一次操作里同一个卷节点只生成一次。
+ */
+export function volumeBuildsBound(fromEntries: number, toEntries: number): number {
+  const lo = Math.floor(Math.max(0, fromEntries) / FOLD_BLOCK_CHAPTERS);
+  const hi = Math.floor(Math.max(0, toEntries) / FOLD_BLOCK_CHAPTERS);
+  let merges = 0;
+  for (let blocks = Math.max(lo, 2); blocks <= hi; blocks += 1) merges += blocks - 1;
+  return hi + merges;
 }
 
 /** 一条卷笔记渲染出来占的字数。 */
@@ -442,6 +471,122 @@ async function inspectNotes(input: { readonly projectDir: string; readonly root:
   return { upTo: bodies.length, bodies, valid, chain, stale };
 }
 
+/**
+ * 一个角色的笔记读到哪了（只读盘、不调模型）：readable = 第 1..upTo 章里连着读得到定稿的章数，
+ * valid = 从第 1 章起连续有效的笔记数。valid < readable 就是还差第 valid+1～readable 章（后台补读按它冻结范围）。
+ * 笔记都齐了再看卷笔记（Astra P2a 第 9 轮第 4 条）：volumesMissing = 读到第 readable 章的窗口要用、盘上没有（或对不上）的卷节点数，
+ * 大于 0 时后台补读照样要接（只补卷）。
+ */
+export async function readerNotesStatus(input: { readonly projectDir: string; readonly role: ReaderRole; readonly upTo: number; readonly notesRoot?: string; readonly maxChars?: number }): Promise<{ readonly readable: number; readonly valid: number; readonly volumesMissing: number }> {
+  const root = input.notesRoot ?? input.projectDir;
+  const state = await inspectNotes({ projectDir: input.projectDir, root, role: input.role, upTo: input.upTo });
+  const volumesMissing = state.valid.length === state.upTo
+    ? await missingVolumeCount(root, input.role, state.valid, input.maxChars ?? READER_WINDOW_MAX_CHARS)
+    : 0;
+  return { readable: state.upTo, valid: state.valid.length, volumesMissing };
+}
+
+/** 还没生成的卷笔记按这个字数估：已有的平均长度（夹在 400～1700），一份都没有时按上限估。 */
+function estimateVolumeChars(volumeNotes: ReadonlyMap<string, VolumeNoteEntry>): number {
+  if (volumeNotes.size === 0) return VOLUME_NOTE_ESTIMATE_CHARS;
+  const sizes = [...volumeNotes.values()].map((volume) => volume.note.length);
+  return Math.min(VOLUME_NOTE_ESTIMATE_CHARS, Math.max(400, Math.round(sizes.reduce((sum, size) => sum + size, 0) / sizes.length)));
+}
+
+/**
+ * 卷笔记规划（取窗口和数缺口共用这一条路，Astra P2a 第 10 轮第 3 条）：每一轮先按手上有的规划（有的按实际字数、其余按估值），
+ * 再把这份规划要用的卷节点从盘上认领一遍（只读、不生成；下级齐了才认上级）——认领到新的就按实际字数重规划，直到稳了。
+ * 稳了还缺：给了 build 就生成缺的（先下级后上级），生成出来的字数和估值不同，再回去重规划；没给（只数缺口）就数出缺几个节点。
+ * 以前数缺口先认领再重规划，真建却按初次估值先把上级建了：状态说齐了、取窗口还要建，后台又不接。
+ */
+async function settleVolumeLayout(input: {
+  readonly root: string;
+  readonly role: ReaderRole;
+  readonly entries: readonly ReaderWindowEntry[];
+  readonly maxChars: number;
+  /** 手上已有的卷笔记（认领到的、生成的都记进去）。 */
+  readonly notes: Map<string, VolumeNoteEntry>;
+  readonly build?: (volume: LayoutVolume, materials: readonly string[]) => Promise<VolumeNoteEntry>;
+}): Promise<{ readonly layout: WindowLayout; readonly missing: number }> {
+  const { root, role, entries, maxChars, notes } = input;
+  /** 盘上没有（或对不上）的：键 + 材料哈希。 */
+  const absent = new Set<string>();
+  const leafMaterials = (volume: LayoutVolume): string[] => {
+    const materials: string[] = [];
+    for (let chapter = volume.from; chapter <= volume.to; chapter += 1) materials.push(entries[chapter - 1]!.note);
+    return materials;
+  };
+  const fromDisk = async (volume: LayoutVolume, materials: readonly string[]): Promise<VolumeNoteEntry | undefined> => {
+    const lookup = `${volumeKey(volume.from, volume.to)}\u0000${sha(materialsJoin(materials))}`;
+    if (absent.has(lookup)) return undefined;
+    const existing = await readVolume(root, role, volume.from, volume.to, materials);
+    if (!existing) absent.add(lookup);
+    else notes.set(volumeKey(volume.from, volume.to), existing);
+    return existing;
+  };
+  /** 认领：手上有就用，下级都认领得到、盘上有这一份就认上。不生成。 */
+  const claim = async (volume: LayoutVolume): Promise<VolumeNoteEntry | undefined> => {
+    const held = notes.get(volumeKey(volume.from, volume.to));
+    if (held) return held;
+    let materials: string[];
+    if (volume.children.length === 0) materials = leafMaterials(volume);
+    else {
+      materials = [];
+      for (const child of volume.children) {
+        const note = await claim(child);
+        if (!note) return undefined;
+        materials.push(note.note);
+      }
+    }
+    return fromDisk(volume, materials);
+  };
+  /** 备齐一个节点：下级先备齐，盘上有就认、没有就生成。 */
+  const provide = async (volume: LayoutVolume, build: NonNullable<typeof input.build>): Promise<VolumeNoteEntry> => {
+    const held = notes.get(volumeKey(volume.from, volume.to));
+    if (held) return held;
+    const materials = volume.children.length === 0 ? leafMaterials(volume) : [];
+    for (const child of volume.children) materials.push((await provide(child, build)).note);
+    const existing = await fromDisk(volume, materials);
+    if (existing) return existing;
+    const entry = await build(volume, materials);
+    notes.set(volumeKey(volume.from, volume.to), entry);
+    return entry;
+  };
+  const countMissing = (volumes: readonly LayoutVolume[]): number => {
+    const counted = new Set<string>();
+    const count = (volume: LayoutVolume): void => {
+      const key = volumeKey(volume.from, volume.to);
+      if (notes.has(key) || counted.has(key)) return;
+      counted.add(key);
+      for (const child of volume.children) count(child);
+    };
+    for (const volume of volumes) count(volume);
+    return counted.size;
+  };
+  for (let round = 0; round < VOLUME_PLAN_MAX_ROUNDS; round += 1) {
+    const layout = planWindowLayout({
+      role,
+      entries,
+      maxChars,
+      noteSizeFor: (from, to) => notes.get(volumeKey(from, to))?.note.length ?? estimateVolumeChars(notes),
+    });
+    const before = notes.size;
+    for (const volume of layout.volumes) await claim(volume);
+    if (notes.size !== before) continue;
+    const missing = layout.volumes.filter((volume) => !notes.has(volumeKey(volume.from, volume.to)));
+    if (missing.length === 0) return { layout, missing: 0 };
+    if (!input.build) return { layout, missing: countMissing(layout.volumes) };
+    for (const volume of missing) await provide(volume, input.build);
+  }
+  throw new Error("卷笔记规划没有收敛");
+}
+
+/** 只读盘数卷笔记的缺口（和取窗口同一条规划路，不调模型）。 */
+async function missingVolumeCount(root: string, role: ReaderRole, entries: readonly ReaderWindowEntry[], maxChars: number): Promise<number> {
+  if (!role.volumeTask) return 0;
+  return (await settleVolumeLayout({ root, role, entries, maxChars, notes: new Map() })).missing;
+}
+
 /** 已定稿到第几章（chapters/NNNN.md 里最大的章号）。目录读不到是 0。 */
 export async function countCommittedChapters(projectDir: string): Promise<number> {
   const files = await readdir(join(projectDir, "chapters")).catch(() => [] as string[]);
@@ -464,6 +609,11 @@ async function withCatchUpLock<T>(key: string, run: () => Promise<T>): Promise<T
   } finally {
     if (catchUpLocks.get(key) === tail) catchUpLocks.delete(key);
   }
+}
+
+/** 测试用：模拟进程没了（在飞的补笔记还攥着锁，新进程里没有这把锁）。 */
+export function __resetCatchUpLocksForTests(): void {
+  catchUpLocks.clear();
 }
 
 /** 读一条卷笔记：字段齐、哈希对得上（下级材料 + 卷笔记提示词）才要。 */
@@ -498,7 +648,7 @@ export interface EnsuredReaderWindow {
   readonly built: number;
   /** 直接复用的笔记数。 */
   readonly reused: number;
-  /** 需要新写但这次没写的笔记数（超过 maxCatchUp）。 */
+  /** 需要新写但这次没写的笔记数（超过 maxCatchUp）；卷节点到了 maxVolumeBuilds 也算没备齐（至少 1）。 */
   readonly missing: number;
   /** 这次新生成 / 重生成的卷笔记数。 */
   readonly volumesBuilt: number;
@@ -509,6 +659,10 @@ export interface EnsuredReaderWindow {
   /** 这次等过补读（R6.1）：开口那一刻之后笔记多出来的章（第 from～to 章）、等了 ms 毫秒——
    *  不管笔记是谁补上的（自己当场补 / 排在后台补读后面等它补完），回执据此如实说等过。笔记本来就齐不带。 */
   readonly waited?: ReaderWaited;
+  /** 缺笔记、但这个角色的后台补读停着等作者（Astra P2a 第 9 轮第 3 条）：这次一次都没发，调用方走冷窗口。 */
+  readonly pausedBackfill?: PausedBackfill;
+  /** 卷节点到了这次的上限（maxVolumeBuilds）没建齐：missing ≥ 1。后台补读按上界给的上限，到了就是规划出了错，如实失败。 */
+  readonly volumeLimited?: true;
 }
 
 /**
@@ -517,6 +671,14 @@ export interface EnsuredReaderWindow {
  * 折掉原文还超预算时按规划生成卷笔记（角色要有 volumeTask）：写每一章笔记用的窗口也先卷好，
  * 保证任何时刻发给模型的消息都不超预算。补笔记的模型调用失败照实抛出——已写下的笔记留着，下次接着补。
  */
+/** 卷节点到了这次的上限（ensureReaderWindow 内部用）。 */
+class VolumeBuildLimit extends Error {
+  constructor() {
+    super("卷笔记到了这次的上限");
+    this.name = "VolumeBuildLimit";
+  }
+}
+
 export async function ensureReaderWindow(input: {
   readonly projectDir: string;
   readonly role: ReaderRole;
@@ -526,6 +688,11 @@ export async function ensureReaderWindow(input: {
   readonly notesRoot?: string;
   /** 需要新写的笔记超过这个数就不写了，直接返回 missing > 0（调用方如实说「还在读前文」，笔记在后台补）。缺省不限。 */
   readonly maxCatchUp?: number;
+  /**
+   * 这一次最多新生成几个卷节点（写作版本 P2a 4.5：数的是实际新生成的每一个，含递归出来的下级、重新规划后多出来的）。
+   * 到了就停：已生成的留着（按内容键的缓存），返回 missing ≥ 1，调用方走冷窗口、剩下的交后台补。缺省不限（后台补读）。
+   */
+  readonly maxVolumeBuilds?: number;
   /** 窗口字数预算；缺省 READER_WINDOW_MAX_CHARS（测试用小值）。 */
   readonly maxChars?: number;
   /** 每写完一章笔记调一次（后台补读拿它落进度）；返回 Promise 会等它落完再写下一章。 */
@@ -541,9 +708,18 @@ export async function ensureReaderWindow(input: {
   const root = input.notesRoot ?? input.projectDir;
   const maxChars = input.maxChars ?? READER_WINDOW_MAX_CHARS;
   const inspect = () => inspectNotes({ projectDir: input.projectDir, root, role: input.role, upTo: input.upTo });
+  // 这个角色的后台补读停着等作者（Astra P2a 第 9 轮第 3 条）：这里一章笔记、一个卷节点都不补——那份补读可能有一笔
+  // 结果不明、已经计费的调用，当场补等于自动重发。笔记齐的照常给窗口；缺的返回 missing、带上停着的那份，调用方走冷窗口。
+  // 进锁前看一眼、进锁后再看一眼（排在后台补读后面时它可能刚停下）。
+  let paused = await pausedBackfillOf(input.projectDir, input.role.id);
+  const maxCatchUp = (): number | undefined => (paused ? 0 : input.maxCatchUp);
+  const maxVolumeBuilds = (): number | undefined => (paused ? 0 : input.maxVolumeBuilds);
   const notReady = (state: NotesState): EnsuredReaderWindow =>
-    ({ messages: [], built: 0, reused: state.upTo - state.stale.length, missing: state.stale.length, volumesBuilt: 0, foldedChapters: 0, readThrough: state.valid.length });
-  const tooMany = (state: NotesState): boolean => input.maxCatchUp !== undefined && state.stale.length > input.maxCatchUp;
+    ({ messages: [], built: 0, reused: state.upTo - state.stale.length, missing: state.stale.length, volumesBuilt: 0, foldedChapters: 0, readThrough: state.valid.length, ...(paused ? { pausedBackfill: paused } : {}) });
+  const tooMany = (state: NotesState): boolean => {
+    const limit = maxCatchUp();
+    return limit !== undefined && state.stale.length > limit;
+  };
 
   // 开口那一刻（R6.1）：进锁前先看一眼已有几章有效笔记＋记下时间。等没等、等的是哪几章都按它算——
   // 排在后台补读后面时，轮到我们笔记已经齐了（built=0），但「开口时缺的章等完补上了」照样算等过。
@@ -553,6 +729,7 @@ export async function ensureReaderWindow(input: {
   if (tooMany(peek)) return notReady(peek); // 缺得太多走冷窗口：没等，不登记
   const spokeStale = peek.stale;
   const run = (): Promise<EnsuredReaderWindow> => withCatchUpLock(`${root}\u0000${input.role.id}`, async () => {
+    paused = await pausedBackfillOf(input.projectDir, input.role.id);
     const state = await inspect();
     if (tooMany(state)) return notReady(state);
     const entries = [...state.valid];
@@ -562,58 +739,24 @@ export async function ensureReaderWindow(input: {
     const roleHash = roleHashOf(input.role);
     const volumeNotes = new Map<string, VolumeNoteEntry>();
     let volumesBuilt = 0;
-    /** 还没生成的那份卷笔记按这个字数估：已生成的平均长度（夹在 400～1700），一份都没有时按上限估。
-     *  估大了只会多折、不会超预算；照着已生成的估能少生成一堆马上就用不上的中间卷笔记。 */
-    const estimateVolumeChars = (): number => {
-      if (volumeNotes.size === 0) return VOLUME_NOTE_ESTIMATE_CHARS;
-      const sizes = [...volumeNotes.values()].map((volume) => volume.note.length);
-      return Math.min(VOLUME_NOTE_ESTIMATE_CHARS, Math.max(400, Math.round(sizes.reduce((sum, size) => sum + size, 0) / sizes.length)));
-    };
-    /** 拿到一条卷笔记：内存里有就用，盘上对得上就用，否则把下级材料备齐（叶子＝十章笔记，否则＝下级卷笔记）、调模型生成、存盘。 */
-    const volumeNoteOf = async (volume: LayoutVolume): Promise<VolumeNoteEntry> => {
-      const key = volumeKey(volume.from, volume.to);
-      const cached = volumeNotes.get(key);
-      if (cached) return cached;
-      const materials: string[] = [];
-      if (volume.children.length === 0) {
-        for (let chapter = volume.from; chapter <= volume.to; chapter += 1) materials.push(entries[chapter - 1]!.note);
-      } else {
-        for (const child of volume.children) materials.push((await volumeNoteOf(child)).note);
-      }
-      const existing = await readVolume(root, input.role, volume.from, volume.to, materials);
-      if (existing) {
-        volumeNotes.set(key, existing);
-        return existing;
-      }
+    /** 生成一条卷笔记（规划里缺、盘上也没有的才走到这）：到了这次的上限就停；调模型、存盘。 */
+    const generateVolume = async (volume: LayoutVolume, materials: readonly string[]): Promise<VolumeNoteEntry> => {
+      const volumeLimit = maxVolumeBuilds();
+      if (volumeLimit !== undefined && volumesBuilt >= volumeLimit) throw new VolumeBuildLimit();
       const note = (await input.callModel(buildVolumeMessages(input.role, volume.from, volume.to, materials), { json: false }))
         .trim()
         .slice(0, VOLUME_NOTE_MAX_CHARS);
       if (!note) throw new Error(`第 ${volume.from}～${volume.to} 章的卷笔记是空的`);
-      await stat(input.projectDir); // 书已删就别再写
-      await writeAtomically(
+      await writeBookCache(input.projectDir, () => writeAtomically(
         volumeFile(root, input.role.id, volume.from, volume.to),
         `${JSON.stringify({ from: volume.from, to: volume.to, textHash: sha(materialsJoin(materials)), roleHash: volumeRoleHashOf(input.role), note, createdAt: new Date().toISOString() } satisfies VolumeFile, null, 2)}\n`,
-      );
-      const entry = { from: volume.from, to: volume.to, note };
-      volumeNotes.set(key, entry);
+      ));
       volumesBuilt += 1;
-      return entry;
+      return { from: volume.from, to: volume.to, note };
     };
-    /** 按当前笔记把窗口规划稳：该有的卷笔记都备齐（生成或从盘上认领），返回布局。 */
-    const settleVolumes = async (): Promise<WindowLayout> => {
-      for (let round = 0; round < VOLUME_PLAN_MAX_ROUNDS; round += 1) {
-        const layout = planWindowLayout({
-          role: input.role,
-          entries,
-          maxChars,
-          noteSizeFor: (from, to) => volumeNotes.get(volumeKey(from, to))?.note.length ?? estimateVolumeChars(),
-        });
-        const missing = layout.volumes.filter((volume) => !volumeNotes.has(volumeKey(volume.from, volume.to)));
-        if (missing.length === 0) return layout;
-        for (const volume of missing) await volumeNoteOf(volume);
-      }
-      throw new Error("卷笔记规划没有收敛");
-    };
+    /** 按当前笔记把窗口规划稳：该有的卷笔记都备齐（从盘上认领或生成），返回布局。 */
+    const settleVolumes = async (): Promise<WindowLayout> =>
+      (await settleVolumeLayout({ root, role: input.role, entries, maxChars, notes: volumeNotes, build: generateVolume })).layout;
     const renderWindow = async (): Promise<{ readonly messages: BrainMessage[]; readonly foldedChapters: number }> => {
       const layout = input.role.volumeTask ? await settleVolumes() : planWindowLayout({
         role: input.role,
@@ -628,36 +771,45 @@ export async function ensureReaderWindow(input: {
       await input.onCatchUpBegin?.(entries.length, state.upTo);
     }
     try {
-      for (let chapter = firstStale; chapter <= state.upTo; chapter += 1) {
-        const body = state.bodies[chapter - 1]!;
-        const window = await renderWindow();
-        const note = (await input.callModel(
-          [...window.messages, { role: "user", content: readUserContent(input.role, chapter, body) }],
-          { json: false },
-        )).trim();
-        if (!note) throw new Error(`第 ${chapter} 章的读书笔记是空的`);
-        await writeNote(input.projectDir, root, input.role.id, { chapter, textHash: sha(body), note, createdAt: new Date().toISOString(), roleHash, priorHash: chain });
-        const entry = { chapter, body, note };
-        entries.push(entry);
-        chain = chainStep(chain, entry);
-        await input.onProgress?.(chapter);
-      }
-    } finally {
-      // 等读收尾（含中途失败）：把进度从「在读」翻回「读完」，失败时 done 如实停在落下的那章。
-      if (firstStale <= state.upTo) await input.onCatchUpEnd?.(entries.length, state.upTo);
+      return await buildRest();
+    } catch (error) {
+      // 卷节点到了这次的上限：已写下的笔记、卷笔记都留着，这次当没备齐（调用方走冷窗口，剩下的后台补）。
+      if (error instanceof VolumeBuildLimit) return { ...notReady(state), built: entries.length - state.valid.length, missing: Math.max(1, state.upTo - entries.length), volumesBuilt, readThrough: entries.length, volumeLimited: true };
+      throw error;
     }
-    const final = await renderWindow();
-    return {
-      messages: final.messages,
-      built: state.stale.length,
-      reused: state.upTo - state.stale.length,
-      missing: 0,
-      volumesBuilt,
-      foldedChapters: final.foldedChapters,
-      readThrough: state.upTo,
-      // 等过了（R6.1）：拿到窗口时读到的章比开口时多——多的就是这中间补上的（谁补的都算），如实带回执。
-      ...(spokeStale.length > 0 ? { waited: { from: spokeStale[0]!, to: spokeStale.at(-1)!, ms: Date.now() - startedAt } satisfies ReaderWaited } : {}),
-    };
+    async function buildRest(): Promise<EnsuredReaderWindow> {
+      try {
+        for (let chapter = firstStale; chapter <= state.upTo; chapter += 1) {
+          const body = state.bodies[chapter - 1]!;
+          const window = await renderWindow();
+          const note = (await input.callModel(
+            [...window.messages, { role: "user", content: readUserContent(input.role, chapter, body) }],
+            { json: false },
+          )).trim();
+          if (!note) throw new Error(`第 ${chapter} 章的读书笔记是空的`);
+          await writeNote(input.projectDir, root, input.role.id, { chapter, textHash: sha(body), note, createdAt: new Date().toISOString(), roleHash, priorHash: chain });
+          const entry = { chapter, body, note };
+          entries.push(entry);
+          chain = chainStep(chain, entry);
+          await input.onProgress?.(chapter);
+        }
+      } finally {
+        // 等读收尾（含中途失败）：把进度从「在读」翻回「读完」，失败时 done 如实停在落下的那章。
+        if (firstStale <= state.upTo) await input.onCatchUpEnd?.(entries.length, state.upTo);
+      }
+      const final = await renderWindow();
+      return {
+        messages: final.messages,
+        built: state.stale.length,
+        reused: state.upTo - state.stale.length,
+        missing: 0,
+        volumesBuilt,
+        foldedChapters: final.foldedChapters,
+        readThrough: state.upTo,
+        // 等过了（R6.1）：拿到窗口时读到的章比开口时多——多的就是这中间补上的（谁补的都算），如实带回执。
+        ...(spokeStale.length > 0 ? { waited: { from: spokeStale[0]!, to: spokeStale.at(-1)!, ms: Date.now() - startedAt } satisfies ReaderWaited } : {}),
+      };
+    }
   });
   if (!input.waitingAs) return run();
   registerReaderWaiting(root, input.role.id, input.waitingAs);

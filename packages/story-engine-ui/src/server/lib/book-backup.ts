@@ -137,8 +137,9 @@ export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date())
     }
     if (suffix) await retitle(join(staging, "project.json"), title);
     // 解出来的书换一个新的写入代次（P1a 第 2 轮、P1b 第 3 轮复核）：备份里的代次是那时候的，书露面之前就换好；
+    // 书的纪元也换（写作版本 P2a）：备份之前受理的操作，书搬回来以后一律不能再写。
     // 走核心事务写（不跟软链写到书外，P1 第 22 轮 AJ3），换不了整个恢复停下。
-    await bumpRevision(staging, now);
+    await bumpRevision(staging, now, { bookEpoch: true });
     await rename(staging, target);
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);

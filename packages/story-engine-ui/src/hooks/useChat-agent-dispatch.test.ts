@@ -18,6 +18,10 @@ import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
 import { cardOf, hasCard } from "../utils/messageCards.js";
+import { draftChoiceAction } from "../utils/workflowHelpers.js";
+import { cancelOperationRequest, listActiveOperations } from "../api/operationsClient.js";
+import { newCommitAction, newDraftAction, newInspectAction, type OperationViewData } from "../api/agentChatClient.js";
+import { useCommitSheet } from "../workspace/commitSheet.js";
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
@@ -26,8 +30,16 @@ vi.mock("../api/client.js", () => ({
   restoreSnapshotApi: vi.fn(),
 }));
 
-vi.mock("../api/agentChatClient.js", () => ({
+vi.mock("../api/agentChatClient.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/agentChatClient.js")>(),
   streamAgentChat: vi.fn(),
+}));
+
+// 停掉在做的操作（写作版本 P2a）走操作接口，只断言调用。
+vi.mock("../api/operationsClient.js", () => ({
+  cancelOperationRequest: vi.fn(async () => ({ cancelled: true })),
+  listActiveOperations: vi.fn(async () => []),
+  followOperationEvents: vi.fn(async () => undefined),
 }));
 
 vi.mock("../api/chatSessionsClient.js", () => ({
@@ -114,7 +126,6 @@ function resetStore(): void {
   });
   useUiStore.setState({
     aiFlavorPending: null,
-    draftActionLoading: null,
   });
   disk.clear();
   diskVersion = 0;
@@ -151,10 +162,32 @@ function lastAssistant() {
 function buildParams(overrides: Partial<UseChatParams>): UseChatParams {
   return {
     projectPath: PROJECT,
-    handleApplyRevisionPreview: async () => undefined,
     refreshWorkspaceFromOverview: () => undefined,
     ...overrides,
   };
+}
+
+const DRAFT_OP = "op-draft56789abcdef0123";
+
+/** 这一轮交上的写稿操作（draft.change）此刻的样子。 */
+const COMMIT_OP = "op-0123456789abcdef0c0c";
+
+function draftView(overrides: Partial<OperationViewData> = {}): OperationViewData {
+  return {
+    opId: DRAFT_OP, kind: "draft.change", mode: "write", chapter: 3, what: "写第 3 章", state: "running", stateText: "在做",
+    allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
+  };
+}
+
+/** 写稿做完、换上了工作稿。 */
+function draftDone(chapter: number, title?: string): OperationViewData {
+  return draftView({ chapter, state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 9, draft: { chapter, applied: true, ...(title ? { title } : {}) } });
+}
+
+/** 写稿操作的一段正文流。 */
+function draftDelta(text: string, streamSeq: number, extra: { readonly replace?: true; readonly base?: true; readonly exec?: string } = {}) {
+  const { exec = "exec-1", ...flags } = extra;
+  return { opId: DRAFT_OP, event: { type: "draft-delta" as const, exec, streamSeq, text, ...flags } };
 }
 
 describe("useChat agent dispatch (Mastra phase 1)", () => {
@@ -331,24 +364,15 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(mockedFetchChapterPaper).toHaveBeenCalledWith(PROJECT, 3);
   });
 
-  it("generate_draft 写完：稿纸换成盘上那一版终稿，流程态 draft_ready", async () => {
+  it("写稿操作做完：稿纸换成盘上那一版终稿，流程态 draft_ready", async () => {
     window.localStorage.setItem("chatBrain", "agent");
-    const overview = makeOverview("Draft");
     const realDraft = "夜色四合，主角推开祠堂斑驳的木门，借着月光看清了梁上的刻痕。";
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: realDraft.slice(0, 10) });
-      // 服务端写完落盘，再回结果。
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta(realDraft.slice(0, 10), 1));
+      // 服务端写完落盘，再报做完。
       writeDisk(3, { draft: realDraft, title: "夜探祠堂" });
-      handlers.onToolResult({
-        toolName: "generate_draft",
-        toolCallId: "g1",
-        refreshScope: "full",
-        overview,
-        ok: true,
-        draftBody: realDraft,
-        draftTitle: "夜探祠堂",
-      });
+      handlers.onOperation?.(draftDone(3, "夜探祠堂"));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -357,19 +381,54 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
       await result.current.handleSendMessage("写第一章，主角夜探祠堂");
     });
 
-    expect(mockedApplyOverview).toHaveBeenCalledWith(overview, { flowStatus: "draft_ready", title: "夜探祠堂" });
+    expect(mockedApplyOverview).toHaveBeenCalledWith(expect.anything(), { flowStatus: "draft_ready", chapter: 3, title: "夜探祠堂" });
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: realDraft, title: "夜探祠堂", streaming: null });
     // 稿纸与盘一致：不会再回写一遍。
     expect(useDraftStore.getState().savedBody).toBe(realDraft);
+    expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ opId: DRAFT_OP, state: "succeeded" });
+  });
+
+  it("改稿操作（片 2C）：不流正文、不进「正在生成」；停着等作者时卡上摆改法；换上了稿纸按盘上重读、高亮改后那句", async () => {
+    const pending = { kind: "revise" as const, actionId: "confirm:1", decisions: ["apply", "again"], revise: { round: 1, changes: [{ from: "第三章原有的工作稿。", to: "第三章改过的稿。" }], failed: [] } };
+    const editView = (overrides: Partial<OperationViewData>) => draftView({ mode: "revise", what: "改稿·第 3 章", ...overrides });
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(editView({}));
+      expect(useBookStore.getState().workspace.flowStatus).not.toBe("draft_generating");
+      handlers.onOperation?.(editView({ state: "waiting_author", stateText: "等你定", eventSeq: 4, pending }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("把这句改顺一点");
+    });
+    expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ state: "waiting_author", pending });
+    expect(useDraftStore.getState().body).toBe("第三章原有的工作稿。");
+
+    // 作者点「换上」：新一轮接着做，做完了按盘上重读。
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(editView({ eventSeq: 5 }));
+      writeDisk(3, { draft: "第三章改过的稿。", title: "第三章" });
+      handlers.onOperation?.(editView({ state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 9, draft: { chapter: 3, applied: true, changes: [{ from: "第三章原有的工作稿。", to: "第三章改过的稿。" }] } }));
+      handlers.onDone();
+    });
+    await act(async () => {
+      await result.current.handleSendUserAction({ kind: "resume", opId: DRAFT_OP, answer: { actionId: "confirm:1", decision: "apply" } });
+    });
+    expect(messages().filter((message) => message.role === "user").at(-1)?.content).toBe("换上");
+    expect(useDraftStore.getState()).toMatchObject({ body: "第三章改过的稿。", streaming: null });
+    expect(useUiStore.getState().revisionHighlightTexts).toEqual(["第三章改过的稿。"]);
+    // 等作者的改法、按钮、结论只挂在新一轮那条上（老的那条只留一行状态）。
+    const carrying = messages().filter((message) => cardOf(message, "operation")?.op.opId === DRAFT_OP);
+    expect(carrying.map((message) => cardOf(message, "operation")?.op.pending)).toEqual([undefined, undefined]);
+    expect(cardOf(carrying[0]!, "operation")?.op).toMatchObject({ state: "succeeded", allowed: [], summary: "" });
   });
 
   it("出稿流式的字只显示（稿纸只读），不进作者的稿子", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = deferred<void>();
     mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: "正在流出来的字" });
-      await gate;
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("正在流出来的字", 1));
+      await gate.promise;
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -378,49 +437,65 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     act(() => { pending = result.current.handleSendMessage("写这一章"); });
     await vi.waitFor(() => expect(useDraftStore.getState().streaming).toContain("正在流出来的字"));
     expect(useDraftStore.getState().body).toBe("第三章原有的工作稿。");
-    release();
+    gate.resolve();
     await act(async () => { await pending; });
     expect(useDraftStore.getState().streaming).toBeNull();
   });
 
-  it("流式里 replace 片段换掉已流出的字（重写一段时退回），之后的片段接着它往下", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+  it("正文流按号拼：replace 换掉已流出的新写的字，迟到的旧号丢掉；一步重做（换了执行）之前流的作废", async () => {
+    const gate = deferred<void>();
     mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: "前面写好的。\n\n重演的一段" });
-      handlers.onDraftDelta?.({ chapter: 3, text: "前面写好的。\n\n", replace: true });
-      handlers.onDraftDelta?.({ chapter: 3, text: "新的一段" });
-      await gate;
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("前面写好的。\n\n重演的一段", 1));
+      handlers.onOperationLive?.(draftDelta("前面写好的。\n\n", 2, { replace: true }));
+      handlers.onOperationLive?.(draftDelta("新的一段", 3));
+      handlers.onOperationLive?.(draftDelta("迟到的旧片段", 2));
+      await gate.promise;
+      handlers.onOperationLive?.({ opId: DRAFT_OP, event: { type: "step", step: "write:1", exec: "exec-2" } });
+      handlers.onOperationLive?.(draftDelta("重做的一版", 1, { exec: "exec-2" }));
+      handlers.onOperationLive?.(draftDelta("旧执行迟到的", 4));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
     let pending!: Promise<void>;
-    act(() => { pending = result.current.handleSendMessage("接着往下写"); });
+    let afterRedo = "";
+    act(() => { pending = result.current.handleSendMessage("写这一章"); });
     await vi.waitFor(() => expect(useDraftStore.getState().streaming).toContain("新的一段"));
     expect(useDraftStore.getState().streaming).not.toContain("重演的一段");
-    release();
+    expect(useDraftStore.getState().streaming).not.toContain("迟到的旧片段");
+    const unsubscribe = useDraftStore.subscribe((state) => { if (state.streaming) afterRedo = state.streaming; });
+    gate.resolve();
+    await act(async () => { await pending; });
+    unsubscribe();
+    expect(afterRedo).toBe("重做的一版");
+  });
+
+  it("别的操作的正文流不进稿纸", async () => {
+    const gate = deferred<void>();
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.({ ...draftDelta("别的操作的字", 1), opId: "op-other0123456789abcd" });
+      handlers.onOperationLive?.(draftDelta("这次的字", 1));
+      await gate.promise;
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写这一章"); });
+    await vi.waitFor(() => expect(useDraftStore.getState().streaming).toBe("这次的字"));
+    gate.resolve();
     await act(async () => { await pending; });
   });
 
-  it("explicitly adopts a generate_draft target chapter and keeps streaming next-chapter support", async () => {
-    const overview = makeOverview("Next chapter");
+  it("写的是另一章：稿纸、当前章、这轮对话都换到那章；第三章原稿不动", async () => {
     const body = "第四章的新正文。";
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft" });
-      handlers.onDraftDelta?.({ chapter: 4, text: body });
-      handlers.onDraftDelta?.({ chapter: 3, text: "绝不能串回第三章的片段。" });
+      handlers.onOperation?.(draftView({ chapter: 4, what: "写第 4 章" }));
+      handlers.onOperationLive?.(draftDelta(body, 1));
       writeDisk(4, { draft: body, title: "第四章" });
-      handlers.onToolResult({
-        toolName: "generate_draft",
-        refreshScope: "full",
-        overview,
-        ok: true,
-        chapter: 4,
-        draftBody: body,
-        draftTitle: "第四章",
-      });
+      handlers.onOperation?.(draftDone(4, "第四章"));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -430,21 +505,18 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     });
 
     expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(4);
-    expect(useDraftStore.getState().chapter).toBe(4);
-    expect(useDraftStore.getState().body).toBe(body);
-    expect(useDraftStore.getState().body).not.toContain("串回第三章");
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 4, body });
     // 这一轮对话归第四章：之后在第四章接着聊，它不收进「别的章的对话」。
     expect(useChatStore.getState().messages.find((message) => message.role === "user" && message.content === "继续写下一章")?.chapter).toBe(4);
-    expect(mockedApplyOverview).toHaveBeenCalledWith(overview, { flowStatus: "draft_ready", chapter: 4, title: "第四章" });
-    // 第三章原稿还在盘上，没被动过。
+    expect(mockedApplyOverview).toHaveBeenCalledWith(expect.anything(), { flowStatus: "draft_ready", chapter: 4, title: "第四章" });
     expect(disk.get(3)?.draft?.body).toBe("第三章原有的工作稿。");
   });
 
   it("换到另一章出稿前，先把手上那章没存的字存掉", async () => {
     useDraftStore.getState().edit("作者在第三章刚打的字。");
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft" });
-      handlers.onDraftDelta?.({ chapter: 4, text: "第四章。" });
+      handlers.onOperation?.(draftView({ chapter: 4 }));
+      handlers.onOperationLive?.(draftDelta("第四章。", 1));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -456,18 +528,24 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(disk.get(3)?.draft?.body).toBe("作者在第三章刚打的字。");
   });
 
-  it("AI 写另一章、手上那章存不上：稿纸和当前章都留在原章，下一句话还是指原章（第 4 轮复核 R8）", async () => {
+  it("AI 写另一章、手上那章存不上：稿纸和当前章都留在原章，马上退出「正在生成」，下一句话还是指原章（第 4 轮复核 R8）", async () => {
     editDraft("第三章没存上的字。");
     mockedSaveWorkingDraft.mockRejectedValue(new Error("存稿失败"));
-    scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g4" });
-      handlers.onDraftDelta?.({ chapter: 4, text: "第四章 AI 在写。" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g4", chapter: 4, ok: true });
+    const gate = deferred<void>();
+    mockedStreamAgentChat.mockImplementationOnce(async (_input, handlers) => {
+      handlers.onOperation?.(draftView({ chapter: 4 }));
+      handlers.onOperationLive?.(draftDelta("第四章 AI 在写。", 1));
+      handlers.onOperation?.(draftDone(4));
+      await gate.promise;
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
-    await act(async () => { await result.current.handleSendMessage("继续写下一章"); });
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("继续写下一章"); });
+    await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready"));
+    gate.resolve();
+    await act(async () => { await pending; });
     scriptAgentStream((handlers) => handlers.onDone());
     await act(async () => { await result.current.handleSendMessage("改一下我眼前这一章"); });
 
@@ -481,9 +559,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     const fetched = deferred<ChapterPaper>();
     mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return fetched.promise; });
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s1" });
-      handlers.onDraftDelta?.({ chapter: 4, text: "第四章流式稿。" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "s1", chapter: 4, ok: true });
+      handlers.onOperation?.(draftView({ chapter: 4 }));
+      handlers.onOperationLive?.(draftDelta("第四章流式稿。", 1));
+      handlers.onOperation?.(draftDone(4));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -500,7 +578,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(3);
   });
 
-  it("换章之后才处理的工具结果又发起重读：回合等它读完才收尾（第 5 轮 S2）", async () => {
+  it("换章之后才处理的做完又发起重读：回合等它读完才收尾（第 5 轮 S2）", async () => {
     const entered = deferred<void>();
     const first = deferred<ChapterPaper>();
     const secondEntered = deferred<void>();
@@ -509,10 +587,10 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
       .mockImplementationOnce(async () => { entered.resolve(); return first.promise; })
       .mockImplementationOnce(async () => { secondEntered.resolve(); return second.promise; });
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s2" });
-      handlers.onDraftDelta?.({ chapter: 4, text: "已经出完第四章。" });
+      handlers.onOperation?.(draftView({ chapter: 4 }));
+      handlers.onOperationLive?.(draftDelta("已经出完第四章。", 1));
       writeDisk(4, { draft: "第四章成稿。" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "s2", chapter: 4, ok: true });
+      handlers.onOperation?.(draftDone(4));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -538,9 +616,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     const fetched = deferred<ChapterPaper>();
     mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return fetched.promise; });
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s3" });
-      handlers.onDraftDelta?.({ chapter: 4, text: "旧书第四章。" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "s3", chapter: 4, ok: true });
+      handlers.onOperation?.(draftView({ chapter: 4 }));
+      handlers.onOperationLive?.(draftDelta("旧书第四章。", 1));
+      handlers.onOperation?.(draftDone(4));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -563,14 +641,14 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     }
   });
 
-  it("换章还没换完出稿就报错：不再换过去、不再摆出流式稿、不谎报写完（第 5 轮 S4）", async () => {
+  it("换章还没换完写稿就没成：不再换过去、不再摆出流式稿、不谎报写完（第 5 轮 S4）", async () => {
     const entered = deferred<void>();
     const fetched = deferred<ChapterPaper>();
     mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return fetched.promise; });
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s4" });
-      handlers.onDraftDelta?.({ chapter: 4, text: "失败前的半章。" });
-      handlers.onToolError({ toolName: "generate_draft", toolCallId: "s4", message: "生成失败", retryable: true });
+      handlers.onOperation?.(draftView({ chapter: 4 }));
+      handlers.onOperationLive?.(draftDelta("失败前的半章。", 1));
+      handlers.onOperation?.(draftView({ chapter: 4, state: "failed", stateText: "没做成", allowed: [], eventSeq: 4, summary: "生成失败", failure: { message: "生成失败", retryable: true } }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -582,6 +660,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     });
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "第三章原有的工作稿。", streaming: null });
     expect(messages().some((message) => message.content.includes("其实已经写完了"))).toBe(false);
+    expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ state: "failed" });
   });
 
   it("回合收尾后迟到的重读：作者其间存好的新字不被旧读数盖回去（第 6 轮 T1）", async () => {
@@ -633,9 +712,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(disk.get(3)?.draft?.body).toBe(original);
   });
 
-  it("出稿调用后连接断了、没有工具结果：步骤不再一直转（第 6 轮 T3）", async () => {
+  it("写稿调用后连接断了、没有工具结果：步骤不再一直转（第 6 轮 T3）", async () => {
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "t3" });
+      handlers.onToolCall({ toolName: "change_draft", toolCallId: "t3" });
       handlers.onError("连接中断，没有工具结果", true);
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -645,12 +724,12 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useChatStore.getState().chatLoading).toBe(false);
   });
 
-  it("出稿前作者自己存了字、出稿失败：不说「其实已经写完了」（第 6 轮 T4）", async () => {
+  it("写稿前作者自己存了字、写稿没成：不说「其实已经写完了」（第 6 轮 T4）", async () => {
     mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "t4" });
+      handlers.onOperation?.(draftView());
       editDraft("模型还没写，作者自己补的字。");
       await flushDraftSave();
-      handlers.onToolError({ toolName: "generate_draft", toolCallId: "t4", message: "模型失败，没生成正文", retryable: true });
+      handlers.onOperation?.(draftView({ state: "failed", stateText: "没做成", allowed: [], eventSeq: 3, summary: "模型失败，没生成正文", failure: { message: "模型失败，没生成正文", retryable: true } }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -664,7 +743,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     useChatStore.getState().setMessages([{ id: "old-user", role: "user", content: "旧需求" }, target]);
     const restoreEntered = deferred<void>();
     const restoreDone = deferred<void>();
-    vi.mocked(restoreSnapshotApi).mockImplementationOnce(async () => { restoreEntered.resolve(); await restoreDone.promise; });
+    vi.mocked(restoreSnapshotApi).mockImplementationOnce(async () => { restoreEntered.resolve(); await restoreDone.promise; return { conclusion: "已恢复。", changed: true }; });
     const { result } = renderHook(() => useChat(buildParams({})));
     await act(async () => {
       const undo = result.current.undoToTurn(target);
@@ -698,89 +777,50 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(isWorkspaceBusy()).toBe(false);
   });
 
-  it("commit_apply 定稿：稿纸按盘上换成已定稿，流程态 committed", async () => {
+  it("定稿操作：出了清单就打开清单（记下出清单时稿纸的版本）；定成了 → 稿纸按盘上换成已定稿、按盘上的概况刷新、流程态 committed", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     const overview = makeOverview("Committed");
+    mockedFetchStateOverview.mockResolvedValue(overview);
     const committedBody = "已经定稿入库的第三章正文。";
+    const commitView = (overrides: Partial<OperationViewData>): OperationViewData => ({
+      opId: COMMIT_OP, kind: "commit.prepare", chapter: 3, what: "定稿·第 3 章", state: "running", stateText: "在做",
+      allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
+    });
+    const checklist = { chapter: 3, canCommit: true };
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "commit_apply" });
+      handlers.onOperation?.(commitView({}));
+      handlers.onOperation?.(commitView({ state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => { await result.current.handleSendMessage("定稿"); });
+
+    const owner = messages().find((m) => m.role === "assistant" && m.cards?.some((card) => card.type === "commit-preview"));
+    expect(owner).toBeDefined();
+    expect(useCommitSheet.getState().messageId).toBe(owner!.id);
+    expect(useBookStore.getState().workspace.flowStatus).toBe("waiting_commit_confirmation");
+
+    scriptAgentStream((handlers) => {
       writeDisk(3, { draft: committedBody, committed: committedBody, title: "夜探祠堂" });
-      handlers.onToolResult({
-        toolName: "commit_apply",
-        refreshScope: "full",
-        overview,
-        committed: true,
-        draftBody: committedBody,
-        draftTitle: "夜探祠堂",
-      });
+      handlers.onOperation?.(commitView({ state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 9, commit: { chapter: 3, committed: true, report: { updatedCharacters: [] }, snapshotId: "s-3" } }));
       handlers.onDone();
     });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
     await act(async () => {
-      await result.current.handleSendMessage("确认入库");
+      await result.current.handleSendUserAction({ kind: "resume", opId: COMMIT_OP, answer: { actionId: "confirm-commit", decision: "commit" } }, { echo: "确认定稿第 3 章" });
     });
 
-    expect(mockedApplyOverview).toHaveBeenCalledWith(overview, { flowStatus: "committed", title: "夜探祠堂" });
+    await vi.waitFor(() => expect(mockedApplyOverview).toHaveBeenCalledWith(overview, { flowStatus: "committed", chapter: 3 }));
+    expect(messages().some((m) => m.role === "user" && m.content === "确认定稿第 3 章")).toBe(true);
+    await vi.waitFor(() => expect(isPaperCommitted()).toBe(true));
     expect(useDraftStore.getState().committed?.body).toBe(committedBody);
-    expect(isPaperCommitted()).toBe(true);
-  });
-
-  it("commits full workspace truth when commit_apply succeeds without an overview", async () => {
-    const committedBody = "没有 overview 也必须落成 committed 的正文。";
-    scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "commit_apply" });
-      writeDisk(3, { draft: committedBody, committed: committedBody, title: "无概览定稿" });
-      handlers.onToolResult({
-        toolName: "commit_apply",
-        committed: true,
-        draftBody: committedBody,
-        draftTitle: "无概览定稿",
-      });
-      handlers.onDone();
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => {
-      await result.current.handleSendMessage("确认定稿");
-    });
-
-    const state = useBookStore.getState().workspace;
-    expect(mockedApplyOverview).not.toHaveBeenCalled();
-    expect(state.flowStatus).toBe("committed");
-    expect(state.currentChapter).toMatchObject({ hasCommittedChapter: true, hasDraftFile: true });
-    expect(useDraftStore.getState()).toMatchObject({ body: committedBody, title: "无概览定稿" });
-    expect(isPaperCommitted()).toBe(true);
-  });
-
-  it("定稿结果在断流里丢了、盘上其实已定稿 → 按盘上更正成已定稿并说一声", async () => {
-    const committedBody = "# 磁盘定稿标题\n\n这是已经真正写盘的完整定稿正文。";
-    scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "commit_apply" });
-      writeDisk(3, { draft: committedBody, committed: committedBody, title: "磁盘定稿标题" });
-      handlers.onError("SSE disconnected after disk commit", true);
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => {
-      await result.current.handleSendMessage("确认定稿");
-    });
-
-    const state = useBookStore.getState();
-    expect(state.workspace.flowStatus).toBe("committed");
-    expect(state.workspace.currentChapter).toMatchObject({ chapterNumber: 3, hasCommittedChapter: true });
-    expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: committedBody, title: "磁盘定稿标题" });
-    expect(useDraftStore.getState().committed?.body).toBe(committedBody);
-    expect(mockedFetchStateOverview).toHaveBeenCalledWith({ projectPath: PROJECT, maxTimelineEvents: 8 });
-    expect(messages().some((m) => m.content.includes("其实已经定稿"))).toBe(true);
   });
 
   it("纯读工具断流：不重读盘、作者的稿子原样", async () => {
     const unsavedDraft = "这是作者尚未保存的新版本，质检断流绝不能把它覆盖。";
     useDraftStore.getState().edit(unsavedDraft);
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "quality_check" });
-      handlers.onError("quality stream disconnected", true);
+      handlers.onToolCall({ toolName: "run_check" });
+      handlers.onError("check stream disconnected", true);
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
@@ -916,7 +956,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     mockedFetchStateOverview.mockResolvedValueOnce(overview);
     scriptAgentStream((handlers) => {
       handlers.onToolResult({ toolName: "read_foundation" });
-      handlers.onToolResult({ toolName: "manage_ledger", refreshScope: "full", snapshotId: "snap-3" });
+      const changed = opView({ kind: "ledger.change", mode: "edit", chapter: undefined, what: "改账", state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 7, changed: { what: "ledger", snapshotId: "snap-3" } });
+      handlers.onOperation?.(changed);
+      handlers.onOperation?.({ ...changed, eventSeq: 8 });
       handlers.onDone();
     });
     const refreshWorkspaceFromOverview = vi.fn();
@@ -930,75 +972,137 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(refreshWorkspaceFromOverview).toHaveBeenCalledWith(overview);
   });
 
-  it("onToolResult for check_ai_flavor 把报告挂到这条 assistant 消息上（随消息走，不再落全局 store）", async () => {
+  const OP = "op-0123456789abcdef0123";
+  const opView = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: OP, kind: "inspect.run", mode: "flavor", chapter: 3, what: "查 AI 味·第 3 章", state: "running", stateText: "在做",
+    allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
+  });
+  const flavorReport = {
+    ok: true,
+    summary: "有一处 AI 腔。",
+    usedFallback: false,
+    violations: [{ id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high" as const, suggestedFix: "改成具体动作" }],
+  };
+
+  it("检查做完（操作事件）→ 结果卡挂在这条助手消息上、带查的版本；这一轮说了结论，操作卡记下不再重复", async () => {
     window.localStorage.setItem("chatBrain", "agent");
-    const report = {
-      ok: true,
-      summary: "有一处 AI 腔。",
-      usedFallback: false,
-      violations: [
-        { id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high" as const, suggestedFix: "改成具体动作" },
-      ],
-    };
     scriptAgentStream((handlers) => {
-      // check_ai_flavor 只读，无 overview/refreshScope；报告随 project(output:info) 投影挂到这条消息。
-      handlers.onToolResult({ toolName: "check_ai_flavor", aiFlavorReport: report });
+      handlers.onOperation?.(opView());
+      handlers.onOperationProgress?.({ opId: OP, text: "在查第 3 章" });
+      handlers.onOperation?.(opView({ state: "succeeded", stateText: "做完了", allowed: [], summary: "有一处 AI 腔。", eventSeq: 3, inspect: { aiFlavorReport: flavorReport, checkedVersion: "v1" } }));
+      handlers.onTextDelta("有一处 AI 腔。");
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
-
     await act(async () => {
-      await result.current.handleSendMessage("帮我体检这章的 AI 味");
+      await result.current.handleSendMessage("帮我查这章的 AI 味");
     });
-
-    const carried = cardOf(lastAssistant()!, "ai-flavor")?.report;
-    expect(carried).toBeTruthy();
-    expect(carried?.violations).toHaveLength(1);
-    expect(carried?.violations[0].text).toBe("心中五味杂陈。");
+    const message = lastAssistant()!;
+    expect(cardOf(message, "ai-flavor")).toMatchObject({ checkedVersion: "v1", report: { violations: [{ text: "心中五味杂陈。" }] } });
+    expect(cardOf(message, "operation")?.op).toMatchObject({ opId: OP, state: "succeeded", announced: true });
   });
 
-  it("onToolResult for a failed check_ai_flavor (ok:false) 不把报告挂到消息上（失败不当结果）", async () => {
+  it("检查没做成：不挂结果卡，操作卡如实是没做成", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     scriptAgentStream((handlers) => {
-      handlers.onToolResult({
-        toolName: "check_ai_flavor",
-        aiFlavorReport: { ok: false, summary: "体检没成。", usedFallback: true, violations: [] },
+      handlers.onOperation?.(opView({ state: "failed", stateText: "没做成", allowed: [], summary: "模型没回", eventSeq: 2, failure: { message: "模型没回", retryable: true } }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("查 AI 味");
+    });
+    expect(cardOf(lastAssistant()!, "ai-flavor")).toBeUndefined();
+    expect(cardOf(lastAssistant()!, "operation")?.op).toMatchObject({ state: "failed", summary: "模型没回" });
+  });
+
+  it.each([
+    ["针对当前章", 3, "quality_checked"],
+    ["针对别的章", 8, "draft_ready"],
+  ] as const)("硬伤检查做完（%s）→ 流程态 %s", async (_label, chapter, expected) => {
+    window.localStorage.setItem("chatBrain", "agent");
+    useBookStore.setState({ workspace: { ...useBookStore.getState().workspace, flowStatus: "draft_ready" } });
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(opView({ mode: "quality", chapter, what: `硬伤检查·第 ${chapter} 章`, state: "succeeded", allowed: [], eventSeq: 2 }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("帮我查硬伤");
+    });
+    expect(useBookStore.getState().workspace.flowStatus).toBe(expected);
+  });
+
+  it("对话流断了、这一轮交的操作还在做：不说「没做完」、不给重试，接着订阅它", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => {
+      handlers.onOperation?.(opView());
+      handlers.onError("network error", true);
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      await result.current.handleSendMessage("查 AI 味");
+    });
+    // 不另记一句「还在做」：卡自己跟着变。
+    const last = lastAssistant()!;
+    expect(hasCard(last, "operation")).toBe(true);
+    expect(hasCard(last, "error")).toBe(false);
+    expect(last.suggestedActions ?? []).toEqual([]);
+    expect(useChatStore.getState().messages.some((item) => item.content.includes("还在做"))).toBe(false);
+    expect(vi.mocked(listActiveOperations)).toHaveBeenCalledWith(PROJECT, expect.anything());
+  });
+
+  it("关页 / 刷新掐断的流：不记错误卡", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => {
+      handlers.onTextDelta("好的，");
+      window.dispatchEvent(new Event("pagehide"));
+      handlers.onError("network error", true);
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    try {
+      await act(async () => {
+        await result.current.handleSendMessage("帮我看看这章");
       });
-      handlers.onDone();
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => {
-      await result.current.handleSendMessage("体检 AI 味");
-    });
-
-    expect(cardOf(lastAssistant()!, "ai-flavor")?.report).toBeUndefined();
+    } finally {
+      window.dispatchEvent(new Event("pageshow"));
+    }
+    expect(messages().some((m) => hasCard(m, "error"))).toBe(false);
   });
 
-  it("纯 agent 流程：质检工具（只读·无 overview）也把 flowStatus 推进到 quality_checked（A 修复，不再卡在写稿）", async () => {
+  it("在做的时候点停止：交给服务端停掉这次操作（不掐断这一轮，等它如实收尾）", async () => {
     window.localStorage.setItem("chatBrain", "agent");
-    useBookStore.setState({
-      workspace: { ...useBookStore.getState().workspace, flowStatus: "draft_ready" },
-    });
-    scriptAgentStream((handlers) => {
-      handlers.onToolResult({ toolName: "quality_check", ok: true }); // 只读，不带 overview/draftBody
+    const gate = deferred<void>();
+    let aborted = false;
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers, signal) => {
+      signal?.addEventListener("abort", () => { aborted = true; });
+      handlers.onOperation?.(opView());
+      await gate.promise;
+      handlers.onOperation?.(opView({ state: "cancelled", stateText: "停掉了", allowed: [], eventSeq: 4 }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
-
+    let sending!: Promise<void>;
     await act(async () => {
-      await result.current.handleSendMessage("帮我质检这章");
+      sending = result.current.handleSendMessage("查 AI 味");
+      await Promise.resolve();
     });
-
-    expect(useBookStore.getState().workspace.flowStatus).toBe("quality_checked");
+    act(() => result.current.stopAgent());
+    expect(vi.mocked(cancelOperationRequest)).toHaveBeenCalledWith(PROJECT, OP);
+    expect(aborted).toBe(false);
+    gate.resolve();
+    await act(async () => {
+      await sending;
+    });
+    expect(cardOf(lastAssistant()!, "operation")?.op.state).toBe("cancelled");
   });
 
   it("tool-error settles the running toolStep + card to failed (no longer stuck running) and appends a retryable error", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "foundation_write", toolCallId: "c1" });
+      handlers.onToolCall({ toolName: "read_state_overview", toolCallId: "c1" });
       handlers.onToolError({
-        toolName: "foundation_write",
+        toolName: "read_state_overview",
         toolCallId: "c1",
         message: "落盘失败",
         retryable: true,
@@ -1053,14 +1157,13 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });
 
-  it("出稿结果已经收到、之后那步超时：说正文在稿纸上不用重来，不给「重试这一步」，也不再「核对盘上」（作者长篇实跑 2026-10-26）", async () => {
+  it("稿已经换上、之后那步超时：说正文在稿纸上不用重来，不给「重试这一步」，也不再「核对盘上」（作者长篇实跑 2026-10-26）", async () => {
     window.localStorage.setItem("chatBrain", "agent");
-    const overview = makeOverview("Draft");
     const realDraft = "窄道上只容一辆车，崔头领勒住马，抬手叫后头的车停下。";
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onOperation?.(draftView());
       writeDisk(3, { draft: realDraft, title: "窄道" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g1", refreshScope: "full", overview, ok: true, draftBody: realDraft, draftTitle: "窄道" });
+      handlers.onOperation?.(draftDone(3, "窄道"));
       handlers.onTextDelta("第 3 章写好了。");
       handlers.onError("上游流式输出中断：90 秒没有新内容", true, "timeout");
       handlers.onDone();
@@ -1113,63 +1216,72 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     });
   }
 
-  it("流式出稿中途点「停止」→ running 步骤结算 stopped、flowStatus 复位、已流出内容留给作者、拉一次盘上对账", async () => {
+  /** 写稿操作在流正文、点「停止」交给服务端停（假的停止接口一调就放行），服务端报停掉了再收尾。 */
+  function scriptCancellableDraft(begin: (handlers: AgentChatHandlers) => void, beforeCancelled?: () => void): void {
+    const cancelled = deferred<void>();
+    vi.mocked(cancelOperationRequest).mockImplementationOnce(async () => { cancelled.resolve(); return { cancelled: true }; });
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
+      begin(handlers);
+      await cancelled.promise;
+      beforeCancelled?.();
+      handlers.onOperation?.(draftView({ state: "cancelled", stateText: "停掉了", allowed: [], eventSeq: 6 }));
+      handlers.onDone();
+    });
+  }
+
+  it("写稿中途点「停止」→ 交服务端停掉；流程态复位、已流出的字留给作者、按盘上重读", async () => {
     seedPaper(3, { draft: "短" });
-    scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: "已流出的一截新正文。" });
+    scriptCancellableDraft((handlers) => {
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("已流出的一截新正文。", 1));
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
     let pending!: Promise<void>;
     act(() => { pending = result.current.handleSendMessage("写第三章，主角夜探祠堂"); });
-    await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    await vi.waitFor(() => expect(useDraftStore.getState().streaming).toContain("已流出的一截新正文"));
+    expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating");
     mockedFetchChapterPaper.mockClear();
     act(() => { result.current.stopAgent(); });
     await act(async () => { await pending; });
 
-    const agentMessage = messages().find((m) => (m.toolSteps?.length ?? 0) > 0)!;
-    // 残留 running → stopped（不是 failed），补 endedAt；金光/字幕随之静止。
-    expect(agentMessage.toolSteps![0].status).toBe("stopped");
-    expect(typeof agentMessage.toolSteps![0].endedAt).toBe("number");
+    expect(vi.mocked(cancelOperationRequest)).toHaveBeenCalledWith(PROJECT, DRAFT_OP);
+    expect(cardOf(lastAssistant()!, "operation")?.op.state).toBe("cancelled");
     expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
     // 已写出的内容留给作者（盘上那版更短），稿纸不再只读。
     expect(useDraftStore.getState().body).toContain("已流出的一截新正文");
     expect(useDraftStore.getState().streaming).toBeNull();
-    // 写类工具在飞 → 拉了一次盘上对账。
     expect(mockedFetchChapterPaper).toHaveBeenCalledWith(PROJECT, 3);
     // 停止不是失败：无错误气泡。
     expect(messages().filter((m) => hasCard(m, "error"))).toHaveLength(0);
     expect(useChatStore.getState().chatLoading).toBe(false);
   });
 
-  it("「停止」后盘上稿更完整（服务端停止前已写完）→ 稿纸换成盘上那版并如实说", async () => {
-    const fullDraftOnDisk = "这是服务端在停止前其实已经写完整的一整章正文，比编辑器里流出的半截要长得多。";
-    scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: "半截。" });
-      writeDisk(3, { draft: fullDraftOnDisk, title: "夜探祠堂" });
+  it("停掉时盘上那版比流出来的长：用盘上的，不拿半截盖", async () => {
+    const onDisk = "盘上这一版比流出来的半截长得多，作者之前就写好了这么多。";
+    seedPaper(3, { draft: onDisk });
+    scriptCancellableDraft((handlers) => {
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("半截。", 1));
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
     let pending!: Promise<void>;
-    act(() => { pending = result.current.handleSendMessage("写第三章，主角夜探祠堂"); });
-    await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    act(() => { pending = result.current.handleSendMessage("重写第三章"); });
+    await vi.waitFor(() => expect(useDraftStore.getState().streaming).toBe("半截。"));
     act(() => { result.current.stopAgent(); });
     await act(async () => { await pending; });
 
-    expect(useDraftStore.getState()).toMatchObject({ chapter: 3, title: "夜探祠堂", body: fullDraftOnDisk, savedBody: fullDraftOnDisk });
-    expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
-    expect(messages().some((m) => m.content.includes("其实已经写完了"))).toBe(true);
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: onDisk, savedBody: onDisk, streaming: null });
   });
 
   it("接着写中途「停止」：本来写好的那段原样留着（不当新写的换引号、去星号），新写的那截接在后面", async () => {
     const mine = "我写的\"直引号\"、“弯引号”和**星号**。";
     seedPaper(3, { draft: mine });
-    scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: `${mine}\n\n`, base: true });
-      handlers.onDraftDelta?.({ chapter: 3, text: "接着写的\"一截\"。" });
+    scriptCancellableDraft((handlers) => {
+      handlers.onOperation?.(draftView({ mode: "continue" }));
+      handlers.onOperationLive?.(draftDelta(`${mine}\n\n`, 1, { base: true }));
+      handlers.onOperationLive?.(draftDelta("接着写的\"一截\"。", 2));
     });
     const { result } = renderHook(() => useChat(buildParams({})));
 
@@ -1182,35 +1294,18 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useDraftStore.getState().body).toBe(`${mine}\n\n接着写的“一截”。`);
   });
 
-  it("「停止」时流式已收（服务端写完、正在核账）→ 盘上是新稿也如实说", async () => {
-    seedPaper(3, { draft: "原来的稿。" });
-    scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      writeDisk(3, { draft: "原来的稿。\n\n接着写完的一段。", title: "夜探祠堂" });
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    let pending!: Promise<void>;
-    act(() => { pending = result.current.handleSendMessage("接着往下写"); });
-    await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating"));
-    act(() => { result.current.stopAgent(); });
-    await act(async () => { await pending; });
-    expect(useDraftStore.getState().body).toBe("原来的稿。\n\n接着写完的一段。");
-    expect(messages().some((m) => m.content.includes("其实已经写完了"))).toBe(true);
-  });
-
-  it("「停止」后对账读盘期间作者又动了稿 → 不用盘稿盖掉新编辑（出提示让作者选）", async () => {
+  it("停掉后读盘期间作者又动了稿 → 不用盘稿盖掉新编辑（出提示让作者选）", async () => {
     const gate = deferred<ChapterPaper>();
-    scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftDelta?.({ chapter: 3, text: "半截。" });
-    });
+    scriptCancellableDraft((handlers) => {
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("半截。", 1));
+    }, () => { mockedFetchChapterPaper.mockReturnValueOnce(gate.promise); });
     const { result } = renderHook(() => useChat(buildParams({})));
 
     let pending!: Promise<void>;
     act(() => { pending = result.current.handleSendMessage("写第三章，主角夜探祠堂"); });
-    await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating"));
-    mockedFetchChapterPaper.mockReturnValueOnce(gate.promise);
+    await vi.waitFor(() => expect(useDraftStore.getState().streaming).toBe("半截。"));
+    mockedFetchChapterPaper.mockClear();
     act(() => { result.current.stopAgent(); });
     await vi.waitFor(() => expect(mockedFetchChapterPaper).toHaveBeenCalled());
     act(() => { useDraftStore.getState().edit("作者停止后亲手改的新版本。"); });
@@ -1222,56 +1317,26 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useDraftStore.getState().incoming).not.toBeNull();
   });
 
-  it("「停止」腰斩 commit_apply 且盘上已定稿 → 按「其实已入库」整体恢复", async () => {
-    const committedBody = "停止前其实已经真正入库定稿的正文。";
-    seedPaper(3, { draft: committedBody, title: "磁盘定稿标题" });
-    scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "commit_apply", toolCallId: "c1" });
-      writeDisk(3, { draft: committedBody, committed: committedBody, title: "磁盘定稿标题" });
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    let pending!: Promise<void>;
-    act(() => { pending = result.current.handleSendMessage("确认定稿"); });
-    await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(true));
-    act(() => { result.current.stopAgent(); });
-    await act(async () => { await pending; });
-
-    const state = useBookStore.getState();
-    expect(state.workspace.flowStatus).toBe("committed");
-    expect(isPaperCommitted()).toBe(true);
-    expect(state.workspace.currentChapter.hasCommittedChapter).toBe(true);
-    expect(messages().some((m) => m.content.includes("其实已经定稿"))).toBe(true);
-  });
-
-  /* ---- #13（长跑×3）：回合正常收尾后 flowStatus 不得残留 draft_generating ---- */
-
-  it("出稿写了另一章（跨章 tool-result 直接 return）→ 当前章立即退出「正在生成工作稿…」，不挂到回合结束", async () => {
+  it("别的章的只读结果（核账回执这类）：不说「写的是第 N 章」，也不动当前章", async () => {
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g1", ok: true, chapter: 4, summary: "第 4 章已出稿。" });
-      handlers.onTextDelta("第 4 章的工作稿已经写好了。");
+      handlers.onToolCall({ toolName: "run_check", toolCallId: "r1" });
+      handlers.onToolResult({ toolName: "run_check", toolCallId: "r1", ok: true, chapter: 7, summary: "交了。" });
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
-
     await act(async () => {
-      await result.current.handleSendMessage("写第 4 章");
+      await result.current.handleSendMessage("核一下第 7 章");
     });
-
-    // 稿纸上本就有第 3 章的稿子 → 诚实复位成 draft_ready，而不是谎报「正在生成」。
-    expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
-    expect(useNavigationStore.getState().toast ?? "").toContain("第 4 章");
+    expect(useNavigationStore.getState().toast ?? "").not.toContain("第 7 章");
   });
 
-  it("出稿阶段（拟章纲 / 写正文）推给稿纸；回合结束清掉", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+  it("写稿的步骤（拟章纲 / 写正文）推给稿纸；回合结束清掉", async () => {
+    const gate = deferred<void>();
     mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onDraftPhase?.({ chapter: 3, phase: "plan" });
-      await gate;
-      handlers.onDraftPhase?.({ chapter: 3, phase: "write" });
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.({ opId: DRAFT_OP, event: { type: "step", step: "plan", exec: "exec-0" } });
+      await gate.promise;
+      handlers.onOperationLive?.({ opId: DRAFT_OP, event: { type: "step", step: "write:1", exec: "exec-1" } });
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1280,18 +1345,16 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     act(() => { pending = result.current.handleSendMessage("写这一章"); });
     await vi.waitFor(() => expect(useUiStore.getState().draftPhase).toBe("plan"));
     expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating");
-    release();
+    gate.resolve();
     await act(async () => { await pending; });
     expect(useUiStore.getState().draftPhase).toBeNull();
   });
 
-  it("回合正常结束但出稿结果没复位（守卫拦下定稿等中途分支）→ 收尾兜底把 draft_generating 复位，不永久转圈", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+  it("回合正常结束、写稿操作还没报停下：收尾兜底把 draft_generating 复位，不永久转圈", async () => {
+    const gate = deferred<void>();
     mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
-      handlers.onTextDelta("这章的稿子已经准备好了。");
-      await gate;
+      handlers.onOperation?.(draftView());
+      await gate.promise;
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1299,7 +1362,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     let pending!: Promise<void>;
     act(() => { pending = result.current.handleSendMessage("写这一章"); });
     await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating"));
-    release();
+    gate.resolve();
     await act(async () => { await pending; });
 
     expect(useChatStore.getState().chatLoading).toBe(false);
@@ -1329,7 +1392,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
 
   it("被「停止」腰斩的回合不做诚实盖文——半截流式文本不等于「声称完成」", async () => {
     scriptAbortableStream((handlers) => {
-      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onToolCall({ toolName: "change_draft", toolCallId: "g1" });
       handlers.onTextDelta("第3章正文已经写好了，接下来");
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1347,9 +1410,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   });
 });
 
-// AI 撤销（undo_last_change / manage_snapshots op=undo）：服务端已回退盘上，稿纸按盘上那版直接换上（撤销是作者要的），
-// 原地更新、不整页刷新（重构 P5）。旧字写不回去：存稿带版本号，盘上变了旧版本存不进。
-describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）", () => {
+// 撤了 / 恢复了（写作版本 P2a 片 4C：history.change 操作做完、真改了盘）：和操作历史里恢复同一套原地重读——稿纸按盘上那版
+// 直接换上（撤销是作者要的）、概况重读、流程态按盘上那版算，不整页刷新（重构 P5）。旧字写不回去：存稿带版本号，盘上变了旧版本存不进。
+describe("useChat 撤销：稿纸原地换成盘上那版（重构 P5）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
@@ -1357,7 +1420,14 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
   });
 
-  it("undone=true：盘上回退后的那版直接换上稿纸，流程态按它算，旧回合的过时建议条剥掉", async () => {
+  const undoView = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: "op-0123456789abcdef0123", kind: "history.change", mode: "undo", chapter: 3, what: "撤销", state: "succeeded", stateText: "做完了",
+    allowed: [], summary: "撤好了：第 3 章工作稿回到了这次之前。", conclusion: "撤好了：第 3 章工作稿回到了这次之前。", eventSeq: 3,
+    origin: { kind: "chat", messageId: "user-x" }, changed: { what: "history", snapshotId: "a".repeat(40) }, ...overrides,
+  });
+  const flowApplied = (): unknown => mockedApplyOverview.mock.calls.at(-1)?.[1];
+
+  it("撤了：盘上回退后的那版直接换上稿纸，概况重读、流程态按它算，旧回合的过时建议条剥掉", async () => {
     const diskAfterUndo = "盘上回退后的更早版本。";
     useBookStore.getState().updateWorkspace({ flowStatus: "draft_ready" });
     useChatStore.getState().setMessages([{
@@ -1374,13 +1444,10 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
       }],
     }]);
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "undo_last_change", toolCallId: "u1" });
+      handlers.onToolCall({ toolName: "change_history", toolCallId: "u1" });
+      handlers.onToolResult({ toolName: "change_history", toolCallId: "u1", ok: true, summary: "交上了。" });
       writeDisk(3, { draft: diskAfterUndo, title: "回退后的标题" });
-      handlers.onToolResult({
-        toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。",
-        refreshScope: "full", overview: makeOverview("T"),
-      });
-      handlers.onTextDelta("已撤销上一步「出稿」。");
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1388,15 +1455,15 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
 
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, title: "回退后的标题", body: diskAfterUndo, savedBody: diskAfterUndo });
-    expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
-    expect(lastAssistant()?.content).toBe("已撤销上一步「出稿」。");
+    expect(mockedFetchStateOverview).toHaveBeenCalledTimes(1);
+    expect(flowApplied()).toEqual({ flowStatus: "draft_ready" });
     expect(messages().every((m) => !m.suggestedActions?.some((a) => a.id === "confirm-write"))).toBe(true);
   });
 
-  it("undone=true 且盘上已无草稿（撤到「还没写过」）→ 稿纸清空、流程态 idle", async () => {
+  it("撤到「还没写过」（盘上已无草稿）→ 稿纸清空、流程态 idle", async () => {
     scriptAgentStream((handlers) => {
       disk.set(3, emptyPaper(3));
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1404,7 +1471,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销"); });
 
     expect(useDraftStore.getState().body).toBe("");
-    expect(useBookStore.getState().workspace.flowStatus).toBe("idle");
+    expect(flowApplied()).toEqual({ flowStatus: "idle" });
   });
 
   it("撤销请求发出后作者又打了字 → 字留着，盘上那版挂成提示（第 4 轮复核 R7）", async () => {
@@ -1413,7 +1480,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     scriptAgentStream((handlers) => {
       editDraft("撤销请求发出后作者刚打的字");
       writeDisk(3, { draft: "撤销后盘上那版" });
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1431,7 +1498,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     mockedSaveWorkingDraft.mockRejectedValue(new Error("磁盘故障"));
     scriptAgentStream((handlers) => {
       writeDisk(3, { draft: "撤销后盘上那版" });
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1441,10 +1508,9 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     expect(useDraftStore.getState().body).toBe("还没存上、只在稿纸上的字");
   });
 
-  it("undone=false（没东西可撤）→ 稿纸不动", async () => {
+  it("没东西可撤（做完了但没改盘）→ 稿纸不动、不重读", async () => {
     scriptAgentStream((handlers) => {
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: false, summary: "没有可撤销的改动。" });
-      handlers.onTextDelta("当前没有可撤销的改动。");
+      handlers.onOperation?.(undoView({ summary: "没有能撤的改动了。", conclusion: "没有能撤的改动了。", changed: undefined }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1452,12 +1518,13 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销"); });
 
     expect(useDraftStore.getState().body).toBe("第三章原有的工作稿。");
+    expect(mockedFetchStateOverview).not.toHaveBeenCalled();
   });
 
   it("读盘失败 → 稿纸原样、回合照常收尾、不冒错误气泡", async () => {
     scriptAgentStream((handlers) => {
       mockedFetchChapterPaper.mockRejectedValue(new Error("网络抖动"));
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1541,8 +1608,9 @@ describe("useChat AI 改稿撞上作者没存的字", () => {
   });
 });
 
-// R7.2：请求带上「上一个有写盘回合的首个快照」——服务端 undo 工具优先按它整回合回退。
-describe("useChat 请求携带整回合撤销锚点 lastTurnUndoHint（R7.2）", () => {
+// 「重写这一章」「接着往下写」（写作版本 P2a）：服务端没受理写稿时出的按钮带着整份写稿动作（请求号那时就定了），点了原样交上去；
+// 存盘读回的按钮点的时候再核一遍，不对就说失效、不交。
+describe("「重写这一章」「接着往下写」按钮 → 原样交写稿动作", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
@@ -1551,100 +1619,33 @@ describe("useChat 请求携带整回合撤销锚点 lastTurnUndoHint（R7.2）",
     scriptAgentStream((handlers) => handlers.onDone());
   });
 
-  it("上一回合写了两个快照 → 请求带 { snapshotId: 首个, changes: 2 }", async () => {
-    useBookStore.setState({ workspace: mockWorkspaceData });
-    useChatStore.setState({
-      messages: [{
-        id: "prev-assistant",
-        role: "assistant",
-        content: "两处都改好了。",
-        turnSnapshots: [
-          { toolName: "revise_draft", snapshotId: `${"a".repeat(40)}` },
-          { toolName: "foundation_write", snapshotId: `${"b".repeat(40)}` },
-        ],
-      }],
-    });
+  it("重写：交的就是按钮上那份（请求号不变），对话留「重写第 3 章」，回写作台", async () => {
+    const requestCenterView = vi.fn();
+    useNavigationStore.setState({ requestCenterView });
+    const stored = newDraftAction("write", { chapter: 3, rewrite: true, direction: "林澈夜探旧泵站" });
     const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
-
-    const [input] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
-    expect(input.lastTurnUndoHint).toEqual({ snapshotId: "a".repeat(40), changes: 2 });
-  });
-
-  it("纯聊天会话没有写盘快照 → 不带该字段（服务端走默认逐步回退）", async () => {
-    useBookStore.setState({ workspace: mockWorkspaceData });
-    useChatStore.setState({ messages: [{ id: "prev", role: "assistant", content: "聊聊天。" }] });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
-
-    const [input] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
-    expect(input.lastTurnUndoHint).toBeUndefined();
-  });
-});
-
-// 「确认定稿」按钮（2026-10-07 拆补丁塔）：点击发结构化动作，服务端直接执行 commit_apply——
-// 不再发文本「确认定稿」让模型猜、过正则意图门。
-describe("「确认定稿」按钮 → 结构化动作", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    window.localStorage.clear();
-    resetStore();
-    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
-    scriptAgentStream((handlers) => {
-      handlers.onToolResult({ toolName: "commit_apply", toolCallId: "c1", ok: true, committed: true, summary: "第 3 章已定稿。" });
-      handlers.onTextDelta("第 3 章已定稿。");
-      handlers.onDone();
-    });
-  });
-
-  const commitApply = (commitTarget?: { chapter?: number; previewToken?: string }) => ({
-    id: "commit-apply",
-    label: "确认定稿",
-    description: "写入定稿章节",
-    permission: "formal_state_write" as const,
-    requiresConfirmation: false,
-    ...(commitTarget ? { commitTarget } : {}),
-  });
-
-  it("带目标章与令牌 → streamAgentChat 收到 action，对话留一条「确认定稿第 N 章」", async () => {
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    act(() => {
-      result.current.handleSuggestedAction(commitApply({ chapter: 2, previewToken: "tok" }));
-    });
+    act(() => result.current.handleSuggestedAction(draftChoiceAction({ label: "重写第 3 章", mode: "write", action: stored })));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
-
-    const request = mockedStreamAgentChat.mock.calls[0]![0];
-    expect(request.action).toEqual({ toolName: "commit_apply", chapter: 2, previewToken: "tok" });
-    expect(request.messages.at(-1)).toEqual({ role: "user", content: "确认定稿第 2 章" });
-    expect(messages().some((m) => m.role === "user" && m.content === "确认定稿第 2 章")).toBe(true);
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual(stored);
+    expect(messages().some((m) => m.role === "user" && m.content === "重写第 3 章")).toBe(true);
+    expect(requestCenterView).toHaveBeenCalledWith("desk");
   });
 
-  it("无目标（诚实更正上的「重新确认定稿」）→ 用当前章，不带令牌（服务端用最近一次预览票据）", async () => {
+  it("接着往下写：对话留「第 3 章接着往下写」", async () => {
+    const stored = newDraftAction("continue", { chapter: 3 });
     const { result } = renderHook(() => useChat(buildParams({})));
-
-    act(() => {
-      result.current.handleSuggestedAction(commitApply());
-    });
+    act(() => result.current.handleSuggestedAction(draftChoiceAction({ label: "接着往下写", mode: "continue", action: stored })));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
-
-    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "commit_apply", chapter: 3 });
+    expect(messages().some((m) => m.role === "user" && m.content === "第 3 章接着往下写")).toBe(true);
   });
 
-  it("已有操作在跑 → 不发动作、不追加消息", async () => {
-    useChatStore.setState({ chatLoading: true });
-    const before = messages();
+  it("存盘读回的动作坏了：说失效、不交", async () => {
+    const broken = { ...newDraftAction("write", { chapter: 3 }), params: "第三章" } as unknown as ReturnType<typeof newDraftAction>;
     const { result } = renderHook(() => useChat(buildParams({})));
-
-    act(() => {
-      result.current.handleSuggestedAction(commitApply({ chapter: 3 }));
-    });
+    act(() => result.current.handleSuggestedAction(draftChoiceAction({ label: "重写第 3 章", mode: "write", action: broken })));
     await Promise.resolve();
-
     expect(mockedStreamAgentChat).not.toHaveBeenCalled();
-    expect(messages()).toBe(before);
+    expect(useNavigationStore.getState().toast).toContain("失效");
   });
 });
 
@@ -1654,24 +1655,22 @@ describe("handleSendUserAction：「下一步」选项的结构化动作直达�
     window.localStorage.clear();
     resetStore();
     mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
-    scriptAgentStream((handlers) => {
-      handlers.onToolResult({ toolName: "commit_preview", toolCallId: "cp1", ok: true });
-      handlers.onDone();
-    });
+    scriptAgentStream((handlers) => handlers.onDone());
   });
 
   it("选项带的 action 直接进 streamAgentChat 请求体（body.action），对话里留一句作者看得懂的回显", async () => {
+    const commit = newCommitAction(5);
     const { result } = renderHook(() => useChat(buildParams({})));
 
     await act(async () => {
-      await result.current.handleSendUserAction({ toolName: "commit_preview", chapter: 5 });
+      await result.current.handleSendUserAction(commit);
     });
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
 
     const request = mockedStreamAgentChat.mock.calls[0]![0];
-    expect(request.action).toEqual({ toolName: "commit_preview", chapter: 5 });
-    expect(request.messages.at(-1)).toEqual({ role: "user", content: "预览第 5 章的定稿改动" });
-    expect(messages().some((m) => m.role === "user" && m.content === "预览第 5 章的定稿改动")).toBe(true);
+    expect(request.action).toEqual(commit);
+    expect(request.messages.at(-1)).toEqual({ role: "user", content: "定稿第 5 章" });
+    expect(messages().some((m) => m.role === "user" && m.content === "定稿第 5 章")).toBe(true);
   });
 
   it("出稿类动作把作者带回写作台；已有操作在跑 → 不发动作、不追加消息", async () => {
@@ -1680,17 +1679,17 @@ describe("handleSendUserAction：「下一步」选项的结构化动作直达�
     useNavigationStore.setState({ requestCenterView });
 
     await act(async () => {
-      await result.current.handleSendUserAction({ toolName: "generate_draft", chapter: 6 });
+      await result.current.handleSendUserAction(newDraftAction("write", { chapter: 6 }));
     });
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
-    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "generate_draft", chapter: 6 });
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toMatchObject({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } });
     expect(requestCenterView).toHaveBeenCalledWith("desk");
 
     mockedStreamAgentChat.mockClear();
     useChatStore.setState({ chatLoading: true });
     const before = messages();
     await act(async () => {
-      await result.current.handleSendUserAction({ toolName: "check_continuity", chapter: 5 });
+      await result.current.handleSendUserAction(newInspectAction("continuity", 5));
     });
     expect(mockedStreamAgentChat).not.toHaveBeenCalled();
     expect(messages()).toBe(before);
@@ -1707,18 +1706,20 @@ describe("handleChapterButton：写作区固定按钮直接发结构化动作（
     scriptAgentStream((handlers) => handlers.onDone());
   });
 
-  it("「内容审阅」带当前章号发 ai_review 动作；「撤销上一步」发 undo", async () => {
+  it("「内容审阅」带当前章号交一次检查（请求号、交的时间按钮出的时候给）；「撤销上一步」交一次撤销（不带号 = 上一次）", async () => {
     const { result } = renderHook(() => useChat(buildParams({})));
     const chapter = useBookStore.getState().workspace.currentChapter.chapterNumber;
 
-    act(() => result.current.handleChapterButton("ai_review"));
+    act(() => result.current.handleChapterButton("review"));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
-    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "ai_review", chapter });
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({
+      kind: "new", type: "inspect.run", mode: "review", params: { chapter }, requestKey: expect.any(String), issuedAt: expect.any(String),
+    });
 
     await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(false));
     act(() => result.current.handleChapterButton("undo"));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(2));
-    expect(mockedStreamAgentChat.mock.calls[1]![0].action).toEqual({ toolName: "undo" });
+    expect(mockedStreamAgentChat.mock.calls[1]![0].action).toMatchObject({ kind: "new", type: "history.change", mode: "undo", params: {} });
   });
 
   it("「写这一章」带方向框里的字（原样）作章纲方向", async () => {
@@ -1728,7 +1729,9 @@ describe("handleChapterButton：写作区固定按钮直接发结构化动作（
 
     act(() => result.current.handleChapterButton("write"));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
-    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "generate_draft", chapter, chapterGoal: "林澈夜探旧泵站" });
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({
+      kind: "new", type: "draft.change", mode: "write", params: { chapter, direction: "林澈夜探旧泵站" }, requestKey: expect.any(String), issuedAt: expect.any(String),
+    });
   });
 
   it("作者自己打出和按钮一样的字 → 交给 AI（不带 action），不再被认成按钮", async () => {

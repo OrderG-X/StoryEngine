@@ -57,24 +57,23 @@ describe("buildOutboundConversation", () => {
       { role: "assistant", content: "还没有。" },
     ]);
   });
-  it("定论卡点了「不改了」：出卡的那个工具带上 dropped，别的工具不带；没点的不带（换题材长篇实跑 2026-10-27）", () => {
-    const settle = { canon: "周伯跟了林国栋二十六年", canonExists: false, edits: [], facts: [], fields: [], searched: [], missed: [], failures: [], token: "0123456789abcdef" };
+  it("这一轮交的操作在流断了以后才做完、话里没结论：照卡上的现状给 AI；话里有结论的原样给（P2a 界面真点 2026-10-30）", () => {
+    const op = (what: string, state: string, stateText: string, summary: string) =>
+      ({ type: "operation", op: { opId: `op-${what}`, kind: "inspect.run", what, state, stateText, allowed: [], summary, eventSeq: 5 } });
     const msgs = [
-      { id: "m-0", role: "user", content: "以这个为准：周伯跟了二十六年" },
+      { id: "m-0", role: "user", content: "查一下第 8 章的 AI 味" },
       {
-        id: "m-1", role: "assistant", content: "查完了，点「确认」改齐。", cards: [{ type: "settle", settle, dropped: true }],
-        toolSteps: [
-          { id: "t1", label: "读设定", toolName: "read_foundation", status: "completed", startedAt: 1 },
-          { id: "t2", label: "查前文", toolName: "settle_fact", status: "completed", startedAt: 2 },
-        ],
+        id: "m-1", role: "assistant", content: "", cards: [op("查 AI 味·第 8 章", "succeeded", "做完了", "挑出 5 处机器腔。")],
+        toolSteps: [{ id: "t1", label: "检查", toolName: "run_check", status: "completed", startedAt: 1 }],
       },
-      {
-        id: "m-2", role: "assistant", content: "查完了。", cards: [{ type: "settle", settle }],
-        toolSteps: [{ id: "t3", label: "查前文", toolName: "settle_preview", status: "completed", startedAt: 3 }],
-      },
+      { id: "m-2", role: "user", content: "核一下第 7 章" },
+      { id: "m-3", role: "assistant", content: "", cards: [op("核账·第 7 章", "running", "在做", "")] },
+      { id: "m-4", role: "user", content: "再查一遍" },
+      { id: "m-5", role: "assistant", content: "挑出 2 处。", cards: [op("查 AI 味·第 8 章", "succeeded", "做完了", "挑出 2 处。")] },
     ];
     const out = buildOutboundConversation(msgs as any, 0, 96000);
-    expect(out[1]!.tools).toEqual([{ name: "read_foundation", ok: true }, { name: "settle_fact", ok: true, dropped: true }]);
-    expect(out[2]!.tools).toEqual([{ name: "settle_preview", ok: true }]);
+    expect(out[1]).toEqual({ role: "assistant", content: "查 AI 味·第 8 章：做完了。挑出 5 处机器腔。", tools: [{ name: "run_check", ok: true }] });
+    expect(out[3]!.content).toBe("核账·第 7 章：在做。");
+    expect(out[5]!.content).toBe("挑出 2 处。");
   });
 });

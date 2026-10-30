@@ -9,7 +9,6 @@ import { fetchChapterPaper, type ChapterPaper } from "../api/workingDraftClient.
 import { listChatSessions } from "../api/chatSessionsClient.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
-import { useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
@@ -95,7 +94,6 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
       { id: "msg-resp", role: "assistant", content: "好的。" },
     ]);
     useChatStore.setState({ chatLoading: false });
-    useUiStore.setState({ draftActionLoading: null });
     setAutosaveFlusher(async () => ({ ok: true }));
     // spy 必须在切章调用之前设置
     setWorkspaceSpy = vi.spyOn(useBookStore.getState(), "setWorkspace");
@@ -306,8 +304,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
   it("direct generation in flight blocks chapter navigation before reading the target", async () => {
     useChatStore.setState({ activeSessionId: "session-a" });
-    useUiStore.setState({ draftActionLoading: "generate-draft" });
-    beginWorkspaceOperation("generate-draft", {
+    beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
@@ -345,7 +342,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     act(() => { transition = result.current.openChapterWorkspace(ch2); });
     await vi.waitFor(() => expect(fetchChapterPaper).toHaveBeenCalled());
 
-    const intruder = beginWorkspaceOperation("generate-draft", {
+    const intruder = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: useChatStore.getState().activeSessionId,
@@ -361,8 +358,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
   it("direct generation in flight blocks switching to another project", async () => {
     useChatStore.setState({ activeSessionId: "session-a" });
-    useUiStore.setState({ draftActionLoading: "generate-draft" });
-    beginWorkspaceOperation("generate-draft", {
+    beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
@@ -403,7 +399,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     act(() => { transition = result.current.openProject("/tmp/new-book"); });
     await vi.waitFor(() => expect(fetchStateOverview).toHaveBeenCalled());
 
-    const intruder = beginWorkspaceOperation("generate-draft", {
+    const intruder = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: useChatStore.getState().activeSessionId,
@@ -435,7 +431,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     act(() => { creation = result.current.handleCreateBook({ title: "慢创建" } as never); });
     await vi.waitFor(() => expect(createStoryProjectFromDraft).toHaveBeenCalledTimes(1));
 
-    const writer = beginWorkspaceOperation("generate-draft", {
+    const writer = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: useChatStore.getState().activeSessionId,
@@ -467,7 +463,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     let creation!: Promise<void>;
     act(() => { creation = result.current.handleCreateBook({ title: "失败创建" } as never); });
     await vi.waitFor(() => expect(createStoryProjectFromDraft).toHaveBeenCalledTimes(1));
-    const during = beginWorkspaceOperation("generate-draft", {
+    const during = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: useChatStore.getState().activeSessionId,
@@ -480,7 +476,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     expect(isWorkspaceBusy()).toBe(false);
     expect(useNavigationStore.getState().toast).toContain("创建失败");
-    const after = beginWorkspaceOperation("generate-draft", {
+    const after = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/test-book",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: useChatStore.getState().activeSessionId,

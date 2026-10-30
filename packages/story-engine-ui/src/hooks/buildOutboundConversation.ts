@@ -1,10 +1,6 @@
 import { estimateTokens } from "../lib/estimate-tokens.js";
 import type { ChapterMessage } from "../type-defs/workspace.js";
 import type { ChatHistoryMessage } from "../server/lib/project-io.js";
-import { cardOf } from "../utils/messageCards.js";
-
-/** 出定论卡的工具（对话里 settle_fact、核账卡按钮 settle_preview）：卡上点了「不改了」就带上 dropped。 */
-const SETTLE_TOOLS: ReadonlySet<string> = new Set(["settle_fact", "settle_preview"]);
 
 /**
  * A2 历史诚实化（治谎报回灌·配合 A3 全书磁盘真相双保险）：发给 AI 的历史带上那条回合调过哪些工具、成没成，
@@ -18,12 +14,19 @@ export function outboundTools(m: ChapterMessage): ChatHistoryMessage["tools"] {
   const steps = (m.toolSteps ?? []).filter((s) => s.toolName);
   const names = [...new Set(steps.map((s) => s.toolName!))];
   if (names.length === 0) return undefined;
-  const dropped = cardOf(m, "settle")?.dropped === true;
-  return names.map((name) => ({
-    name,
-    ok: !steps.some((s) => s.toolName === name && s.status === "failed"),
-    ...(dropped && SETTLE_TOOLS.has(name) ? { dropped: true as const } : {}),
-  }));
+  return names.map((name) => ({ name, ok: !steps.some((s) => s.toolName === name && s.status === "failed") }));
+}
+
+/**
+ * 发给 AI 的那条回复的文字。这一轮交的操作在流断了以后才做完（刷新、断网、服务端重启），话里一句结论都没有，
+ * 结论只在卡上：照卡上的现状给（做的什么、做到哪了、结论），作者看到的和 AI 看到的是同一样。
+ * 不给的话历史里是「交出去了」+ 一条空回复，模型当上一句没答，下一轮连着上一句一起做（写作版本 P2a 界面真点 2026-10-30：
+ * 作者说「第 9 章接着写」，AI 先去重查了上一轮已经查完的第 8 章 AI 味）。
+ */
+function outboundContent(m: ChapterMessage): string {
+  if (m.role !== "assistant" || m.content.trim()) return m.content;
+  const ops = (m.cards ?? []).flatMap((card) => (card.type === "operation" ? [card.op] : []));
+  return ops.map((op) => `${op.what}：${op.stateText}。${op.summary}`).join("\n");
 }
 
 export function buildOutboundConversation(
@@ -36,7 +39,8 @@ export function buildOutboundConversation(
       (m.role === "user" || m.role === "assistant") && m.kind !== "scaffolding")
     .map((m): ChatHistoryMessage => {
       const tools = outboundTools(m);
-      return tools ? { role: m.role, content: m.content, tools } : { role: m.role, content: m.content };
+      const content = outboundContent(m);
+      return tools ? { role: m.role, content, tools } : { role: m.role, content };
     });
   let start = 0;
   while (start < active.length - 1

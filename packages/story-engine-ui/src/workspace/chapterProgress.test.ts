@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { ChapterMessage, ContinuityCheckData } from "../type-defs/workspace.js";
+import type { ChapterMessage, ContinuityCheckData, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
 import { useChatStore } from "../stores/chatStore.js";
 import {
   chapterProgress,
@@ -45,7 +45,7 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
     expect(p.write.done).toBe(true);
     expect(p.write.text).toMatch(/比目标少/);
     expect(p.check).toMatchObject({ state: "none", done: false, text: "还没核" });
-    expect(p.primary).toEqual({ kind: "check_continuity", label: "核账" });
+    expect(p.primary).toEqual({ kind: "continuity", label: "核账" });
     expect(p.statusLine).toBe("还没核账");
   });
 
@@ -71,14 +71,14 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
       targetWords: null,
     });
     expect(p.check.state).toBe("clean");
-    expect(p.primary).toEqual({ kind: "commit_preview", label: "定稿" });
+    expect(p.primary).toEqual({ kind: "commit", label: "定稿" });
     expect(p.statusLine).toBe("核过了：没有确定对不上的，1 处可能");
   });
 
   it("核过后稿子变了（版本变 / 还有没存的字）：再核一遍", () => {
     const moved = chapterProgress({ paper: paper({ baseVersion: "v2" }), result: result(), targetWords: null });
     expect(moved.check).toMatchObject({ state: "stale", done: false, text: "核过后改过稿" });
-    expect(moved.primary).toEqual({ kind: "check_continuity", label: "再核一遍" });
+    expect(moved.primary).toEqual({ kind: "continuity", label: "再核一遍" });
     const dirty = chapterProgress({ paper: paper({ body: `${BODY}又写一句。` }), result: result(), targetWords: null });
     expect(dirty.check.state).toBe("stale");
   });
@@ -128,16 +128,22 @@ describe("核账结果取当前会话里这一章最新那张卡", () => {
 describe("核账卡之后定论改齐了：改掉的条目不再算", () => {
   const cross = { quote: "老码头在东边", earlierQuote: "位置：北岸", earlierChapter: 0, reason: "方位", fixChapter: 5, againstSetting: { label: "位置" } };
   const checkMsg: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [wrongMarket, cross] } }] };
-  const settle = (id: string, extra: object): ChapterMessage => ({
+  /** 定论这次操作的卡（片 3C 起改齐的结果在操作卡上）：做完了、改了（applied）才算。 */
+  const canonOp = (id: string, card: SettleCardData, result: { readonly applied?: boolean; readonly excluded?: readonly string[]; readonly state?: OperationCardData["state"] } = {}): ChapterMessage => ({
     id, role: "assistant", content: "", cards: [{
-      type: "settle",
-      settle: {
-        token: "0123456789abcdef", canon: "老码头在北岸", canonExists: false, fields: [], facts: [], searched: [5], missed: [], failures: [],
-        edits: [{ key: "e1", chapter: 5, draft: false, from: "老码头在东边，走过去二十分钟。", to: "老码头在北岸，走过去二十分钟。" }],
+      type: "operation",
+      op: {
+        opId: "op-0123456789abcdef0123", kind: "canon.propose", what: "定论", state: result.state ?? "succeeded", stateText: "做完了", allowed: [], summary: "", eventSeq: 3,
+        canon: { card, excluded: result.excluded ?? [], applied: result.applied ?? true },
       },
-      ...extra,
     }],
-  } as ChapterMessage);
+  });
+  const harbor: SettleCardData = {
+    canon: "老码头在北岸", canonExists: false, fields: [], facts: [], searched: [5], missed: [], failures: [],
+    edits: [{ key: "e1", chapter: 5, draft: false, from: "老码头在东边，走过去二十分钟。", to: "老码头在北岸，走过去二十分钟。" }],
+  };
+  const settle = (id: string, extra: { readonly applied?: string; readonly excluded?: readonly string[] }): ChapterMessage =>
+    extra.applied ? canonOp(id, harbor, { ...(extra.excluded ? { excluded: extra.excluded } : {}) }) : canonOp(id, harbor, { state: "waiting_author", applied: false });
 
   it("核账之后改齐的定论：那章被改的句子里有条目原句 = 改掉；没改齐 / 划掉 / 在核账之前的都不算", () => {
     const key = continuityItemKey(cross);
@@ -159,48 +165,34 @@ describe("核账卡之后定论改齐了：改掉的条目不再算", () => {
   it("「以本章为准」点的那条（resolves）：另一边真改了才算——对设定的看设定栏改没改，对前文的看那章被改的句子", () => {
     const setting = { quote: "港务局按失踪结的案", earlierQuote: "官方以海难结案", earlierChapter: 0, reason: "结案", fixChapter: 1, againstSetting: { label: "故事设定" } };
     const msg: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [setting, wrongMarket] } }] };
-    const fieldSettle = (extra: object): ChapterMessage => ({
-      id: "s", role: "assistant", content: "", cards: [{
-        type: "settle",
-        settle: {
-          token: "0123456789abcdef", canon: "按失踪结案", canonExists: false, edits: [], facts: [], searched: [], missed: [], failures: [],
-          fields: [{ key: "f1", label: "历史", from: "官方以海难结案", to: "港务局按失踪结案" }], resolves: continuityItemKey(setting),
-        },
-        applied: "改齐了。",
-        ...extra,
-      }],
-    } as ChapterMessage);
+    const fieldSettle = (extra: { readonly excluded?: readonly string[] }): ChapterMessage => canonOp("s", {
+      canon: "按失踪结案", canonExists: false, edits: [], facts: [], searched: [], missed: [], failures: [],
+      fields: [{ key: "f1", label: "历史", from: "官方以海难结案", to: "港务局按失踪结案" }], resolves: continuityItemKey(setting),
+    }, extra);
     expect(latestContinuityResult([msg, fieldSettle({})], 11)?.settled).toEqual([continuityItemKey(setting)]);
     expect(latestContinuityResult([msg, fieldSettle({ excluded: ["f1"] })], 11)?.settled).toBeUndefined();
-    const chapterSettle: ChapterMessage = {
-      id: "s2", role: "assistant", content: "", cards: [{
-        type: "settle",
-        settle: {
-          token: "0123456789abcdef", canon: "东门菜场", canonExists: false, fields: [], facts: [], searched: [10], missed: [], failures: [],
-          edits: [{ key: "e1", chapter: 10, draft: false, from: "约在南门菜场后街。", to: "约在东门菜场后街。" }], resolves: continuityItemKey(wrongMarket),
-        },
-        applied: "改齐了。",
-      }],
-    } as ChapterMessage;
+    const chapterSettle = canonOp("s2", {
+      canon: "东门菜场", canonExists: false, fields: [], facts: [], searched: [10], missed: [], failures: [],
+      edits: [{ key: "e1", chapter: 10, draft: false, from: "约在南门菜场后街。", to: "约在东门菜场后街。" }], resolves: continuityItemKey(wrongMarket),
+    });
     expect(latestContinuityResult([msg, chapterSettle], 11)?.settled).toEqual([continuityItemKey(wrongMarket)]);
   });
 });
 
-describe("chatStore：不是问题记在卡上、核完记版本", () => {
+describe("chatStore：不是问题记在卡上", () => {
   afterEach(() => useChatStore.setState({ messages: [] }));
 
-  it("记下 / 撤回，空了字段就去掉；版本只盖这张卡", () => {
+  it("记下 / 撤回，空了字段就去掉；只动这张卡，服务端带的版本留着", () => {
     useChatStore.setState({ messages: [
-      { id: "m1", role: "assistant", content: "", cards: [{ type: "continuity", check }] },
+      { id: "m1", role: "assistant", content: "", cards: [{ type: "continuity", check, checkedVersion: "v7" }] },
       { id: "m2", role: "assistant", content: "", cards: [{ type: "continuity", check }] },
     ] });
     const store = useChatStore.getState();
     store.setContinuityDismissed("m1", "k1", true);
     store.setContinuityDismissed("m1", "k1", true);
-    store.stampCardVersion("m1", "continuity", "v7");
     const card = () => useChatStore.getState().messages[0]!.cards![0]!;
     expect(card()).toMatchObject({ dismissed: ["k1"], checkedVersion: "v7" });
-    expect(useChatStore.getState().messages[1]!.cards![0]).not.toHaveProperty("checkedVersion");
+    expect(useChatStore.getState().messages[1]!.cards![0]).not.toHaveProperty("dismissed");
     useChatStore.getState().setContinuityDismissed("m1", "k1", false);
     expect(card()).not.toHaveProperty("dismissed");
   });

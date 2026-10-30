@@ -15,6 +15,10 @@ const TAIL_SKIP_TOOLS = new Set([
   "read_foundation",
   "read_draft",
   "suggest_next_steps",
+  "run_check",
+  "prepare_commit",
+  "read_operation",
+  // P2a 前的检查、定稿工具：只在存下的老会话里出现。
   "commit_preview",
   "commit_apply",
   "quality_check",
@@ -22,6 +26,7 @@ const TAIL_SKIP_TOOLS = new Set([
   "check_ai_flavor",
   "check_continuity",
   "brainstorm_chapter",
+  "plan_chapter",
   "web_search",
 ]);
 

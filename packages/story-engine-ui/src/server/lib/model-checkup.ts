@@ -4,6 +4,7 @@
  *
  * 体检不是写作调用：每个模型最多等 CHECKUP_IDLE_MS 没动静就判不通（写作路径的「不设总时长」铁律不适用于这里）。
  */
+import { ModelCallError } from "./ai-errors.js";
 import { resolveConfiguredChatModel, resolveFallbackChatModel, streamChatModelToText, type ModelTaskProfileKey, type ResolvedChatModel } from "./llm-client.js";
 
 export const CHECKUP_TASKS: readonly ModelTaskProfileKey[] = ["triage", "fastDraft", "repair", "chapterSteering", "draftReview", "qualityCheck"];
@@ -67,7 +68,7 @@ export async function resolveModelsInUse(): Promise<{ readonly targets: Readonly
 async function pingModel(configured: ResolvedChatModel): Promise<{ readonly ok: boolean; readonly ms: number; readonly error?: string }> {
   const started = Date.now();
   try {
-    const { content, thinking } = await streamChatModelToText({
+    await streamChatModelToText({
       // 关思考：体检只看通不通，不让模型想半天。不带备用：主模型不通就是不通，不能让备用顶上冒充。
       configured: { ...configured, thinking: false, fallback: undefined },
       messages: [{ role: "user", content: "只回一个字：好" }],
@@ -75,11 +76,13 @@ async function pingModel(configured: ResolvedChatModel): Promise<{ readonly ok: 
       maxThinkingMs: CHECKUP_IDLE_MS,
       maxContentChars: CHECKUP_MAX_CHARS,
     });
-    const ms = Date.now() - started;
-    if (!content.trim() && !thinking.trim()) return { ok: false, ms, error: "连上了，但模型什么也没回。" };
-    return { ok: true, ms };
+    return { ok: true, ms: Date.now() - started };
   } catch (error) {
-    return { ok: false, ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
+    const ms = Date.now() - started;
+    // 只回了思考、正文没出：连得上、模型在答，体检算通（关不了思考的模型常这样）。
+    if (error instanceof ModelCallError && error.unusable === "thinking_only") return { ok: true, ms };
+    if (error instanceof ModelCallError && error.unusable === "empty") return { ok: false, ms, error: "连上了，但模型什么也没回。" };
+    return { ok: false, ms, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

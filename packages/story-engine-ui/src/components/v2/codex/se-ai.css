@@ -421,6 +421,31 @@
   .msg.se-op-row{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;text-align:left;font-size:13px;color:var(--faint);}
   .msg.se-op-row.is-running{color:var(--muted);}
   .se-op-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+  /* 操作卡（P2a 核账 / 检查交给执行器）：一行说在做什么、停着的带「接着做 / 不要了」 */
+  .se-op-card{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 0;font-size:13px;line-height:1.7;color:var(--muted);}
+  .se-op-card.is-ended{color:var(--faint);}
+  .se-op-card .se-op-text{flex:1 1 180px;min-width:0;}
+  .se-op-card .se-op-acts{display:flex;gap:6px;flex:none;}
+  /* 改写停着等作者：改前划掉、改后照摆，「换上」是唯一实心按钮。 */
+  .se-op-card.se-op-revise{flex-direction:column;align-items:stretch;gap:6px;}
+  .se-op-revise .se-op-brief{margin:0;color:var(--muted);}
+  .se-op-revise .se-op-changes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+  .se-op-revise .se-op-changes li{padding:1px 0 1px 10px;border-left:2px solid var(--accent-line);}
+  .se-op-revise .se-op-from{margin:0;font-size:12px;line-height:1.7;color:var(--faint);text-decoration:line-through;text-decoration-color:var(--line-strong);}
+  .se-op-revise .se-op-to{margin:2px 0 0;font-size:13px;line-height:1.8;color:var(--text);}
+  .se-op-revise .se-op-failed{margin:0;font-size:12px;color:var(--faint);}
+  .se-op-revise .se-op-acts{justify-content:flex-start;}
+  .se-op-revise .chip.is-primary{border-color:transparent;color:var(--accent-ink);background:var(--sheen),var(--accent);}
+  .se-op-revise .chip.is-primary:hover:not(:disabled){filter:brightness(1.05);background:var(--sheen),var(--accent);}
+  .se-op-card.se-op-settings{flex-direction:column;align-items:stretch;gap:6px;}
+  .se-op-settings .se-op-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;}
+  .se-op-settings .se-op-lines li{padding:1px 0 1px 10px;border-left:2px solid var(--accent-line);font-size:13px;line-height:1.7;color:var(--text);}
+  .se-op-settings .se-op-failed{margin:0;font-size:12px;color:var(--faint);}
+  .se-op-settings .se-op-acts{justify-content:flex-start;}
+  .se-op-settings .chip.is-primary{border-color:transparent;color:var(--accent-ink);background:var(--sheen),var(--accent);}
+  .se-op-settings .chip.is-primary:hover:not(:disabled){filter:brightness(1.05);background:var(--sheen),var(--accent);}
+  /* 检查结果卡上方：查完之后稿子改过了 */
+  .se-card-stale{margin:6px 0 0;font-size:12px;line-height:1.6;color:var(--faint);}
 
   /* 历史会话 / 记忆浮层：标题淡字，当前会话只用底色区分，不再金字 */
   .cssp-head{color:var(--faint);letter-spacing:0;text-transform:none;font-weight:500;}

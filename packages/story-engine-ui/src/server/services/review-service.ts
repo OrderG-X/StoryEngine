@@ -39,6 +39,7 @@ import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 import { checkDraftBeforeCommit, type CommitQualityReport } from "../writing/commit-quality-check.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText, type ResolvedChatModel } from "../lib/llm-client.js";
+import { rethrowIfStopped } from "../lib/operations/context.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { resolveDraftContentForQualityCheck } from "./quality-service.js";
 
@@ -174,7 +175,7 @@ function normalizeOptionalReviewText(value: string | undefined): string | undefi
   return trimmed ? trimmed : undefined;
 }
 
-/** 调模型并解析；任何失败（请求/空内容/解析）都走 fallback，绝不抛、不谎称审稿通过。 */
+/** 调模型并解析；任何失败（请求/空内容/解析）都走 fallback，不谎称审稿通过。操作被停掉 / 暂停照原样抛。 */
 async function runReviewModel(
   prompt: string,
   callModel: (prompt: string) => Promise<string>,
@@ -183,6 +184,7 @@ async function runReviewModel(
     const content = await callModel(prompt);
     return parseDraftAIReviewReport(content);
   } catch (error) {
+    rethrowIfStopped(error);
     return fallbackDraftAIReviewReport(error instanceof Error ? error.message : String(error));
   }
 }

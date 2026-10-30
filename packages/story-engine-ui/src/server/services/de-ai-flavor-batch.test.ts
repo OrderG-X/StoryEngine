@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyDeAiBatch,
+  deAiReplyLimit,
   parseDeAiBatchRewrites,
   buildDeAiRewriteMessages,
   runDeAiFlavorBatch,
@@ -82,6 +83,18 @@ describe("parseDeAiBatchRewrites · 解析模型批量改写", () => {
 
   it("模型输出不可解析 → 空数组（不抛）", () => {
     expect(parseDeAiBatchRewrites("抱歉我无法完成", draft)).toEqual([]);
+  });
+
+  it("回复上限装得下协议内最长的回复：8 条 1000 字原句、各 3000 字改句、键和值全转义、4096 空白（Astra 第 6 轮第 4 条）", () => {
+    const chars = (base: number, length: number): string => Array.from({ length }, (_, k) => String.fromCharCode(base + k)).join("");
+    const escape = (text: string): string => `"${[...text].map((ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("")}"`;
+    const originals = Array.from({ length: 8 }, (_, i) => chars(0x4e00 + i * 1000, 1000));
+    const rewrites = Array.from({ length: 8 }, (_, i) => chars(0x6000 + i * 3000, 3000));
+    const items = originals.map((text, i) => `{${escape("text")}:${escape(text)},${escape("afterText")}:${escape(rewrites[i]!)}}`);
+    const reply = `{${" ".repeat(4096)}${escape("rewrites")}:[${items.join(",")}]}`;
+    expect(reply.length).toBe(196886);
+    expect(reply.length).toBeLessThanOrEqual(deAiReplyLimit(originals.map((text) => v(text))));
+    expect(parseDeAiBatchRewrites(reply, originals.join("\n"))).toHaveLength(8);
   });
 });
 

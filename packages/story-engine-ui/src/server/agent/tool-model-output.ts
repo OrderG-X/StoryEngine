@@ -4,11 +4,10 @@
  *
  * 界面照旧拿完整结果（SSE tool-result 原样转发、写作区刷新靠它）；模型只看去掉总览与正文的精简版。
  * 读类工具（read_*）的本职就是把资料给模型看，原样保留。
- * 定稿预览：整份引擎计划（几千字的 JSON）不给模型，给它账本清单的人话标签就够转述（界面本来就不用 plan）。
  */
 
 /** 读类工具：结果就是给模型读的，不精简。 */
-const READ_TOOLS = new Set(["read_state_overview", "read_chapters_overview", "read_timeline", "read_foundation", "read_draft"]);
+const READ_TOOLS = new Set(["read_state_overview", "read_chapters_overview", "read_timeline", "read_foundation", "read_draft", "read_operation"]);
 
 /** 只给界面用、模型不需要的字段。 */
 const UI_ONLY_FIELDS = new Set(["overview", "refreshScope"]);
@@ -35,22 +34,8 @@ export function slimToolOutputForModel(toolName: string, output: unknown): unkno
       }
       continue;
     }
-    if (toolName === "commit_preview" && key === "plan") continue;
-    // 落选的几版全文只给界面（「另外几版」卡）；模型知道有几版、谁来换就够。
-    if (toolName === "generate_draft" && key === "otherVersions") {
-      if (Array.isArray(value) && value.length > 0) {
-        slim.otherVersionsNote = `另外 ${value.length} 版放在对话的「另外几版」卡上，作者点「用这版」就换进工作稿；你换不了，别说「想换就说」。`;
-      }
-      continue;
-    }
-    // 定论卡（原句 → 新句的清单）只给界面；模型转述 summary 就够。
-    if (toolName === "settle_fact" && key === "settle") continue;
-    // 「认下」按钮带的那几步只给界面；模型照 summary 提一句就够。
-    if (toolName === "foundation_write" && key === "foundationAccept") continue;
-    if (key === "ledgerChecklist" && Array.isArray(value)) {
-      slim.ledgerChecklist = value.map((item) => (item && typeof item === "object" ? (item as { label?: unknown }).label : item));
-      continue;
-    }
+    // 「接着往下写」「重写这一章」按钮带的动作只给界面；模型照 summary 告诉作者点按钮就够。
+    if (toolName === "change_draft" && key === "rewriteChoices") continue;
     slim[key] = value;
   }
   return slim;

@@ -1,5 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { ModelCallError } from "../../lib/ai-errors.js";
+import { StopSignal } from "../../lib/operations/context.js";
 import { buildContinuationMessages, continueDraftToLength, splitForContinuation } from "./continue-draft.js";
 
 const TARGET = { requested: 300, lowerBound: 240, upperBound: 345, source: "writing_rules" as const };
@@ -67,5 +69,23 @@ describe("continueDraftToLength", () => {
     expect(result.draftBody).toBe(draft);
     expect(result.rounds).toBe(0);
     expect(result.failures).toEqual([expect.stringContaining("socket hang up"), expect.stringContaining("不可用")]);
+  });
+
+  it("被拒（422）/ 结果不明：下一轮是同一个请求，不再发（写作版本 P2a 4.2，Astra 第 6 轮第 3 条）", async () => {
+    const draft = `${han(100)}。\n\n${han(50, "末")}。`;
+    for (const error of [new ModelCallError("模型请求失败：422", "rejected", 422), new ModelCallError("断流", "unknown")]) {
+      const callModel = vi.fn().mockRejectedValue(error);
+      const result = await continueDraftToLength({ chapter: 1, draftBody: draft, lengthTarget: TARGET, callModel });
+      expect(callModel).toHaveBeenCalledTimes(1);
+      expect(result.rounds).toBe(0);
+      expect(result.failures).toHaveLength(1);
+    }
+  });
+
+  it("操作被停（取消 / 暂停）：原样抛，不当成「这轮没续成」", async () => {
+    const draft = `${han(100)}。\n\n${han(50, "末")}。`;
+    const callModel = vi.fn().mockRejectedValue(new StopSignal({ type: "cancel" }));
+    await expect(continueDraftToLength({ chapter: 1, draftBody: draft, lengthTarget: TARGET, callModel })).rejects.toBeInstanceOf(StopSignal);
+    expect(callModel).toHaveBeenCalledTimes(1);
   });
 });

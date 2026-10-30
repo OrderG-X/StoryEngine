@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,7 +7,11 @@ import { Readable } from "node:stream";
 import { afterAll, describe, expect, it } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerSnapshotsRoutes } from "./snapshots.js";
+import { draftSave, readDraft, runCommand } from "@actalk/story-core";
+import { createStoryProject } from "../book/project-store.js";
 import { createSnapshot, listSnapshots } from "../lib/snapshot.js";
+import { __resetRecipesForTests, registerRecipe } from "../services/operations/executor.js";
+import { historyChangeRecipe } from "../services/operations/recipes/history-change.js";
 import { testRunRoot } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 
@@ -84,19 +89,32 @@ describe("snapshots routes", () => {
     expect(snapshots[0]?.id).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it("POST /api/snapshots/restore restores and reports the new entry", async () => {
-    const dir = await makeProject();
+  it("POST /api/snapshots/restore：交一次整本恢复操作、等它做完，回结论；缺请求号的 400、不恢复", async () => {
+    registerRecipe(historyChangeRecipe);
+    await mkdir(TEST_ROOT, { recursive: true });
+    const { projectDir: dir } = await createStoryProject({ rootDir: await mkdtemp(join(TEST_ROOT, "book-")), title: "恢复", genre: "悬疑", protagonistName: "林远" });
     const snap = await createSnapshot(dir, "好状态");
-    await writeFile(join(dir, "story", "extra.json"), "{}", "utf-8");
-    await createSnapshot(dir, "坏状态");
+    const saved = await runCommand(dir, draftSave, { chapter: 1, title: "", body: "后来写的。", baseVersion: null }, { caller: "author" });
+    expect(saved.ok).toBe(true);
+
+    const missing = await callSnapshotsRoute("POST", "/api/snapshots/restore", { projectPath: dir, id: snap.id });
+    expect(missing.statusCode).toBe(400);
+    expect(await readDraft(dir, 1)).toBeDefined();
+
     const { statusCode, payload } = await callSnapshotsRoute("POST", "/api/snapshots/restore", {
       projectPath: dir,
       id: snap.id,
+      requestKey: "restore-1",
+      issuedAt: new Date().toISOString(),
     });
     expect(statusCode).toBe(200);
     expect(payload.ok).toBe(true);
-    const restored = payload.restored as { id: string; label: string };
-    expect(restored.label).toContain("恢复到");
+    const operation = payload.operation as { conclusion: string; state: string; result?: { body?: { paths?: string[] } } };
+    expect(operation.state).toBe("succeeded");
+    expect(operation.conclusion).toContain("已恢复到「好状态」之前");
+    expect(operation.result?.body?.paths).toEqual(["drafts/fast/chapter-0001.md"]);
+    expect(await readDraft(dir, 1)).toBeUndefined();
+    __resetRecipesForTests();
   });
 
   it("rejects unsafe project paths", async () => {

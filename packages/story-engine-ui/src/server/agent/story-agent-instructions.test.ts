@@ -17,36 +17,36 @@ vi.mock("./model.js", () => ({
 
 import { buildInstructions, getStoryAgent, invalidateStoryAgent } from "./story-agent.js";
 
-describe("story agent 工具表（重构 P9：补资料并进 foundation_write；P12 加 settle_fact，19 个）", () => {
-  it("19 个工具；没有 enrich_foundation 和老的补全/文风样本工具；指令里也不再提它们", async () => {
+describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内容审阅 / 查 AI 味合成 run_check，写稿 change_draft 收编 generate_draft，定稿 prepare_commit 收编 commit_preview，加 read_operation，17 个）", () => {
+  it("17 个工具；旧的四个检查工具、generate_draft 和老的补全/文风样本工具都没了；指令里也不再提它们", async () => {
     invalidateStoryAgent();
     const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
     invalidateStoryAgent();
     expect(tools).toEqual([
-      "ai_review",
-      "brainstorm_chapter",
-      "check_ai_flavor",
-      "check_continuity",
-      "commit_preview",
-      "foundation_write",
-      "generate_draft",
-      "manage_ledger",
-      "manage_snapshots",
-      "quality_check",
+      "change_draft",
+      "change_history",
+      "change_ledger",
+      "change_settings",
+      "plan_chapter",
+      "prepare_commit",
+      "propose_canon",
       "read_chapters_overview",
       "read_draft",
       "read_foundation",
+      "read_operation",
       "read_state_overview",
       "read_timeline",
       "revise_draft",
-      "settle_fact",
+      "run_check",
       "suggest_next_steps",
       "web_search",
     ]);
     const instructions = buildInstructions();
-    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars"]) {
+    for (const gone of ["brainstorm_chapter", "enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars", "check_continuity", "quality_check", "ai_review", "check_ai_flavor", "generate_draft", "foundation_write", "settle_fact"]) {
       expect(instructions).not.toContain(gone);
     }
+    expect(instructions).toContain("run_check");
+    expect(instructions).toContain("read_operation");
   });
 });
 
@@ -71,14 +71,14 @@ describe("story agent instructions（确认口径唯一）", () => {
   it("不再注入底层能力清单；工具怎么选写在对照里", () => {
     expect(instructions).not.toContain("foundationAgent");
     expect(instructions).toContain("read_state_overview");
-    expect(instructions).toContain("foundation_write");
+    expect(instructions).toContain("change_settings");
     expect(instructions.length).toBeLessThan(10_000);
   });
 
-  it("快照裁剪两步哲学：manage_snapshots op=prune 在工具清单里，默认预览、用户明确「确认裁剪」才真裁", () => {
-    expect(instructions).toContain("manage_snapshots op=prune");
-    expect(instructions).toContain("确认裁剪");
-    expect(instructions).toMatch(/manage_snapshots op=prune（先预览、用户确认才真裁）/u);
+  it("撤销 / 裁剪是交给服务端的事：change_history op=undo / op=prune，作者点「确认裁剪」才裁；整本恢复只在「历史」里点", () => {
+    expect(instructions).toContain("change_history op=undo");
+    expect(instructions).toContain("change_history op=prune（作者点「确认裁剪」才裁）");
+    expect(instructions).toContain("顶栏「历史」里挑存档恢复");
     // 如实声明撤销边界：undo 撤不到裁剪（不动工作树），别拿 undo 撤别的顶替（复审实锤的误撤风险）
     expect(instructions).toContain("不在撤销链");
   });
@@ -90,15 +90,15 @@ describe("story agent instructions（确认口径唯一）", () => {
 
   it("执行类请求必须实际调用对应工具，不能只在对话里口头答应", () => {
     expect(instructions).toContain("执行类请求必须工具先行");
-    expect(instructions).toContain("写正文=generate_draft");
+    expect(instructions).toContain("写正文 / 接着写=change_draft");
     expect(instructions).toContain("改稿=revise_draft");
-    expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write");
-    expect(instructions).toContain("定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮");
+    expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=change_settings");
+    expect(instructions).toContain("定稿（入库）=prepare_commit（出定稿清单，用户点「确认定稿」才写入）");
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
 
-  it("重写有稿的章也要真调 generate_draft：按钮随调用出现，不许凭印象叫作者去点", () => {
-    expect(instructions).toContain("作者要重写、重出已经有稿的章，也照样调 generate_draft");
+  it("重写有稿的章也要真调 change_draft：按钮随调用出现，不许凭印象叫作者去点", () => {
+    expect(instructions).toContain("作者要重写、重出已经有稿的章，也照样调 change_draft");
     expect(instructions).toContain("没调就没有按钮");
     expect(instructions).not.toContain("界面已出「重写这一章」按钮");
   });
@@ -108,23 +108,24 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("提醒、不是拦");
   });
 
-  // R2#1：「写下一章」按钮点了不调 generate_draft（intent 不在换章触发词内 + 模型分两轮只读不写）。
+  // R2#1：「写下一章」按钮点了不调写稿工具（intent 不在换章触发词内 + 模型分两轮只读不写）。
   // 指令须把『写下一章/下一章』并入直接出稿触发、且要求同一轮就出稿。
-  it("3a 把『写下一章/下一章』映射到同一轮 generate_draft 出稿（修 R2#1 写下一章按钮断）", () => {
+  it("3a 把『写下一章/下一章』映射到同一轮 change_draft 出稿（修 R2#1 写下一章按钮断）", () => {
     expect(instructions).toContain("写下一章");
     expect(instructions).toContain("同一轮就出稿");
   });
 
   // R2#1：定稿「下一步卡」intent 是模型自由生成，须用能干净映射工具的措辞。
-  it("下一步卡的预览 intent 用能干净触发工具的措辞；定稿不放进选项卡（预览卡自带按钮）", () => {
-    expect(instructions).toContain("生成第N章定稿预览");
-    expect(instructions).toContain("定稿不放进选项卡");
+  it("下一步卡的定稿 intent 用能干净触发工具的措辞；「确认定稿」不放进选项卡（清单卡自带按钮）", () => {
+    expect(instructions).toContain("定稿用『定稿第N章』");
+    expect(instructions).toContain("「确认定稿」不放进选项卡");
+    expect(instructions).not.toContain("定稿预览");
   });
 
-  // R3#4 + R5：用户可见泄漏——绝不把内部 id / 资料编号 / previewToken 复述给用户；调工具前别先吐英文思考/preamble。
-  it("禁止把 id/资料编号/previewToken 复述给用户、禁止输出英文 reasoning preamble", () => {
+  // R3#4 + R5：用户可见泄漏——绝不把内部 id / 资料编号 / 操作号复述给用户；调工具前别先吐英文思考/preamble。
+  it("禁止把 id/资料编号/操作号复述给用户、禁止输出英文 reasoning preamble", () => {
     expect(instructions).toMatch(/绝不(把|向用户).{0,8}(id|资料编号)/u);
-    expect(instructions).toMatch(/previewToken|预览令牌/u);
+    expect(instructions).toMatch(/操作号/u);
     expect(instructions).toMatch(/英文(思考|旁白|reasoning|preamble)/iu);
   });
 
@@ -177,11 +178,11 @@ describe("buildInstructions 开书引导（仅空书时主动轻引导）", () =
     expect(instructions).toMatch(/故事资料基本为空|像一本新书/);
   });
 
-  it("开书引导复用现成工具（foundation_write/brainstorm_chapter）", () => {
+  it("开书引导复用现成工具（change_settings/plan_chapter）", () => {
     const guidanceStart = instructions.indexOf("开书引导");
     const guidance = instructions.slice(guidanceStart);
-    expect(guidance).toContain("foundation_write");
-    expect(guidance).toContain("brainstorm_chapter");
+    expect(guidance).toContain("change_settings");
+    expect(guidance).toContain("plan_chapter");
   });
 
   // 重构 P9：新书不再自带占位主角，主角是作者说了才建的一张标了主角的人物卡。
@@ -237,8 +238,8 @@ describe("buildInstructions 写设定（第一轮就把已给的写进卡，不�
 describe("buildInstructions 改账 = 你提、作者点按钮（重构 P3）", () => {
   const instructions = buildInstructions();
 
-  it("manage_ledger 只出「确认改账」按钮；绝不说已记好；作者没说过的决定不替作者做", () => {
-    expect(instructions).toContain("「确认改账」按钮");
+  it("change_ledger 只提议、作者点「确认改账」才记；绝不说已记好；作者没说过的决定不替作者做", () => {
+    expect(instructions).toContain("「确认改账」卡");
     expect(instructions).toContain("绝不说『已记好/已改好/已收口』");
     expect(instructions).toContain("作者没说过的决定不要替作者做");
   });
@@ -256,13 +257,13 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toMatch(/继续[\s\S]*?(下一章|往前走)/);
   });
 
-  it("禁止口头冒充草稿（⑥）：要正文必须调 generate_draft 落盘，没调工具就是没出稿", () => {
+  it("禁止口头冒充草稿（⑥）：要正文必须调 change_draft 落盘，没调工具就是没出稿", () => {
     expect(instructions).toContain("禁止口头冒充草稿");
     expect(instructions).toContain("没出稿");
     expect(instructions).toContain("绝不谎称已写");
   });
 
-  it("generate_draft 工具描述声明缺章号默认当前章", () => {
+  it("change_draft 指令声明缺章号默认当前章", () => {
     expect(instructions).toContain("缺章号时默认用户当前所在章");
   });
 
@@ -271,10 +272,12 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toContain("系统会直接转告定稿结果");
   });
 
-  it("待收口提醒只转告并给归并选项；单条已完结用 manage_ledger op=resolve", () => {
+  it("待收口提醒只转告并给归并选项；单条已完结用 change_ledger op=resolve；理线索 review", () => {
     expect(instructions).toContain("待收口提醒只转告");
-    expect(instructions).toContain("manage_ledger op=group");
-    expect(instructions).toContain("manage_ledger op=resolve");
+    expect(instructions).toContain("change_ledger 一项 op=group");
+    expect(instructions).toContain("change_ledger 一项 op=resolve");
+    expect(instructions).toContain("change_ledger review:true");
+    expect(instructions).not.toContain("manage_ledger");
   });
 
   it("出稿后下一步交给选项卡，文字不要重复口播工作稿保存/下一步提示", () => {
@@ -283,24 +286,19 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
   });
 });
 
-describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07）", () => {
+describe("buildInstructions 定稿 = 模型交、用户点按钮（片 4A：commit.prepare）", () => {
   const instructions = buildInstructions();
 
-  it("定稿真写入只由用户点「确认定稿」按钮完成，模型负责预览并请用户点按钮", () => {
-    expect(instructions).toContain("【定稿 = 你预览、用户点按钮】");
-    expect(instructions).toContain("先对该章 commit_preview");
-    expect(instructions).toContain("请用户在定稿清单里点「确认定稿」");
-  });
-
-  // 2026-10-10 瘦身：commit_apply 不再给对话 AI（它调了也只是再出一个按钮），定稿只能点按钮。
-  it("对话 AI 没有定稿工具，定稿只能由用户点按钮", () => {
-    expect(instructions).toContain("你没有定稿工具");
+  it("定稿真写入只由用户点「确认定稿」按钮完成，模型只交 prepare_commit 出清单", () => {
+    expect(instructions).toContain("【定稿 = 你交、用户点按钮】");
+    expect(instructions).toContain("用户想定稿时交 prepare_commit");
+    expect(instructions).toContain("用户在清单里点「确认定稿」才写入");
+    expect(instructions).not.toContain("commit_preview");
     expect(instructions).not.toContain("commit_apply");
   });
 
-  it("绝不说已定稿；不可定稿时如实说明、不让用户去点按钮", () => {
+  it("绝不说已定稿", () => {
     expect(instructions).toContain("**绝不说『已定稿/已入库』**");
-    expect(instructions).toContain("canCommit=false 时如实说明阻断原因");
   });
 
   it("旧的组合意图/强制执行条款已删（不再靠模型一轮走完定稿）", () => {
@@ -309,9 +307,9 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
     expect(instructions).not.toContain("同轮继续 commit_apply");
   });
 
-  it("出稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：出稿那步只写稿、写成了这一轮就结束；写完出预览带 thenPreview", () => {
-    expect(instructions).toContain("出稿那一步只调 generate_draft");
-    expect(instructions).toContain("稿写成了这一轮就结束");
+  it("写稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：写稿那步只交写稿、交上了这一轮就结束；写完出预览带 thenPreview", () => {
+    expect(instructions).toContain("写稿那一步只调 change_draft");
+    expect(instructions).toContain("交上了这一轮就结束");
     expect(instructions).toContain("thenPreview:true");
   });
 

@@ -1,24 +1,11 @@
 import type { WorkspaceOperationTarget } from "../type-defs/workspace.js";
 
+/** 占前台写位的几种事：对话一轮（含按钮交的操作）、换书换章、换会话、操作历史里点恢复。 */
 export type WorkspaceOperationKind =
   | "agent-chat"
-  | "generate-steering"
-  | "generate-draft"
-  | "quality-check"
-  | "ai-review"
-  | "revision-preview"
-  | "revision-apply"
-  | "selection-rewrite"
-  | "reroll-candidates"
-  | "apply-candidate"
-  | "commit-preview"
-  | "commit-apply"
   | "navigation-transition"
   | "session-transition"
-  | "foundation-write"
-  | "deai-fix-all"
-  | "snapshot-restore"
-  | "other-write";
+  | "snapshot-restore";
 
 export interface WorkspaceOperationToken extends WorkspaceOperationTarget {
   readonly kind: WorkspaceOperationKind;

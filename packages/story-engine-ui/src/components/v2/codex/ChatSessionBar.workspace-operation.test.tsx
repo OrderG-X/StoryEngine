@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { ChatSessionBar } from "./ChatSessionBar.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { useChatStore } from "../../../stores/chatStore.js";
-import { useUiStore } from "../../../stores/uiStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../../../utils/workspaceOperation.js";
 
@@ -48,10 +47,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
       activeSessionId: "session-a",
       sessions: [{ id: "session-a", name: "当前会话", updatedAt: new Date().toISOString() }],
     });
-    useUiStore.setState({
-      draftActionLoading: "generate-draft",
-    });
-    beginWorkspaceOperation("generate-draft", {
+    beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/story-project",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
@@ -83,9 +79,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
         { id: "session-b", name: "会话 B", updatedAt: new Date().toISOString() },
       ],
     });
-    useUiStore.setState({
-      draftActionLoading: null,
-    });
     const switchGate = deferred<{
       session: { id: string; name: string; messages: readonly []; archivedCount: number };
       index: { activeSessionId: string; sessions: readonly { id: string; name: string; updatedAt: string }[] };
@@ -114,7 +107,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("new-session creation owns the slot until the new session is fully loaded", async () => {
     resetWorkspaceOperationForTests();
-    useUiStore.setState({ draftActionLoading: null });
     const createGate = deferred<{
       session: { id: string; name: string; messages: readonly []; archivedCount: number };
       index: { activeSessionId: string; sessions: readonly [] };
@@ -124,7 +116,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
     fireEvent.click(screen.getByRole("button", { name: /新会话/u }));
     await waitFor(() => expect(sessionApi.createChatSession).toHaveBeenCalled());
 
-    const intruder = beginWorkspaceOperation("generate-draft", {
+    const intruder = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/story-project",
       chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
@@ -142,7 +134,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("awaits the old-session flush before creating and activating a new session", async () => {
     resetWorkspaceOperationForTests();
-    useUiStore.setState({ draftActionLoading: null });
     const flushGate = deferred<void>();
     setAutosaveFlusher(async () => {
       await flushGate.promise;
@@ -173,9 +164,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
         { id: "session-b", name: "会话 B", updatedAt: new Date().toISOString() },
       ],
     });
-    useUiStore.setState({
-      draftActionLoading: null,
-    });
     setAutosaveFlusher(async () => ({ ok: false, error: "save failed" }));
     render(<ChatSessionBar />);
     fireEvent.click(screen.getByRole("button", { name: /历史/u }));
@@ -197,9 +185,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
         { id: "session-b", name: "会话 B", updatedAt: new Date().toISOString() },
       ],
     });
-    useUiStore.setState({
-      draftActionLoading: null,
-    });
     setAutosaveFlusher(async () => ({ ok: false, error: "save failed" }));
     render(<ChatSessionBar />);
     fireEvent.click(screen.getByRole("button", { name: /历史/u }));
@@ -213,7 +198,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("drops a late rename response after the project/session list has changed", async () => {
     resetWorkspaceOperationForTests();
-    useUiStore.setState({ draftActionLoading: null });
     const renameGate = deferred<{ index: { activeSessionId: string; sessions: readonly { id: string; name: string; updatedAt: string }[] } }>();
     sessionApi.renameChatSession.mockReturnValueOnce(renameGate.promise);
     render(<ChatSessionBar />);
@@ -246,7 +230,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("successful create commits its session+index response without a second read", async () => {
     resetWorkspaceOperationForTests();
-    useUiStore.setState({ draftActionLoading: null });
     sessionApi.createChatSession.mockResolvedValueOnce({
       session: { id: "session-b", name: "B", messages: [], archivedCount: 0, createdAt: "t", updatedAt: "t" },
       index: { activeSessionId: "session-b", sessions: [{ id: "session-b", name: "B", updatedAt: "t" }] },
@@ -264,7 +247,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
     useChatStore.setState({ activeSessionId: "session-a", sessions });
-    useUiStore.setState({ draftActionLoading: null });
     sessionApi.setActiveChatSession.mockResolvedValueOnce({
       session: { id: "session-b", name: "B", messages: [{ id: "b", role: "user", content: "B truth" }], archivedCount: 2 },
       index: { activeSessionId: "session-b", sessions },
@@ -284,7 +266,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
     useChatStore.setState({ activeSessionId: "session-a", sessions });
-    useUiStore.setState({ draftActionLoading: null });
     sessionApi.deleteChatSession.mockResolvedValueOnce({
       session: { id: "session-b", name: "B", messages: [{ id: "b", role: "user", content: "B truth" }], archivedCount: 0 },
       index: { activeSessionId: "session-b", sessions: [sessions[1]] },
@@ -298,7 +279,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("reconciles disk truth after a create response is lost", async () => {
     resetWorkspaceOperationForTests();
-    useUiStore.setState({ draftActionLoading: null });
     const sessions = [{ id: "session-b", name: "B", updatedAt: "t" }];
     sessionApi.createChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockResolvedValueOnce({ index: { activeSessionId: "session-b", sessions } });
@@ -321,7 +301,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
     useChatStore.setState({ activeSessionId: "session-a", sessions });
-    useUiStore.setState({ draftActionLoading: null });
     sessionApi.setActiveChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockResolvedValueOnce({ index: { activeSessionId: "session-b", sessions } });
     sessionApi.readChatSession.mockResolvedValueOnce({
@@ -344,7 +323,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
     useChatStore.setState({ activeSessionId: "session-a", sessions });
-    useUiStore.setState({ draftActionLoading: null });
     sessionApi.deleteChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockResolvedValueOnce({
       index: { activeSessionId: "session-b", sessions: [sessions[1]] },
@@ -364,7 +342,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("reports uncertain state when mutation response and reconciliation both fail", async () => {
     resetWorkspaceOperationForTests();
-    useUiStore.setState({ draftActionLoading: null });
     sessionApi.createChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockRejectedValueOnce(new Error("reconcile failed"));
     render(<ChatSessionBar />);

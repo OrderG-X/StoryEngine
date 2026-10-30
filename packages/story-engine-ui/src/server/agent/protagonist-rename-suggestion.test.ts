@@ -3,18 +3,23 @@
 // 定稿后的「设为主角」建议（重构 P9）：设定本里还没标主角时，按账里的视角人物取视角章最多的那个；
 // 有卡就建议标主角，没卡就建议建卡并标主角。只是建议：作者点了才发 intent 给模型，这里绝不写盘。
 // 不数出场次数（视角是林小满、宋伯名字出现再多也是建议林小满）；一章视角声明都没有就不建议。
-// 真书 + 真账单（核心定稿命令），executeTool 用假的，不调模型。
+// 真书 + 真账单（核心定稿命令）；定稿收尾那组用假的定稿配方（不调模型），走真执行器和真收尾。
 import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { RequestContext } from "@mastra/core/di";
 import { cardWrite, chapterCommit, runCommand, type CardOp, type EntryInput } from "@actalk/story-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { __resetExecutionsForTests } from "../lib/operations/context.js";
+import { __resetLiveForTests } from "../lib/operations/live.js";
+import { __resetOperationStoreForTests } from "../lib/operations/store.js";
+import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe } from "../services/operations/executor.js";
+import { COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
+import { commitAction } from "./next-steps.js";
+import { runOperationAction } from "./operation-turn.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
-import { runUserAction, type UserActionToolExecutor } from "./user-actions.js";
 
 let rootDir: string;
 let book: string;
@@ -102,67 +107,64 @@ describe("buildProtagonistRenameSuggestion（设定本没标主角时按视角�
   });
 });
 
-describe("runUserAction 定稿收尾追加「设为主角」建议（只加不改原选项）", () => {
-  const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
+describe("定稿收尾追加「设为主角」建议（只加不改原选项）", () => {
+  beforeEach(() => {
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    __resetLiveForTests();
+    __resetRecipesForTests();
+    vi.stubEnv("SE_DATA_DIR", join(rootDir, "data"));
+  });
+  afterEach(async () => {
+    await __drainOperationsForTests();
+    __resetRecipesForTests();
+    vi.unstubAllEnvs();
+  });
 
-  function collect() {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    return { events, sendEvent: (event: string, data: unknown) => events.push({ event, data: data as Record<string, unknown> }) };
+  /** 假的定稿配方：照给的结果收（不记账、不写盘）。 */
+  function fakeCommit(body: Pick<CommitPrepareBody, "committed">): void {
+    registerRecipe<{ readonly chapter: number }>({
+      kind: COMMIT_PREPARE_KIND,
+      version: 1,
+      lane: "foreground",
+      async prepare(_bookDir, input) {
+        return { ok: true, params: input.params as { readonly chapter: number }, writeScope: { chapters: [] }, budget: 1 };
+      },
+      async run(ctx) {
+        const chapter = ctx.params.chapter;
+        return { schema: "operation-result/1", summary: body.committed ? `第 ${chapter} 章已定稿。` : `第 ${chapter} 章现在还定不了。`, body: { kind: COMMIT_PREPARE_KIND, chapter, ...body } };
+      },
+      stepBudget: () => 0,
+      modelTasks: () => [],
+    });
   }
 
-  const committed: UserActionToolExecutor = async () => ({ ok: true, committed: true, chapter: 1, summary: "第 1 章已定稿。" });
+  async function finish(): Promise<{ readonly text: string; readonly choices: readonly { readonly label: string; readonly intent: string }[] }> {
+    const events: { readonly event: string; readonly data: Record<string, unknown> }[] = [];
+    await runOperationAction({
+      action: commitAction(1),
+      projectDir: book,
+      sendEvent: (event, data) => { events.push({ event, data: data as Record<string, unknown> }); },
+      scrubber: { push: (text: string) => text, flush: () => "" },
+      signal: new AbortController().signal,
+    });
+    const next = events.filter((item) => item.event === "tool-result" && item.data.toolName === "suggest_next_steps").at(-1)?.data.output as { choices: { label: string; intent: string }[] } | undefined;
+    return { text: events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join(""), choices: next?.choices ?? [] };
+  }
 
   it("定稿成功 + 没标主角 + 有视角人物 → 原选项照旧、末尾多一个「把『陆沉』设为主角」", async () => {
     await commit(1, ["陆沉"], "陆沉");
-    const { events, sendEvent } = collect();
-
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 1 },
-      requestContext: new RequestContext(),
-      executeTool: committed,
-      sendEvent,
-      scrubber: passthroughScrubber(),
-      scrubError: String,
-      projectDir: book,
-    });
-
-    const next = events.at(-1)!.data.output as { choices: { label: string; intent: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["AI 写第 2 章", "把『陆沉』设为主角"]);
-    expect(next.choices[1]!.intent).toContain("陆沉");
+    fakeCommit({ committed: true });
+    const { choices } = await finish();
+    expect(choices.map((choice) => choice.label)).toEqual(["AI 写第 2 章", "把『陆沉』设为主角"]);
+    expect(choices[1]!.intent).toContain("陆沉");
   });
 
-  it("没给 projectDir（其他调用方）→ 行为与原来完全一致，不多选项", async () => {
-    const { events, sendEvent } = collect();
-
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 1 },
-      requestContext: new RequestContext(),
-      executeTool: committed,
-      sendEvent,
-      scrubber: passthroughScrubber(),
-      scrubError: String,
-    });
-
-    const next = events.at(-1)!.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["AI 写第 2 章"]);
-  });
-
-  it("定稿没成（committed:false）→ 不给建议（没定稿就没有新依据）", async () => {
+  it("定稿没成（定不了）→ 不给建议（没定稿就没有新依据）", async () => {
     await commit(1, ["陆沉"], "陆沉");
-    const executeTool: UserActionToolExecutor = async () => ({ ok: false, committed: false, summary: "还没预览，不能定稿。" });
-    const { events, sendEvent } = collect();
-
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 1 },
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent,
-      scrubber: passthroughScrubber(),
-      scrubError: String,
-      projectDir: book,
-    });
-
-    const next = events.at(-1)!.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["重新预览"]);
+    fakeCommit({ committed: false });
+    const { text, choices } = await finish();
+    expect(text).toBe("第 1 章现在还定不了，原因在清单里。");
+    expect(choices).toEqual([]);
   });
 });

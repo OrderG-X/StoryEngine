@@ -2,10 +2,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
-  brainstormChapter,
   brainstormCheckTask,
+  checkDirections,
+  proposeDirections,
   brainstormTask,
   parseBrainstorm,
   splitBrainstormProblems,
@@ -129,6 +131,14 @@ function fakeReader(reply: string | Error) {
   return { callModel, calls };
 }
 
+/** 两步接起来（同 plan.propose：先出、再核）。 */
+async function brainstormChapter(input: Parameters<typeof proposeDirections>[0] & { readonly callChecker: BrainCallModel }) {
+  const proposed = await proposeDirections(input);
+  if (!proposed.ok) return proposed;
+  const checked = await checkDirections({ ...input, options: proposed.options });
+  return { ok: true as const, chapter: input.chapter, ...(proposed.idea ? { idea: proposed.idea } : {}), ...checked };
+}
+
 describe("头脑风暴：整条（章纲员出 → 核账员核）", () => {
   it("章纲员读完前文出走法、核账员一次核完；只读（不落章纲）", async () => {
     const dir = await makeBook();
@@ -193,5 +203,20 @@ describe("头脑风暴：整条（章纲员出 → 核账员核）", () => {
       expect(unchecked.checkNote).toContain("服务商超时");
       expect(unchecked.options).toHaveLength(3);
     }
+  });
+
+  it("章纲员那次被拒（422）：只发一次就如实说，不说「已自动重试」（写作版本 P2a 4.2）", async () => {
+    const dir = await makeBook();
+    const planner = fakeReader(new ModelCallError("模型请求失败：422", "rejected", 422));
+    const result = await brainstormChapter({
+      projectDir: dir,
+      chapter: 3,
+      callPlanner: planner.callModel,
+      callChecker: fakeReader("{}").callModel,
+      readThreads: async () => [],
+    });
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.reason).not.toContain("已自动重试");
   });
 });

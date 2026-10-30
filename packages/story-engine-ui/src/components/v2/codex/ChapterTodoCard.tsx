@@ -29,8 +29,8 @@ export function ChapterTodoCard({
   if (progress.chapter <= 0) return null;
   const steps = [
     { key: "write", label: "写", hint: undefined, ...progress.write },
-    { key: "check", label: "核账", hint: STEP_HINTS.check_continuity, done: progress.check.done, text: progress.check.text },
-    { key: "commit", label: "定稿", hint: STEP_HINTS.commit_preview, ...progress.commit },
+    { key: "check", label: "核账", hint: STEP_HINTS.continuity, done: progress.check.done, text: progress.check.text },
+    { key: "commit", label: "定稿", hint: STEP_HINTS.commit, ...progress.commit },
   ];
   const title = progress.commit.done ? `第 ${progress.chapter} 章已定稿` : `第 ${progress.chapter} 章`;
   const { primary } = progress;

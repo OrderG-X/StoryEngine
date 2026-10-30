@@ -1,6 +1,6 @@
 /**
  * 定稿后的「设为主角」建议（重构 P9 起：设定本里没有标主角时，按视角人物建议）。
- * **只是建议**：作者点了才把这句话发给模型，由模型走 foundation_write 设（可撤销），绝不在这里写盘。
+ * **只是建议**：作者点了才把这句话发给模型，由模型走 change_settings 设（可撤销），绝不在这里写盘。
  */
 import { readBible } from "@actalk/story-core";
 import { suggestProtagonist } from "../writing/presence/protagonist-suggestion.js";

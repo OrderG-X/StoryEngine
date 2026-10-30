@@ -138,9 +138,9 @@ export async function restoreFromTrash(id: string): Promise<{ readonly projectPa
   let target = original;
   for (let n = 1; await exists(target); n += 1) target = `${original}-恢复${n > 1 ? n : ""}`;
   await mkdir(dirname(target), { recursive: true });
-  // 搬回来的书换一个新的写入代次（读过原路径后来那一版的预览、缓存不能当没变）：走核心事务写，store-control 是软链之类
-  // 换不了就停下，回收站这一条原样留着（P1 第 22 轮 AJ4）。
-  await bumpRevision(join(entry, BOOK_DIR));
+  // 搬回来的书换一个新的写入代次（读过原路径后来那一版的预览、缓存不能当没变）、新的书纪元（删之前受理的操作不能再写，写作版本 P2a）：
+  // 走核心事务写，store-control 是软链之类换不了就停下，回收站这一条原样留着（P1 第 22 轮 AJ4）。
+  await bumpRevision(join(entry, BOOK_DIR), new Date(), { bookEpoch: true });
   await moveDir(join(entry, BOOK_DIR), target);
   await rm(entry, { recursive: true, force: true });
   return { projectPath: target, title: record.title };

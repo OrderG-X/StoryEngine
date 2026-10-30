@@ -40,11 +40,12 @@ interface FormState {
   readonly name: string;
   readonly baseUrl: string;
   readonly authEnv: string;
+  readonly quotaGroup: string;
   readonly apiKey: string;
   readonly showApiKey: boolean;
 }
 
-const EMPTY_FORM: FormState = { presetId: "", name: "", baseUrl: "", authEnv: "", apiKey: "", showApiKey: false };
+const EMPTY_FORM: FormState = { presetId: "", name: "", baseUrl: "", authEnv: "", quotaGroup: "", apiKey: "", showApiKey: false };
 
 /** 详情目标：id = 预设或已存服务商 id；null = 新建自定义服务。 */
 type View = { readonly kind: "list" } | { readonly kind: "detail"; readonly id: string | null };
@@ -265,6 +266,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       name: saved?.label ?? preset?.label ?? "",
       baseUrl: saved?.baseUrl ?? preset?.baseUrl ?? "",
       authEnv: saved?.apiKeyEnv ?? preset?.apiKeyEnvSuggestion ?? "",
+      quotaGroup: saved?.quotaGroup ?? "",
       apiKey: "",
       showApiKey: false,
     });
@@ -325,6 +327,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       baseUrl,
       apiKeyEnv: form.authEnv.trim(),
       apiKeyStatus: form.apiKey.trim() ? "present" : previous?.apiKeyStatus ?? "missing",
+      ...(form.quotaGroup.trim() ? { quotaGroup: form.quotaGroup.trim() } : {}),
     };
     const providers = previous
       ? savedProviders.map((p) => (p.id === id ? next : p))
@@ -606,6 +609,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
                   setFormName={(v: string) => setForm((f) => ({ ...f, name: v }))}
                   setFormBaseUrl={(v: string) => setForm((f) => ({ ...f, baseUrl: v }))}
                   setFormAuthEnv={(v: string) => setForm((f) => ({ ...f, authEnv: v }))}
+                  formQuotaGroup={form.quotaGroup}
+                  setFormQuotaGroup={(v: string) => setForm((f) => ({ ...f, quotaGroup: v }))}
                   setFormApiKey={(v: string) => setForm((f) => ({ ...f, apiKey: v }))}
                   setShowApiKey={(updater: (value: boolean) => boolean) => setForm((f) => ({ ...f, showApiKey: updater(f.showApiKey) }))}
                   onSelectPreset={() => { /* 详情页服务商已确定，预设选择区已隐藏 */ }}

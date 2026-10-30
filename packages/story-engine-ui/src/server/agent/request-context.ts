@@ -16,11 +16,6 @@ export const REQUEST_CONTEXT_PROJECT_DIR_KEY = "projectDir";
  */
 export const REQUEST_CONTEXT_CURRENT_CHAPTER_KEY = "currentChapter";
 /**
- * 出稿流式增量回调（每段正文 delta）。路由层注入一个把 delta 转成 SSE 事件的 sink，
- * generate_draft 工具把它穿给 writer client → 正文逐字流到前端编辑器。缺失=不流式（向后兼容）。
- */
-export const REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY = "draftDeltaSink";
-/**
  * 作者在这段对话窗口里说过的话（user 消息原文，旧→新）。重构 P4 起只用来「找原句」：
  * 模型转述作者的话（如出稿的 chapterGoal）时，核对它确实出自作者之口。不用来猜意图。
  */
@@ -37,7 +32,6 @@ export const REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY = "userConfirmedTool";
  * R7.2：上一个有写盘回合的首个快照（该回合第一次写盘前）+ 该回合写盘处数。
  * 前端从 turnSnapshots[0] 带来；undo 工具优先按它整回合回退（作者说「撤销上一步」指上一回合全部改动）。
  */
-export const REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY = "lastTurnUndoHint";
 
 /**
  * 作者给某一章挑中的走法（稿纸上方点的「用这个」，前端随请求带来）。出稿写的正是这一章时，走法原文并进作者方向——
@@ -51,36 +45,27 @@ export const REQUEST_CONTEXT_PICKED_DIRECTION_KEY = "pickedDirection";
  */
 export const REQUEST_CONTEXT_TURN_STATE_KEY = "turnState";
 
+/**
+ * 这一轮是作者哪条消息发起的（写作版本 P2a）：消息号是前端给的 UUID、随消息存，重发沿用；issuedAt 也随消息存。
+ * 对话里交的操作键 = `chat:<消息号>`：一条作者消息只受理一个顶层操作。按钮动作不经模型，不用它。
+ */
+export const REQUEST_CONTEXT_MESSAGE_REF_KEY = "messageRef";
+
+export interface MessageRef {
+  readonly messageId: string;
+  readonly issuedAt: string;
+}
+
 export interface TurnState {
-  /** 模型这一步要调的工具（turn-flow：执行前记下，这一步有出稿就只写稿）。 */
+  /** 模型这一步要调的工具（turn-flow：执行前记下，这一步交了操作又有别的写就一件都不做）。 */
   stepTools?: readonly string[];
-  /** 这一轮的出稿正在执行（同一步别的工具不执行，第二份出稿也不写）。没写成就放开，模型可以改了再调。 */
-  draftStarted?: boolean;
-  /** 稿写成了：这一步走完这一轮就结束，结论、核账卡、下一步由服务端出（和「写这一章」按钮同一套）。 */
-  draftWritten?: { readonly chapter: number; readonly output: unknown; readonly thenPreview: boolean };
+  /** 这一轮交上、受理了的操作：这一步走完这一轮就结束，进度和结果由服务端出（契约第三节）。 */
+  operationAccepted?: { readonly opId: string };
 }
 
 export interface PickedDirection {
   readonly chapter: number;
   readonly text: string;
-}
-
-export interface LastTurnUndoHint {
-  /** git commit id（40 位十六进制）。 */
-  readonly snapshotId: string;
-  /** 上一回合写盘改动的处数（turnSnapshots 条数）。 */
-  readonly changes: number;
-}
-
-/** 容错解析：snapshotId 必须是 40 位十六进制 commit id，changes 必须是正整数；其余（缺省/非法）一律 undefined。 */
-export function parseLastTurnUndoHint(raw: unknown): LastTurnUndoHint | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const record = raw as Record<string, unknown>;
-  const snapshotId = record.snapshotId;
-  const changes = record.changes;
-  if (typeof snapshotId !== "string" || !/^[0-9a-f]{40}$/u.test(snapshotId)) return undefined;
-  if (typeof changes !== "number" || !Number.isInteger(changes) || changes < 1) return undefined;
-  return { snapshotId, changes };
 }
 
 /** 标记「本次执行是用户点按钮确认过的」（undefined 清除）。 */
@@ -93,38 +78,26 @@ export function isUserConfirmedTool(context: ToolExecutionContext | undefined, t
   return context?.requestContext?.get(REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY) === toolName;
 }
 
-/**
- * 出稿流式 sink：text = 正文增量；phase = 出稿进行到哪一步（plan 拟章纲 / write 写正文，text 为空串）。
- * 拟章纲要一两分钟、这期间稿纸是空的，作者得知道 AI 在干什么。
- */
-/**
- * replace=true：text 是这次写的、稿纸上该显示的全部，换掉已经流出去的（重写一段时退回、两段之间补空行）。
- * base=true：接着写时本来写好的那段（原样显示、不当新写的清理；replace 换的是它后面新写的）。
- */
-export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string; readonly phase?: "plan" | "write" | "check"; readonly replace?: boolean; readonly base?: boolean }) => void;
-
 function isPositiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 /**
- * 路由层：把当前请求的 projectDir（+ 可选 currentChapter / lastTurnUndoHint）包成 RequestContext，
+ * 路由层：把当前请求的 projectDir（+ 可选 currentChapter）包成 RequestContext，
  * 喂给 agent.stream/generate。currentChapter 非正整数时不注入（由工具各自的默认行为兜底）。
  */
 export function buildProjectRequestContext(
   projectDir: string,
   currentChapter?: number,
-  draftDeltaSink?: DraftDeltaSink,
   authorWords?: readonly string[],
-  lastTurnUndoHint?: LastTurnUndoHint,
   pickedDirection?: PickedDirection,
+  messageRef?: MessageRef,
 ): RequestContext {
   const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir], [REQUEST_CONTEXT_TURN_STATE_KEY, {} satisfies TurnState]];
+  if (messageRef) entries.push([REQUEST_CONTEXT_MESSAGE_REF_KEY, messageRef]);
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
-  if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
   const words = (authorWords ?? []).filter((text) => typeof text === "string" && text.trim());
   if (words.length > 0) entries.push([REQUEST_CONTEXT_AUTHOR_WORDS_KEY, words]);
-  if (lastTurnUndoHint) entries.push([REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY, lastTurnUndoHint]);
   if (pickedDirection && isPositiveInt(pickedDirection.chapter) && pickedDirection.text.trim()) {
     entries.push([REQUEST_CONTEXT_PICKED_DIRECTION_KEY, pickedDirection]);
   }
@@ -137,16 +110,26 @@ export function readProjectDirFromContext(context: ToolExecutionContext | undefi
   return typeof raw === "string" && raw.trim() ? raw : undefined;
 }
 
+/** 工具层：这一轮是作者哪条消息发起的（没带返回 undefined：交不了操作）。 */
+export function readMessageRefFromContext(context: ToolExecutionContext | undefined): MessageRef | undefined {
+  const raw = context?.requestContext?.get(REQUEST_CONTEXT_MESSAGE_REF_KEY) as Partial<MessageRef> | undefined;
+  return typeof raw?.messageId === "string" && typeof raw.issuedAt === "string" ? { messageId: raw.messageId, issuedAt: raw.issuedAt } : undefined;
+}
+
+/**
+ * 请求体里的消息号和 issuedAt（前端给每条作者消息的 UUID、发的时刻，随消息存）：消息号只认 1～64 位的字母数字和 `-_`，
+ * issuedAt 要能读成时间；不对就当没带（这一轮交不了操作，如实说）。
+ */
+export function parseMessageRef(messageId: unknown, issuedAt: unknown): MessageRef | undefined {
+  if (typeof messageId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(messageId)) return undefined;
+  if (typeof issuedAt !== "string" || issuedAt.length > 40 || !Number.isFinite(Date.parse(issuedAt))) return undefined;
+  return { messageId, issuedAt: new Date(Date.parse(issuedAt)).toISOString() };
+}
+
 /** 工具层：读出用户当前所在章号（缺失/非法返回 undefined）。 */
 export function readCurrentChapterFromContext(context: ToolExecutionContext | undefined): number | undefined {
   const raw = context?.requestContext?.get(REQUEST_CONTEXT_CURRENT_CHAPTER_KEY);
   return isPositiveInt(raw) ? raw : undefined;
-}
-
-/** 工具层：读出出稿流式 sink（缺失返回 undefined→不流式）。 */
-export function readDraftDeltaSinkFromContext(context: ToolExecutionContext | undefined): DraftDeltaSink | undefined {
-  const raw = context?.requestContext?.get(REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY);
-  return typeof raw === "function" ? (raw as DraftDeltaSink) : undefined;
 }
 
 /** 工具层：读出作者在这段对话里说过的话（缺失返回 undefined——不是对话通道调的，如按钮直达）。 */
@@ -161,12 +144,6 @@ export function readAuthorWordsFromContext(context: ToolExecutionContext | undef
 export function readPickedDirectionFromContext(context: ToolExecutionContext | undefined, chapter: number): string | undefined {
   const raw = context?.requestContext?.get(REQUEST_CONTEXT_PICKED_DIRECTION_KEY) as Partial<PickedDirection> | undefined;
   return raw?.chapter === chapter && typeof raw.text === "string" && raw.text.trim() ? raw.text.trim() : undefined;
-}
-
-/** 工具层：读出「上一个有写盘回合的首个快照」锚点（缺失/形状不对返回 undefined，undo 走默认逐步回退）。 */
-export function readLastTurnUndoHintFromContext(context: ToolExecutionContext | undefined): LastTurnUndoHint | undefined {
-  const raw = context?.requestContext?.get(REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY);
-  return parseLastTurnUndoHint(raw);
 }
 
 /**

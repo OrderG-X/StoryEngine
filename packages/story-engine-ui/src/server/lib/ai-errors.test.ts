@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { classifyAiError, ModelHttpError, ModelSetupError, UpstreamSilentError } from "./ai-errors.js";
+import { classifyAiError, ModelCallError, ModelSetupError, UpstreamSilentError } from "./ai-errors.js";
 
 describe("调模型失败的分类（P11）", () => {
   it("自家的类型直接认", () => {
@@ -9,9 +9,9 @@ describe("调模型失败的分类（P11）", () => {
   });
 
   it("按状态码：401/403 密钥、402 欠费、429 限流、5xx 服务商故障；别的不认", () => {
-    expect(classifyAiError(new ModelHttpError("x", 401))).toBe("auth");
-    expect(classifyAiError(new ModelHttpError("x", 403))).toBe("auth");
-    expect(classifyAiError(new ModelHttpError("x", 402))).toBe("quota");
+    expect(classifyAiError(new ModelCallError("x", "rejected", 401))).toBe("auth");
+    expect(classifyAiError(new ModelCallError("x", "rejected", 403))).toBe("auth");
+    expect(classifyAiError(new ModelCallError("x", "rejected", 402))).toBe("quota");
     expect(classifyAiError({ status: 429 })).toBe("rate-limit");
     expect(classifyAiError({ statusCode: 503 })).toBe("server");
     expect(classifyAiError({ statusCode: 400 })).toBe("unknown");

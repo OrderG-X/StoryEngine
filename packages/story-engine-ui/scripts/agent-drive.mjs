@@ -15,6 +15,7 @@
 //          STORY_ENGINE_BASE（默认 http://127.0.0.1:5173；桌面 standalone 等非常规端口场景用它覆盖）。
 // 项目路径为什么不设默认：历史默认 story-test-book 已于 2026-07-12 清库；书库根下现只有
 // 用户真书 story-demo-book，严禁拿来跑。必须经 [projectPath] 参数或 STORY_ENGINE_PROJECT 显式指定。
+import { randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 
 const PROJECT = process.argv[5] || process.env.STORY_ENGINE_PROJECT;
@@ -32,7 +33,9 @@ let history = [];
 if (historyFile) history = JSON.parse(await readFile(historyFile, "utf-8").catch(() => "[]"));
 const messages = [...history, { role: "user", content: userMsg }];
 
-const body = JSON.stringify({ projectPath: PROJECT, messages, ...(currentChapter ? { currentChapter } : {}) });
+// 写作版本 P2a：作者消息带号和发出时间（界面也这样发），对话里交的操作按它认「是不是同一次」、重开书挂回这条。
+const messageId = `drive-${randomBytes(6).toString("hex")}`;
+const body = JSON.stringify({ projectPath: PROJECT, messages, messageId, issuedAt: new Date().toISOString(), ...(currentChapter ? { currentChapter } : {}) });
 console.log(`\n========== 用户：${userMsg}  (currentChapter=${currentChapter ?? "—"}) ==========`);
 
 const res = await fetch(`${BASE}/api/agent/chat`, { method: "POST", headers: { "content-type": "application/json" }, body });
@@ -69,6 +72,15 @@ function handle(event, dataStr) {
     if (r.characterSelection?.summary) console.log(`     characterSelection: ${r.characterSelection.summary}`);
     if (r.refined) console.log(`     refined: passed=${r.refined.passed} blocking=[${(r.refined.blocking ?? []).map((b) => b.label || b.type).join("、")}]`);
     if (r.report) console.log(`     report: ${JSON.stringify(r.report).slice(0, 300)}`);
+    return;
+  }
+  if (event === "operation") {
+    if (data?.type === "live") {
+      if (data.event?.type === "progress") console.log(`     … ${data.event.text}`);
+      return;
+    }
+    const op = data?.operation ?? {};
+    console.log(`\n  ⚙️  ${op.what ?? "操作"}：${op.state}${op.stateText ? `（${op.stateText}）` : ""}${op.summary ? ` — ${op.summary}` : ""}${op.allowed?.length ? ` [可点 ${op.allowed.join("/")}]` : ""}`);
     return;
   }
   if (event === "tool-error") { console.log(`\n  ❌ tool-error: ${JSON.stringify(data).slice(0, 300)}`); return; }

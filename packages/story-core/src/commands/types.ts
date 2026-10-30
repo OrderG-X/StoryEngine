@@ -36,6 +36,8 @@ export interface WritePlan<R> {
   readonly writes: readonly TxWrite[];
   readonly changed: ChangeSet;
   readonly result: R;
+  /** 整本换一个工作稿纪元（撤销、整本恢复：每一章的工作稿版本号都和之前对不上），不只换写了的那几章。 */
+  readonly freshDraftEpoch?: boolean;
 }
 
 export interface PlanContext {
@@ -47,6 +49,8 @@ export interface PlanContext {
    * plan 回报写完的版本号就用它算（draftVersionOf(全文, { epoch, gen: draftGen })）。
    */
   readonly draftGen: string;
+  /** 哪次操作的哪一步在写（不是操作写的没有）。 */
+  readonly op?: { readonly opId: string; readonly stepId: string };
 }
 
 export interface WriteCommandSpec<A, R> {
@@ -93,8 +97,22 @@ export type CommandOutcome<R> = CommandSuccess<R> | CommandFailure;
 export interface RunOptions {
   readonly caller: Caller;
   readonly idempotencyKey?: string;
-  /** 写前打快照（git 快照在服务端，核心只管在对的时机调它）。第二个参数是命令名，服务端据此给操作历史分类。 */
-  readonly snapshot?: (label: string, command: string) => Promise<void>;
+  /**
+   * 写前打快照（git 快照在服务端，核心只管在对的时机调它）。第二个参数是命令名，服务端据此给操作历史分类。
+   * 返回那份存档的树号就记进回执（撤销取前像用）。
+   * 第三个参数 `"tree"`：不打存档点的命令（snapshot: false）、或存档回调没给树号的（一批里第二条起），有撤销范围的效果时
+   * 只要写之前那一刻的树号——服务端打一份不进操作历史的存档、返回它的树。
+   */
+  readonly snapshot?: (label: string, command: string, mode?: "tree") => Promise<string | void>;
+  /**
+   * 哪次操作的哪一步（写作版本 P2a）：没给幂等键时，键就是 `op:<opId>:<stepId>`（同一步只应用一次，再来回放回执）；回执记下这两个号。
+   */
+  readonly op?: { readonly opId: string; readonly stepId: string };
+  /**
+   * 书锁里、回放回执之后、核依据和 plan 之前跑（写作版本 P2a 的栅栏）：返回失败就不写、原样返回它。
+   * 回执已在的照常回放（回放什么都不写）。
+   */
+  readonly precondition?: () => Promise<CommandFailure | undefined>;
   /** 写成功后推事件。 */
   readonly emit?: (event: BookEvent) => void;
   readonly now?: () => Date;

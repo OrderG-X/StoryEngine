@@ -46,6 +46,8 @@ export interface SavedProvider {
   readonly baseUrl: string;
   readonly apiKeyEnv: string;
   readonly apiKeyStatus: "present" | "missing" | "not_required";
+  /** 额度组（选填）：同一套餐的几个服务填成同一个名字，一起排队限流。 */
+  readonly quotaGroup?: string;
 }
 
 export interface FlatModelItem {
@@ -81,6 +83,8 @@ export interface ProviderFormProps {
   readonly setFormName: (value: string) => void;
   readonly setFormBaseUrl: (value: string) => void;
   readonly setFormAuthEnv: (value: string) => void;
+  readonly formQuotaGroup?: string;
+  readonly setFormQuotaGroup?: (value: string) => void;
   readonly setFormApiKey: (value: string) => void;
   readonly setShowApiKey: (updater: (value: boolean) => boolean) => void;
   readonly onSelectPreset: (preset: ProviderPreset) => void;

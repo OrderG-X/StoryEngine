@@ -121,10 +121,10 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
     expect(screen.queryByRole("button", { name: "重试这一步" })).toBeNull();
   });
 
-  it("同一轮有「下一步」选项：「确认改账」照出（AI 叫作者点它），别的建议动作不重复出", () => {
+  it("同一轮有「下一步」选项：「接着往下写」照出（作者档按钮），别的建议动作不重复出", () => {
     const { container } = renderChat([
       user("u1"),
-      assistant("a1", "已提交改账——点「确认改账」按钮生效。", [action("ledger-confirm", "确认改账"), action("quality-check", "质检")], {
+      assistant("a1", "第 3 章已经有稿了。", [action("continue-confirm", "接着往下写"), action("quality-check", "质检")], {
         cards: [{ type: "next-steps", prompt: { question: "陈年线索怎么排进收尾？", choices: [{ label: "直接写第27章", intent: "写第27章" }] } }],
       }),
     ], { onSendMessage: vi.fn() });
@@ -132,7 +132,7 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
     screen.getByRole("button", { name: "直接写第27章" });
     const el = rail(container);
     expect(el).not.toBeNull();
-    within(el!).getByRole("button", { name: "确认改账" });
+    within(el!).getByRole("button", { name: "接着往下写" });
     expect(within(el!).queryByRole("button", { name: "质检" })).toBeNull();
   });
 

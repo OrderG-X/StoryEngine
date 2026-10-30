@@ -7,19 +7,21 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bumpRevision, cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readDraft, readDraftState, readTruthBasis, runCommand, setLegacyTxIoHookForTests, sha256, withBookLock } from "@actalk/story-core";
+import { bumpRevision, cardWrite, chapterCommit, draftPath, draftSave, parseDraftFile, readBookEpoch, readDraft, readDraftState, readTruthBasis, runCommand, setLegacyTxIoHookForTests, sha256, withBookLock } from "@actalk/story-core";
 import { __resetDraftSyncForTests, acceptPaperIncoming, editDraft, flushDraftSave, hasFailedUnsavedDraft, isOwnSavedVersion, keepPaperMine, openPaper, refreshPaper, saveDraftKeepalive, scheduleDraftSave, UnsavedPaperError } from "../../drafts/draftSync.js";
 import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { createStoryProject } from "../book/project-store.js";
-import { applyAiDraft } from "../lib/ai-draft-write.js";
+import { applyAiDraftInOperation as applyAiDraft } from "../services/operations/test-helpers.js";
 import { writeCards } from "../lib/card-write.js";
 import { draftSha, pendingDraftFor, readDraftCandidate, readDraftRecovery, readSaveMark, saveDraftCandidate } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
-import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
-import { applyRevision, previewRevision, reviseDraftOneShot } from "../services/revision-service.js";
+import { createSnapshot } from "../lib/snapshot.js";
+import { restoreForTest } from "../lib/history-test-helpers.js";
+import { resumeOperation } from "../services/operations/executor.js";
+import { fakeDraftDeps, runDraftEdit, settledDraftChange } from "../services/operations/recipes/draft-change-kit.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
 
 const hooks = vi.hoisted(() => ({
@@ -203,7 +205,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const oldRequest = { projectPath: book, chapter: 1, body: "之前存过、后来撤销的 A。", baseVersion: base };
     expect((await call("PUT", "/api/working-draft", oldRequest)).status).toBe(200);
     expect(await applyAiDraft(book, { chapter: 1, title: "", body: "AI 后来改的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
-    await restoreSnapshot(book, before.id);
+    await restoreForTest(book, before.id);
     const restored = (await readDraft(book, 1))!;
     expect(restored.body).toBe("作者选定要恢复的底稿。");
     expect(restored.version).not.toBe(base);
@@ -217,7 +219,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const oldRequest = { projectPath: book, chapter: 1, body: "已经撤销的首稿 A。", baseVersion: null, client: "samewindow01", seq: 1 };
     expect((await call("PUT", "/api/working-draft", oldRequest)).status).toBe(200);
     expect(await applyAiDraft(book, { chapter: 1, title: "", body: "后来 AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
-    await restoreSnapshot(book, before.id);
+    await restoreForTest(book, before.id);
     const state = await readDraftState(book, 1);
     expect(state.file).toBeUndefined();
     expect(state.version).not.toBeNull();
@@ -537,7 +539,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     // 两笔都在撤销前发出、撤销后才到。
     const queuedNoop = { projectPath: book, chapter: 1, client, seq: 2, baseVersion: original, body: "撤销回的 R。" };
     const queuedEdit = { projectPath: book, chapter: 1, client, seq: 3, baseVersion: first.payload.version, body: "撤销前发出的 B。" };
-    await restoreSnapshot(book, snapshot.id);
+    await restoreForTest(book, snapshot.id);
     expect((await call("PUT", "/api/working-draft", queuedNoop)).payload).toMatchObject({ ok: true, unchanged: true });
     expect((await readSaveMark(book, 1, client))?.seq).toBe(2);
     const late = await call("PUT", "/api/working-draft", queuedEdit);
@@ -551,7 +553,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const snapshot = await createSnapshot(book, "撤销目标");
     const request = { projectPath: book, chapter: 1, client: "round8window02", baseVersion: original };
     expect((await call("PUT", "/api/working-draft", { ...request, seq: 1, body: "A。" })).status).toBe(200);
-    await restoreSnapshot(book, snapshot.id);
+    await restoreForTest(book, snapshot.id);
     expect((await call("PUT", "/api/working-draft", { ...request, seq: 2, body: "B。" })).status).toBe(409);
     expect((await readDraft(book, 1))?.body).toBe("R。");
     expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: "B。" });
@@ -589,8 +591,11 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
 
   it("书从备份 / 回收站搬回来：稿纸上照原来那版发的存稿对不上", async () => {
     const base = await save(1, "搬走前的稿。");
-    await bumpRevision(book);
+    const epoch = await readBookEpoch(book);
+    await bumpRevision(book, new Date(), { bookEpoch: true });
     expect((await readDraft(book, 1))?.version).not.toBe(base);
+    // 书的纪元也换了（写作版本 P2a）：搬走之前受理的操作不能再写这本书。
+    expect(await readBookEpoch(book)).not.toBe(epoch);
     expect((await call("PUT", "/api/working-draft", { projectPath: book, chapter: 1, body: "旧窗口的字。", baseVersion: base })).status).toBe(409);
     expect((await readDraft(book, 1))?.body).toBe("搬走前的稿。");
   });
@@ -1204,33 +1209,8 @@ describe("拆过的不再拆、章名行只认一级（第 14 轮复核）", () 
     expect(await readDraft(book, 1)).toMatchObject({ title: "原章名", body: "## 小节\n\n正文。" });
   });
 
-  it.each([
-    { label: "没章名", title: "", expected: undefined },
-    { label: "自己的章名", title: "AI 起的章名", expected: "AI 起的章名" },
-  ])("AB3：AI 候选（$label）换上时照它自己的章名，不夹带盘上后来的章名", async ({ title, expected }) => {
-    await saveTitled(1, "作者原稿。", "作者旧章名");
-    const start = await begin(1);
-    await saveTitled(1, "作者后来改的稿。", "作者后来改的章名");
-    const written = await applyAiDraft(book, { chapter: 1, title, body: "AI 稿。", ...start, source: "continue" });
-    expect(written).toMatchObject({ applied: false, reason: "draft_moved" });
-    if (written.applied) throw new Error("应留下候选");
-    wireRoutesWith();
-    await openPaper(book, 1);
-    expect(useDraftStore.getState().incoming?.pending?.id).toBe(written.candidateId);
-    expect(await acceptPaperIncoming()).toEqual({ ok: true });
-    expect((await readDraft(book, 1))?.title).toBe(expected);
-    expect(useDraftStore.getState().title).toBe(title);
-  });
-
-  it("AB4：「不要了」AI 候选不带指纹：不删（409），后来更新的那份留着", async () => {
-    const base = await save(1, "作者稿。");
-    const input = { chapter: 1, body: "候选正文。", baseVersion: base, basisDigest: (await readTruthBasis(book)).digest, source: "draft" as const, status: "ready" as const };
-    const candidate = await saveDraftCandidate(book, { ...input, title: "看到的旧名" });
-    await saveDraftCandidate(book, { ...input, id: candidate.id, title: "后来更新的新名" });
-    const response = await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "candidate", id: candidate.id, decision: "dismiss", baseVersion: null });
-    expect(response.status).toBe(409);
-    expect(await readDraftCandidate(book, candidate.id)).toMatchObject({ title: "后来更新的新名" });
-  });
+  // AB3（候选换上照它自己的章名）、AB4（不要了必带指纹）：P2a 片 2D 起 AI 候选换上 / 不要了走 draft.adopt / draft.discard，
+  // 见 services/operations/recipes/draft-candidate.test.ts。
 });
 
 // Astra 第 15 轮探针改写：一份稿只有两种样子（文件原文 / 拆开的稿），稿纸上就是拆开的稿——盘上读来的、提示里换上的、
@@ -1295,31 +1275,23 @@ describe("稿纸上就是拆开的稿（第 15 轮复核）", () => {
 });
 
 describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
-  it("两步改稿：预览后作者改了设定，应用时不换上、留成候选（B2）", async () => {
+  it("改稿等作者看改法：看的时候作者改了设定，点「换上」不换、作废说清，不留候选（B2）", async () => {
     await save(1, "他推开门。");
-    expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "海州" }], idempotencyKey: "origin-a" })).toMatchObject({ ok: true });
-    const preview = await previewRevision({
-      projectDir: book,
-      chapter: 1,
-      task: { id: "r-preview", chapter: 1, targetType: "paragraph", targetText: "他推开门。", problemSummary: "身份不明", revisionGoal: "点明籍贯", constraints: [], status: "pending" },
-      callModel: async (prompt) => {
+    expect(await writeCards(book, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "海州" }], idempotencyKey: "origin-a" })).toMatchObject({ ok: true });
+    const waiting = await runDraftEdit(book, "revise", { chapter: 1, edits: [{ targetText: "他推开门。", revisionGoal: "点明籍贯" }], preview: true }, fakeDraftDeps({
+      fixCallModel: async (prompt) => {
         expect(prompt).toContain("海州");
         return JSON.stringify({ beforeText: "他推开门。", afterText: "海州来的张三推开门。" });
       },
-    });
-    if (!preview.ok) throw new Error(JSON.stringify(preview));
-    expect(await writeCards(book, { by: "author", ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }], idempotencyKey: "origin-b" })).toMatchObject({ ok: true });
-    const applied = await applyRevision({ projectDir: book, chapter: 1, preview: preview.preview, targetText: "他推开门。" });
-    expect(applied).toMatchObject({ ok: false, code: "draft_kept" });
+    }));
+    expect(waiting.record.state).toBe("waiting_author");
+    expect(await writeCards(book, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }], idempotencyKey: "origin-b" })).toMatchObject({ ok: true });
+    expect(await resumeOperation(book, waiting.record.opId, { actionId: "confirm:1", decision: "apply" })).toMatchObject({ ok: true });
+    const done = await settledDraftChange(book, waiting.record.opId);
+    expect(done).toMatchObject({ state: "obsolete", failure: { code: "basis_moved" } });
+    expect(done.failure?.message).toContain("设定");
     expect((await readDraft(book, 1))?.body).toBe("他推开门。");
-    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "candidate", reason: "basis_moved", body: "海州来的张三推开门。" });
-  });
-
-  it("两步改稿：预览没记依据（升级前的旧预览）→ 不换，如实说要重新预览", async () => {
-    await save(1, "他推开门。");
-    const applied = await applyRevision({ projectDir: book, chapter: 1, preview: { beforeText: "他推开门。", afterText: "他推开了门。" } as never, targetText: "他推开门。" });
-    expect(applied).toMatchObject({ ok: false, code: "preview_stale" });
-    expect((await readDraft(book, 1))?.body).toBe("他推开门。");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
   });
 
   it("升级前崩溃留下的老格式定稿事务：先收拾再核依据，照没收拾的半截前文写的不换上（R9）", async () => {
@@ -1410,28 +1382,28 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
       if (from.includes("/staged/") && to === join(book, "store-control/revision.json")) { revisionSwapped.release(); await allowRest.promise; }
     };
     hooks.beforeRename = async (from, to) => {
-      if (from.includes("/staged/") && to.includes("/ledger/receipts/")) throw eio("设定已换、回执写盘失败");
+      // 只坏这一次（改稿换上时也写回执）。
+      if (from.includes("/staged/") && to.includes("/ledger/receipts/")) {
+        hooks.beforeRename = undefined;
+        throw eio("设定已换、回执写盘失败");
+      }
     };
     const failedWrite = runCommand(book, cardWrite, { ops: [{ op: "field.set", card: "张三", label: "籍贯", value: "京城" }] }, { caller: "author", idempotencyKey: "failed-card-b" });
     let prompt = "";
     try {
       await revisionSwapped.promise;
-      const revising = reviseDraftOneShot({
-        projectDir: book,
-        chapter: 1,
-        targetText: "他推开门。",
-        revisionGoal: "点明籍贯",
-        callModel: async (input) => {
+      const revising = runDraftEdit(book, "revise", { chapter: 1, edits: [{ targetText: "他推开门。", revisionGoal: "点明籍贯" }] }, fakeDraftDeps({
+        fixCallModel: async (input) => {
           prompt = input;
           return JSON.stringify({ beforeText: "他推开门。", afterText: "海州来的张三推开门。" });
         },
-      });
+      }));
       // 写到一半时改稿取不到依据（等书锁），进不了模型。
       await new Promise((done) => setTimeout(done, 50));
       expect(prompt).toBe("");
       allowRest.release();
       expect(await failedWrite).toMatchObject({ ok: false });
-      expect(await revising).toMatchObject({ ok: true, applied: true });
+      expect(await revising).toMatchObject({ record: { state: "succeeded" }, body: { ok: true } });
       expect(prompt).toContain("海州");
       expect(prompt).not.toContain("京城");
       expect((await readDraft(book, 1))?.body).toBe("海州来的张三推开门。");
@@ -1459,21 +1431,17 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     let prompt = "";
     try {
       await atHead.promise;
-      const revising = reviseDraftOneShot({
-        projectDir: book,
-        chapter: 2,
-        targetText: "林远看着保险柜。",
-        revisionGoal: "补上账本里记的口令",
-        callModel: async (input) => {
+      const revising = runDraftEdit(book, "revise", { chapter: 2, edits: [{ targetText: "林远看着保险柜。", revisionGoal: "补上账本里记的口令" }] }, fakeDraftDeps({
+        fixCallModel: async (input) => {
           prompt = input;
           return JSON.stringify({ beforeText: "林远看着保险柜。", afterText: "林远输入白鹤，打开了保险柜。" });
         },
-      });
+      }));
       await new Promise((done) => setTimeout(done, 50));
       expect(prompt).toBe("");
       finishHead.release();
       expect(await writing).toMatchObject({ ok: true });
-      expect(await revising).toMatchObject({ ok: true, applied: true });
+      expect(await revising).toMatchObject({ record: { state: "succeeded" }, body: { ok: true } });
       expect(prompt).toContain("白鹤");
       expect(prompt).not.toContain("红松");
       expect(await pendingDraftFor(book, 2)).toBeUndefined();

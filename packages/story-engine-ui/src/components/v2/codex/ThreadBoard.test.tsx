@@ -61,22 +61,22 @@ describe("伏笔看板（重构 P6，草图 ④）", () => {
     expect(screen.getAllByRole("button", { name: /^「/u })).toHaveLength(1);
   });
 
-  it("【这条收了】【分量】发「确认改账」结构化动作（线索编号只在动作里）；收了的没有这两个；有动作在跑不让点", async () => {
+  it("【这条收了】【分量】交一次直接改账（线索编号只在动作里，请求号点的时候给）；收了的没有这两个；有动作在跑不让点", async () => {
     mockFetch({ ok: true, board: BOARD });
     const onAction = vi.fn();
     const { rerender } = render(<ThreadBoard projectPath="/book" busy={false} onAction={onAction} />);
     fireEvent.click(await screen.findByRole("button", { name: /钥匙开什么/u }));
     fireEvent.click(screen.getByRole("button", { name: "这条收了" }));
-    expect(onAction).toHaveBeenLastCalledWith({
-      toolName: "ledger_decision",
-      key: "board-close-t-key-10",
-      decisions: [{ type: "thread.close", thread: "t-key", chapter: 10 }],
-      label: "收掉线索「钥匙开什么」",
-    });
+    expect(onAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: "new",
+      type: "ledger.change",
+      mode: "author",
+      params: { changes: [{ op: "resolve", id: "t-key", chapter: 10, title: "钥匙开什么" }] },
+      requestKey: expect.any(String),
+    }));
     fireEvent.click(within(screen.getByRole("group", { name: "分量" })).getByRole("button", { name: "小线索" }));
     expect(onAction).toHaveBeenLastCalledWith(expect.objectContaining({
-      decisions: [{ type: "thread.weight", thread: "t-key", weight: "minor" }],
-      label: "线索「钥匙开什么」定为小线索",
+      params: { changes: [{ op: "importance", id: "t-key", importance: "minor", title: "钥匙开什么" }] },
     }));
     // 当前分量那个按钮按下、点不了。
     expect((within(screen.getByRole("group", { name: "分量" })).getByRole("button", { name: "大伏笔" }) as HTMLButtonElement).disabled).toBe(true);

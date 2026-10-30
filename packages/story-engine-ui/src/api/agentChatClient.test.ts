@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamAgentChat } from "./agentChatClient.js";
+import { readStoredOperationAction, streamAgentChat, type OperationViewData } from "./agentChatClient.js";
 
 /** 把若干 SSE 帧拼成一个文本，返回带 body(ReadableStream) 的 Response。 */
 function sseResponse(frames: readonly string[], init?: { ok?: boolean; status?: number }): Response {
@@ -24,6 +24,35 @@ function sseResponse(frames: readonly string[], init?: { ok?: boolean; status?: 
 
 function frame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+const OP_ID = "op-0123456789abcdef0123";
+
+/** 服务端的操作视图（写作版本 P2a）：检查做完了，结果体照四个检查原来的输出形状。 */
+function opView(mode: string, body: unknown, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    opId: OP_ID, kind: "inspect.run", mode, what: "核账·第 8 章", chapter: 8, state: "succeeded", stateText: "做完了", allowed: [],
+    origin: { kind: "chat", messageId: "user-1", chapter: 3 }, summary: "做完了",
+    result: { schema: "operation-result/1", summary: "做完了", body }, pendingActions: [], eventSeq: 4, createdAt: "", updatedAt: "",
+    ...overrides,
+  };
+}
+
+/** 发几帧 operation 事件，收 onOperation / onOperationProgress。 */
+async function collectOperations(frames: readonly string[]) {
+  vi.stubGlobal("fetch", vi.fn(async () => sseResponse([...frames, frame("done", {})])));
+  const views: OperationViewData[] = [];
+  const progress: { opId: string; text: string }[] = [];
+  await streamAgentChat(
+    { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
+    {
+      onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: () => undefined, onToolError: () => undefined,
+      onError: () => undefined, onDone: () => undefined,
+      onOperation: (view) => { views.push(view); },
+      onOperationProgress: (item) => { progress.push(item); },
+    },
+  );
+  return { views, progress };
 }
 
 afterEach(() => {
@@ -293,302 +322,289 @@ describe("streamAgentChat", () => {
     expect(received?.ok).toBe(true);
   });
 
-  it("passes the check_ai_flavor report (violations/usedFallback) through onToolResult", async () => {
-    // 体检卡需要 violations/usedFallback——这俩字段不在 read/draft 工具的投影白名单里，
-    // 必须为 check_ai_flavor 专门透传整份 AiFlavorReport，否则前端拿不到违规清单。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "f1",
-          toolName: "check_ai_flavor",
-          output: {
-            ok: true,
-            summary: "有一处 AI 腔。",
-            usedFallback: false,
-            violations: [
-              { id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high", suggestedFix: "改成具体动作" },
-            ],
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { aiFlavorReport?: { ok: boolean; violations: readonly unknown[]; usedFallback: boolean } } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "体检这章 AI 味" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => {
-          received = info;
-        },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.aiFlavorReport?.ok).toBe(true);
-    expect(received?.aiFlavorReport?.usedFallback).toBe(false);
-    expect(received?.aiFlavorReport?.violations).toHaveLength(1);
-  });
-
-  it("translates commit_apply output.report (真实字段名) → commitReport for the 入库 delta 卡", async () => {
-    // commit_apply 真实输出字段名是 report（commit-apply.ts），且只有 committed:true 才透传。
-    // 测翻译层：原始帧给 report（不是 commitReport），断言 onToolResult 收到 commitReport。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "c1",
-          toolName: "commit_apply",
-          output: {
-            ok: true,
-            committed: true,
-            report: { updatedCharacters: ["c1", "c2"], timelineEventIds: ["e1"], updatedHooks: [] },
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "入库这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitReport).toBeDefined();
-    expect((received?.commitReport as { updatedCharacters?: readonly unknown[] }).updatedCharacters).toHaveLength(2);
-  });
-
-  it("does NOT translate commit_apply.report when committed=false (反谎报：入库未通过不挂卡)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "c2",
-          toolName: "commit_apply",
-          output: { ok: false, committed: false, report: { updatedCharacters: ["c1"] } },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "入库这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitReport).toBeUndefined();
-  });
-
-  it("generate_draft 的 otherVersions（落选几版全文）→ draftVersions，「另外几版」卡用；别的工具不认", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "g1", toolName: "generate_draft", output: { ok: true, chapter: 38, otherVersions: [{ index: 1, body: "另一版。" }] } }),
-        frame("tool-result", { toolCallId: "r1", toolName: "revise_draft", output: { ok: true, chapter: 38, otherVersions: [{ index: 1, body: "另一版。" }] } }),
-        frame("done", {}),
-      ]),
-    ));
-    const received: { draftVersions?: unknown }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写两版" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received.push(info); },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-    expect(received[0]?.draftVersions).toEqual({ chapter: 38, versions: [{ index: 1, body: "另一版。" }] });
-    expect(received[1]?.draftVersions).toBeUndefined();
-  });
-
-  it("translates quality_check output.refined (真实字段名) → qualityReport for the 质检明细卡", async () => {
-    // quality_check 真实输出分层报告字段名是 refined（quality-check.ts）。测翻译层：原始帧给 refined，断言收到 qualityReport。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "q1",
-          toolName: "quality_check",
-          output: {
-            ok: true,
-            summary: "有 1 处硬伤。",
-            refined: { passed: false, blocking: [{ type: "forbidden_reveal", label: "提前泄密", severity: "error", message: "m" }], soft: [], reference: [], summary: "s" },
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { qualityReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "质检这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.qualityReport).toBeDefined();
-    expect((received?.qualityReport as { blocking?: readonly unknown[] }).blocking).toHaveLength(1);
-  });
-
-  it("check_continuity 没核成（ok:false：还在读 / 出错）→ 不透传 continuityCheck，不出「没发现对不上」卡；pending 透传 continuityPending（R4.1/验收 3.1）", async () => {
-    // 验收 3.1 的根因：只要有 sure/maybe 数组就建卡，空数组被渲染成「没发现对不上」的假成功卡。
-    // 现在 ok:false 一律不建卡（还在读、模型失败、没正文都一样），只留工具文字如实说。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "cc1",
-          toolName: "check_continuity",
-          output: {
-            ok: false,
-            chapter: 5,
-            source: "draft",
-            sure: [],
-            maybe: [],
-            failures: ["核账员还在读前文（第 4 / 57 章），这次没核"],
-            pending: { done: 4, total: 57 },
-            summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
-          },
-        }),
-        frame("tool-result", {
-          toolCallId: "cc2",
-          toolName: "check_continuity",
-          output: { ok: false, chapter: 5, source: "draft", sure: [], maybe: [], failures: ["第 1 遍（盯东西）没跑成"], summary: "第 5 章核账没跑成。" },
-        }),
-        frame("tool-result", {
-          toolCallId: "cc3",
-          toolName: "check_continuity",
-          output: { ok: false, chapter: 5, source: null, sure: [], maybe: [], summary: "第 5 章还没有正文，没法核账。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    const received: { continuityCheck?: unknown; continuityPending?: unknown }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received.push(info); },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received).toHaveLength(3);
-    for (const info of received) expect(info.continuityCheck).toBeUndefined();
-    // 「还在读」的结构化进度照透传（前端区分「还在读」和「出错」用这个字段，别解析 failures 文字）；
-    // 出错 / 没正文没有 pending。
-    expect(received[0]?.continuityPending).toEqual({ done: 4, total: 57 });
-    expect(received[1]?.continuityPending).toBeUndefined();
-    expect(received[2]?.continuityPending).toBeUndefined();
-  });
-
-  it("check_continuity ok:true 且 0 处 → 照旧透传 continuityCheck（渲染「没发现对不上」卡，正常路不回归）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "cc4",
-          toolName: "check_continuity",
-          output: { ok: true, chapter: 4, source: "draft", sure: [], maybe: [], failures: [], summary: "核了第 4 章，没发现和前文对不上的地方。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { continuityCheck?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.continuityCheck).toEqual({ chapter: 4, sure: [], maybe: [] });
-  });
-
-  it("check_continuity 的「可能」里带 revisited（上一遍按核账改过的句子）→ 透传；from 不是字符串的不带", async () => {
-    const twice = { quote: "还剩八天", earlierQuote: "还剩九天", earlierChapter: 12, reason: "天数", revisited: { from: "还剩九天。" } };
-    const bad = { quote: "她走了", earlierQuote: "她没走", earlierChapter: 12, reason: "去留", revisited: { from: 3 } };
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "cc6", toolName: "check_continuity", output: { ok: true, chapter: 12, source: "draft", sure: [], maybe: [twice, bad], failures: [], summary: "核了" } }),
-        frame("done", {}),
-      ]),
-    ));
-    let received: { continuityCheck?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      { onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: (info) => { received = info; }, onToolError: () => undefined, onError: () => undefined, onDone: () => undefined },
-    );
-    const { revisited: _ignored, ...plain } = bad;
-    expect(received?.continuityCheck).toEqual({ chapter: 12, sure: [], maybe: [twice, plain] });
-  });
-
-  it("check_continuity 带 earlierOpen（前面章节之前报过、没改的）→ 透传进 continuityCheck", async () => {
+  it("检查做完（operation 事件）→ 视图带针对的章；核账结果按原来的卡片字段解析（revisited、earlierOpen、查的版本）", async () => {
+    const twice = { quote: "还剩八天", earlierQuote: "还剩九天", earlierChapter: 7, reason: "天数", revisited: { from: "还剩九天。" } };
+    const bad = { quote: "她走了", earlierQuote: "她没走", earlierChapter: 7, reason: "去留", revisited: { from: 3 } };
     const old = { quote: "走了五年", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年", againstSetting: { label: "人物卡" } };
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "cc5",
-          toolName: "check_continuity",
-          output: { ok: true, chapter: 8, source: "draft", sure: [], maybe: [], earlierOpen: [old], failures: [], checkedVersion: "abc123", summary: "核了第 8 章，没发现和前文对不上的地方。第 3 章还有 1 处之前报过、还没改。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { continuityCheck?: unknown; checkedVersion?: string } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.continuityCheck).toEqual({ chapter: 8, sure: [], maybe: [], earlierOpen: [old] });
-    expect(received?.checkedVersion).toBe("abc123");
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: opView("continuity", { ok: true, chapter: 8, source: "draft", checkedVersion: "abc123", sure: [], maybe: [twice, bad], earlierOpen: [old], failures: [], summary: "核了" }) }),
+    ]);
+    const { revisited: _ignored, ...plain } = bad;
+    expect(views[0]).toMatchObject({ opId: OP_ID, mode: "continuity", chapter: 8, what: "核账·第 8 章", state: "succeeded", origin: { kind: "chat", messageId: "user-1" } });
+    expect(views[0]?.inspect).toEqual({ continuityCheck: { chapter: 8, sure: [], maybe: [twice, plain], earlierOpen: [old] }, checkedVersion: "abc123" });
   });
 
-  it("定论（P12）：settle_preview / settle_fact 的卡防御解析后透传；没查成不建卡；settle_apply 成功带票号", async () => {
-    const settle = {
-      token: "0123456789abcdef",
+  it("硬伤检查 / 内容审阅 / 查 AI 味做完 → 各自的结果卡字段；查的是定稿时不带版本", async () => {
+    const refined = { passed: false, blocking: [{ type: "forbidden_reveal", label: "提前泄密", severity: "error", message: "m" }], soft: [], reference: [], summary: "s" };
+    const review = { issues: [{ id: "x", message: "m" }] };
+    const violations = [{ id: "aiflavor-0", text: "心中五味杂陈。", reason: "套路抒情", severity: "high", suggestedFix: "改成具体动作" }];
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: opView("quality", { ok: true, source: "draft", checkedVersion: "v1", refined }) }),
+      frame("operation", { type: "record", operation: opView("review", { ok: true, usedFallback: false, source: "committed", checkedVersion: "v1", review }) }),
+      frame("operation", { type: "record", operation: opView("flavor", { ok: true, usedFallback: false, source: "draft", checkedVersion: "v2", violations }) }),
+    ]);
+    expect(views[0]?.inspect).toEqual({ qualityReport: refined, checkedVersion: "v1" });
+    expect(views[1]?.inspect).toEqual({ draftReview: review });
+    expect(views[2]?.inspect).toMatchObject({ aiFlavorReport: { ok: true, usedFallback: false, violations }, checkedVersion: "v2" });
+  });
+
+  it("没查成的不出结果卡：ok:false、审稿走了回退、操作没做成（空清单不等于没问题）", async () => {
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: opView("continuity", { ok: false, chapter: 8, source: "draft", sure: [], maybe: [], failures: ["没跑成"] }) }),
+      frame("operation", { type: "record", operation: opView("quality", { ok: false, refined: { passed: true, blocking: [], soft: [], reference: [], summary: "s" } }) }),
+      frame("operation", { type: "record", operation: opView("review", { ok: true, usedFallback: true, review: { issues: [{ id: "x", message: "AI 审稿结果不可用" }] } }) }),
+      frame("operation", { type: "record", operation: opView("flavor", { ok: false, usedFallback: false, violations: [] }) }),
+      frame("operation", { type: "record", operation: opView("continuity", { ok: true, chapter: 8, sure: [], maybe: [] }, { state: "failed", failure: { code: "x", message: "模型没回", retryable: true } }) }),
+    ]);
+    expect(views).toHaveLength(5);
+    for (const view of views) expect(view.inspect).toBeUndefined();
+    expect(views[4]).toMatchObject({ state: "failed", failure: { message: "模型没回", retryable: true } });
+  });
+
+  it("写稿做完了 → draft（章、换没换上、章名、存档点按先后、落选几版）；没做完、不是写稿的不带", async () => {
+    const draftView = (body: unknown, overrides: Record<string, unknown> = {}) => opView("write", body, { kind: "draft.change", what: "写稿·第 38 章", chapter: 38, ...overrides });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38, draftTitle: " 雨夜 ", planSnapshotId: "s-plan", snapshotId: "s-draft", otherVersions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "另一版。" }] }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", pick: "author", ok: false, chapter: 38, planSnapshotId: "s-plan", otherVersions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "甲。" }, { index: 2, candidateId: "0038-op-2", handled: true }] }) }),
+      frame("operation", { type: "record", operation: opView("write", { kind: "draft.adopt", chapter: 38, applied: true, version: "v9", snapshotId: "s-adopt" }, { kind: "draft.adopt", what: "换上 AI 稿·第 38 章", chapter: 38, mode: undefined }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: false, chapter: 38, planSnapshotId: "s-plan", snapshotId: "s-stale", kept: { candidateId: "c1", reason: "draft_moved" } }) }),
+      frame("operation", { type: "record", operation: draftView({ kind: "draft.change", mode: "write", ok: true, chapter: 38 }, { state: "running" }) }),
+      frame("operation", { type: "record", operation: opView("continuity", { kind: "draft.change", ok: true, chapter: 8 }) }),
+    ]);
+    expect(views[0]?.draft).toEqual({ chapter: 38, applied: true, title: "雨夜", snapshots: ["s-plan", "s-draft"], versions: { chapter: 38, versions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "另一版。" }] } });
+    // 作者自己挑：一版都没换上，几版带 pick；处理过的那版不收。
+    expect(views[1]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"], versions: { chapter: 38, pick: true, versions: [{ index: 1, candidateId: "0038-op-1", sha: "a".repeat(64), body: "甲。" }] } });
+    // 换上作者挑的那版：带存档点。
+    expect(views[2]?.draft).toEqual({ chapter: 38, applied: true, snapshots: ["s-adopt"] });
+    // 没换上：稿的存档点不算（没写），章纲存过的照算。
+    expect(views[3]?.draft).toEqual({ chapter: 38, applied: false, snapshots: ["s-plan"] });
+    expect(views[4]?.draft).toBeUndefined();
+    expect(views[5]?.draft).toBeUndefined();
+  });
+
+  it("想走法（片 2D）做完了 → plan（走法卡那一份）；没做完、没想出能用的不带", async () => {
+    const planView = (body: unknown, overrides: Record<string, unknown> = {}) => opView("", body, { kind: "plan.propose", mode: undefined, what: "想走法·第 8 章", ...overrides });
+    const options = [{ title: "老周开口", steps: ["夜里上楼", "说出钥匙在哪"], recommended: true, threads: [], problems: [] }];
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: planView({ kind: "plan.propose", ok: true, chapter: 8, idea: "让老周开口", options, checked: true, summary: "s" }) }),
+      frame("operation", { type: "record", operation: planView({ kind: "plan.propose", ok: true, chapter: 8, options, checked: true }, { state: "running" }) }),
+      frame("operation", { type: "record", operation: planView({ kind: "plan.propose", ok: true, chapter: 8, options: [], checked: false }) }),
+    ]);
+    expect(views[0]?.plan).toEqual({ chapter: 8, idea: "让老周开口", options, checked: true });
+    expect(views[1]?.plan).toBeUndefined();
+    expect(views[2]?.plan).toBeUndefined();
+  });
+
+  it("「再想一次」按钮存下来、读回来（和服务端同一口径）：章号不对的不认", () => {
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "plan.propose", params: { chapter: 8, idea: " 让老周开口 ", avoid: ["甲", "甲", " "] }, ...stamp }))
+      .toEqual({ kind: "new", type: "plan.propose", params: { chapter: 8, idea: "让老周开口", avoid: ["甲"] }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "plan.propose", params: { chapter: 0 }, ...stamp })).toBeUndefined();
+  });
+
+  it("改稿（片 2C）做完了 → draft 带改了的几处；停着等作者的带改法和能点的决定，点过的、认不出的不算", async () => {
+    const editView = (overrides: Record<string, unknown>) => opView("revise", null, { kind: "draft.change", what: "改稿·第 4 章", chapter: 4, ...overrides });
+    const preview = { round: 2, changes: [{ from: "旧句。", to: "新句。" }, { from: 3 }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "压一压语气" };
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: editView({
+        result: { schema: "operation-result/1", summary: "改好了", body: { kind: "draft.change", mode: "fix", ok: true, chapter: 4, snapshotId: "s-1", changes: [{ from: "旧。", to: "新。" }, "坏的"], failed: [] } },
+      }) }),
+      frame("operation", { type: "record", operation: editView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm:1", kind: "draft.revise.confirm", decisions: ["apply", "again"], preview: { round: 1, changes: [{ from: "a", to: "b" }], failed: [] }, decided: true },
+        { actionId: "other", kind: "something.else", decisions: ["x"], preview: {}, decided: false },
+        { actionId: "confirm:2", kind: "draft.revise.confirm", decisions: ["apply", "again", 7], preview, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: editView({ state: "running", result: undefined, pendingActions: [{ actionId: "confirm:3", kind: "draft.revise.confirm", decisions: ["apply"], preview, decided: false }] }) }),
+    ]);
+    expect(views[0]?.draft).toEqual({ chapter: 4, applied: true, snapshots: ["s-1"], changes: [{ from: "旧。", to: "新。" }] });
+    expect(views[1]?.pending).toEqual({
+      kind: "revise",
+      actionId: "confirm:2",
+      decisions: ["apply", "again"],
+      revise: { round: 2, changes: [{ from: "旧句。", to: "新句。" }], failed: [{ target: "那句", why: "稿里找不到" }], brief: "压一压语气" },
+    });
+    // 不在等作者的不带（停着等作者才有按钮）。
+    expect(views[2]?.pending).toBeUndefined();
+  });
+
+  it("改设定、改账（片 3）：停着等作者的带那几处和附带的话；做完了带存档点；「认下」、直接改账的按钮存下来读回来，不对的不认", async () => {
+    const settingsView = (overrides: Record<string, unknown>) => opView("ai", null, { kind: "settings.change", what: "改设定", chapter: undefined, ...overrides });
+    const ledgerView = (overrides: Record<string, unknown>) => opView("edit", null, { kind: "ledger.change", what: "改账", chapter: undefined, ...overrides });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: settingsView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: ["「林远」的「身份」改了", 3], notes: ["没改成：没有叫「甲」的卡。"] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: settingsView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-settings", kind: "settings_confirm", decisions: ["apply"], preview: { lines: [] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: settingsView({ result: { schema: "operation-result/1", summary: "改好了", body: { kind: "settings.change", applied: ["x"], notDone: [], snapshotId: "s-9" } } }) }),
+      frame("operation", { type: "record", operation: ledgerView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-ledger", kind: "ledger_confirm", decisions: ["apply"], preview: { lines: ["把线索「钟为什么停」记为第 2 章已收"], notes: [] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: ledgerView({ result: { schema: "operation-result/1", summary: "账改好了", body: { kind: "ledger.change", applied: ["x"], notes: [] } } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({ kind: "confirm", what: "settings", actionId: "confirm-settings", decisions: ["apply"], lines: ["「林远」的「身份」改了"], notes: ["没改成：没有叫「甲」的卡。"] });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]?.changed).toEqual({ what: "settings", snapshotId: "s-9" });
+    expect(views[3]?.pending).toEqual({ kind: "confirm", what: "ledger", actionId: "confirm-ledger", decisions: ["apply"], lines: ["把线索「钟为什么停」记为第 2 章已收"], notes: [] });
+    expect(views[4]?.changed).toEqual({ what: "ledger" });
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "settings.change", params: { accept: OP_ID }, ...stamp })).toEqual({ kind: "new", type: "settings.change", params: { accept: OP_ID }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "settings.change", params: { accept: "op-1" }, ...stamp })).toBeUndefined();
+    const changes = [{ op: "resolve", id: "t1-1", chapter: 2, title: "钟为什么停" }, { op: "summary", chapter: 1, text: "她找到了钥匙。" }];
+    expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes }, ...stamp })).toEqual({ kind: "new", type: "ledger.change", mode: "author", params: { changes }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "edit", params: { changes }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes: [{ op: "resolve", id: "t1-1" }] }, ...stamp })).toBeUndefined();
+  });
+
+  it("撤销 / 裁剪（片 4C）：停着等「全撤」「确认裁剪」带那几处；做完真改了盘才算「改了」（带存档点），没改、裁剪不算；撤销按钮存下来读回来", async () => {
+    const historyView = (mode: string, overrides: Record<string, unknown>) => opView(mode, null, { kind: "history.change", what: "撤销", chapter: undefined, ...overrides });
+    const body = (mode: string, paths: readonly string[], snapshotId?: string) => ({ kind: "history.change", mode, paths, ...(snapshotId ? { snapshotId } : {}) });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: historyView("undo", { state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-undo-2", kind: "undo_confirm", decisions: ["apply"], preview: { lines: ["第 1 章工作稿：这次之后别的改动又改过"], notes: ["要撤的是…"] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: historyView("prune", { state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-prune", kind: "prune_confirm", decisions: ["apply"], preview: { lines: ["更早的 30 条折成一条"], notes: [] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: historyView("undo", { result: { schema: "operation-result/1", summary: "撤好了", body: body("undo", ["chapters/0001.md"], "s-7") } }) }),
+      frame("operation", { type: "record", operation: historyView("undo", { result: { schema: "operation-result/1", summary: "没有能撤的改动了。", body: body("undo", []) } }) }),
+      frame("operation", { type: "record", operation: historyView("prune", { result: { schema: "operation-result/1", summary: "裁好了", body: body("prune", []) } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({ kind: "confirm", what: "undo", actionId: "confirm-undo-2", decisions: ["apply"], lines: ["第 1 章工作稿：这次之后别的改动又改过"], notes: ["要撤的是…"] });
+    expect(views[1]?.pending).toMatchObject({ kind: "confirm", what: "prune", actionId: "confirm-prune" });
+    expect(views[2]?.changed).toEqual({ what: "history", snapshotId: "s-7" });
+    expect(views[3]?.changed).toBeUndefined();
+    expect(views[4]?.changed).toBeUndefined();
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: OP_ID }, ...stamp })).toEqual({ kind: "new", type: "history.change", mode: "undo", params: { opId: OP_ID }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp })).toEqual({ kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: "op-1" }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "restore", params: { snapshot: "a".repeat(40) }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "prune", params: {}, ...stamp })).toBeUndefined();
+  });
+
+  it("改稿按钮、等作者点的「接着做」防御解析（和服务端同一口径）：章号、原文、决定不对的不认", () => {
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 4, fixes: [{ targetText: "旧。", revisionGoal: "对上前文" }] }, ...stamp }))
+      .toEqual({ kind: "new", type: "draft.change", mode: "fix", params: { mode: "fix", chapter: 4, fixes: [{ targetText: "旧。", revisionGoal: "对上前文" }] }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 4, edits: [{ targetText: " 原样 ", revisionGoal: "润色" }], preview: true, style: "deai" }, ...stamp }))
+      .toMatchObject({ mode: "revise", params: { edits: [{ targetText: " 原样 ", revisionGoal: "润色" }], preview: true, style: "deai" } });
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "deai", params: { chapter: 4, violations: [{ id: "v1", text: "那一刻。", severity: "high" }] }, ...stamp }))
+      .toMatchObject({ mode: "deai", params: { violations: [{ id: "v1", text: "那一刻。", severity: "high" }] } });
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 4, fixes: [{ targetText: "旧。" }] }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "revise", params: { chapter: 0, edits: [{ targetText: "a" }] }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "deai", params: { chapter: 4, violations: [] }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm:1", decision: "apply" } }))
+      .toEqual({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm:1", decision: "apply" } });
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm 1", decision: "apply" } })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: "apply" })).toBeUndefined();
+  });
+
+  it("步骤、正文流（live）→ onOperationLive；进度不进这里，形状不对的不认", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "step", step: "write:0", exec: "1:write:0" } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "draft-delta", exec: "1:write:0", streamSeq: 1, text: "雨下了", replace: true, base: false } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "draft-delta", exec: "1:write:0", streamSeq: "2", text: "号不是数" } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "progress", text: "在写" } }),
+      frame("done", {}),
+    ])));
+    const live: unknown[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写" }] },
+      {
+        onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: () => undefined, onToolError: () => undefined,
+        onError: () => undefined, onDone: () => undefined,
+        onOperationLive: (item) => { live.push(item); },
+      },
+    );
+    expect(live).toEqual([
+      { opId: OP_ID, event: { type: "step", step: "write:0", exec: "1:write:0" } },
+      { opId: OP_ID, event: { type: "draft-delta", exec: "1:write:0", streamSeq: 1, text: "雨下了", replace: true } },
+    ]);
+  });
+
+  it("change_draft 有稿时的按钮（rewriteChoices）防御解析：动作不对的那个丢掉；别的工具不认", async () => {
+    const action = { kind: "new", type: "draft.change", mode: "write", params: { chapter: 3, rewrite: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" };
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      frame("tool-result", { toolCallId: "c1", toolName: "change_draft", output: { ok: false, code: "chapter_has_text", chapter: 3, rewriteChoices: [
+        { label: "重写第 3 章", intent: "重写", action },
+        { label: "坏的", intent: "x", action: { kind: "new", type: "draft.change", mode: "write", params: {} } },
+      ] } }),
+      frame("tool-result", { toolCallId: "r1", toolName: "revise_draft", output: { ok: false, rewriteChoices: [{ label: "重写第 3 章", intent: "重写", action }] } }),
+      frame("done", {}),
+    ])));
+    const received: { rewriteChoices?: unknown }[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写第 3 章" }] },
+      {
+        onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: (info) => { received.push(info); }, onToolError: () => undefined,
+        onError: () => undefined, onDone: () => undefined,
+      },
+    );
+    expect(received[0]?.rewriteChoices).toEqual([{ label: "重写第 3 章", mode: "write", action }]);
+    expect(received[1]?.rewriteChoices).toBeUndefined();
+  });
+
+  it("进度（live）→ onOperationProgress；形状不对的不认", async () => {
+    const { progress } = await collectOperations([
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "progress", text: "核账员在读第 3 章" } }),
+      frame("operation", { type: "live", opId: OP_ID, event: { type: "progress" } }),
+      frame("operation", { type: "live", event: { type: "progress", text: "没有号" } }),
+    ]);
+    expect(progress).toEqual([{ opId: OP_ID, text: "核账员在读第 3 章" }]);
+  });
+
+  it("定稿（片 4A）：清单等作者点 → pending 是定稿清单（防御解析，认不出的不算）；定不了 → 带清单卡；定成了 → 带回执和存档点；按钮存下来读回来", async () => {
+    const commitView = (overrides: Record<string, unknown>) => opView("", null, { kind: "commit.prepare", mode: undefined, what: "定稿·第 2 章", chapter: 2, ...overrides });
+    const checklist = {
+      chapter: 2, canCommit: true, blockingReasons: [], summary: "第 2 章可以定稿：2 条自动记下。", notRecorded: [],
+      ledgerChecklist: [
+        { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
+        { id: "i0", kind: "fact", label: "林远到了钟楼", detail: "林远推门进了钟楼。", removable: true },
+        { id: "", kind: "fact", label: "没键的丢掉", removable: true },
+      ],
+    };
+    const blocked = { chapter: 2, canCommit: false, blockingReasons: ["正文 120 字，不到每章下限 300 字。这章就该这么短的话，点「就这么短，照样定稿」"], summary: "第 2 章现在还定不了。", notRecorded: [], shortOnly: true };
+    const report = { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 1, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, day: 3, dayEnd: 3, notRecorded: 0 } };
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: checklist }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: { chapter: 2 } }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "定不了", body: { kind: "commit.prepare", chapter: 2, committed: false, blocked } } }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "第 2 章已定稿。", body: { kind: "commit.prepare", chapter: 2, committed: true, done: { report, summary: "第 2 章已定稿。", draftBody: "正文" }, snapshotId: "s-7" } } }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "坏的", body: { kind: "commit.prepare", chapter: 2, committed: true } } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({
+      kind: "commit",
+      actionId: "confirm-commit",
+      decisions: ["commit"],
+      preview: {
+        chapter: 2, canCommit: true, summary: "第 2 章可以定稿：2 条自动记下。",
+        ledgerChecklist: [
+          { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
+          { id: "i0", kind: "fact", label: "林远到了钟楼", detail: "林远推门进了钟楼。", removable: true },
+        ],
+      },
+    });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]?.commit).toEqual({ chapter: 2, committed: false, blocked: { ...blocked, notRecorded: undefined } });
+    expect(views[3]?.commit).toEqual({ chapter: 2, committed: true, report, snapshotId: "s-7" });
+    expect(views[4]?.commit).toBeUndefined();
+
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "commit.prepare", params: { chapter: 2, allowShort: true }, ...stamp }))
+      .toEqual({ kind: "new", type: "commit.prepare", params: { chapter: 2, allowShort: true }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "commit.prepare", params: { chapter: "2" }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4, dayEnd: 5, bad: 1.5 } } }))
+      .toEqual({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4, dayEnd: 5 } } });
+  });
+
+  it("定论（片 3C）：停着等作者的卡防御解析后带上；做完了带结果（划掉的只认卡上有的），改了才算「改过」；按钮存下来读回来，不对的不认", async () => {
+    const card = {
       canon: "杜长顺十年前去世",
       canonExists: false,
       chapter: 4,
@@ -599,29 +615,35 @@ describe("streamAgentChat", () => {
       missed: [],
       failures: [],
     };
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "s1", toolName: "settle_preview", output: { ok: true, summary: "定论", settle } }),
-        frame("tool-result", { toolCallId: "s2", toolName: "settle_fact", output: { ok: false, summary: "没写出定论", settle } }),
-        frame("tool-result", { toolCallId: "s3", toolName: "settle_apply", output: { ok: true, summary: "改齐了。", settleToken: settle.token, refreshScope: "full" } }),
-        frame("done", {}),
-      ]),
-    ));
-    const received: { toolName: string; settle?: unknown; settleToken?: string }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "以第 1 章为准" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received.push(info); },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-    expect(received[0]?.settle).toEqual({ ...settle, edits: [settle.edits[0]] });
-    expect(received[1]?.settle).toBeUndefined();
-    expect(received[2]?.settleToken).toBe(settle.token);
+    const goodCard = { ...card, edits: [card.edits[0]] };
+    const canonView = (overrides: Record<string, unknown>) => opView("statement", null, { kind: "canon.propose", what: "定论", chapter: undefined, ...overrides });
+    const done = (body: Record<string, unknown>) => canonView({ result: { schema: "operation-result/1", summary: "改齐了。", body: { kind: "canon.propose", card, ...body } } });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: canonView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-canon", kind: "canon_confirm", decisions: ["apply"], preview: { card, summary: "查完了：第 2 章 1 句要改。" }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: canonView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-canon", kind: "canon_confirm", decisions: ["apply"], preview: { summary: "没卡" }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: done({ excluded: ["e1", "zz"], applied: true, snapshotId: "s-3" }) }),
+      frame("operation", { type: "record", operation: done({ excluded: [], applied: false }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({ kind: "canon", actionId: "confirm-canon", decisions: ["apply"], card: goodCard, summary: "查完了：第 2 章 1 句要改。" });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]?.canon).toEqual({ card: goodCard, excluded: ["e1"], applied: true });
+    expect(views[2]?.changed).toEqual({ what: "canon", snapshotId: "s-3" });
+    expect(views[3]?.canon).toEqual({ card: goodCard, excluded: [], applied: false });
+    expect(views[3]?.changed).toBeUndefined();
+
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    const truth = { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" };
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "杜长顺十年前去世", chapter: 4 }, ...stamp }))
+      .toEqual({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "杜长顺十年前去世", chapter: 4 }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "pick", params: { chapter: 4, truth, item: "k1", reason: "年份对不上" }, ...stamp }))
+      .toEqual({ kind: "new", type: "canon.propose", mode: "pick", params: { chapter: 4, truth, reason: "年份对不上", item: "k1" }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "statement", params: { statement: "  " }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", mode: "pick", params: { chapter: 4 }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "canon.propose", params: { chapter: 4, truth }, ...stamp })).toBeUndefined();
   });
 
   it("suggest_next_steps 的 choice.action（R4.7）→ 白名单内透传、白名单外/形状不对丢掉（选项保留，退回发文本）", async () => {
@@ -634,12 +656,15 @@ describe("streamAgentChat", () => {
             ok: true,
             question: "核账做完了，接下来？",
             choices: [
-              { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
-              { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } },
+              { label: "定稿第5章", intent: "定稿第 5 章", recommended: true, action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, requestKey: "rk-0", issuedAt: "2026-10-29T00:00:00.000Z" } },
+              { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" } },
+              // 操作按钮缺了请求号 / 交的时间：不透传（服务端也拒）。
+              { label: "缺请求号", intent: "w", action: { kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 5 } } },
               { label: "我自己改", intent: "我自己改，先放着" },
               // 白名单外（授权写盘动作不许藏在选项里直达）→ action 丢掉，选项照旧发文本。
               { label: "假确认定稿", intent: "x", action: { toolName: "commit_apply", chapter: 5 } },
-              { label: "坏章号", intent: "y", action: { toolName: "commit_preview", chapter: 0 } },
+              // P2a 前按工具名的老按钮：工具没了，不认。
+              { label: "老定稿预览", intent: "y", action: { toolName: "commit_preview", chapter: 5 } },
               { label: "认不出的工具", intent: "z", action: { toolName: "web_search" } },
             ],
           },
@@ -661,269 +686,20 @@ describe("streamAgentChat", () => {
       },
     );
 
-    const prompt = received?.nextStepPrompt as { question: string; choices: { label: string; action?: { toolName: string } }[] };
+    const prompt = received?.nextStepPrompt as { question: string; choices: { label: string; action?: Record<string, unknown> }[] };
     expect(prompt.question).toBe("核账做完了，接下来？");
-    expect(prompt.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview" } });
-    expect(prompt.choices[1]).toMatchObject({ label: "再细核一遍", action: { toolName: "check_continuity" } });
-    expect(prompt.choices[1].action).toMatchObject({ fresh: true });
-    expect(prompt.choices[2]).not.toHaveProperty("action");
-    expect(prompt.choices[3]).not.toHaveProperty("action");
-    expect(prompt.choices[4]).not.toHaveProperty("action");
-    expect(prompt.choices[5]).not.toHaveProperty("action");
+    expect(prompt.choices[0]).toMatchObject({ label: "定稿第5章", action: { kind: "new", type: "commit.prepare", params: { chapter: 5 } } });
+    expect(prompt.choices[1]).toMatchObject({ label: "再细核一遍", action: { kind: "new", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1" } });
+    for (const index of [2, 3, 4, 5, 6]) expect(prompt.choices[index]).not.toHaveProperty("action");
   });
 
-  it("quality_check ok:false（防御位）→ 不透传 refined 质检卡（今天失败走抛错，ok:false+refined 一旦出现不能显成「质检通过」卡）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "q2",
-          toolName: "quality_check",
-          output: {
-            ok: false,
-            summary: "没跑成。",
-            refined: { passed: true, blocking: [], soft: [], reference: [], summary: "s" },
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { qualityReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "质检这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.qualityReport).toBeUndefined();
-  });
-
-  it("ai_review ok:false（防御位）→ 不透传 draftReview 审稿卡（usedFallback 之外的失败位，空手不显成「1 处问题」卡）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "ar1",
-          toolName: "ai_review",
-          output: {
-            ok: false,
-            usedFallback: false,
-            review: { issues: [{ id: "x", message: "m" }] },
-            summary: "这次没审完。",
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { draftReview?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "审一下" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.draftReview).toBeUndefined();
-  });
-
-  it("translates commit_preview 裁决（R3）→ commitPreview for 定稿预览卡（不靠模型转述）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "commit_preview",
-          output: {
-            ok: false,
-            chapter: 7,
-            canCommit: false,
-            blockingReasons: ["第 7 章还没有工作稿。"],
-            summary: "暂不可定稿。",
-            draftQualityIssues: [{ severity: "error", type: "too_short", message: "正文过短" }],
-            semanticQualityIssues: [],
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitPreview?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitPreview).toEqual({
-      chapter: 7,
-      canCommit: false,
-      blockingReasons: ["第 7 章还没有工作稿。"],
-      summary: "暂不可定稿。",
-      draftIssueCount: 1,
-      semanticIssueCount: 0,
-      // R7.7·报告 4.3：明细文案直接透传进卡（默认折叠展示），不再指向不存在的「质检卡」。
-      draftIssues: ["正文过短"],
-    });
-  });
-
-  it("commit_preview 质量问题明细防御解析：非对象丢掉、无 message 丢掉、裸字符串宽容保留（R7.7）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "commit_preview",
-          output: {
-            chapter: 7,
-            canCommit: false,
-            semanticQualityIssues: [
-              { severity: "warning", type: "stale_thread", message: "伏笔「钥匙」已 4 章未推进。" },
-              { severity: "warning", type: "no_message" },
-              "裸字符串不算",
-              null,
-            ],
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitPreview?: { semanticIssues?: readonly string[] } } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitPreview?.semanticIssues).toEqual(["伏笔「钥匙」已 4 章未推进。", "裸字符串不算"]);
-  });
-
-  it("结构化动作（「确认定稿」按钮）→ 请求体带 action；commit_preview 的 previewToken 透传给卡（按钮带回）", async () => {
-    const fetchMock = vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "commit_preview",
-          output: { ok: true, chapter: 2, canCommit: true, previewToken: "tok-2", summary: "可以定稿。" },
-        }),
-        frame("done", {}),
-      ]),
-    );
+  it("结构化动作（「确认定稿」按钮）→ 请求体带 action（接着做那次定稿：划掉的、改的天数原样带上）", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([frame("done", {})]));
     vi.stubGlobal("fetch", fetchMock);
-
-    let received: { commitPreview?: unknown } | undefined;
-    await streamAgentChat(
-      {
-        projectPath: "/tmp/p",
-        messages: [{ role: "user", content: "确认定稿第 2 章" }],
-        action: { toolName: "commit_apply", chapter: 2, previewToken: "tok-2" },
-      },
-      { ...noopHandlers(), onToolResult: (info) => { received = info; } },
-    );
-
+    const action = { kind: "resume" as const, opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4 } } };
+    await streamAgentChat({ projectPath: "/tmp/p", messages: [{ role: "user", content: "确认定稿第 2 章" }], action }, noopHandlers());
     const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(requestInit.body)).action).toEqual({ toolName: "commit_apply", chapter: 2, previewToken: "tok-2" });
-    expect(received?.commitPreview).toMatchObject({ chapter: 2, canCommit: true, previewToken: "tok-2" });
-  });
-
-  it("模型发起的 commit_apply 只出确认按钮（needsConfirmation + confirmAction）→ 透传 commitConfirmAction；残缺 confirmAction 不透传", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "a1",
-          toolName: "commit_apply",
-          output: { ok: false, committed: false, needsConfirmation: true, confirmAction: { toolName: "commit_apply", chapter: 4, previewToken: "t4" }, summary: "等你点确认定稿。" },
-        }),
-        frame("tool-result", {
-          toolCallId: "a2",
-          toolName: "commit_apply",
-          output: { ok: false, committed: false, needsConfirmation: true, confirmAction: { toolName: "commit_apply" }, summary: "残缺。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    const received: { commitConfirmAction?: unknown; needsConfirmation?: boolean }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "确认定稿" }] },
-      { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
-    );
-
-    expect(received[0]?.needsConfirmation).toBe(true);
-    expect(received[0]?.commitConfirmAction).toEqual({ chapter: 4, previewToken: "t4" });
-    expect(received[1]?.commitConfirmAction).toBeUndefined();
-  });
-
-  it("改账 / 改设定 / 认下按钮带的依据摘要原样透传（作者点按钮时服务端拿它核）", async () => {
-    const basis = "a".repeat(64);
-    const from = "b".repeat(64);
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "l1",
-          toolName: "manage_ledger",
-          output: { ok: false, needsConfirmation: true, ledgerConfirm: { key: "ledger:x", decisions: [{ type: "fact.retract", fact: "f1" }], basis }, summary: "…" },
-        }),
-        frame("tool-result", {
-          toolCallId: "f1",
-          toolName: "foundation_write",
-          output: { ok: true, needsConfirmation: true, foundationConfirm: { key: "card-1", input: { ops: [] }, label: "改", basis, basisFrom: from }, summary: "…" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-    const received: { ledgerConfirmAction?: unknown; foundationConfirmAction?: unknown }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "改" }] },
-      { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
-    );
-    expect(received[0]?.ledgerConfirmAction).toMatchObject({ key: "ledger:x", basis });
-    expect(received[1]?.foundationConfirmAction).toMatchObject({ key: "card-1", basis, basisFrom: from });
-  });
-
-  it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "p1", toolName: "commit_preview", output: { ok: true, summary: "可以。" } }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitPreview?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitPreview).toBeUndefined();
+    expect(JSON.parse(String(requestInit.body)).action).toEqual(action);
   });
 
   it("routes an SSE status event to onStatus（R4：历史裁剪等说明不静默吞掉）", async () => {

@@ -12,7 +12,6 @@ import {
   readJsonBody,
   readWorkspaceMessages,
   writeFileAtomic,
-  commitFilesAtomically,
 } from "./project-io.js";
 import { cardOf, hasCard } from "../../utils/messageCards.js";
 
@@ -415,7 +414,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(legacy).not.toHaveProperty("intentTitle");
   });
 
-  it("定稿预览卡 commitPreview 与「确认定稿」按钮 commitTarget 持久化（刷新后卡与按钮不丢）；坏值不写", () => {
+  it("老会话的定稿预览 commitPreview 读成只看的清单卡；老「确认定稿」「确认裁剪」按钮不再摆（清单 / 操作卡上点）；坏卡不要", () => {
     const out = readWorkspaceMessages([
       {
         id: "assistant-preview",
@@ -440,12 +439,18 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
             commitTarget: { chapter: 2, previewToken: "tok-2", junk: 1 },
           },
           {
-            id: "commit-apply-bad-target",
-            label: "确认定稿",
-            description: "写入定稿章节",
+            id: "prune-confirm",
+            label: "确认裁剪",
+            description: "裁剪操作历史",
             permission: "formal_state_write",
             requiresConfirmation: false,
-            commitTarget: { chapter: 0 },
+          },
+          {
+            id: "quality-check",
+            label: "硬伤检查",
+            description: "查硬伤",
+            permission: "model_call",
+            requiresConfirmation: false,
           },
         ],
       },
@@ -453,35 +458,9 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
 
-    expect(cardOf(out[0]!, "commit-preview")?.preview).toEqual({
-      chapter: 2,
-      canCommit: true,
-      blockingReasons: ["x"],
-      summary: "可以定稿。",
-      draftIssueCount: 0,
-      previewToken: "tok-2",
-    });
-    expect(out[0]!.suggestedActions?.[0]).toMatchObject({ id: "commit-apply", commitTarget: { chapter: 2, previewToken: "tok-2" } });
-    expect(out[0]!.suggestedActions?.[0]?.commitTarget).toEqual({ chapter: 2, previewToken: "tok-2" });
-    expect(out[0]!.suggestedActions?.[1]).not.toHaveProperty("commitTarget");
-    expect(out[1]).not.toHaveProperty("commitPreview");
-  });
-
-  it("「确认裁剪」按钮的 pruneTarget 持久化（刷新后按钮仍按预览的保留条数裁）；坏 keep 丢掉但按钮还在", () => {
-    const out = readWorkspaceMessages([
-      {
-        id: "assistant-prune",
-        role: "assistant",
-        content: "预览：将裁 12 条，点确认裁剪。",
-        suggestedActions: [
-          { id: "prune-confirm", label: "确认裁剪", description: "裁剪操作历史", permission: "destructive_write", requiresConfirmation: false, pruneTarget: { keep: 20, junk: 1 } },
-          { id: "prune-confirm-bad", label: "确认裁剪", description: "裁剪操作历史", permission: "destructive_write", requiresConfirmation: false, pruneTarget: { keep: -3 } },
-        ],
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ] as any);
-    expect(out[0]!.suggestedActions?.[0]?.pruneTarget).toEqual({ keep: 20 });
-    expect(out[0]!.suggestedActions?.[1]?.pruneTarget).toEqual({});
+    expect(cardOf(out[0]!, "commit-preview")).toEqual({ type: "commit-preview", preview: { chapter: 2, canCommit: true, blockingReasons: ["x"], summary: "可以定稿。" } });
+    expect(out[0]!.suggestedActions?.map((action) => action.id)).toEqual(["quality-check"]);
+    expect(cardOf(out[1]!, "commit-preview")).toBeUndefined();
   });
 
   it("建议动作的 disabledReason 持久化：重开书后「还不能点」的按钮仍是灰的", () => {
@@ -491,13 +470,13 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         role: "assistant",
         content: "质检完成。",
         suggestedActions: [
-          { id: "commit-apply", label: "确认定稿", description: "写入", permission: "draft_write", requiresConfirmation: true, disabledReason: "必须先生成定稿预览。" },
-          { id: "commit-preview", label: "生成定稿预览", description: "预览", permission: "safe_read", requiresConfirmation: false, disabledReason: "" },
+          { id: "quality-check", label: "硬伤检查", description: "检查", permission: "safe_read", requiresConfirmation: false, disabledReason: "先写出这一章。" },
+          { id: "ai-review", label: "内容审阅", description: "审阅", permission: "safe_read", requiresConfirmation: false, disabledReason: "" },
         ],
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
-    expect(out[0]!.suggestedActions?.[0]?.disabledReason).toBe("必须先生成定稿预览。");
+    expect(out[0]!.suggestedActions?.[0]?.disabledReason).toBe("先写出这一章。");
     expect(out[0]!.suggestedActions?.[1]).not.toHaveProperty("disabledReason");
   });
 
@@ -594,22 +573,25 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         nextStepPrompt: {
           question: "核账做完了，接下来？",
           choices: [
-            { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
-            { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } },
+            { label: "定稿", intent: "定稿第 5 章", recommended: true, action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, requestKey: "rk-0", issuedAt: "2026-10-29T00:00:00.000Z" } },
+            { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" } },
+            { label: "缺请求号丢", intent: "c", action: { kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 5 } } },
             { label: "我自己改", intent: "我自己改，先放着" },
-            { label: "坏动作丢", intent: "a", action: { toolName: "commit_apply", chapter: 5 } },
-            { label: "残缺动作丢", intent: "b", action: { toolName: "commit_preview" } },
+            { label: "老动作丢", intent: "a", action: { toolName: "commit_preview", chapter: 5 } },
+            { label: "残缺动作丢", intent: "b", action: { kind: "new", type: "commit.prepare", params: {}, requestKey: "rk-9", issuedAt: "2026-10-29T00:00:00.000Z" } },
           ],
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ]);
     const choices = cardOf(out[0], "next-steps")!.prompt.choices;
-    expect(choices[0]).toEqual({ label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } });
-    expect(choices[1]).toEqual({ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
-    expect(choices[2]).not.toHaveProperty("action");
-    expect(choices[3]).not.toHaveProperty("action");
-    expect(choices[4]).not.toHaveProperty("action");
+    expect(choices[0]).toEqual({ label: "定稿", intent: "定稿第 5 章", recommended: true, action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, requestKey: "rk-0", issuedAt: "2026-10-29T00:00:00.000Z" } });
+    expect(choices[1]).toEqual({
+      label: "再细核一遍",
+      intent: "再细核一遍：这一章重新对一遍前文",
+      action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" },
+    });
+    for (const index of [2, 3, 4, 5]) expect(choices[index]).not.toHaveProperty("action");
   });
 
   it("isErrorNotice/errorDetail round-trip：错误卡字段保留，旧消息不多写", () => {
@@ -666,53 +648,6 @@ describe("writeFileAtomic 原子写（失败不留 tmp 残留）", () => {
 
     const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
     expect(residue).toEqual([]);
-  });
-});
-
-describe("commitFilesAtomically 多文件原子提交（失败不留 tmp 残留）", () => {
-  it("全部就绪：逐文件原子落盘", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-multi-ok-"));
-    await commitFilesAtomically([
-      { path: join(dir, "a.json"), content: "{\"a\":1}\n" },
-      { path: join(dir, "b.json"), content: "{\"b\":2}\n" },
-    ]);
-
-    expect(await readFile(join(dir, "a.json"), "utf-8")).toBe("{\"a\":1}\n");
-    expect(await readFile(join(dir, "b.json"), "utf-8")).toBe("{\"b\":2}\n");
-    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
-    expect(residue).toEqual([]);
-  });
-
-  it("提交段 rename 中途失败 → 抛错、已提交文件不回滚、未提交的 tmp 全清", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-multi-fail-"));
-    const committedTarget = join(dir, "a.json");
-    const blockedTarget = join(dir, "blocked.json");
-    await mkdir(blockedTarget); // rename(文件, 已存在目录) 必失败，确定性命中提交段 catch
-
-    await expect(commitFilesAtomically([
-      { path: committedTarget, content: "{\"a\":1}\n" },
-      { path: blockedTarget, content: "{\"b\":2}\n" },
-    ])).rejects.toThrow();
-
-    // 文档口径：「部分提交」窗口不回滚已 rename 的文件，但绝不留 tmp 残渣（会被快照扫进 git）。
-    expect(await readFile(committedTarget, "utf-8")).toBe("{\"a\":1}\n");
-    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
-    expect(residue).toEqual([]);
-  });
-
-  it("staging 段失败 → 已 staged 的 tmp 也全清（旧口径回归锁）", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-stage-fail-"));
-    const missingDirTarget = join(dir, "no-such-dir", "b.json"); // 目录不存在 → writeFile 直接 ENOENT
-
-    await expect(commitFilesAtomically([
-      { path: join(dir, "a.json"), content: "{\"a\":1}\n" },
-      { path: missingDirTarget, content: "{\"b\":2}\n" },
-    ])).rejects.toThrow();
-
-    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
-    expect(residue).toEqual([]);
-    // staging 段失败时原文件分毫未动
-    await expect(readFile(join(dir, "a.json"), "utf-8")).rejects.toThrow();
   });
 });
 

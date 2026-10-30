@@ -19,30 +19,38 @@ import {
   readChapterLedger,
   readTruthBasis,
   runCommand,
+  settleApply,
   sha256,
   splitUnits,
 } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
-import { confirmChapterCommit, fileTicketStore, memoryTicketStore, prepareChapterCommit, type PrepareInput } from "../editorial/commit-flow.js";
+import { commitEntriesOf, prepareChapterCommit, type PrepareInput, type PreviewTicket } from "../editorial/commit-flow.js";
 import { planBasisOf, resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
 import * as readers from "../editorial/reader-window.js";
-import { readRereadState } from "../editorial/reread-state.js";
-import { beginReread, runReread } from "../editorial/reread.js";
-import { applySettleProposal, saveSettleProposal } from "../editorial/settle/store.js";
+import { readRereadState, REREAD_KIND } from "../editorial/reread-state.js";
+import { settleApplyArgs } from "../editorial/settle/apply-args.js";
+import type { SettleProposal } from "../editorial/settle/propose.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { readChapterPlan } from "../book/chapter-plan.js";
 import { createBookBackup, restoreBookFromBackup } from "../lib/book-backup.js";
 import { moveBookToTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { writeCards } from "../lib/card-write.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
-import { applyFoundationDecision } from "./foundation-decisions.js";
-import { applyLedgerDecisions, planLedgerChange } from "./ledger-decisions.js";
-import { foundationWriteLogic } from "./tools/foundation-write.js";
+import { createSnapshot } from "../lib/snapshot.js";
+import { restoreForTest } from "../lib/history-test-helpers.js";
+import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
+import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../services/operations/executor.js";
+import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
+import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
+import { createBackgroundRereadRecipe } from "../services/operations/recipes/background-reread.js";
+import { COMMIT_CONFIRM_ACTION, COMMIT_PREPARE_KIND, createCommitPrepareRecipe } from "../services/operations/recipes/commit-prepare.js";
 
 /** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
 const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
+/** 照票定稿（commit.prepare「确认定稿」那步同一个做法：依据照票核）。 */
+const confirmTicket = (ticket: PreviewTicket, text: string) =>
+  runCommand(book, chapterCommit, { chapter: ticket.chapter, text, entries: commitEntriesOf(ticket, {}) }, { caller: "author", basis: ticket.basis });
 
 let sandbox: string;
 let book: string;
@@ -78,26 +86,35 @@ describe("依据安全契约", () => {
     const original = await readFile(join(book, "chapters/0001.md"), "utf-8");
     const unit = splitUnits(original).find((item) => item.text.includes("张三"));
     if (!unit) throw new Error("没找到那句");
-    const correction = await saveSettleProposal(book, {
+    const correction: SettleProposal = {
       canon: "", canonExists: false, sceneOnly: true,
       edits: [{ key: "fix-name", chapter: 1, target: "committed", id: unit.id, from: unit.text, to: unit.text.replace("张三", "李四") }],
       facts: [], fields: [], committed: [{ chapter: 1, textSha256: sha256(original) }],
       drafts: [], searched: [1], missed: [], reviewDropped: [], failures: [], basis: await readTruthBasis(book),
-    });
-    await beginReread(book, 1);
+    };
     let changed = false;
-    await runReread(book, {
+    __resetOperationStoreForTests();
+    registerRecipe(createBackgroundRereadRecipe({
+      modelProblem: () => undefined,
       callModel: async (messages, options) => {
         if (!options?.json) return "笔记。";
         const sees = messages.at(-1)?.content.includes("李四") ? "李四" : "张三";
         if (!changed) {
           changed = true;
           // 记账员还在想：作者在别处确认了一条定论，正文里的张三改成了李四。
-          ok(await applySettleProposal(book, correction.token, []));
+          // 依据现取：交通读时老书先接上新核心（搬设定卡），那也是一次写。
+          const fix = { ...correction, basis: await readTruthBasis(book) };
+          ok(await runCommand(book, settleApply, await settleApplyArgs(book, fix, new Set()), { ...author("fix-name"), basis: fix.basis }));
         }
         return JSON.stringify({ summary: { text: `${sees}交出钥匙后离开`, quote: "他离开了" } });
       },
-    });
+    }));
+    try {
+      ok(await submitOperation(book, { kind: REREAD_KIND, params: { total: 1 }, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString(), origin: { kind: "button" } }));
+      await __drainOperationsForTests();
+    } finally {
+      __resetRecipesForTests();
+    }
     const text = await readFile(join(book, "chapters/0001.md"), "utf-8");
     const ledger = await readChapterLedger(book, 1);
     expect(text).toContain("李四");
@@ -108,35 +125,56 @@ describe("依据安全契约", () => {
 
   it("R2 改账整批一个事务：提议之后作者改了天数，整批一条都不记、如实说", async () => {
     await seed();
-    const proposal = await planLedgerChange(book, { op: "summary", chapter: 1, text: "第一条" });
-    if (!proposal.ok) throw new Error(proposal.reason);
-    const day = await planLedgerChange(book, { op: "day", chapter: 1, day: 2 });
-    if (!day.ok) throw new Error(day.reason);
-    ok(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, author("author-new-day")));
-    const result = await applyLedgerDecisions(book, { key: proposal.key, decisions: [...proposal.decisions, ...day.decisions], basis: proposal.basis });
-    const view = await projectBook(book);
-    expect(result).toMatchObject({ ok: false, applied: 0 });
-    expect(result.summary).toContain("请让 AI 重新提一次");
-    expect(view.chapters[0]?.day).toBe(20);
-    expect(view.chapters[0]?.summary).not.toBe("第一条");
+    __resetOperationStoreForTests();
+    registerRecipe(ledgerChangeRecipe);
+    try {
+      const outcome = ok(await submitOperation(book, {
+        kind: LEDGER_CHANGE_KIND,
+        mode: "edit",
+        params: { changes: [{ op: "summary", chapter: 1, text: "第一条" }, { op: "day", chapter: 1, day: 2 }] },
+        requestKey: crypto.randomUUID(),
+        issuedAt: new Date().toISOString(),
+        origin: { kind: "chat", messageId: crypto.randomUUID() },
+      }));
+      if (!("record" in outcome)) throw new Error("没受理");
+      await __drainOperationsForTests();
+      ok(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, author("author-new-day")));
+      ok(await resumeOperation(book, outcome.record.opId, { actionId: "confirm-ledger", decision: "apply" }));
+      await __drainOperationsForTests();
+      const read = await readOperation(book, outcome.record.opId);
+      if (read.kind !== "record") throw new Error("记录没了");
+      expect(read.record.state).toBe("obsolete");
+      expect(read.record.failure?.message).toContain("这份改账是照改之前算的，没改");
+      const view = await projectBook(book);
+      expect(view.chapters[0]?.day).toBe(20);
+      expect(view.chapters[0]?.summary).not.toBe("第一条");
+    } finally {
+      __resetRecipesForTests();
+    }
   });
 
-  it("R3 确认定稿后撤销，再点同一张旧票：作废，不重新定稿", async () => {
+  it("R3 确认定稿后撤销，再点同一个旧「确认定稿」：回放那次的结果，不重新定稿", async () => {
     await seed();
     ok(await runCommand(book, draftSave, { chapter: 2, title: "二", body: "第二天，张三出门了。", baseVersion: null }, { caller: "author" }));
-    const text = await readFile(join(book, draftPath(2)), "utf-8");
     const snapshot = await createSnapshot(book, "before-ch2");
-    const ticketDir = join(book, "ledger/.preview");
-    const tickets = fileTicketStore(ticketDir);
-    const preview = ok(await prepareNow({ bookDir: book, chapter: 2, text, tickets, callModel: model }));
-    ok(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets }));
-    await restoreSnapshot(book, snapshot.id);
-    expect((await projectBook(book)).chapters).toHaveLength(1);
-    const restoredText = await readFile(join(book, draftPath(2)), "utf-8");
-    expect(restoredText).toBe(text);
-    const again = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: restoredText, tickets: fileTicketStore(ticketDir) });
-    expect(again.ok).toBe(false);
-    expect((await projectBook(book)).chapters).toHaveLength(1);
+    __resetOperationStoreForTests();
+    registerRecipe(createCommitPrepareRecipe({ callModel: model, modelProblem: () => undefined }));
+    try {
+      const submitted = await submitOperation(book, { kind: COMMIT_PREPARE_KIND, params: { chapter: 2, allowShort: true }, requestKey: "r3", issuedAt: new Date().toISOString(), origin: { kind: "button" } });
+      if (!submitted.ok || !("record" in submitted)) throw new Error("没受理");
+      await __drainOperationsForTests();
+      const answer = { actionId: COMMIT_CONFIRM_ACTION, decision: "commit" };
+      ok(await resumeOperation(book, submitted.record.opId, answer));
+      await __drainOperationsForTests();
+      expect((await projectBook(book)).chapters).toHaveLength(2);
+      await restoreForTest(book, snapshot.id);
+      expect((await projectBook(book)).chapters).toHaveLength(1);
+      expect(await resumeOperation(book, submitted.record.opId, answer)).toMatchObject({ ok: true, replayed: true });
+      await __drainOperationsForTests();
+      expect((await projectBook(book)).chapters).toHaveLength(1);
+    } finally {
+      __resetRecipesForTests();
+    }
   });
 
   it("R4 A→B→撤销回 A：记账员读的是 B，票记的是 A，确认时照样作废", async () => {
@@ -155,21 +193,20 @@ describe("依据安全契约", () => {
       }
       return original(input);
     });
-    const tickets = memoryTicketStore();
     const text = "# 二\n\n第二天，他交了钥匙。";
     let sawB = false;
     const preview = ok(await prepareNow({
-      bookDir: book, chapter: 2, text, tickets, callModel: async (messages) => {
+      bookDir: book, chapter: 2, text, callModel: async (messages) => {
         if (!messages.at(-1)?.content.includes("交这一章的账单")) return "他是李四。";
         sawB = messages.some((message) => message.content.includes("他叫李四"));
-        await restoreSnapshot(book, saved.id);
+        await restoreForTest(book, saved.id);
         return JSON.stringify({ summary: { text: "李四交了钥匙", quote: "他交了钥匙" } });
       },
     }));
     expect(sawB).toBe(true);
     const now = await readTruthBasis(book);
     expect(now.texts).toEqual(basisA.texts);
-    const result = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets });
+    const result = await confirmTicket(preview.ticket, text);
     expect(result.ok).toBe(false);
     expect((await projectBook(book)).chapters).toHaveLength(1);
   });
@@ -178,19 +215,32 @@ describe("依据安全契约", () => {
     const write = async (value: string, key: string) => ok(await runCommand(book, cardWrite, { ops: [{ op: "story.set", label: "地点", value }] }, author(key)));
     await write("北京", "initial");
     const ops = [{ op: "story.set", label: "地点", value: "上海" }];
-    const first = await foundationWriteLogic({ projectDir: book, ops });
-    if (!first.foundationConfirm) throw new Error("没出确认按钮");
-    ok(await applyFoundationDecision(book, first.foundationConfirm));
-    await write("广州", "author-later");
-    const second = await foundationWriteLogic({ projectDir: book, ops });
-    if (!second.foundationConfirm) throw new Error("没出确认按钮");
-    expect(second.foundationConfirm.key).not.toBe(first.foundationConfirm.key);
-    ok(await applyFoundationDecision(book, second.foundationConfirm));
-    expect((await readCards(book))?.story.fields.find((field) => field.label === "地点")?.value).toBe("上海");
+    __resetOperationStoreForTests();
+    registerRecipe(settingsChangeRecipe);
+    // 对话 AI 提一次改设定（碰了作者写的 → 等作者点「确认改设定」），作者点了。
+    const proposeAndConfirm = async (): Promise<string> => {
+      const outcome = ok(await submitOperation(book, {
+        kind: SETTINGS_CHANGE_KIND, params: { ops }, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString(), origin: { kind: "chat", messageId: crypto.randomUUID() },
+      }));
+      if (!("record" in outcome)) throw new Error("没受理");
+      await __drainOperationsForTests();
+      ok(await resumeOperation(book, outcome.record.opId, { actionId: "confirm-settings", decision: "apply" }));
+      await __drainOperationsForTests();
+      return outcome.record.opId;
+    };
+    try {
+      const first = await proposeAndConfirm();
+      await write("广州", "author-later");
+      const second = await proposeAndConfirm();
+      expect(second).not.toBe(first);
+      expect((await readCards(book))?.story.fields.find((field) => field.label === "地点")?.value).toBe("上海");
+    } finally {
+      __resetRecipesForTests();
+    }
   });
 
   it("R6 作者一次没改动的请求也留回执：迟到重发不盖掉后来的改动", async () => {
-    const write = (value: string, key: string) => writeCards(book, { by: "author", ops: [{ op: "story.set", label: "地点", value }], idempotencyKey: key });
+    const write = (value: string, key: string) => writeCards(book, { ops: [{ op: "story.set", label: "地点", value }], idempotencyKey: key });
     ok(await write("北京", "seed-city"));
     expect(ok(await write("北京", "retry-same-request")).lines).toEqual([]);
     ok(await write("广州", "new-request"));
@@ -237,9 +287,8 @@ describe("依据安全契约", () => {
       }
       return original(input);
     });
-    const tickets = memoryTicketStore();
     const preview = ok(await prepareNow({
-      bookDir: book, chapter: 2, text, tickets, callModel: async (messages, options) => {
+      bookDir: book, chapter: 2, text, callModel: async (messages, options) => {
         if (!options?.json) return "笔记。";
         expect(messages.at(-1)?.content).toContain("他叫李四");
         await moveBookToTrash(book, "B");
@@ -248,7 +297,7 @@ describe("依据安全契约", () => {
         return JSON.stringify({ summary: { text: "李四交了钥匙", quote: "他交了钥匙" } });
       },
     }));
-    const result = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets });
+    const result = await confirmTicket(preview.ticket, text);
     expect(result.ok).toBe(false);
     expect((await projectBook(book)).chapters[1]?.summary ?? "").not.toContain("李四");
   });
@@ -272,7 +321,7 @@ describe("依据安全契约", () => {
       plannerCallModel: async (messages, options) => {
         if (!options?.json) return "笔记。";
         expect(messages.some((message) => message.content.includes("他叫李四"))).toBe(true);
-        await restoreSnapshot(book, saved.id);
+        await restoreForTest(book, saved.id);
         return JSON.stringify({ summary: "李四去交钥匙", beats: ["李四去交钥匙"], characters: ["李四"], newInformation: ["钥匙有了下落"], scene: { location: "北城" }, dayOffset: 1 });
       },
       planCheckReaderCallModel: async (_messages, options) => (options?.json ? JSON.stringify({ problems: [] }) : "笔记。"),

@@ -3,20 +3,22 @@ import { cardOf, hasCard } from "../../../utils/messageCards.js";
 import { isRestoreNote } from "../../../utils/restoreNote.js";
 
 /**
- * 「确认定稿」按钮挂在哪张定稿预览卡上（纯函数）：只挂最新那张——从后往前扫，先遇到预览卡就是它；
- * 先遇到入库 delta 卡（定稿已成）说明最新预览已经用掉，不再挂按钮，免得旧卡上一排可点的「确认定稿」。
- * 定稿没成功（commit_apply 没挂定稿回执卡）不算用掉：预览卡按钮留着可重试。
+ * 哪几张定稿清单还能点「确认定稿」（纯函数）：出它的那次定稿还在等作者点（消息上的操作卡就是它、在等、等的是这张清单），
+ * 而且是这一章最新的那张（同一章后来又出了一张，服务端已经把旧的作废了）。之后在操作历史里恢复过的，前面的清单都不算。
  */
-export function confirmableCommitPreviewMessageId(messages: readonly ChapterMessage[]): string | null {
+export function confirmableCommitPreviewIds(messages: readonly ChapterMessage[]): ReadonlySet<string> {
+  const seen = new Set<number>();
+  const out = new Set<string>();
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (isRestoreNote(message)) return null;
-    if (message.role !== "assistant") continue;
-    if (hasCard(message, "commit-report")) return null;
-    const preview = cardOf(message, "commit-preview")?.preview;
-    if (preview) return preview.canCommit ? message.id : null;
+    const message = messages[i]!;
+    if (isRestoreNote(message)) break;
+    const card = cardOf(message, "commit-preview");
+    if (!card || seen.has(card.preview.chapter)) continue;
+    seen.add(card.preview.chapter);
+    const op = cardOf(message, "operation")?.op;
+    if (card.opId && op?.opId === card.opId && op.state === "waiting_author" && op.pending?.kind === "commit") out.add(message.id);
   }
-  return null;
+  return out;
 }
 
 /**

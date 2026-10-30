@@ -6,16 +6,17 @@
  */
 import type {
   AiFlavorReport,
-  CommitPreviewCardData,
   ContinuityCheckData,
   ContinuityCheckItemData,
   MessageCard,
   MessageCardType,
   NextStepPrompt,
+  OperationCardData,
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
+import { readCommitPreviewCard } from "../../utils/commitPreviewCard.js";
 import { readDraftVersions } from "../../utils/draftVersions.js";
 import { readSettleData, readSettleExcluded } from "../../utils/settleCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
@@ -53,10 +54,10 @@ function readMessageCard(value: unknown): MessageCard | undefined {
   switch (type) {
     case "ai-flavor":
       return isRecord(value.report)
-        ? withFixedIds({ type, report: value.report as unknown as AiFlavorReport }, value.fixedIds)
+        ? { ...withFixedIds({ type, report: value.report as unknown as AiFlavorReport }, value.fixedIds), ...checkedVersionOf(value) }
         : undefined;
     case "draft-review":
-      return isRecord(value.review) ? { type, review: value.review as unknown as DraftReviewView } : undefined;
+      return isRecord(value.review) ? { type, review: value.review as unknown as DraftReviewView, ...checkedVersionOf(value) } : undefined;
     case "continuity": {
       const card = cardFromContinuity(value.check);
       if (!card || card.type !== "continuity") return undefined;
@@ -69,12 +70,17 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       };
     }
     case "quality":
-      return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport } : undefined;
+      return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport, ...checkedVersionOf(value) } : undefined;
+    case "operation": {
+      const op = readOperationCard(value.op);
+      return op ? { type, op } : undefined;
+    }
     case "commit-preview": {
       const card = cardFromCommitPreview(value.preview);
       if (!card || card.type !== "commit-preview") return undefined;
+      const opId = readString(value.opId);
       const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
-      return { ...card, ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
+      return { ...card, ...(opId && /^op-[0-9a-f]{20}$/u.test(opId) ? { opId } : {}), ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
     }
     case "commit-report":
       // 定稿回执原样存（体量大、结构跟着引擎走），渲染侧 summarizeCommitReport 防御解析。
@@ -95,18 +101,54 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       const versions = readDraftVersions(value.versions);
       return versions ? { type, versions } : undefined;
     }
-    case "settle": {
-      const settle = readSettleData(value.settle);
-      if (!settle) return undefined;
-      const excluded = readSettleExcluded(value.excluded, settle);
-      const applied = typeof value.applied === "string" && value.applied.trim() ? value.applied.trim().slice(0, 2000) : "";
-      // 改齐了就不算「不改了」。
-      const dropped = !applied && value.dropped === true;
-      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}), ...(dropped ? { dropped: true as const } : {}) };
-    }
     default:
       return undefined;
   }
+}
+
+/** 结果卡记下的「查的是工作稿哪一版」（null＝没法比，查定稿时没有）。 */
+function checkedVersionOf(value: Record<string, unknown>): { readonly checkedVersion?: string | null } {
+  const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
+  return checkedVersion !== undefined ? { checkedVersion } : {};
+}
+
+const OPERATION_STATES: readonly OperationCardData["state"][] = ["queued", "running", "waiting_author", "paused", "succeeded", "failed", "cancelled", "obsolete"];
+
+/** 操作卡（写作版本 P2a）：号、种类、状态缺了就不认；中文说法截长。 */
+function readOperationCard(value: unknown): OperationCardData | undefined {
+  if (!isRecord(value)) return undefined;
+  const opId = readString(value.opId);
+  const kind = readString(value.kind);
+  const state = OPERATION_STATES.find((item) => item === value.state);
+  if (!opId || !/^op-[0-9a-f]{20}$/u.test(opId) || !kind || !state) return undefined;
+  const mode = readString(value.mode);
+  const chapter = readPositiveInteger(value.chapter);
+  const allowed = (Array.isArray(value.allowed) ? value.allowed : [])
+    .filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel");
+  const progress = readString(value.progress);
+  const canon = readCanonResult(value.canon);
+  return {
+    opId,
+    kind,
+    ...(mode ? { mode } : {}),
+    ...(chapter !== undefined ? { chapter } : {}),
+    what: (readString(value.what) ?? "这次操作").slice(0, 200),
+    state,
+    stateText: (readStringAllowEmpty(value.stateText) ?? "").slice(0, 200),
+    allowed: [...new Set(allowed)],
+    summary: (readStringAllowEmpty(value.summary) ?? "").slice(0, 2000),
+    ...(progress ? { progress: progress.slice(0, 500) } : {}),
+    eventSeq: readNonNegativeInteger(value.eventSeq) ?? 0,
+    ...(value.announced === true ? { announced: true as const } : {}),
+    ...(canon ? { canon } : {}),
+  };
+}
+
+/** 定论做完的结果（核账卡认哪几条被它改掉了）：卡认不出就不存；划掉的只认卡上真有的。 */
+function readCanonResult(value: unknown): OperationCardData["canon"] {
+  if (!isRecord(value)) return undefined;
+  const card = readSettleData(value.card);
+  return card ? { card, excluded: readSettleExcluded(value.excluded, card), applied: value.applied === true } : undefined;
 }
 
 function dedupeByType(cards: readonly MessageCard[]): MessageCard[] {
@@ -141,7 +183,7 @@ function cardFromContinuity(value: unknown): MessageCard | undefined {
 }
 
 function cardFromCommitPreview(value: unknown): MessageCard | undefined {
-  const preview = readCommitPreview(value);
+  const preview = readCommitPreviewCard(value);
   return preview ? { type: "commit-preview", preview } : undefined;
 }
 
@@ -204,56 +246,3 @@ function readNextStepPrompt(value: unknown): NextStepPrompt | undefined {
   return { question, choices: choices.slice(0, 8) };
 }
 
-/** 定稿预览卡：章号 + 能不能定是必须的，其余逐项校验。 */
-function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
-  if (!isRecord(value)) return undefined;
-  const chapter = readPositiveInteger(value.chapter);
-  if (chapter === undefined || typeof value.canCommit !== "boolean") return undefined;
-  const blockingReasons = readStringList(value.blockingReasons).slice(0, 20);
-  const summary = readString(value.summary);
-  const previewToken = readString(value.previewToken);
-  const draftIssueCount = readNonNegativeInteger(value.draftIssueCount);
-  const semanticIssueCount = readNonNegativeInteger(value.semanticIssueCount);
-  const draftIssues = readStringList(value.draftIssues).slice(0, 20);
-  const semanticIssues = readStringList(value.semanticIssues).slice(0, 20);
-  const ledgerChecklist = Array.isArray(value.ledgerChecklist)
-    ? value.ledgerChecklist.filter(isRecord).slice(0, 200).flatMap((item) => {
-      const id = readString(item.id);
-      const label = readString(item.label);
-      if (!id || !label) return [];
-      const detail = readString(item.detail);
-      const reason = readString(item.reason);
-      const editableDay = readPositiveInteger(item.editableDay);
-      const editableDayEnd = readPositiveInteger(item.editableDayEnd);
-      return [{
-        id,
-        kind: readString(item.kind) ?? "",
-        label,
-        ...(reason ? { reason } : {}),
-        ...(detail ? { detail } : {}),
-        removable: item.removable === true,
-        ...(editableDay !== undefined ? { editableDay } : {}),
-        ...(editableDayEnd !== undefined ? { editableDayEnd } : {}),
-        ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
-        ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
-      }];
-    })
-    : [];
-  const notRecorded = readStringList(value.notRecorded).slice(0, 50);
-  const notes = readStringList(value.notes).slice(0, 20);
-  return {
-    chapter,
-    canCommit: value.canCommit,
-    ...(blockingReasons.length > 0 ? { blockingReasons } : {}),
-    ...(summary ? { summary } : {}),
-    ...(draftIssueCount !== undefined ? { draftIssueCount } : {}),
-    ...(semanticIssueCount !== undefined ? { semanticIssueCount } : {}),
-    ...(draftIssues.length > 0 ? { draftIssues } : {}),
-    ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
-    ...(previewToken ? { previewToken } : {}),
-    ...(value.shortOnly === true ? { shortOnly: true } : {}),
-    ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
-    ...(notRecorded.length > 0 ? { notRecorded } : {}),
-    ...(notes.length > 0 ? { notes } : {}),
-  };
-}
