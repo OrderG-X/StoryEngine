@@ -466,6 +466,21 @@ describe("「撤销上一步」撤哪次", () => {
     expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "X" }, unsure: [draftPath(1)] });
   });
 
+  it("A 写第 1 章 → B 改第 1、2 章 → 全撤 A → 回执之外把第 1 章原样放回 B 那版：B 靠第 2 章还在被选中，第 1 章带「说不准」（Astra 第 14 轮第 1 条）", async () => {
+    const second = chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" });
+    await write("A", chapter(1, []));
+    await write("B", [...second, ...chapter(2, [])]);
+    expect(await applyRevert("A", await revert("A"), "U1")).toMatchObject({ ok: true });
+    expect(await exists(chapterTextPath(1))).toBe(false);
+    // 第 1 章被全撤退掉、没人再动：撤 B 的计划自己会列出第 1 章后来改过，不用「说不准」。
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "B" } });
+    expect((await revert("B")).impact.map((item) => item.path)).toEqual([chapterTextPath(1), chapterLedgerPath(1)]);
+    await outside(second);
+    // 原样放回之后撤 B 的计划看不出第 1 章有事（内容就是 B 写的那份），只能靠「说不准」停下。
+    expect((await revert("B")).impact).toEqual([]);
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ target: { opId: "B" }, unsure: [chapterTextPath(1), chapterLedgerPath(1)] });
+  });
+
   it("最后一张回执之后才在回执之外改的：照现在的样子认出来（只读回执认不出）", async () => {
     await write("X", chapter(9, []));
     await write("A", [{ path: draftPath(1), content: "AI 写的。" }]);

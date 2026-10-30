@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { fail } from "../commands/runner.js";
 import type { WriteCommandSpec } from "../commands/types.js";
-import type { ChangeSet } from "../schema/book.js";
+import type { ChangeSet, CommandReceipt } from "../schema/book.js";
 import { bookEpochWrite, opBookEpoch } from "../store/control.js";
 import { CARDS_PATH, chapterFromFileName, DECISIONS_PATH, draftChapterOfPath, isUndoablePath, planChapterOfPath } from "../store/paths.js";
 import { sha256Bytes, type TxWrite } from "../store/transaction.js";
@@ -44,6 +44,16 @@ async function currentSha(bookDir: string, path: string): Promise<string | null>
     throw error;
   }
   return sha256Bytes(await readFile(join(bookDir, path)));
+}
+
+/**
+ * 这张回执写的文件现在是不是还是它写成的样子（一个个按写后哈希核）。回放时用：盘上的是后来的（又定过、撤过）就不拿来当这次的结果。
+ * 升级之前的回执没有效果记录：undefined（说不准）。
+ */
+export async function receiptOnDisk(bookDir: string, receipt: CommandReceipt): Promise<boolean | undefined> {
+  if (receipt.effects === undefined) return undefined;
+  for (const effect of receipt.effects) if ((await currentSha(bookDir, effect.path)) !== effect.after) return false;
+  return true;
 }
 
 const chapterOfTextPath = (path: string): number | undefined =>

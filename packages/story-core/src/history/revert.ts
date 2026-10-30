@@ -129,7 +129,7 @@ interface FileVersion {
   readonly outside?: number;
 }
 
-/** 「撤销上一步」撤哪次；unsure = 往前找的时候跳过了在回执之外又改过的文件上的那几次（在不在说不准），撤之前要作者点。 */
+/** 「撤销上一步」撤哪次；unsure = 在回执之外又改过、跟记录接不上的文件（跳过的那几次、找到的这次自己写过的），撤之前要作者点。 */
 export interface UndoChoice {
   readonly target: RevertTarget;
   readonly unsure?: readonly string[];
@@ -147,6 +147,7 @@ export interface UndoChoice {
  * （作者存稿核过版本，确实是）；撤销 / 恢复换回去的内容对不上任何一份记过的，再往前接不上。current（撤销范围里现在每个文件
  * 的哈希）给了就把最后一张回执之后的也这样认出来。被跳过的那次写过的文件之后有过回执之外的写（比如原样放回了它那份），
  * 它在不在就说不准：照样往前找，找到的带上 unsure，撤之前停下给作者看、点了才撤，不自动去撤别章（Astra 第 13 轮第 1 条）。
+ * 找到的这次自己写过的文件也一样：谱系里已经没有它、之后又有回执之外的写的，一起进 unsure（第 14 轮第 1 条）。
  *
  * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS）就停。
  * 没有返回 undefined。receipts 按写的先后排好。
@@ -192,9 +193,14 @@ export function lastUndoable(receipts: readonly CommandReceipt[], current?: Read
     firstWrite.set(ids[index] as string, mine);
   });
   const present = new Set<string>();
+  // 文件 → 现在这份的谱系里有哪几次。
+  const presentIn = new Map<string, Set<string>>();
   for (const [path, list] of versions) {
     if (current) onDisk(list, current.get(path) ?? null, receipts.length);
-    for (let version = list.at(-1); version; version = version.from) if (version.writer !== undefined) present.add(ids[version.writer] as string);
+    const here = new Set<string>();
+    for (let version = list.at(-1); version; version = version.from) if (version.writer !== undefined) here.add(ids[version.writer] as string);
+    presentIn.set(path, here);
+    for (const id of here) present.add(id);
   }
   // 文件 → 最后一次回执之外的写是在第几张回执之前发现的。
   const lastOutside = new Map<string, number>();
@@ -205,21 +211,32 @@ export function lastUndoable(receipts: readonly CommandReceipt[], current?: Read
   const skip = (receipt: CommandReceipt, index: number): void => {
     for (const effect of receipt.effects ?? []) if (index < (lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
   };
-  const choose = (receipt: CommandReceipt): UndoChoice => ({ target: targetOf(receipt), ...(unsure.size > 0 ? { unsure: [...unsure].sort() } : {}) });
+  // 找到的这次自己写过、现在的谱系里已经没有它的文件，之后有过回执之外的写（比如作者原样存回了它那份）：撤它会不会动到作者的，
+  // 也说不准（Astra 第 14 轮第 1 条：整组靠别的文件还在被选中，这个文件撤了内容对得上就不问了）。
+  const choose = (receipt: CommandReceipt, index: number): UndoChoice => {
+    const id = ids[index] as string;
+    receipts.forEach((mine, at) => {
+      if (at > index || ids[at] !== id) return;
+      for (const effect of mine.effects ?? []) {
+        if (!presentIn.get(effect.path)?.has(id) && at < (lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
+      }
+    });
+    return { target: targetOf(receipt), ...(unsure.size > 0 ? { unsure: [...unsure].sort() } : {}) };
+  };
   for (let index = receipts.length - 1; index >= 0; index -= 1) {
     const receipt = receipts[index] as CommandReceipt;
     const id = ids[index] as string;
     if (receipt.command === HISTORY_APPLY_COMMAND) {
       const result = receipt.result as { readonly kind?: unknown } | null | undefined;
       if (result?.kind !== "restore" || (receipt.effects ?? []).length === 0) continue;
-      if (present.has(id)) return choose(receipt);
+      if (present.has(id)) return choose(receipt, index);
       skip(receipt, index);
       continue;
     }
     if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
-    if (receipt.effects === undefined) return choose(receipt);
+    if (receipt.effects === undefined) return choose(receipt, index);
     if (receipt.effects.length === 0) continue;
-    if (present.has(id)) return choose(receipt);
+    if (present.has(id)) return choose(receipt, index);
     skip(receipt, index);
   }
   return undefined;

@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, chapterTextPath, readCardsOrLegacy, type BasisChange, type ChapterCommitResult, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
+import { chapterCommit, chapterTextPath, readCardsOrLegacy, receiptOnDisk, type BasisChange, type ChapterCommitResult, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { describeBasisChanges, MirrorLagError, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
@@ -30,7 +30,7 @@ import { defaultDraftPath } from "../../../lib/project-io.js";
 import { requestReaderBackfill } from "../../../lib/reader-backfill.js";
 import { recordChapterWords } from "../../../lib/word-stats.js";
 import { checkDraftHardGates } from "../../../writing/commit-quality-check.js";
-import { blockedView, checklistView, choicesOfToggled, commitDoneView, committedShortOf, describeGate, type CommitDone, type CommitPreviewView } from "../../commit-view.js";
+import { blockedView, checklistView, choicesOfToggled, commitDoneView, committedShortOf, describeGate, supersededCommitView, type CommitDone, type CommitPreviewView } from "../../commit-view.js";
 import { coded } from "../../draft-change/steps.js";
 import type { OperationResult, Recipe } from "../executor.js";
 
@@ -198,10 +198,14 @@ async function commit(bookDir: string, preview: CommitPreview, choices: { readon
   return { done: await doneOf(bookDir, chapter, text, result.result), ...(snapshotId ? { snapshotId } : {}) };
 }
 
-/** 上次已经定了（崩在定完、记检查点之前，ctx.apply 照回执回放）：照回执报，不再核工作稿（作者之后存的新稿不算「改过」）。 */
+/**
+ * 上次已经定了（崩在定完、记检查点之前，ctx.apply 照回执回放）：照回执报，不再核工作稿（作者之后存的新稿不算「改过」）。
+ * 盘上还是这次写成的才照盘上算条数；之后这章又定过、撤过的，盘上是后来的，只说回执里有的（Astra 第 14 轮第 2 条）。
+ */
 async function committed(bookDir: string, chapter: number, receipt: CommandReceipt): Promise<{ readonly done: CommitDone }> {
   const outcome = replayedOutcome<ChapterCommitResult>(receipt, chapterCommit);
-  const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8").catch(() => "");
+  if (await receiptOnDisk(bookDir, receipt) !== true) return { done: supersededCommitView(chapter, outcome.result) };
+  const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8");
   return { done: await doneOf(bookDir, chapter, text, outcome.result) };
 }
 

@@ -177,7 +177,7 @@ interface UndoTarget {
   readonly what: string;
   /** 撤的是一次撤销 / 整本恢复（结论换个说法：它退回去了，那几处回到它之前）。 */
   readonly ofHistory: boolean;
-  /** 往前找「上一步」时跳过了在操作之外又改过的这几个文件上的那几次：撤之前停下给作者看。 */
+  /** 在操作之外又改过、跟操作记录接不上的这几个文件（往前找跳过的那几次、找到的这次写过的）：撤之前停下给作者看。 */
   readonly unsure?: readonly string[];
 }
 
@@ -266,7 +266,7 @@ async function applyUndo(bookDir: string, undo: UndoTarget, confirmed: string | 
 }
 
 const UNDO_NOTES = ["全撤会把这几处一起退回这次之前的样子：之后那几次在这几处的改动也跟着没了。"];
-const UNSURE_NOTE = "往前找「上一步」时这几处说不准，找到的是这一次。";
+const UNSURE_NOTE = "这几处现在的样子跟操作记录接不上，撤了会不会动到之后改的说不准，你看过再撤。";
 
 async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<OperationResult> {
   const { bookDir } = ctx;
@@ -275,13 +275,15 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
   if (!resolved) return succeeded("undo", "没有能撤的改动了。", []);
   const first = await ctx.step("plan", { target: resolved.target }, async () => {
     const plan = await planUndo(bookDir, resolved.target);
-    return { impact: await impactLines(bookDir, plan.impact), impactDigest: plan.impactDigest };
+    // 跟操作记录接不上的文件：后来又改过的那几处已经一处一行列着，不再列第二遍。
+    const unsure = (resolved.unsure ?? []).filter((path) => !plan.impact.some((item) => item.path === path));
+    return { impact: await impactLines(bookDir, plan.impact), impactDigest: plan.impactDigest, unsure };
   });
   let confirmed: string | null = null;
   let impact: readonly string[] = first.impact;
   let digest = first.impactDigest;
-  // 往前找的时候跳过了在操作之外又改过的文件上的那几次：找到的这次对不对说不准，第一回就停下给作者看（Astra 第 13 轮第 1 条）。
-  const unsure = (resolved.unsure ?? []).map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`);
+  // 在操作之外改过、跟操作记录接不上的文件：撤得对不对说不准，第一回就停下给作者看（Astra 第 13 轮第 1 条、第 14 轮第 1 条）。
+  const unsure = first.unsure.map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`);
   for (let round = 1; round <= MAX_UNDO_ROUNDS; round += 1) {
     if (impact.length > 0 || (round === 1 && unsure.length > 0)) {
       const notes = impact.length > 0 ? UNDO_NOTES : [UNSURE_NOTE];

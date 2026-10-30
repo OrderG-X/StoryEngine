@@ -20,7 +20,8 @@ import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, listOperations, type OperationRecord } from "../../../lib/operations/store.js";
 import { SETTLED_STATES, untilOperation } from "../../../lib/operations/test-helpers.js";
 import { createSnapshot, listSnapshots } from "../../../lib/snapshot.js";
-import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
+import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation, type Recipe } from "../executor.js";
+import { applyAiDraft, type AiDraftInput } from "../../../lib/ai-draft-write.js";
 import { applyAiDraftInOperation, restoreInOperation, undoInOperation } from "../test-helpers.js";
 import { operationView } from "../view.js";
 import { HISTORY_CHANGE_KIND, historyChangeRecipe, PRUNE_CONFIRM_ACTION, PRUNE_CONFIRM_KIND, UNDO_CONFIRM_ACTION, UNDO_CONFIRM_KIND } from "./history-change.js";
@@ -70,6 +71,31 @@ async function aiWrites(chapter: number, body: string): Promise<void> {
   const outcome = await applyAiDraftInOperation(book, { chapter, title: "", body, baseVersion, basis, materials: [], source: "draft" });
   if (!outcome.applied) throw new Error(outcome.message);
 }
+
+async function aiInput(chapter: number, body: string): Promise<AiDraftInput> {
+  return { chapter, title: "", body, baseVersion: (await readDraft(book, chapter))?.version ?? null, basis: await readTruthBasis(book), materials: [], source: "draft" };
+}
+
+/** 一次操作里 AI 换上几章稿（一章一步）。 */
+const TWO_DRAFTS_KIND = "test.ai-drafts";
+const twoDraftsRecipe: Recipe<readonly AiDraftInput[]> = {
+  kind: TWO_DRAFTS_KIND,
+  version: 1,
+  lane: "foreground",
+  async prepare(_bookDir, input) {
+    const params = input.params as readonly AiDraftInput[];
+    return { ok: true, params, writeScope: { chapters: params.map((item) => item.chapter) }, budget: 0 };
+  },
+  async run(ctx) {
+    for (const item of ctx.params) {
+      const apply = () => applyAiDraft(ctx.bookDir, item);
+      await ctx.apply(`apply-${item.chapter}`, item, apply, apply);
+    }
+    return { schema: "operation-result/1", summary: "换上了", body: null };
+  },
+  stepBudget: () => 0,
+  modelTasks: () => [],
+};
 
 async function authorSaves(chapter: number, body: string): Promise<void> {
   const baseVersion = (await readDraft(book, chapter))?.version ?? null;
@@ -158,6 +184,30 @@ describe("撤销上一步", () => {
     expect(done.state).toBe("succeeded");
     expect(await bodyOf(9)).toBeUndefined();
     expect(await bodyOf(1)).toBe("作者自己从头写的。");
+  });
+
+  it("一次操作改了两章、它之前那次被全撤顺带退掉一章，作者又原样存回：靠另一章还在找到它，也停下给作者看（Astra 第 14 轮第 1 条）", async () => {
+    await aiWrites(1, "A 写的。");
+    registerRecipe(twoDraftsRecipe);
+    const first = await aiInput(1, "B 写的第一章。");
+    const second = await aiInput(2, "B 写的第二章。");
+    const submitted = await submitOperation(book, { kind: TWO_DRAFTS_KIND, params: [first, second], requestKey: randomUUID(), issuedAt: new Date().toISOString(), origin: { kind: "button" } });
+    if (!submitted.ok || !("record" in submitted)) throw new Error(JSON.stringify(submitted));
+    expect(await untilOperation(book, submitted.record.opId, (record) => SETTLED_STATES.includes(record.state))).toMatchObject({ state: "succeeded" });
+    const a = (await listOperations(book)).find((record) => record.kind === "test.ai-draft");
+    await undoInOperation(book, a?.opId);
+    expect(await bodyOf(1)).toBeUndefined();
+    expect(await bodyOf(2)).toBe("B 写的第二章。");
+    const saved = await runCommand(book, draftSave, { chapter: 1, title: "", body: "B 写的第一章。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+    expect(saved.ok).toBe(true);
+    const waiting = await submit("undo", {}, "button");
+    expect(waiting.state).toBe("waiting_author");
+    const preview = operationView(waiting).pendingActions[0]?.preview as { lines: string[]; notes: string[] };
+    // 撤它的计划看不出第 1 章有事（内容就是它写的那份），只靠「接不上」停下。
+    expect(preview.lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
+    expect(await bodyOf(1)).toBe("B 写的第一章。");
+    expect(await answer(waiting)).toMatchObject({ state: "succeeded" });
+    expect(await bodyOf(2)).toBeUndefined();
   });
 
   it("上一次是升级之前、没留存档的写：如实说撤不了、指去「历史」，不说「没有能撤的」", async () => {

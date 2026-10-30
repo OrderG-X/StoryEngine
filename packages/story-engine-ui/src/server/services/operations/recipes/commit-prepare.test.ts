@@ -15,7 +15,7 @@ import { MIRROR_BACKUP_DIR } from "../../../book/mirror/sync.js";
 import type { BrainCallModel } from "../../../editorial/reader-window.js";
 import { __resetCatchUpLocksForTests } from "../../../editorial/reader-window.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
-import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
+import { __resetExecutionsForTests, OperationStopped } from "../../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, readOperation, type OperationRecord } from "../../../lib/operations/store.js";
 import { listSnapshots } from "../../../lib/snapshot.js";
@@ -290,7 +290,7 @@ describe("作者点「确认定稿」", () => {
     const body = bodyOf(done);
     expect(body).toMatchObject({ committed: true, snapshotId: expect.stringMatching(/^[0-9a-f]{40}$/u) });
     expect(body.done).toMatchObject({ draftTitle: "第1章 · 钟停", report: { chapter: 1, ledger: { facts: 2, threadsOpened: 1, threadsClosed: 0, present: 1, day: 3, notRecorded: 0 } } });
-    expect(body.done?.draftBody.startsWith("周二傍晚")).toBe(true);
+    expect(body.done?.draftBody?.startsWith("周二傍晚")).toBe(true);
     expect(summaryOf(done)).toContain("第 1 章已定稿");
     expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
     expect((await projectBook(book)).chapters[0]).toMatchObject({ day: 3, dayBasis: "author", present: ["林远"] });
@@ -399,6 +399,31 @@ describe("作者点「确认定稿」", () => {
     expect(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).toBe(edited);
   });
 
+  it("定完、记检查点之前断了；作者之后改稿又定了一次：接着做旧的那次照回执报，不拿后来的正文和条数冒充（Astra 第 14 轮第 2 条）", async () => {
+    await writeDraft(1, CH1);
+    const record = await prepare(1);
+    hook.afterCommitCommand = async () => {
+      hook.afterCommitCommand = undefined;
+      throw new OperationStopped("operation_stopped", "定完、记检查点之前断了");
+    };
+    expect(await confirm(record)).toMatchObject({ state: "paused" });
+    const first = (await readChapterLedger(book, 1))?.entries ?? [];
+    expect(first.filter((entry) => entry.kind === "fact")).toHaveLength(2);
+    const later = await commit(1, CH1.replaceAll("铜钥匙", "银钥匙"), { summary: { text: "林远找到银钥匙", quote: "银钥匙" } });
+    expect(bodyOf(later).done?.report?.ledger.facts).toBe(0);
+    const head = await readHead(book);
+    expect(await resumeOperation(book, record.opId)).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const done = await stored(record.opId);
+    expect(done.state).toBe("succeeded");
+    expect(await readHead(book)).toEqual(head);
+    expect(bodyOf(done)).toMatchObject({ committed: true });
+    expect(bodyOf(done).done?.report).toBeUndefined();
+    expect(bodyOf(done).done?.draftBody).toBeUndefined();
+    expect(summaryOf(done)).toContain(`记了 ${first.length} 条`);
+    expect(summaryOf(done)).toContain("之后又改过");
+  });
+
   it("清单出来之后前文的账改过：不定稿、说哪样变了", async () => {
     await commit(1, CH1, LEDGER1);
     await writeDraft(2, CH2);
@@ -478,7 +503,7 @@ describe("作者点「确认定稿」", () => {
     expect(viewOf(record).ledgerChecklist?.find((item) => item.kind === "thread")?.needsConfirm).toBe(true);
 
     const skipped = bodyOf(await confirm(record));
-    expect(skipped.done?.report.ledger).toMatchObject({ facts: 1, threadsClosed: 1 });
+    expect(skipped.done?.report?.ledger).toMatchObject({ facts: 1, threadsClosed: 1 });
     expect((await readChapterLedger(book, 2))?.entries.some((entry) => entry.kind === "fact" && entry.text === "钟停在四点整")).toBe(false);
 
     expect((await restoreForTest(book, skipped.snapshotId ?? "")).length).toBeGreaterThan(0);
@@ -489,7 +514,7 @@ describe("作者点「确认定稿」", () => {
     const again = await prepare(2);
     const optIn = viewOf(again).ledgerChecklist?.find((item) => item.defaultUnchecked);
     const taken = bodyOf(await confirm(again, [optIn?.id]));
-    expect(taken.done?.report.ledger.facts).toBe(2);
+    expect(taken.done?.report?.ledger.facts).toBe(2);
     expect((await projectBook(book)).conflicts).toHaveLength(1);
   });
 

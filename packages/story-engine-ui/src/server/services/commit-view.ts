@@ -230,13 +230,25 @@ export interface CommitLedgerReport {
   };
 }
 
-/** 定完以后：回执卡的条数、给作者的那一句话、定稿后的正文（稿纸以「已定稿」载入）。 */
+/** 定完以后：回执卡的条数、给作者的那一句话、定稿后的正文（稿纸以「已定稿」载入）。没有条数和正文的是回放旧定稿、盘上已经是后来的那份（supersededCommitView）。 */
 export interface CommitDone {
-  readonly report: CommitLedgerReport;
+  readonly report?: CommitLedgerReport;
   readonly summary: string;
-  readonly draftBody: string;
+  readonly draftBody?: string;
   readonly draftTitle?: string;
   readonly threadMaintenanceHint?: "escalated";
+}
+
+/**
+ * 回放一次旧定稿（写成了、记检查点之前断了），这章之后又定过 / 撤过：盘上的正文和账是后来的，不拿来冒充这次的条数和正文
+ * （Astra 第 14 轮第 2 条）。只说回执里有的：定成了、没记上的那几条。
+ */
+export function supersededCommitView(chapter: number, result: ChapterCommitResult): CommitDone {
+  const parts = [
+    `第 ${chapter} 章这次的定稿已经写成了，记了 ${result.recorded} 条；这章之后又改过，细目不列了。`,
+    ...(result.rejected.length > 0 ? [`那次有 ${result.rejected.length} 条没记上：${result.rejected.slice(0, 3).map((item) => item.message).join("；")}。`] : []),
+  ];
+  return { summary: parts.join(" ") };
 }
 
 /** 定稿成了：照定稿后的账算回执（读的是盘上刚写好的）。mirrorOk = 老格式镜像跟上了没有（没跟上如实说一句）。 */
