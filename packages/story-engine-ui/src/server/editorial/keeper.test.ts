@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
 import { nameHandles, parseKeeperOutput } from "./keeper-parse.js";
-import { buildKeeperTask, endingByWorld, KEEPER_SPEC, LEDGER_ROLE, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
+import { buildChapterEndTask, buildKeeperTask, endingByWorld, endingWeekday, KEEPER_SPEC, LEDGER_ROLE, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
 type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: "auto" | "author" } : never) : never;
@@ -59,6 +59,17 @@ describe("交账单要求：换天", () => {
     expect(spec).not.toContain("天亮换日");
     expect(spec).toContain("\"byBoundary\":{\"midnight\"");
     expect(spec).toContain("不要写「故事第几天」");
+  });
+
+  it("章里过了半夜、凌晨开头又过了天亮：也是一次换天，按两种规矩各写；追问结尾时同一句（P3a 评测：这两种整章记成了同一天）", () => {
+    const spec = KEEPER_SPEC.join("\n");
+    expect(spec).toContain("从白天到半夜十二点以前都还是同一天");
+    expect(spec).toContain("③ 从白天或半夜以前讲到半夜以后、天亮以前");
+    expect(spec).toContain("④ 本章开头在半夜以后、天亮以前，章里又讲到天亮以后：midnight 0、dawn 1");
+    const ask = buildChapterEndTask("[1]凌晨四点。");
+    expect(ask).toContain("③ 从白天或半夜以前讲到半夜以后、天亮以前");
+    expect(ask).toContain("点天亮后那句");
+    expect(ask).not.toContain("quote");
   });
 });
 
@@ -687,6 +698,27 @@ describe("记账员跑一章", () => {
     const task = buildKeeperTask(3, "正文", "", { chapter: 2, text: "屋里静了。", byWorld: ends });
     expect(task).toContain("过了半夜就算第二天时是第 3 天，天亮才算第二天时是第 2 天");
     expect(buildKeeperTask(3, "正文", "", { chapter: 2, text: "屋里静了。" })).not.toContain("两种换天规矩不在同一天");
+  });
+
+  it("上一个当下章结尾是星期几：前文写明了星期、推得出来才告诉记账员（多线往回接按星期定隔几天）；跨天数不定的不说", () => {
+    const day = (min: number) => ({ unit: "day" as const, min, max: min });
+    const monday = "# 第1章\n\n周一下午，面馆还没上客。";
+    const first = ledgerOf({ chapter: 1, text: monday, committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "周一下午" }, weekday: 0, sameDay: true }] });
+    const next = (entries: EntryDraft[]) => ledgerOf({ chapter: 2, text: "# 第2章\n\n第二天一早。到了夜里。", committedAt: "2026-10-17T00:00:00.000Z", entries });
+    const twoDays = next([{ kind: "time", review: "auto", start: { offset: day(1), basis: "text", quote: "第二天一早" }, dayChanges: [{ offset: day(1), quote: "到了夜里" }] }]);
+    expect(endingWeekday(project({ ledgers: [first, twoDays], decisions: [] }), 1)).toBe(0);
+    // 第 2 章开头周二，章内过了一天：结尾周三。
+    expect(endingWeekday(project({ ledgers: [first, twoDays], decisions: [] }), 2)).toBe(2);
+    // 凌晨开头、过了天亮：开头按两种规矩不在同一天（推不出开头星期几），结尾两种都是第 2 天 → 照第 1 章写明的周一推，周二。
+    const dawn = next([{ kind: "time", review: "auto", start: { byBoundary: { midnight: day(1), dawn: day(0) }, basis: "judged", quote: "第二天一早" }, dayChanges: [{ byBoundary: { midnight: day(0), dawn: day(1) }, quote: "到了夜里" }] }]);
+    const dawnView = project({ ledgers: [first, dawn], decisions: [] });
+    expect(dawnView.chapters[1]?.time.weekday).toBeUndefined();
+    expect(endingWeekday(dawnView, 2)).toBe(1);
+    const open = next([{ kind: "time", review: "auto", start: { offset: day(1), basis: "text", quote: "第二天一早" } }]);
+    expect(endingWeekday(project({ ledgers: [first, open], decisions: [] }), 2)).toBeUndefined();
+    const task = buildKeeperTask(3, "正文", "", { chapter: 2, text: "到了夜里。", weekday: 2 });
+    expect(task).toContain("（第 2 章结尾是周三，按前文写明的星期推的。");
+    expect(buildKeeperTask(3, "正文", "", { chapter: 2, text: "到了夜里。" })).not.toContain("按前文写明的星期推的");
   });
 
   it("提示词里不写任何具体书名、人名", () => {

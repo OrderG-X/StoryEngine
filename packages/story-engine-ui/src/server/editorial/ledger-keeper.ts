@@ -28,6 +28,7 @@ import {
   type TextUnit,
   type TimeInput,
 } from "@actalk/story-core";
+import { WEEKDAY_NAMES } from "../book/story-timeline.js";
 import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
@@ -68,6 +69,10 @@ export const KEEPER_MAX_CATCH_UP = 10;
 /** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次。额度算式用。 */
 export const KEEPER_MAX_CALLS = 3;
 
+/** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
+const IN_CHAPTER_BOUNDARY =
+  "章里讲过了半夜或天亮、换没换天要看规矩的，也是一次换天，用 byBoundary 各写一份，不写 sameDay：③ 从白天或半夜以前讲到半夜以后、天亮以前（「过了十二点」「凌晨一点」这类）：midnight 1、dawn 0，quote 摘过了半夜那句；④ 本章开头在半夜以后、天亮以前，章里又讲到天亮以后：midnight 0、dawn 1，quote 摘天亮后那句。两样都有（从晚上讲过半夜一直到天亮以后）就各记一次。";
+
 /** 交账单的要求（通用写法，绝不写进具体书名、人名）。 */
 export const KEEPER_SPEC: readonly string[] = [
   "把这一章引起的变化列成一份账单。题材中立：只记正文真实写到的，不臆造、不补剧情、不预设走向。",
@@ -81,7 +86,8 @@ export const KEEPER_SPEC: readonly string[] = [
   "- start = 本章开头离上一个当下章的结尾多久（下面【上一个当下章结尾】是原文）。写成 {\"offset\":{\"unit\":\"day\",\"min\":1,\"max\":1},\"basis\":\"text\",\"quote\":\"…\"}：同一天 0，「第二天」1，「三天后」3，往回接的写负数（「前天」-2）。本章开头做的正是上一个当下章约到「明天」「第二天」的事，或者本章里说「昨天」指的是上一个当下章的事，也是 1。说不准几天就写区间（「过了几天」写 min、max 两头，「几天后」只写 min）；「半年后」「三年后」照原样写 unit 为 month、year，不要折成天。正文明写了 basis 填 text；对照上一个当下章结尾和本章开头判断的填 judged。quote 引说明它的那句。",
   "- 要看「过了半夜算不算第二天」才定的，按两种规矩各写一份，不写 offset：\"byBoundary\":{\"midnight\":{\"unit\":\"day\",\"min\":0,\"max\":0},\"dawn\":{\"unit\":\"day\",\"min\":1,\"max\":1}}（midnight = 过了半夜十二点就算第二天时隔多久，dawn = 天亮才算第二天时隔多久，里面直接写 unit、min、max，不要再套一层 offset）。两种情形要分：① 上一个当下章停在半夜以后、天亮以前（后半夜、凌晨），本章开头是那之后第一次天亮（「第二天一早」这类）：midnight 0、dawn 1；② 上一个当下章停在白天或半夜以前，本章开头在半夜以后、天亮以前（凌晨四点这类）：midnight 1、dawn 0。再往后每多隔一天，两份各加 1。下面【上一个当下章结尾】后面注明了按两种规矩不在同一天的，多半就是①。不看规矩就定的只写 offset。",
   "- 本章接着当下往下讲、但判断不了隔多久，写 \"start\":\"unknown\"，不要硬填一个数。整章都是回忆、梦这类段时，time 只写 segments，不写 start、sameDay、dayChanges、weekday、timeOfDay。",
-  "- 本章从头到尾在同一天，写 \"sameDay\":true（从早到晚、从白天到深夜都还是同一天）。中间换了天就逐次列 dayChanges：每次写隔了几天（offset 至少 1 天；要看换天规矩才定的照样用 byBoundary 各写一份），quote 逐字摘新的一天开头那句。两样都不写 = 章末是哪天不知道。",
+  "- 本章从头到尾在同一天，写 \"sameDay\":true（从早到晚、从白天到半夜十二点以前都还是同一天）。中间换了天就逐次列 dayChanges：每次写隔了几天（offset 至少 1 天；要看换天规矩才定的照样用 byBoundary 各写一份），quote 逐字摘新的一天开头那句。两样都不写 = 章末是哪天不知道。",
+  `- ${IN_CHAPTER_BOUNDARY}`,
   "- weekday 只填正文明写的星期，写成「周二」这样；没写就不填，不要自己推算。timeOfDay 填正文写的时段（「傍晚」）。",
   "- 不要写「故事第几天」，那由代码按全书算。",
   "",
@@ -185,11 +191,35 @@ export function previousPresentChapter(before: BookProjection, chapter: number):
   return undefined;
 }
 
-/** 上一个当下章的结尾：原文最后一小段，两种换天规矩下结尾不在同一天时带上各是哪天。 */
+/** 上一个当下章的结尾：原文最后一小段，两种换天规矩下结尾不在同一天时带上各是哪天，投影知道结尾是星期几时带上（0 = 周一）。 */
 export interface PreviousEnding {
   readonly chapter: number;
   readonly text: string;
   readonly byWorld?: { readonly midnight: DayRange; readonly dawn: DayRange };
+  readonly weekday?: number;
+}
+
+/**
+ * 这一章结尾是星期几（投影的数）：结尾是确定的第几天，就照离它最近的一处正文写明星期、开头天数确定的章推；
+ * 不然看这章开头推出了星期几、章内跨了几天也确定（两种换天规矩一样）。都推不出就没有。
+ * 多线往回接时本章只写「周二夜里」，记账员得知道上一章结尾是周几才定得出往回隔几天（P3a 评测：专题书「周二夜里」记成了同一天）。
+ */
+export function endingWeekday(before: BookProjection, chapter: number): number | undefined {
+  const exact = (range: DayRange | undefined): number | undefined => (range?.lo !== undefined && range.lo === range.hi ? range.lo : undefined);
+  const time = before.chapters.find((view) => view.chapter === chapter)?.time;
+  if (!time) return undefined;
+  const endDay = exact(time.end);
+  if (endDay !== undefined) {
+    let best: { readonly chapter: number; readonly weekday: number; readonly day: number } | undefined;
+    for (const view of before.chapters) {
+      const day = exact(view.time.start);
+      if (view.time.presentLine !== true || view.time.weekday === undefined || view.time.weekdayDerived || day === undefined) continue;
+      if (!best || Math.abs(view.chapter - chapter) < Math.abs(best.chapter - chapter)) best = { chapter: view.chapter, weekday: view.time.weekday, day };
+    }
+    if (best) return (((best.weekday + endDay - best.day) % 7) + 7) % 7;
+  }
+  const span = exact(time.span);
+  return time.weekday !== undefined && span !== undefined ? (time.weekday + span) % 7 : undefined;
 }
 
 /** 两种换天规矩下这一章结尾各是哪天：都知道、又不一样才有（一样的、哪边不知道的不给，记账员照原文判）。 */
@@ -217,16 +247,28 @@ async function previousEnding(projectDir: string, before: BookProjection, chapte
   try {
     const text = (await readFile(join(projectDir, chapterTextPath(previous)), "utf-8")).trim();
     const byWorld = endingByWorld(before, previous);
-    return { chapter: previous, text: text.length > PREVIOUS_ENDING_CHARS ? `…${text.slice(-PREVIOUS_ENDING_CHARS)}` : text, ...(byWorld ? { byWorld } : {}) };
+    const weekday = endingWeekday(before, previous);
+    return {
+      chapter: previous,
+      text: text.length > PREVIOUS_ENDING_CHARS ? `…${text.slice(-PREVIOUS_ENDING_CHARS)}` : text,
+      ...(byWorld ? { byWorld } : {}),
+      ...(weekday !== undefined ? { weekday } : {}),
+    };
   } catch {
     return undefined;
   }
 }
 
 function endingSection(ending: PreviousEnding): string {
-  const head = `【上一个当下章结尾（第 ${ending.chapter} 章）】\n${ending.text}`;
-  if (!ending.byWorld) return head;
-  return `${head}\n（第 ${ending.chapter} 章结尾按两种换天规矩不在同一天：过了半夜就算第二天时是${dayText(ending.byWorld.midnight)}，天亮才算第二天时是${dayText(ending.byWorld.dawn)}。本章开头隔几天按两种规矩各写一份 byBoundary。）`;
+  const notes = [
+    ...(ending.weekday !== undefined
+      ? [`（第 ${ending.chapter} 章结尾是${WEEKDAY_NAMES[ending.weekday]}，按前文写明的星期推的。本章正文写了星期几的，开头离它隔几天对照着这个定，往回接的照样写负数。）`]
+      : []),
+    ...(ending.byWorld
+      ? [`（第 ${ending.chapter} 章结尾按两种换天规矩不在同一天：过了半夜就算第二天时是${dayText(ending.byWorld.midnight)}，天亮才算第二天时是${dayText(ending.byWorld.dawn)}。本章开头隔几天按两种规矩各写一份 byBoundary。）`]
+      : []),
+  ];
+  return [`【上一个当下章结尾（第 ${ending.chapter} 章）】\n${ending.text}`, ...notes].join("\n");
 }
 
 /** 拼给记账员的那条 user 消息（单测和考卷也用）。ending = 上一个当下章的结尾。 */
@@ -520,8 +562,9 @@ function endMissing(time: TimeInput | undefined): time is TimeInput {
 export function buildChapterEndTask(numbered: string): string {
   return [
     "你刚交的账单里，time 写了本章开头，但没写本章从开头到结尾是不是同一天（sameDay），也没列换天（dayChanges），本章结尾是哪天就不知道了。请只补这一件：",
-    "- 从头到尾都在同一天（从早到晚、从白天到深夜都还是同一天），交 {\"sameDay\":true}；",
+    "- 从头到尾都在同一天（从早到晚、从白天到半夜十二点以前都还是同一天），交 {\"sameDay\":true}；",
     "- 中间换了天，逐次列 dayChanges：每次点新的一天开头那句的编号 id，写隔了几天（offset 至少 1 天；要看换天规矩才定的照样用 byBoundary 各写一份，写法和本章开头一样）；",
+    `- ${IN_CHAPTER_BOUNDARY.replaceAll("quote 摘", "点")}`,
     "- 正文里实在看不出，交 {\"unknown\":true}。",
     "",
     "下面是本章正文，每句前面是编号。",
