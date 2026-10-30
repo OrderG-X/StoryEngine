@@ -31,12 +31,18 @@ describe("agentFlowStatusForTool", () => {
   });
 
   it("定稿（操作）：出了清单等作者点 → waiting_commit_confirmation（已定稿不往回拨）；定成了 → committed；定不了、没做完的不推", () => {
-    const op = (state: OperationViewData["state"], committed?: boolean): OperationViewData => ({
+    const op = (state: OperationViewData["state"], committed?: boolean, pending?: "commit" | "choice"): OperationViewData => ({
       opId: "op-0123456789abcdef0123", kind: "commit.prepare", chapter: 3, what: "定稿", state, stateText: "", allowed: [], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat" },
       ...(committed !== undefined ? { commit: { chapter: 3, committed } } : {}),
+      ...(pending === "commit" ? { pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: { chapter: 3, canCommit: true } } } : {}),
+      ...(pending === "choice" ? { pending: { kind: "choice", actionId: "ledger-failed", decisions: ["retry"], lines: ["没记成"], choices: [{ decision: "retry", label: "再记一次" }] } } : {}),
     });
-    expect(flowAfterOperation(op("waiting_author"), "quality_checked")).toBe("waiting_commit_confirmation");
-    expect(flowAfterOperation(op("waiting_author"), "committed")).toBe("committed");
+    expect(flowAfterOperation(op("waiting_author", undefined, "commit"), "quality_checked")).toBe("waiting_commit_confirmation");
+    expect(flowAfterOperation(op("waiting_author", undefined, "commit"), "committed")).toBe("committed");
+    // 记账没成停着请作者挑：还不是定稿清单，不推。
+    expect(flowAfterOperation(op("waiting_author", undefined, "choice"), "quality_checked")).toBe("quality_checked");
+    // 补账不动这章在哪一步。
+    expect(flowAfterOperation({ ...op("succeeded", true), mode: "fill" }, "draft_ready")).toBe("draft_ready");
     expect(flowAfterOperation(op("succeeded", true), "waiting_commit_confirmation")).toBe("committed");
     expect(flowAfterOperation(op("succeeded", false), "draft_ready")).toBe("draft_ready");
     expect(flowAfterOperation(op("obsolete"), "waiting_commit_confirmation")).toBe("waiting_commit_confirmation");

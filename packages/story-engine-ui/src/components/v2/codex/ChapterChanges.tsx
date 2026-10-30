@@ -83,14 +83,16 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   const next = index >= 0 && index < changes.chapters.length - 1 ? changes.chapters[index + 1] : undefined;
   // 章名表里有的带「第N章 ·」前缀（工作稿刚定稿那章），只取章名。
   const title = chapterBareTitle(chapterTitles.get(changes.chapter) ?? "");
-  const day = changes.dayEnd > changes.day ? `第 ${changes.day}～${changes.dayEnd} 天` : `第 ${changes.day} 天`;
-  const nothing = changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
+  const day = changes.day === undefined || changes.dayEnd === undefined
+    ? "哪天不知道"
+    : changes.dayEnd > changes.day ? `故事第 ${changes.day}～${changes.dayEnd} 天` : `故事第 ${changes.day} 天`;
+  const nothing = !changes.ledgerPending && changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
   return (
     <section className="se-sm se-cc" aria-label="这章改了什么">
       <PageHead
         kicker="设定本 · 这章改了什么"
         title={`第 ${changes.chapter} 章${title ? ` · ${title}` : ""} 改了什么`}
-        sub={`故事${day}${changes.summary ? ` · ${changes.summary}` : ""}`}
+        sub={`${day}${changes.summary ? ` · ${changes.summary}` : ""}`}
         aside={prev !== undefined || next !== undefined ? (
           <nav className="se-cc-nav" aria-label="翻章">
             {prev !== undefined ? <button type="button" className="se-cc-turn" onClick={() => setChapter(prev)}>‹ 第 {prev} 章</button> : null}
@@ -98,6 +100,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
           </nav>
         ) : undefined}
       />
+      {changes.ledgerPending ? <p className="se-bk-blank">这章的账还没记上。</p> : null}
       {nothing ? <p className="se-bk-blank">这章定稿时没记下新的人、线索和事。</p> : null}
       {changes.newCast.length > 0 ? (
         <div className="se-cc-block is-cast">

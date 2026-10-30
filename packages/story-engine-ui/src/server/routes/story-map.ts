@@ -13,13 +13,16 @@ import { readPaceReport } from "../services/pace-report.js";
 
 export interface StoryMapChapter {
   readonly chapter: number;
-  readonly day: number;
-  readonly dayEnd: number;
+  /** 这章的账还没记上（格子显示「账待记」）。 */
+  readonly ledgerPending?: true;
+  /** 是哪天不知道（账待记、接着它算的）就没有。 */
+  readonly day?: number;
+  readonly dayEnd?: number;
   /** 0 = 周一 … 6 = 周日。 */
   readonly weekday?: number;
   readonly weekdayDerived: boolean;
   readonly timeOfDay?: string;
-  readonly basis: "text" | "judged" | "author" | "estimated" | "missing";
+  readonly basis: "text" | "judged" | "author" | "estimated" | "missing" | "unknown";
   readonly summary?: string;
   readonly present: readonly string[];
   readonly viewpoint?: string;
@@ -46,8 +49,8 @@ export function toStoryMap(projection: Pick<BookProjection, "upTo" | "chapters" 
     upTo: projection.upTo,
     chapters: projection.chapters.map((chapter) => ({
       chapter: chapter.chapter,
-      day: chapter.day,
-      dayEnd: chapter.dayEnd,
+      ...(chapter.ledgerStatus === "pending" ? { ledgerPending: true as const } : {}),
+      ...(chapter.day !== undefined && chapter.dayEnd !== undefined ? { day: chapter.day, dayEnd: chapter.dayEnd } : {}),
       ...(chapter.weekday !== undefined ? { weekday: chapter.weekday } : {}),
       weekdayDerived: chapter.weekdayDerived,
       ...(chapter.timeOfDay ? { timeOfDay: chapter.timeOfDay } : {}),

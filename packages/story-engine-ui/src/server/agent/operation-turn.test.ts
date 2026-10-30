@@ -419,6 +419,37 @@ describe("定稿按钮（commit.prepare）收尾", () => {
     expect(waiting.text()).toBe("第 2 章可以定稿，清单在卡上：点「确认定稿」才定。");
   });
 
+  it("先定了正文、账待记：说结论，下一步推荐「补记账」、再给写下一章；补账做完推荐写下一章，没补全给「再补一次」（P2b）", async () => {
+    fakeCommit({ body: { done: { summary: "", report: { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 0, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 0, notRecorded: 0, status: "pending" } } } } });
+    await commitFiles([1, 2]);
+    const out = await press(2);
+    expect(out.choices()[0]).toMatchObject({ label: "补记账", recommended: true, action: { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter: 2, fill: true } } });
+    expect(out.choices()[1]).toMatchObject({ label: "AI 写第 3 章" });
+    __resetRecipesForTests();
+    fakeCommit({ body: { fill: true, done: { summary: "", report: { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 1, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 0, notRecorded: 0, status: "partial" } } } } });
+    const filled = await press(2);
+    expect(filled.choices().map((choice) => choice.label)).toEqual(["再补一次", "AI 写第 3 章"]);
+  });
+
+  it("记账没成停着请作者挑：说一句「在卡上」，不说「可以定稿」", async () => {
+    registerRecipe<{ readonly chapter: number }>({
+      kind: COMMIT_PREPARE_KIND,
+      version: 1,
+      lane: "foreground",
+      async prepare(_bookDir, input) {
+        return { ok: true, params: input.params as { readonly chapter: number }, writeScope: { chapters: [] }, budget: 1 };
+      },
+      async run(ctx) {
+        await ctx.waitForAuthor({ actionId: "ledger-failed", kind: "author_choice", decisions: ["retry", "pending"], preview: { lines: ["没记成"], choices: [] } });
+        return { schema: "operation-result/1", summary: "", body: {} };
+      },
+      stepBudget: () => 0,
+      modelTasks: () => [],
+    });
+    const out = await press(1);
+    expect(out.text()).toBe("第 1 章的账这次没记成，怎么办在卡上。");
+  });
+
   it("没做成：说原因，给「再来一次」（新的一次定稿）", async () => {
     fakeCommit({ fail: "记账员没交成" });
     const out = await press(1);

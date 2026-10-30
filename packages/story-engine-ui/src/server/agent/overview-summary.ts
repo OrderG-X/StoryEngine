@@ -43,6 +43,18 @@ export function summarizeStateOverview(overview: StateOverview): string {
       `主线目标 ${overview.arcGoals.activeCount + overview.arcGoals.touchedCount} 条。`,
   );
 
+  const short = overview.ledgerShort ?? [];
+  const pending = short.filter((item) => item.status === "pending").map((item) => `第 ${item.chapter} 章`);
+  const partial = short.filter((item) => item.status === "partial").map((item) => `第 ${item.chapter} 章`);
+  if (pending.length > 0 || partial.length > 0) {
+    lines.push(
+      `账：${[
+        ...(pending.length > 0 ? [`${pending.join("、")}正文定了、账还没记上`] : []),
+        ...(partial.length > 0 ? [`${partial.join("、")}账没记全`] : []),
+      ].join("；")}（作者可以点「补记账」，或对你说补记哪章的账：交 prepare_commit 带 fill）。`,
+    );
+  }
+
   const lastEvent = overview.storyStatus.lastTimelineEvent;
   if (lastEvent) {
     lines.push(`最近时间线：${lastEvent}`);

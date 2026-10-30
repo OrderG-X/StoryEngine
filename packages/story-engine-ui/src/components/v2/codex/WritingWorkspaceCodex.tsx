@@ -406,11 +406,18 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       || String(i + 1).includes(chapterFilter))
     : chapters;
   // 「还没写」的占位章不进列表：开新章走顶上的「写第 N 章」，翻到它走稿纸底部的「下一章」。
+  // 正文定了、账还没记上 / 没记全的章：章节栏里标出来（点开那章，工具条上「补记账」）。
+  const ledgerShort = new Map((props.overview?.ledgerShort ?? []).map((item) => [item.chapter, item.status] as const));
+  const ledgerShortLabel = (chapter: number): string | undefined => {
+    const status = ledgerShort.get(chapter);
+    return status === "pending" ? "正文定了，账待记" : status === "partial" ? "已定稿，账没记全" : undefined;
+  };
   const chapterRows = buildChapterRows(visibleChapters.filter((ch) => ch.status !== "planned" || ch.id === currentId), Boolean(chapterFilter));
   // 当前章的状态看稿纸（和稿纸工具条、右栏顶卡同源 paperStage；章节列表里它只标「current」，看不出是不是还没定稿）。
   const currentStage = useDraftStore((state) => (state.chapter === props.workspace.currentChapter.chapterNumber ? paperStage(state) : null));
   const currentIsDraft = currentStage === "draft" || currentStage === "edited";
-  const currentLabel = currentStage === "edited" ? "定稿后又改过" : currentIsDraft ? "工作稿还没定稿" : currentStage === "committed" ? "已定稿" : null;
+  const currentLabel = currentStage === "edited" ? "定稿后又改过" : currentIsDraft ? "工作稿还没定稿" : currentStage === "committed" ? (ledgerShortLabel(props.workspace.currentChapter.chapterNumber) ?? "已定稿") : null;
+  const currentWarn = currentIsDraft || (currentStage === "committed" && ledgerShort.has(props.workspace.currentChapter.chapterNumber));
   // ⌘K 里的章也按这个说（不再自己另算）。
   const paletteChapters = chapters.map((ch) => (ch.id === currentId && currentStage && currentStage !== "empty"
     ? { ...ch, status: currentIsDraft ? "draft" as const : "committed" as const }
@@ -705,7 +712,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         className={`se-ch${row.ch.id === currentId ? " on" : ""}`}
                         disabled={workspaceBusy}
                         aria-current={row.ch.id === currentId ? "page" : undefined}
-                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentLabel ?? CHAPTER_STATUS_LABEL[row.ch.status]) : row.ch.status === "committed" && row.ch.editedSinceCommit ? "定稿后又改过" : CHAPTER_STATUS_LABEL[row.ch.status]}`}
+                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentLabel ?? CHAPTER_STATUS_LABEL[row.ch.status]) : row.ch.status === "committed" && row.ch.editedSinceCommit ? "定稿后又改过" : (row.ch.status === "committed" ? ledgerShortLabel(row.ch.chapterNumber) : undefined) ?? CHAPTER_STATUS_LABEL[row.ch.status]}`}
                         onClick={() => {
                           if (workspaceBusy) {
                             useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
@@ -718,7 +725,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       >
                         <span className="se-ch-n">{row.ch.chapterNumber}</span>
                         <span className={`se-ch-t${chapterDisplayTitle(row.ch.title ?? "") && row.ch.status !== "planned" ? "" : " untitled"}`}>{chapterDisplayTitle(row.ch.title ?? "") || "未命名"}</span>
-                        <span className={`se-dot ${row.ch.id === currentId ? (currentIsDraft ? "warn" : "") : needsCommit(row.ch) ? "warn" : CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
+                        <span className={`se-dot ${row.ch.id === currentId ? (currentWarn ? "warn" : "") : needsCommit(row.ch) || (row.ch.status === "committed" && ledgerShort.has(row.ch.chapterNumber)) ? "warn" : CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
                       </button>
                     ))}
                     {visibleChapters.length === 0 ? (

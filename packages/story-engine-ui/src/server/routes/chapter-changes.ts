@@ -34,8 +34,11 @@ export interface ChapterChanges {
   /** 定稿了的章号（翻上一章 / 下一章用）。 */
   readonly chapters: readonly number[];
   readonly summary?: string;
-  readonly day: number;
-  readonly dayEnd: number;
+  /** 这章的账还没记上：梗概、出场、线索、事实都给不出（界面说「账待记」，不说「这章没变」）。 */
+  readonly ledgerPending?: true;
+  /** 是哪天不知道就没有。 */
+  readonly day?: number;
+  readonly dayEnd?: number;
   readonly present: readonly string[];
   /** 这章第一次出场的人。 */
   readonly newCast: readonly { readonly name: string; readonly quote?: string }[];
@@ -86,8 +89,8 @@ export function toChapterChanges(
     chapter: target,
     chapters: projection.chapters.map((item) => item.chapter),
     ...(view.summary ? { summary: view.summary } : {}),
-    day: view.day,
-    dayEnd: view.dayEnd,
+    ...(view.ledgerStatus === "pending" ? { ledgerPending: true as const } : {}),
+    ...(view.day !== undefined && view.dayEnd !== undefined ? { day: view.day, dayEnd: view.dayEnd } : {}),
     present: view.present,
     newCast,
     threads,

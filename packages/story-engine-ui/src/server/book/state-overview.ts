@@ -74,6 +74,8 @@ export interface StateOverview {
     readonly knownCharacters: readonly StateOverviewCharacterItem[];
   };
   readonly setting: StateOverviewSetting;
+  /** 定稿时账没记上（pending）/ 没记全（partial）、还能「补记账」的章（导入的由通读记账补，不算）。没有就不带。 */
+  readonly ledgerShort?: readonly { readonly chapter: number; readonly status: "pending" | "partial" }[];
   readonly uiHints: {
     readonly warnings: readonly string[];
   };
@@ -197,6 +199,9 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   // L2/L3 分层摘要——从全量 events 派生，保留早期内容，不破坏 recentEvents
   const timelineLayers = buildTimelineLayers(timelineEvents, currentChapter ?? 0);
   const lastEvent = recentEvents.at(-1);
+  const ledgerShort = (views?.projection.chapters ?? []).flatMap((chapter) => (
+    chapter.origin !== "import" && chapter.ledgerStatus !== "ready" ? [{ chapter: chapter.chapter, status: chapter.ledgerStatus }] : []
+  ));
 
   return {
     project: {
@@ -256,6 +261,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       knownCharacters: bible ? knownCharactersOf(bible) : [],
     },
     setting: settingOf(bible),
+    ...(ledgerShort.length > 0 ? { ledgerShort } : {}),
     uiHints: {
       warnings: [
         ...buildWarnings({ threadPool, arcGoalPool, cleanupVisibleCount }),

@@ -98,6 +98,12 @@ export async function readChapterLedger(bookDir: string, chapter: number): Promi
   return raw === undefined ? undefined : parseChapterLedger(chapter, raw);
 }
 
+/** 一章的账单和它的原样哈希（重记时新账要记下换掉的是哪一份）。 */
+export async function readChapterLedgerFile(bookDir: string, chapter: number): Promise<{ readonly ledger: ChapterLedger; readonly sha256: string } | undefined> {
+  const raw = await readOptional(bookDir, chapterLedgerPath(chapter));
+  return raw === undefined ? undefined : { ledger: parseChapterLedger(chapter, raw), sha256: sha256(raw) };
+}
+
 /** 有账单的章号，按章号排好（只列目录，不读内容）。 */
 export async function listChapterLedgers(bookDir: string): Promise<readonly number[]> {
   let names: string[];

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, chapterCommit, runCommand, type CardOp } from "@actalk/story-core";
 import {
   buildWriterContext,
   estimateTokens,
@@ -208,6 +208,32 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(continuity?.recentEvents).toEqual(["林远在大门外收到一封没有署名的警告信。"]);
     expect(continuity?.openLeads).toEqual([]);
     expect(continuity?.carryForwardInstruction).toContain("林远在大门外收到一封没有署名的警告信。");
+  });
+
+  it("前面有章账待记：单列一段说清那几章账里没有、以正文为准（预算挤不掉）；故事日历说不知道（P2b）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ledger-pending-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口", protagonistName: "林远" });
+    const outcome = await runCommand(projectDir, chapterCommit, {
+      chapter: 1,
+      text: "# 第1章\n\n林远在渡口等船。",
+      entries: [],
+      ledger: { status: "pending", reasonCodes: ["keeper_failed"] },
+    }, { caller: "author", idempotencyKey: randomUUID() });
+    expect(outcome.ok).toBe(true);
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "船来了。", maxTimelineEvents: 5 });
+    const pending = envelope.sections.find((section) => section.name === "ledger_pending")?.content as { chapters: number[]; note: string } | undefined;
+    expect(pending?.chapters).toEqual([1]);
+    expect(pending?.note).toContain("第 1 章的账还没记上");
+    expect(envelope.sections.find((section) => section.name === "story_calendar")?.content).toEqual({ currentStoryDay: "不知道（前面有章的账还没记上）" });
+    // 最近那章账待记：承接它的正文，不拿「梗概给不出」当要推进的事。
+    const continuity = envelope.sections.find((section) => section.name === "story_continuity")?.content as { recentEvents: string[]; carryForwardInstruction: string } | undefined;
+    expect(continuity?.recentEvents).toEqual(["第 1 章：这章的账还没记上，梗概给不出"]);
+    expect(continuity?.carryForwardInstruction).toContain("优先推进：第 1 章正文结尾接着的事（那章的账还没记上，以正文为准）。");
+
+    // 没有账待记的章：没有这一段。
+    const plain = await buildWriterContext({ projectDir: await createFixtureProject(), chapter: 8, chapterGoal: "推进。", maxTimelineEvents: 3 });
+    expect(plain.trace.sectionNames).not.toContain("ledger_pending");
   });
 
   it("does not invent carry-forward pressure when there is no continuity", async () => {

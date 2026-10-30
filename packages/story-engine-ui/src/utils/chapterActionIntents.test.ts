@@ -29,6 +29,7 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
   it("各动作给作者看得懂的一句话", () => {
     expect(userActionChoiceText(newCommitAction(5))).toBe("定稿第 5 章");
     expect(userActionChoiceText(newCommitAction(5, { allowShort: true }))).toBe("第 5 章就这么短，照样定稿");
+    expect(userActionChoiceText(newCommitAction(5, { fill: true }))).toBe("补记第 5 章的账");
     expect(userActionChoiceText({ kind: "new", type: "settings.change", params: { accept: "op-0123456789abcdef0123" }, requestKey: "k", issuedAt: "2026-10-30T00:00:00.000Z" })).toBe("认下 AI 刚写的设定");
     expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-settings", decision: "apply" } })).toBe("确认改设定");
     expect(userActionChoiceText(newDraftAction("write", { chapter: 12, direction: "寄往上海的存根：1. …" }), "寄往上海的存根")).toBe("照「寄往上海的存根」写第 12 章的正文");

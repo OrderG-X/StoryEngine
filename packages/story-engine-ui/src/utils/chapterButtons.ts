@@ -14,6 +14,7 @@ export type ChapterButton =
   | "review"
   | "quality"
   | "commit"
+  | "fill"
   | "undo";
 
 /** 当前章之后第一个没定稿的章（写下一章用）；章表里没有就是当前章 + 1。纯函数。 */
@@ -51,6 +52,8 @@ export function chapterButtonAction(
       return newInspectAction(button, chapter);
     case "commit":
       return newCommitAction(chapter);
+    case "fill":
+      return newCommitAction(chapter, { fill: true });
   }
 }
 

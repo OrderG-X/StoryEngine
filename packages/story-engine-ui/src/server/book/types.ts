@@ -161,6 +161,8 @@ export interface ArcGoalPool {
 export interface TimelineEvent {
   readonly id: string;
   readonly chapter: number;
+  /** 这章的账还没记上：梗概、出场、线索都给不出（summary 是如实说给不出的那句，不是「什么都没发生」）。 */
+  readonly ledgerPending?: true;
   readonly summary: string;
   readonly participants: readonly string[];
   readonly effects?: Record<string, unknown>;

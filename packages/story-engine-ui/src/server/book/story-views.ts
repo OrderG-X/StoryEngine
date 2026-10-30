@@ -49,13 +49,16 @@ async function readChapterTitles(projectDir: string, chapters: readonly number[]
   return titles;
 }
 
-const TIME_SOURCE: Record<BookProjection["chapters"][number]["dayBasis"], TimelineSource> = {
+const TIME_SOURCE: Record<Exclude<BookProjection["chapters"][number]["dayBasis"], "unknown">, TimelineSource> = {
   author: "author",
   text: "declared",
   judged: "plan",
   estimated: "fallback",
   missing: "fallback",
 };
+
+/** 账待记的章在「各章事件」里的梗概：如实说给不出（写手、章纲、概况照读这一句，不当成「这章什么都没发生」）。 */
+export const PENDING_CHAPTER_SUMMARY = "这章的账还没记上，梗概给不出";
 
 /**
  * 读者说的 stale 是「不再追踪」（清理掉的、合并掉的、过期的打算），一律不当开着的读。
@@ -78,12 +81,14 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
     return time ? [[ledger.chapter, time] as const] : [];
   }));
 
+  const unknownDays = projection.chapters.flatMap((chapter) => (chapter.day === undefined ? [{ chapter: chapter.chapter, pending: chapter.ledgerStatus === "pending" }] : []));
   const timeline: StoryTimeline = {
     schemaVersion: 1,
-    entries: projection.chapters.map((chapter): TimelineEntry => {
+    entries: projection.chapters.flatMap((chapter): TimelineEntry[] => {
+      if (chapter.day === undefined || chapter.dayEnd === undefined || chapter.dayBasis === "unknown") return [];
       const time = timeEntries.get(chapter.chapter);
       const span = chapter.dayEnd - chapter.day;
-      return {
+      return [{
         chapter: chapter.chapter,
         day: chapter.day,
         // 只给明写的星期，推出来的不给（读者自己按最近的锚点推）。
@@ -93,8 +98,9 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
         ...(span > 0 ? { daysInChapter: span } : {}),
         source: TIME_SOURCE[chapter.dayBasis],
         ...(time?.quote ? { quote: time.quote } : {}),
-      };
+      }];
     }),
+    ...(unknownDays.length > 0 ? { unknownDays } : {}),
   };
 
   const facts: FactLedger = {
@@ -153,7 +159,8 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
   const threadTypes = new Map(projection.threads.flatMap((thread) => [thread.id, ...thread.mergedFrom].map((id) => [id, thread.type] as const)));
   const events = projection.chapters.map((chapter): TimelineEvent => {
     const ledger = ledgers.find((item) => item.chapter === chapter.chapter);
-    const summary = chapter.summary ?? "";
+    const pending = chapter.ledgerStatus === "pending";
+    const summary = chapter.summary ?? (pending ? PENDING_CHAPTER_SUMMARY : "");
     const participants = [...chapter.present];
     const aliases = aliasesOf(ledger, projection);
     const { decision, discovery } = turnsOf(ledger, threadTypes);
@@ -163,6 +170,7 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
     return {
       id: `ch${String(chapter.chapter).padStart(4, "0")}-001`,
       chapter: chapter.chapter,
+      ...(pending ? { ledgerPending: true as const } : {}),
       summary,
       participants,
       effects: {

@@ -25,6 +25,7 @@ import {
 import { touchesHardFact } from "./commit-flow.js";
 import { runLedgerKeeper } from "./ledger-keeper.js";
 import { canCallAgain } from "../lib/llm-client.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import type { BrainCallModel } from "./reader-window.js";
 
@@ -51,11 +52,6 @@ export function rereadInputDigest(basis: TruthBasis, chapter: number): string {
     text: basis.texts[String(chapter)] ?? null,
     ledger: basis.ledgers[String(chapter)] ?? null,
   }));
-}
-
-function oneLine(error: unknown): string {
-  const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
-  return text.length > 120 ? `${text.slice(0, 120)}…` : text || "未知错误";
 }
 
 /** 这章试满还不成（或这章没法记）：message 是给作者看的一句原因。 */
@@ -94,7 +90,7 @@ export async function rereadChapter(projectDir: string, chapter: number, callMod
       cause = keeper.cause;
     } catch (error) {
       rethrowIfStopped(error);
-      reason = oneLine(error);
+      reason = modelFailureText(error);
       cause = error;
     }
     // 被拒这类再发也一样（写作版本 P2a 4.2）：这章不再试。

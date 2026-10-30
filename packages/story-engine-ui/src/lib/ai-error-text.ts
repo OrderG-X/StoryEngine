@@ -31,6 +31,11 @@ const CAUSE: Record<AiErrorReason, string> = {
   unknown: "服务没响应",
 };
 
+/** 一句短原因（服务端各处模型调用没成、写进卡上的原因也用这一份）。 */
+export function aiErrorCause(reason: AiErrorReason): string {
+  return CAUSE[reason];
+}
+
 /**
  * 这一轮已经写好了稿（结果收到了）、之后那步才出错：说清写好的在稿纸上、不用重来（作者长篇实跑 2026-10-26：
  * 第 26 章写完、核完、话也说完了，收尾那步服务商没反应，卡上只说「可以再试一次」，点了会把整章重写一遍）。

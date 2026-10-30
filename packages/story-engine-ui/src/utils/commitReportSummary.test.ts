@@ -56,4 +56,13 @@ describe("summarizeCommitReport", () => {
       "没记上：1 条",
     ]);
   });
+
+  it("账待记：不列一排零，只说还没记上；没记全的照列条数再标一行；补账的回执带着标记", () => {
+    const pending = summarizeCommitReport({ chapter: 3, ledger: { facts: 0, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 0, notRecorded: 0, status: "pending" } });
+    expect(pending).toEqual({ chapter: 3, detailLines: ["账：还没记上"], ledgerStatus: "pending" });
+    const partial = summarizeCommitReport({ chapter: 3, fill: true, ledger: { facts: 2, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, day: 4, dayEnd: 4, notRecorded: 0, status: "partial" } });
+    expect(partial).toMatchObject({ chapter: 3, ledgerStatus: "partial", fill: true });
+    expect(partial.detailLines.at(-1)).toBe("账：没记全");
+    expect(summarizeCommitReport({ chapter: 3, ledger: { facts: 1, status: "ready" } }).ledgerStatus).toBeUndefined();
+  });
 });

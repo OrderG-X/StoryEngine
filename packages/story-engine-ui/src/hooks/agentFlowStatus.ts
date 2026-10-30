@@ -28,15 +28,17 @@ export function agentFlowStatusForTool(
  * 写稿、检查、定稿又变了（写作版本 P2a：都是操作，不再是工具结果）：
  * - 写稿、改稿换上了工作稿 → 草稿待打磨（重写已定稿的章也一样：工作稿和定稿不一样了）；没换上的（作者期间改过稿、留成候选）不推进。
  * - 硬伤检查 / 内容审阅做完、本章还没定稿 → 已打磨、可考虑定稿。核账、查 AI 味不改本章生命周期。
- * - 定稿出了清单、等作者点 → 等你确认定稿（已定稿的不往回拨）；定成了 → 已定稿；定不了的不推进。
+ * - 定稿出了清单、等作者点 → 等你确认定稿（已定稿的不往回拨）；定成了 → 已定稿；定不了的不推进；补账不动。
  * 别的没做完的不推进。
  */
 export function flowAfterOperation(
-  operation: { readonly kind: string; readonly mode?: string; readonly state: string; readonly draft?: { readonly applied: boolean }; readonly commit?: { readonly committed: boolean } },
+  operation: { readonly kind: string; readonly mode?: string; readonly state: string; readonly draft?: { readonly applied: boolean }; readonly commit?: { readonly committed: boolean }; readonly pending?: { readonly kind: string } },
   current: ChapterWorkflowState,
 ): ChapterWorkflowState {
   if (operation.kind === "commit.prepare") {
-    if (operation.state === "waiting_author") return TERMINAL.has(current) ? current : "waiting_commit_confirmation";
+    // 补账不动正文、不改这章在哪一步；记账没成停着请作者挑的那张卡也还不是定稿清单。
+    if (operation.mode === "fill") return current;
+    if (operation.state === "waiting_author") return TERMINAL.has(current) || operation.pending?.kind !== "commit" ? current : "waiting_commit_confirmation";
     return operation.state === "succeeded" && operation.commit?.committed ? "committed" : current;
   }
   if (operation.state !== "succeeded") return current;

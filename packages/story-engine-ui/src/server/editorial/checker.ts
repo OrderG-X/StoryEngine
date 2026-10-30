@@ -13,6 +13,7 @@
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
 import { describeTimelineForChapter } from "../book/story-timeline.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 import { readStoryViews } from "../book/story-views.js";
 import { findEarlierPassages } from "../writing/earlier-passages.js";
 import { MODEL_CALL_MAX_SENDS, resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
@@ -691,7 +692,7 @@ async function runReaderPasses(
   settled.forEach((result, index) => {
     if (result.status === "rejected") rethrowIfStopped(result.reason);
     if (result.status === "fulfilled") passes.push(result.value);
-    else failures.push(`${plans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    else failures.push(`${plans[index]!.label}没跑成：${modelFailureText(result.reason)}`);
   });
   return { passes, failures };
 }

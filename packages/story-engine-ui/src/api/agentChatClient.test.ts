@@ -603,6 +603,37 @@ describe("streamAgentChat", () => {
       .toEqual({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4, dayEnd: 5 } } });
   });
 
+  it("记账没成的选择卡、补账（P2b）：按钮只认服务端列的决定；补账的结果带标记；「补记账」按钮存下来读回来", async () => {
+    const commitView = (overrides: Record<string, unknown>) => opView("", null, { kind: "commit.prepare", what: "定稿·第 2 章", chapter: 2, ...overrides });
+    const choice = {
+      lines: ["第 2 章的账这次没记成：记账员没交上账单。"],
+      choices: [{ decision: "retry", label: "再记一次", primary: true }, { decision: "pending", label: "先定正文、账待记" }, { decision: "evil", label: "不在决定里" }],
+    };
+    const report = { chapter: 2, chapterPath: "chapters/0002.md", fill: true, ledger: { facts: 1, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, notRecorded: 0, status: "ready" } };
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "ledger-failed", kind: "author_choice", decisions: ["retry", "pending"], preview: choice, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "ledger-failed", kind: "author_choice", decisions: ["retry"], preview: { lines: ["没成"], choices: [{ decision: "pending", label: "不认" }] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: commitView({ mode: "fill", result: { schema: "operation-result/1", summary: "第 2 章的账补上了。", body: { kind: "commit.prepare", chapter: 2, committed: true, fill: true, done: { report, summary: "第 2 章的账补上了。" }, snapshotId: "s-8" } } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({
+      kind: "choice",
+      actionId: "ledger-failed",
+      decisions: ["retry", "pending"],
+      lines: ["第 2 章的账这次没记成：记账员没交上账单。"],
+      choices: [{ decision: "retry", label: "再记一次", primary: true }, { decision: "pending", label: "先定正文、账待记" }],
+    });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]).toMatchObject({ mode: "fill", commit: { chapter: 2, committed: true, fill: true, report, snapshotId: "s-8" } });
+
+    const stamp = { requestKey: "rk-2", issuedAt: "2026-10-31T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "commit.prepare", params: { chapter: 2, fill: true, allowShort: true }, ...stamp }))
+      .toEqual({ kind: "new", type: "commit.prepare", params: { chapter: 2, fill: true }, ...stamp });
+  });
+
   it("定论（片 3C）：停着等作者的卡防御解析后带上；做完了带结果（划掉的只认卡上有的），改了才算「改过」；按钮存下来读回来，不对的不认", async () => {
     const card = {
       canon: "杜长顺十年前去世",

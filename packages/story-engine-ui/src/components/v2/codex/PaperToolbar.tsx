@@ -24,7 +24,7 @@ export function PaperToolbar({
   const { primary, check } = progress;
   const next = progress.commit.done && primary.kind === "open_next" ? progress.next : undefined;
   const buttons: { readonly button: ChapterButton; readonly label: string }[] = progress.commit.done
-    ? next !== undefined ? [] : [{ button: "write_next", label: "AI 写下一章" }]
+    ? primary.kind === "fill" ? [{ button: "fill", label: primary.label }] : next !== undefined ? [] : [{ button: "write_next", label: "AI 写下一章" }]
     : !progress.write.done
       ? [{ button: "write", label: "AI 写这一章" }]
       : [

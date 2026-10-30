@@ -58,6 +58,21 @@ describe("summarizeStateOverview（重构 P9）", () => {
     expect(summary).toContain("最近时间线：林序在码头拿到船票。");
   });
 
+  it("有章正文定了、账还没记上：概况列出来（导入的不算），摘要说清、指去补记账；都记上了不提（P2b）", async () => {
+    const projectDir = await fixture();
+    expect(summarizeStateOverview(await buildStateOverview({ projectDir }))).not.toContain("账还没记上");
+    const outcome = await runCommand(projectDir, chapterCommit, {
+      chapter: 2,
+      text: "# 第2章\n\n林序上了船。",
+      entries: [],
+      ledger: { status: "pending", reasonCodes: ["keeper_failed"] },
+    }, { caller: "author", idempotencyKey: "c2" });
+    expect(outcome.ok).toBe(true);
+    const overview = await buildStateOverview({ projectDir });
+    expect(overview.ledgerShort).toEqual([{ chapter: 2, status: "pending" }]);
+    expect(summarizeStateOverview(overview)).toContain("账：第 2 章正文定了、账还没记上");
+  });
+
   it("开放线索把推进过、还没收的也算上（换题材长篇实跑第 26 章：14 条推进过没收，报 0 条）", async () => {
     const projectDir = await fixture();
     await seedChapters(projectDir, [

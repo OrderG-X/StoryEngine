@@ -18,6 +18,7 @@ import { findRecurringPhrases, parseDraftFile } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
 import { readStoryViews, type StoryViews } from "../book/story-views.js";
 import { readChapterPlan, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
+import { unknownDayOf } from "../book/story-timeline.js";
 import { selectEffectiveFacts } from "../writing/fact-selection.js";
 import { foundationMessage, readFoundationDigest } from "./foundation-digest.js";
 
@@ -265,7 +266,12 @@ function stepFromTimeText(time: string): number | undefined {
  * 天数却记 5——日历跟着错，写手把前天标成「昨天」）。先用模型给的 dayOffset（离上一章结尾过了几天），没给就看开场时间
  * 里的「第二天 / 三天后 / 当天」；都没有才用模型的 storyDay，且不许比上一章早；全没有当同一天。第 1 章由引擎记为第 1 天。
  */
-export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefined, lastDay: number | undefined): ChapterPlan {
+export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefined, lastDay: number | "unknown" | undefined): ChapterPlan {
+  if (lastDay === "unknown") {
+    // 上一章是哪天不知道：章纲员给的天数没有依据，不留（留了写手会照它说「昨天、前天」）。
+    const { storyDay: _unknown, ...rest } = plan;
+    return rest;
+  }
   if (lastDay === undefined) return plan;
   const step = dayOffset ?? stepFromTimeText(plan.scene.time ?? "");
   if (step !== undefined) return { ...plan, storyDay: lastDay + step };
@@ -299,8 +305,15 @@ export function storyDayAtChapterEnd(plan: ChapterPlan | undefined): number | un
   return day;
 }
 
-/** 上一章结束时是故事第几天（章纲员路也要用：天数归一在拟和改两处都跑）。 */
-export async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | undefined> {
+/**
+ * 上一章结束时是故事第几天（章纲员路也要用：天数归一在拟和改两处都跑）。
+ * 上一章定稿了但天数不知道（它或它前面有章账待记）→ "unknown"：不拿再前一章的天数顶（写作版本 P2b 设计 3.3）。
+ */
+export async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | "unknown" | undefined> {
+  if (chapter > 1) {
+    const views = await readStoryViews(projectDir).catch(() => undefined);
+    if (views && unknownDayOf(views.timeline, chapter - 1)) return "unknown";
+  }
   const last = (await readStoryClock(projectDir, chapter).catch(() => [])).at(-1);
   if (!last) return undefined;
   // 时间线记了章内换天（定稿时正文声明、原句核过）就用它；没记再按那章章纲的要点推。

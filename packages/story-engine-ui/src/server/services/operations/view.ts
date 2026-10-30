@@ -101,6 +101,7 @@ const MODE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   "ledger.change": { edit: "改账", author: "改账", review: "理线索" },
   "canon.propose": { pick: "定论", statement: "定论" },
   "history.change": { undo: "撤销", restore: "整本恢复", prune: "裁剪操作历史" },
+  "commit.prepare": { fill: "补账" },
 };
 const KIND_LABELS: Readonly<Record<string, string>> = {
   [BACKFILL_KIND]: "后台补读前文",

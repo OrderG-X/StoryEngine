@@ -13,6 +13,7 @@ import {
   classifyForReview,
   declarationOf,
   declarationsOf,
+  knownEntries,
   ledgerOf,
   nameKey,
   presenceName,
@@ -92,6 +93,7 @@ export interface CommitPreview {
   readonly ok: true;
   readonly ticket: PreviewTicket;
   readonly chapter: number;
+  /** 这章原来有记了条目的账，这次会换掉（原来是账待记的不算）。 */
   readonly recommit: boolean;
   readonly review: readonly CommitItem[];
   readonly auto: readonly CommitItem[];
@@ -100,9 +102,10 @@ export interface CommitPreview {
   /** 记上了但改过的（比如缺字段的事实按「发生过的事」记）。 */
   readonly adjusted: readonly NotRecorded[];
   readonly time: {
-    readonly day: number;
-    readonly dayEnd: number;
-    readonly basis: TimeBasis | "missing";
+    /** 不知道（前面有章的账还没记上、这章的时间又是相对上一章的）就没有：清单上请作者填。 */
+    readonly day?: number;
+    readonly dayEnd?: number;
+    readonly basis: TimeBasis | "missing" | "unknown";
     readonly weekday?: number;
     readonly timeOfDay?: string;
     /** 天数是估的（记账员没给时间），要作者确认或改。 */
@@ -366,7 +369,9 @@ function keepLastDay(
 ): { readonly accepted: Accepted; readonly sinceLast: NonNullable<CommitPreview["time"]["sinceLast"]> } | undefined {
   const last = previewDay(ledgers, chapter, declarationsOf(previous), textSha);
   const now = previewDay(ledgers, chapter, accepted.map((item) => item.entry), textSha);
-  if (!last || !now || (last.day === now.day && last.dayEnd === now.dayEnd)) return undefined;
+  // 两边有一边是哪天不知道（前面有章账待记）：没得比，照这次的记。
+  if (last?.day === undefined || last.dayEnd === undefined || now?.day === undefined || now.dayEnd === undefined) return undefined;
+  if (last.day === now.day && last.dayEnd === now.dayEnd) return undefined;
   const lastTime = declarationsOf(previous).find((entry) => entry.kind === "time");
   const carried = lastTime ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
   if (!carried) return { accepted, sinceLast: { kept: false, otherDay: last.day, otherDayEnd: last.dayEnd } };
@@ -399,6 +404,22 @@ export interface PrepareInput {
   readonly now?: () => Date;
 }
 
+/**
+ * 这章上次记下的条目（沿用线索、天数、认过的人都照它）。账待记的那份是空的：照它带着的 carry 里最近那版
+ * （carry 里上一份账单的条目排在前面；时间、梗概各只留最前那条）。
+ */
+function lastRecordedEntries(ledger: ChapterLedger | undefined): readonly LedgerEntry[] {
+  if (!ledger) return [];
+  if (ledger.status !== "pending") return ledger.entries;
+  const single = new Set<string>();
+  return knownEntries(ledger).filter((entry) => {
+    if (entry.kind !== "time" && entry.kind !== "summary") return true;
+    if (single.has(entry.kind)) return false;
+    single.add(entry.kind);
+    return true;
+  });
+}
+
 export async function prepareChapterCommit(input: PrepareInput): Promise<CommitPreview | PrepareFailure> {
   if (input.text.trim().length === 0) return { ok: false, code: "empty_text", reason: "正文是空的，没有可定稿的" };
   const snapshot = await readBookSnapshot(input.bookDir);
@@ -415,7 +436,8 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     return { ok: false, code: "chapter_gap", reason: `${gap}还没定稿，先定稿前面的章` };
   }
   const before = project(snapshot, { upTo: input.chapter - 1 });
-  const previous = snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter)?.entries ?? [];
+  const current = snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter);
+  const previous = lastRecordedEntries(current);
   const reopenable = previous
     .flatMap((entry) => (entry.kind === "thread" && entry.op === "open"
       ? [{ thread: threadOf(entry), type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
@@ -439,7 +461,9 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const checked = checkEntries(keeper.parsed.entries, input.text, before);
   const recommit = committed.includes(input.chapter);
   const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
-  const kept = recommit ? keepLastDay(snapshot.ledgers, input.chapter, previous, opens?.accepted ?? checked.accepted, input.text, before, textSha) : undefined;
+  // 账待记那份没记天数：没有「上次记的」可比（carry 里留着更早那版的时间才比）。
+  const lastDayKnown = current?.status !== "pending" || previous.some((entry) => entry.kind === "time");
+  const kept = recommit && lastDayKnown ? keepLastDay(snapshot.ledgers, input.chapter, previous, opens?.accepted ?? checked.accepted, input.text, before, textSha) : undefined;
   const accepted = kept?.accepted ?? opens?.accepted ?? checked.accepted;
   const rejected = opens?.rejected ?? checked.rejected;
   // 重定稿：这章上次定稿时作者认过的出场人物不再当「第一次出场」问一遍（真跑：改两个错字重定稿，又问老郑、刀疤军官是谁）。
@@ -474,7 +498,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     ok: true,
     ticket,
     chapter: input.chapter,
-    recommit,
+    recommit: recommit && current?.status !== "pending",
     review: plan.review.map(toItem),
     auto: mergeSameNote(plan.auto, toItem, before),
     notRecorded: [
@@ -483,12 +507,11 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     ],
     adjusted: keeper.parsed.adjusted.map((drop) => ({ code: "adjusted", label: dropLabel(drop), reason: drop.reason })),
     time: {
-      day: day?.day ?? 1,
-      dayEnd: day?.dayEnd ?? 1,
+      ...(day?.day !== undefined && day.dayEnd !== undefined ? { day: day.day, dayEnd: day.dayEnd } : day?.dayBasis === "unknown" ? {} : { day: 1, dayEnd: 1 }),
       basis: day?.dayBasis ?? "missing",
       ...(day?.weekday !== undefined ? { weekday: day.weekday } : {}),
       ...(day?.timeOfDay !== undefined ? { timeOfDay: day.timeOfDay } : {}),
-      needsConfirm: plan.timeMissing || day?.dayBasis === "missing" || day?.dayBasis === "estimated" || kept?.sinceLast !== undefined,
+      needsConfirm: plan.timeMissing || day?.dayBasis === "missing" || day?.dayBasis === "estimated" || day?.dayBasis === "unknown" || kept?.sinceLast !== undefined,
       ...(kept?.sinceLast ? { sinceLast: kept.sinceLast } : {}),
     },
     ...(opens && opens.lost.length > 0 ? { lostThreads: opens.lost } : {}),

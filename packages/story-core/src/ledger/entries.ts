@@ -306,6 +306,7 @@ export function newLedger(input: {
   readonly status?: LedgerStatus;
   readonly coverage?: Partial<LedgerCoverage>;
   readonly acceptedBasis?: string;
+  readonly previous?: ChapterLedger["previous"];
   readonly legacy?: ChapterLedger["legacy"];
 }): ReturnType<typeof ChapterLedger.safeParse> {
   return ChapterLedger.safeParse({
@@ -320,6 +321,7 @@ export function newLedger(input: {
     unitsVersion: UNITS_VERSION,
     scenes: [],
     entries: input.entries,
+    ...(input.previous ? { previous: input.previous } : {}),
     ...(input.legacy ? { legacy: input.legacy } : {}),
   });
 }

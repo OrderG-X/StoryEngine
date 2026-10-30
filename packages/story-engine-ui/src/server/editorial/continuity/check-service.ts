@@ -77,6 +77,8 @@ export interface ChapterCheckResult {
   readonly coverage?: { readonly mode: "cold"; readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number; readonly pausedBackfill?: string };
   /** 这次核账前先当场补了笔记（R5.2）：补了第 from～to 章、花了 ms 毫秒。summary 已带「这次先等核账员读完…再核」。 */
   readonly waited?: ReaderWaited;
+  /** 前面账还没记上的章（写作版本 P2b 设计 3.3）：对账本那一遍没算它们，summary 已如实说。 */
+  readonly ledgerPending?: readonly number[];
   /** 作者标过「不是问题」、这次没再报的条数。 */
   readonly dismissed: number;
   /** 正文、前文、账本都没改过，直接用的上次结果（没调模型）。 */
@@ -378,11 +380,14 @@ export async function checkChapterBody(
       ].join(" + ")
     }，更早的细节可能漏。${coldPausedNote(result.coverage)}`
     : "";
+  // 前面账待记的章：对账本那一遍没有它们的账，如实说没算（正文核账员照读，不说那几章的账核过）。
+  const ledgerPending = (timeline?.unknownDays ?? []).filter((item) => item.pending && item.chapter < chapter).map((item) => item.chapter);
+  const pendingNote = ledgerPending.length > 0 ? `${ledgerPending.map((item) => `第 ${item} 章`).join("、")}的账还没记上，对账本的那一遍没算${ledgerPending.length > 1 ? "它们" : "它"}。` : "";
   const headline = !ok
     ? `${waitedNote}第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`
     : sure.length + maybe.length === 0
-      ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${earlierNote}${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
-      : `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${earlierNote}${dismissedNote}${coldNote}`;
+      ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${earlierNote}${dismissedNote}${coldNote}${pendingNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
+      : `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${earlierNote}${dismissedNote}${coldNote}${pendingNote}`;
   const baseSummary = ok && sure.length > 0
     ? [headline, ...sure.slice(0, 3).map((issue) => `· ${issueLine(issue)}`)].join("\n")
     : headline;
@@ -395,6 +400,7 @@ export async function checkChapterBody(
     failures: [...result.failures],
     ...(result.coverage ? { coverage: { mode: "cold" as const, ...result.coverage } } : {}),
     ...(!reused && result.waited ? { waited: result.waited } : {}),
+    ...(ledgerPending.length > 0 ? { ledgerPending } : {}),
     dismissed,
     reused,
     ...(changes ? { rechecked: { changed: changes.length } } : {}),

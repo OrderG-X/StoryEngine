@@ -256,6 +256,8 @@ export interface CommitPreviewCardData {
   readonly notes?: readonly string[];
   /** 只差字数下限：定稿窗口给「就这么短，照样定稿」。 */
   readonly shortOnly?: boolean;
+  /** 补账清单（P2b）：按钮是「确认记账」，正文不动。 */
+  readonly fill?: true;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */
   readonly ledgerChecklist?: readonly {
     readonly id: string;
@@ -266,6 +268,8 @@ export interface CommitPreviewCardData {
     readonly removable: boolean;
     readonly editableDay?: number;
     readonly editableDayEnd?: number;
+    /** 天数那一行：这章是哪天不知道（前面有章的账还没记上），两栏空着请作者填。 */
+    readonly dayUnknown?: true;
     readonly needsConfirm?: boolean;
     readonly defaultUnchecked?: boolean;
   }[];

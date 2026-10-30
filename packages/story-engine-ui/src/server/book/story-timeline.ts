@@ -27,10 +27,27 @@ export interface TimelineEntry {
   readonly quote?: string;
 }
 
+/** 天数不知道的章（写作版本 P2b 设计 3.3）：这章账待记，或接着一章天数不知道的章算的（直到下一个作者定的天数）。 */
+export interface UnknownDay {
+  readonly chapter: number;
+  /** 这章自己的账还没记上（不是就是前面有章不知道）。 */
+  readonly pending: boolean;
+}
+
 export interface StoryTimeline {
   readonly schemaVersion: 1;
+  /** 天数知道的章。 */
   readonly entries: readonly TimelineEntry[];
+  /** 定稿了、天数不知道的章（不在 entries 里；没给 = 没有）。 */
+  readonly unknownDays?: readonly UnknownDay[];
 }
+
+/** 这一章的天数是不是不知道。 */
+export function unknownDayOf(timeline: StoryTimeline, chapter: number): UnknownDay | undefined {
+  return timeline.unknownDays?.find((item) => item.chapter === chapter);
+}
+
+const unknownDayText = (item: UnknownDay): string => (item.pending ? "这章的账还没记上，是哪天不知道" : "前面有章的账还没记上，是哪天不知道");
 
 /** 一章结束时是故事第几天。 */
 export function chapterEndDay(entry: TimelineEntry): number {
@@ -86,24 +103,37 @@ export function describeTimelineForChapter(
   chapter: number,
   options: { readonly currentDay?: number; readonly limit?: number } = {},
 ): string | undefined {
+  const ownUnknown = options.currentDay === undefined ? unknownDayOf(timeline, chapter) : undefined;
   const current = options.currentDay ?? timelineEntryFor(timeline, chapter)?.day;
-  const earlier = timeline.entries.filter((entry) => entry.chapter < chapter).slice(-(options.limit ?? 12));
+  const limit = options.limit ?? 12;
+  // 前面各章按章号排，天数不知道的章照样列一行、如实说不知道（不跳过，免得模型把再前一章当成上一章）。
+  const earlier = [
+    ...timeline.entries.filter((entry) => entry.chapter < chapter).map((entry) => ({ chapter: entry.chapter, entry })),
+    ...(timeline.unknownDays ?? []).filter((item) => item.chapter < chapter).map((item) => ({ chapter: item.chapter, unknown: item })),
+  ].sort((a, b) => a.chapter - b.chapter).slice(-limit);
   const unsure = timeline.entries.some((entry) => entry.chapter <= chapter && entry.source === "fallback");
+  const unknownNote = earlier.some((row) => "unknown" in row) || ownUnknown ? ["（有的章账还没记上，那几章是哪天不知道，别替它们定日子。）"] : [];
   if (current === undefined) {
-    // 本章还没定是哪天（还没定稿的稿子）：只列前面各章是哪天、周几，本章按正文里的说法对照这张表。
+    // 本章还没定是哪天（还没定稿的稿子、天数不知道的章）：只列前面各章是哪天、周几，本章按正文里的说法对照这张表。
     if (earlier.length === 0) return undefined;
     return [
-      `本章（第 ${chapter} 章）：还没定稿，是哪天以正文里的说法为准，对照下表`,
-      ...earlier.reverse().map((entry) => `第 ${entry.chapter} 章：${formatChapterDays(timeline, entry)}${entry.timeOfDay ? `，${entry.timeOfDay}` : ""}`),
+      ownUnknown ? `本章（第 ${chapter} 章）：${unknownDayText(ownUnknown)}，以正文里的说法为准，对照下表` : `本章（第 ${chapter} 章）：还没定稿，是哪天以正文里的说法为准，对照下表`,
+      ...earlier.reverse().map((row) => ("unknown" in row
+        ? `第 ${row.chapter} 章：${unknownDayText(row.unknown)}`
+        : `第 ${row.chapter} 章：${formatChapterDays(timeline, row.entry)}${row.entry.timeOfDay ? `，${row.entry.timeOfDay}` : ""}`)),
       "前面各章是哪天以这张表为准，不要自己推算。",
       ...(unsure ? ["（表里有的章天数是按「上一章 +1」估的，作者还没确认。）"] : []),
+      ...unknownNote,
     ].join("\n");
   }
   const own = options.currentDay === undefined ? timelineEntryFor(timeline, chapter) : undefined;
   return [
     `本章（第 ${chapter} 章）：${own ? formatChapterDays(timeline, own) : formatStoryDay(timeline, current)}`,
-    ...earlier.reverse().map((entry) => `第 ${entry.chapter} 章：${formatChapterDays(timeline, entry)}，${relativeSpanLabel(current, entry)}${entry.timeOfDay ? `，${entry.timeOfDay}` : ""}`),
+    ...earlier.reverse().map((row) => ("unknown" in row
+      ? `第 ${row.chapter} 章：${unknownDayText(row.unknown)}`
+      : `第 ${row.chapter} 章：${formatChapterDays(timeline, row.entry)}，${relativeSpanLabel(current, row.entry)}${row.entry.timeOfDay ? `，${row.entry.timeOfDay}` : ""}`)),
     "日子以这张表为准，说「昨天、前天、几天前、周几」照表来，不要自己推算；正文和台词里不写「故事第几天」。",
     ...(unsure ? ["（表里有的章天数是按「上一章 +1」估的，作者还没确认。）"] : []),
+    ...unknownNote,
   ].join("\n");
 }

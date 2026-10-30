@@ -52,10 +52,6 @@ const DEFAULT_DEPS: RereadDeps = {
   modelProblem: (models) => frozenModelProblem(models, "qualityCheck"),
 };
 
-function oneLine(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ").slice(0, 160) || "未知错误";
-}
-
 export function createBackgroundRereadRecipe(deps: RereadDeps = DEFAULT_DEPS): Recipe<RereadParams> {
   return {
     kind: REREAD_KIND,

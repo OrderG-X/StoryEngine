@@ -353,6 +353,18 @@ export const LedgerCoverage = z.object({
 });
 export type LedgerCoverage = z.infer<typeof LedgerCoverage>;
 
+/**
+ * 重记同一章时带上的旧账身份（P2b 设计 3.1）：这一章以前各版账单里出现过的全部条目（同一编号留最近那版），
+ * 新账分配编号时照它沿用、跳过（不复用证明不了是同一件事的旧号），补账时照它接回上次开的线索、上次的天数。
+ * 每次重记都带、一路继承（新 carry = 旧账的条目 ∪ 旧 carry）。投影不读。
+ */
+export const LedgerPrevious = z.object({
+  /** 被换掉的那份账单的原样哈希。 */
+  ledgerSha256: sha,
+  carry: z.object({ entries: z.array(LedgerEntry) }),
+});
+export type LedgerPrevious = z.infer<typeof LedgerPrevious>;
+
 /** 一章的场景（P3）：P2b 一律空 = 没切场景，不是「一个场景」。 */
 export const LedgerScene = z.object({ id, units: UnitRange, order: z.number().int().min(0), timeRefs: z.array(id) });
 
@@ -371,6 +383,7 @@ export const ChapterLedger = z
     unitsVersion: z.literal(UNITS_VERSION),
     scenes: z.array(LedgerScene),
     entries: z.array(LedgerEntry),
+    previous: LedgerPrevious.optional(),
     /** 从 v1 迁来的：原文件的哈希（原样在迁移前的存档里）。 */
     legacy: z.object({ schema: z.literal("chapter-ledger/1"), sha256: sha }).optional(),
   })

@@ -115,12 +115,36 @@ describe("reconcileStoryDay：天数由程序按上一章往后加（第十九�
     expect(reconcileStoryDay(make("清晨", 3), undefined, 12).storyDay).toBe(12);
     expect(reconcileStoryDay(make("清晨"), undefined, 12).storyDay).toBe(12);
     expect(reconcileStoryDay(make("次日"), undefined, undefined).storyDay).toBeUndefined();
+    // 上一章是哪天不知道（有章账待记）：模型给的天数没依据，不留。
+    expect(reconcileStoryDay(make("次日", 9), 1, "unknown").storyDay).toBeUndefined();
     expect(readDayOffset({ dayOffset: 2 })).toBe(2);
     expect(readDayOffset({ dayOffset: "1天" })).toBe(1);
     expect(readDayOffset({ dayOffset: "第二天" })).toBe(1);
     expect(readDayOffset({ dayOffset: "同一天" })).toBe(0);
     expect(readDayOffset({ dayOffset: "" })).toBeUndefined();
     expect(readDayOffset({})).toBeUndefined();
+  });
+});
+
+describe("previousChapterEndDay：上一章是哪天不知道就说不知道，不拿再前一章顶（P2b 设计 3.3）", () => {
+  it("上一章账待记 → unknown；它后面接着记的章也是 unknown；作者定了天数的章之后照常算", async () => {
+    const { previousChapterEndDay } = await import("./plan-materials.js");
+    const rootDir = await mkdtemp(join(tmpdir(), "se-plan-unknown-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "渡口" });
+    const commit = async (chapter: number, text: string, entries: Parameters<typeof chapterCommit.plan>[1]["entries"], pending = false) => {
+      const outcome = await runCommand(projectDir, chapterCommit, {
+        chapter, text, entries, ...(pending ? { ledger: { status: "pending" as const, reasonCodes: ["keeper_failed"] } } : {}),
+      }, { caller: "author", idempotencyKey: `k${chapter}` });
+      expect(outcome.ok).toBe(true);
+    };
+    await commit(1, "# 第1章\n\n周三清晨，渡口起了雾。", [{ kind: "time", review: "auto", basis: "text", quote: "周三清晨" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(1);
+    await commit(2, "# 第2章\n\n雾还没散。", [], true);
+    expect(await previousChapterEndDay(projectDir, 3)).toBe("unknown");
+    await commit(3, "# 第3章\n\n第二天上午，船来了。", [{ kind: "time", review: "auto", basis: "text", quote: "第二天上午", daysSincePrevious: 1 }]);
+    expect(await previousChapterEndDay(projectDir, 4)).toBe("unknown");
+    await commit(4, "# 第4章\n\n到了第六天。", [{ kind: "time", review: "auto", basis: "author", day: 6 }]);
+    expect(await previousChapterEndDay(projectDir, 5)).toBe(6);
   });
 });
 

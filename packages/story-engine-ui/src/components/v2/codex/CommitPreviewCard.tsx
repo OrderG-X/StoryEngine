@@ -58,11 +58,12 @@ export function CommitPreviewCard({
 
   // 能定：卡头「可以定稿」已说了结论，卡里只剩一行数 + 打开清单（弹窗一般已自动打开，这里是关了再开的入口）。
   const counts = [reviewCount > 0 ? `要你看 ${reviewCount} 条` : "", autoCount > 0 ? `自动记 ${autoCount} 条` : ""].filter(Boolean).join(" · ");
+  const fill = preview.fill === true;
   return (
     <StepCard
-      title={`定稿清单 · ${chapterLabel}`}
+      title={fill ? `补账清单 · ${chapterLabel}` : `定稿清单 · ${chapterLabel}`}
       status={blocked ? "attention" : "done"}
-      statusLabel={blocked ? "暂不可定稿" : "可以定稿"}
+      statusLabel={blocked ? (fill ? "暂补不了" : "暂不可定稿") : fill ? "可以补账" : "可以定稿"}
       defaultOpen
     >
       {!blocked && (counts || onOpen) ? (

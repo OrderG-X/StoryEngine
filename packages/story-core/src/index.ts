@@ -16,6 +16,7 @@ export {
   LedgerCoverage,
   LedgerEntry,
   LedgerOrigin,
+  LedgerPrevious,
   LedgerStatus,
   PresenceEntry,
   PresenceInput,
@@ -56,6 +57,7 @@ export {
   type EntryIds,
 } from "./ledger/entries.js";
 export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";
+export { assignIds, entryKey, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
 export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {
@@ -173,6 +175,7 @@ export {
   readAllLedgers,
   readBookSnapshot,
   readChapterLedger,
+  readChapterLedgerFile,
   readCards,
   readChapterText,
   readDecisions,
@@ -247,7 +250,8 @@ export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason }
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
 export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
-export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { buildChapterLedger, chapterCommit, ChapterCommitArgs, LedgerShortfall, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { ledgerComplete, LedgerCompleteArgs, type LedgerCompleteResult } from "./commands/ledger-complete.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { LEDGER_MIGRATE_COMMAND, ledgerMigrate, LedgerMigrateArgs, ledgerMigrateKey, ledgersToUpgrade, type LedgerMigrateResult } from "./commands/ledger-migrate.js";

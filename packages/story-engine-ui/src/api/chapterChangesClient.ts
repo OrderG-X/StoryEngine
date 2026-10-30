@@ -2,33 +2,9 @@
  * 这一章定稿记下了什么（GET /api/chapter-changes，重构 P6 第 6 步）。读不到就如实给原因。
  */
 
-export interface ChapterChangeFact {
-  readonly subject?: string;
-  readonly text: string;
-  readonly quote?: string;
-  readonly replaces?: string;
-  readonly auto: boolean;
-  readonly later?: "superseded" | "retracted";
-}
+import type { ChapterChanges } from "../server/routes/chapter-changes.js";
 
-export interface ChapterChangeThread {
-  readonly op: "open" | "advance" | "close";
-  readonly title: string;
-  readonly note: string;
-  readonly quote?: string;
-}
-
-export interface ChapterChanges {
-  readonly chapter: number;
-  readonly chapters: readonly number[];
-  readonly summary?: string;
-  readonly day: number;
-  readonly dayEnd: number;
-  readonly present: readonly string[];
-  readonly newCast: readonly { readonly name: string; readonly quote?: string }[];
-  readonly threads: readonly ChapterChangeThread[];
-  readonly facts: readonly ChapterChangeFact[];
-}
+export type { ChapterChangeFact, ChapterChanges, ChapterChangeThread } from "../server/routes/chapter-changes.js";
 
 export type ChapterChangesResult = { readonly ok: true; readonly changes: ChapterChanges } | { readonly ok: false; readonly error: string };
 

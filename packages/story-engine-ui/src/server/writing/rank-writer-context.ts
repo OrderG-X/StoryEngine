@@ -19,6 +19,8 @@ const PROTECTED_DYNAMIC_SECTIONS = new Set([
   "chapter_goal",
   "chapter_plan",
   "last_draft_conflicts",
+  // 前面哪几章账待记：一两行，丢了写手会把那几章当成什么都没发生。
+  "ledger_pending",
   "earlier_passages",
   "previous_chapter",
   "previous_uncommitted_draft",

@@ -17,6 +17,7 @@ import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 
@@ -146,11 +147,6 @@ export type KeeperOutcome =
       readonly cause?: unknown;
     });
 
-function oneLine(error: unknown): string {
-  const text = (error instanceof Error ? error.message : String(error)).trim().split(/\s+/u).join(" ");
-  return text.length > 160 ? `${text.slice(0, 160)}…` : text || "未知错误";
-}
-
 /** 上一章结尾摘多少字给记账员对时间（判断本章开头隔了几天）。 */
 export const PREVIOUS_ENDING_CHARS = 160;
 
@@ -241,7 +237,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     }));
   } catch (error) {
     rethrowIfStopped(error);
-    return { ok: false, reason: `记账员读前文没成：${oneLine(error)}`, cause: error };
+    return { ok: false, reason: `记账员读前文没成：${modelFailureText(error)}`, cause: error };
   }
   const extra = { ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   const cards = await readCards(input.projectDir).catch(() => undefined);
@@ -252,7 +248,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     text = await withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
   } catch (error) {
     rethrowIfStopped(error);
-    return { ok: false, reason: `记账员没交上账单：${oneLine(error)}`, cause: error, ...extra };
+    return { ok: false, reason: `记账员没交上账单：${modelFailureText(error)}`, cause: error, ...extra };
   }
   input.onRawOutput?.(text);
   const parsed = parseKeeperOutput(text, context);
@@ -330,7 +326,7 @@ async function repairQuotes(
     reply = await withStep("记账员补摘原句", () => input.callModel([...conversation, { role: "user", content: ask }], { json: true }));
   } catch (error) {
     rethrowIfStopped(error);
-    return { parsed, repair: { asked, fixed: 0, failed: oneLine(error) } };
+    return { parsed, repair: { asked, fixed: 0, failed: modelFailureText(error) } };
   }
   input.onRawOutput?.(reply);
   const picks = parseQuoteRepairs(reply);

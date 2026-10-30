@@ -34,10 +34,12 @@ export interface PaceChapter {
   readonly closed: number;
   /** 每千字推进几条（收一条算两条）；字太少、或前面没有开着的线索可推时没有。 */
   readonly density?: number;
-  /** 这章开头到结尾跨了几天。 */
-  readonly span: number;
-  /** 从上一章结尾到这章结尾，故事走了几天（第一章 = 本章跨的天数）。 */
-  readonly storyDays: number;
+  /** 这章开头到结尾跨了几天（天数不知道就没有）。 */
+  readonly span?: number;
+  /** 从上一章结尾到这章结尾，故事走了几天（第一章 = 本章跨的天数；两头有一头不知道就没有）。 */
+  readonly storyDays?: number;
+  /** 这章账待记：不知道推进了什么，不算密度、不下结论。 */
+  readonly pending?: true;
   /** 天数是正文写明 / 判断 / 作者定的（估的、没记的不算准）。 */
   readonly timeSure: boolean;
   readonly pace?: "slow" | "fast";
@@ -115,15 +117,19 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
     const count = words.get(view.chapter) ?? 0;
     const row = moves.get(view.chapter) ?? { opened: 0, advanced: 0, closed: 0 };
     const weighted = row.advanced + row.closed * 2;
-    const density = count >= PACE_MIN_WORDS && openBefore(view.chapter) > 0 ? weighted / (count / 1000) : undefined;
+    const pending = view.ledgerStatus === "pending";
+    const density = !pending && count >= PACE_MIN_WORDS && openBefore(view.chapter) > 0 ? weighted / (count / 1000) : undefined;
+    const span = view.day !== undefined && view.dayEnd !== undefined ? view.dayEnd - view.day : undefined;
+    const storyDays = view.dayEnd === undefined ? undefined : previous ? (previous.dayEnd === undefined ? undefined : view.dayEnd - previous.dayEnd) : span;
     return {
       chapter: view.chapter,
       words: count,
       ...row,
       ...(density !== undefined ? { density } : {}),
-      span: view.dayEnd - view.day,
-      storyDays: previous ? view.dayEnd - previous.dayEnd : view.dayEnd - view.day,
-      timeSure: view.dayBasis !== "estimated" && view.dayBasis !== "missing",
+      ...(span !== undefined ? { span } : {}),
+      ...(storyDays !== undefined ? { storyDays } : {}),
+      timeSure: view.dayBasis !== "estimated" && view.dayBasis !== "missing" && view.dayBasis !== "unknown",
+      ...(pending ? { pending: true as const } : {}),
       weighted,
     };
   });
@@ -139,13 +145,14 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
     item,
     slow: item.density !== undefined
       && item.density <= typicalDensity * PACE_SLOW_RATIO
-      && item.storyDays <= PACE_SLOW_MAX_DAYS,
+      && item.storyDays !== undefined && item.storyDays <= PACE_SLOW_MAX_DAYS,
     dense: item.density !== undefined
       && item.density >= typicalDensity * PACE_FAST_RATIO
       && weighted >= PACE_FAST_MIN_MOVES,
     span: item.timeSure
+      && !item.pending
       && item.words >= PACE_MIN_WORDS
-      && item.span >= PACE_SPAN_DAYS
+      && item.span !== undefined && item.span >= PACE_SPAN_DAYS
       && item.words < typicalWords * PACE_SPAN_WORDS_RATIO,
   }));
   // 慢要故事时间走得少（≤ 2 天），跨天要一章跨 5 天以上：同一章不会又拖又赶。

@@ -205,6 +205,8 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
   const threadPool = views?.threads ?? { threads: [] };
   const arcGoalPool = views?.goals ?? { goals: [] };
   const allTimelineEvents = views?.events ?? [];
+  // 前面账待记的章（写作版本 P2b 设计 3.3）：如实告诉写手账里没有那几章。
+  const pendingBefore = (views?.projection.chapters ?? []).filter((item) => item.chapter < input.chapter && item.ledgerStatus === "pending").map((item) => item.chapter);
   const plan = input.chapterPlan;
   const storyClock = plan?.storyDay ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
   const earlierPassages = plan
@@ -260,7 +262,13 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       }, "dynamic")]
       : []),
     section("writing_context_pack", writingContextPack satisfies WritingContextPack, "dynamic"),
-    section("story_calendar", { currentStoryDay: views?.projection.chapters.at(-1)?.dayEnd ?? 1 }, "dynamic"),
+    section("story_calendar", { currentStoryDay: currentStoryDayOf(views?.projection) }, "dynamic"),
+    ...(pendingBefore.length > 0
+      ? [section("ledger_pending", {
+        chapters: pendingBefore,
+        note: `${pendingBefore.map((chapter) => `第 ${chapter} 章`).join("、")}的账还没记上：那几章出了什么事、谁在场、线索怎么动的、是哪天，账里都没有；要接的地方以那几章正文为准，别当成什么都没发生。`,
+      }, "dynamic")]
+      : []),
     section("story_threads", storyThreads, "dynamic"),
     section("arc_goals", arcGoals, "dynamic"),
     section("story_continuity", storyContinuity, "dynamic"),
@@ -591,10 +599,8 @@ function buildStoryContinuityContext(timelineEvents: readonly TimelineEvent[]): 
   const recentEvents = [...timelineEvents]
     .sort((left, right) => right.chapter - left.chapter || right.id.localeCompare(left.id))
     .slice(0, 3);
-  const summaries = recentEvents.map((event) => {
-    const semanticSummary = readSemanticSummary(event);
-    return semanticSummary?.mainEvent ?? event.summary;
-  });
+  // 账待记的章带上章号（几章都没梗概时分得清是哪章），不当成什么都没发生。
+  const summaries = recentEvents.map((event) => (event.ledgerPending ? `第 ${event.chapter} 章：${event.summary}` : readSemanticSummary(event)?.mainEvent ?? event.summary));
   const openLeads = recentEvents.map((event) => readSemanticSummary(event)?.nextLead);
   const activeConflicts = recentEvents.map((event) => readSemanticSummary(event)?.conflict);
   const discoveries = recentEvents.map((event) => readSemanticSummary(event)?.discovery);
@@ -612,7 +618,7 @@ function buildStoryContinuityContext(timelineEvents: readonly TimelineEvent[]): 
   };
   return {
     ...continuity,
-    carryForwardInstruction: buildCarryForwardInstruction(continuity),
+    carryForwardInstruction: buildCarryForwardInstruction(continuity, recentEvents[0]?.ledgerPending ? recentEvents[0].chapter : undefined),
   };
 }
 
@@ -638,11 +644,14 @@ function readSemanticSummary(event: TimelineEvent): Partial<{
   }>;
 }
 
-function buildCarryForwardInstruction(context: Omit<StoryContinuityContext, "carryForwardInstruction">): string {
+/** pendingNewest：最近那章的账还没记上（梗概、线索都给不出）：承接它的正文，不拿更早那章的事当「最近」。 */
+function buildCarryForwardInstruction(context: Omit<StoryContinuityContext, "carryForwardInstruction">, pendingNewest?: number): string {
   if (isEmptyContinuityContext(context)) {
     return "暂无前情承接要求。";
   }
-  const lead = stripTerminalPunctuation(context.openLeads[0] ?? context.recentEvents[0] ?? "最近事件");
+  const lead = pendingNewest !== undefined
+    ? `第 ${pendingNewest} 章正文结尾接着的事（那章的账还没记上，以正文为准）`
+    : stripTerminalPunctuation(context.openLeads[0] ?? context.recentEvents[0] ?? "最近事件");
   const conflict = stripTerminalPunctuation(context.activeConflicts[0] ?? context.discoveries[0] ?? "上一章后果");
   const locations = context.recentLocations.length > 0 ? context.recentLocations.join("、") : "暂无明确地点";
   const characters = context.recentCharacters.length > 0 ? context.recentCharacters.join("、") : "近期出场角色";
@@ -681,4 +690,11 @@ function stripTerminalPunctuation(value: string): string {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+/** 故事现在到第几天（最后定稿那章的结尾）；那章是哪天不知道（它或它前面有章账待记）就如实说不知道，不按第 1 天给。 */
+function currentStoryDayOf(projection: { readonly chapters: readonly { readonly dayEnd?: number }[] } | undefined): number | string {
+  const last = projection?.chapters.at(-1);
+  if (!last) return 1;
+  return last.dayEnd ?? "不知道（前面有章的账还没记上）";
 }

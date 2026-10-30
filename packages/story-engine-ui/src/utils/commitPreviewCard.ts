@@ -31,6 +31,7 @@ function readChecklistItem(value: unknown): ChecklistItem | undefined {
     removable: value.removable === true,
     ...(editableDay !== undefined ? { editableDay } : {}),
     ...(editableDayEnd !== undefined ? { editableDayEnd } : {}),
+    ...(editableDay === undefined && value.dayUnknown === true ? { dayUnknown: true as const } : {}),
     ...(value.needsConfirm === true ? { needsConfirm: true } : {}),
     ...(value.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
   };
@@ -57,6 +58,7 @@ export function readCommitPreviewCard(value: unknown): CommitPreviewCardData | u
     ...(notRecorded.length > 0 ? { notRecorded } : {}),
     ...(notes.length > 0 ? { notes } : {}),
     ...(value.shortOnly === true ? { shortOnly: true } : {}),
+    ...(value.fill === true ? { fill: true as const } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
   };
 }

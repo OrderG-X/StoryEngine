@@ -352,12 +352,16 @@ function buildThreads(
     }
   }
 
+  // 「多少章没动」不数账待记的章：那几章的账没记上，不知道动没动。
+  const pending = ledgers.filter((ledger) => ledger.status === "pending").map((ledger) => ledger.chapter);
+  const idleSince = (chapter: number): number => upTo - chapter - pending.filter((item) => item > chapter && item <= upTo).length;
   const views = [...threads.values()].map((thread): ThreadView => {
     const lastTouchedAt = Math.max(thread.openedAt, ...thread.touches.map((touch) => touch.chapter));
+    const idleChapters = Math.max(0, idleSince(lastTouchedAt));
     const idleLimit = thread.weight === "major" ? staleAfter * MAJOR_STALE_FACTOR : staleAfter;
     const status = thread.closedAt !== undefined
       ? "closed"
-      : thread.weight !== "minor" && upTo - lastTouchedAt >= idleLimit
+      : thread.weight !== "minor" && idleChapters >= idleLimit
         ? "stale"
         : thread.touches.some((touch) => touch.op === "advance")
           ? "active"
@@ -368,6 +372,7 @@ function buildThreads(
       title: thread.title,
       openedAt: thread.openedAt,
       lastTouchedAt,
+      idleChapters,
       ...(thread.closedAt !== undefined ? { closedAt: thread.closedAt, closedBy: thread.closedBy ?? "ledger" } : {}),
       status,
       weight: thread.weight,
@@ -391,13 +396,14 @@ function buildChapters(
   const summaryRulings = new Map<number, string>();
   for (const decision of decisions) if (decision.type === "chapter.summary") summaryRulings.set(decision.chapter, decision.text);
   const views: ChapterView[] = [];
-  let previousEnd = 0;
+  // 上一章结尾是第几天；不知道（账待记的章、接着它算的）= undefined，直到下一个作者定的天数。
+  let previousEnd: number | undefined = 0;
   for (const ledger of ledgers) {
     const time = timeDeclarationOf(ledger.entries);
     const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
     const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
     const ruling = dayRulings.get(ledger.chapter);
-    let day: number;
+    let day: number | undefined;
     let basis: ChapterView["dayBasis"];
     let dayEnd: number | undefined;
     if (ruling) {
@@ -407,6 +413,9 @@ function buildChapters(
     } else if (time?.basis === "author" && time.day !== undefined) {
       day = time.day;
       basis = "author";
+    } else if (ledger.status === "pending" || previousEnd === undefined) {
+      // 账待记：这章没有时间可依；上一章就不知道：相对它算的也不知道（不按 +1 估）。
+      basis = "unknown";
     } else if (time?.daysSincePrevious !== undefined) {
       day = Math.max(1, previousEnd + time.daysSincePrevious);
       basis = time.basis;
@@ -416,7 +425,7 @@ function buildChapters(
       // 定稿清单请作者看一眼（换题材长篇实跑第 21 章：标成「正文明写」，暑假记成了上一章的第二天）。
       basis = !time ? "missing" : views.length > 0 ? "estimated" : time.basis;
     }
-    dayEnd ??= day + (time?.daysInChapter ?? 0);
+    if (day !== undefined) dayEnd ??= day + (time?.daysInChapter ?? 0);
     previousEnd = dayEnd;
 
     const present: string[] = [];
@@ -433,8 +442,8 @@ function buildChapters(
       origin: ledger.origin,
       committedAt: ledger.committedAt,
       ...(summary !== undefined ? { summary } : {}),
-      day,
-      dayEnd,
+      ledgerStatus: ledger.status,
+      ...(day !== undefined && dayEnd !== undefined ? { day, dayEnd } : {}),
       dayBasis: basis,
       ...(time?.weekday !== undefined ? { weekday: time.weekday } : {}),
       weekdayDerived: false,
@@ -445,14 +454,15 @@ function buildChapters(
       textMissing: textHashes ? hash === undefined : false,
     });
   }
-  // 星期：没明写的，从天数最近的一个明写星期推。
-  const anchors = views.filter((view) => view.weekday !== undefined);
+  // 星期：没明写的，从天数最近的一个明写星期推（天数不知道的两头都不算）。
+  const anchors = views.flatMap((view) => (view.weekday !== undefined && view.day !== undefined ? [{ day: view.day, weekday: view.weekday }] : []));
   if (anchors.length === 0) return views;
   return views.map((view) => {
-    if (view.weekday !== undefined) return view;
-    let best = anchors[0] as ChapterView;
-    for (const anchor of anchors) if (Math.abs(anchor.day - view.day) < Math.abs(best.day - view.day)) best = anchor;
-    return { ...view, weekday: mod7((best.weekday as number) + view.day - best.day), weekdayDerived: true };
+    const day = view.day;
+    if (view.weekday !== undefined || day === undefined) return view;
+    let best = anchors[0]!;
+    for (const anchor of anchors) if (Math.abs(anchor.day - day) < Math.abs(best.day - day)) best = anchor;
+    return { ...view, weekday: mod7(best.weekday + day - best.day), weekdayDerived: true };
   });
 }
 

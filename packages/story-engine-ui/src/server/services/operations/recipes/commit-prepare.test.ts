@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { cardWrite, decisionRecord, projectBook, readCards, readChapterLedger, readHead, runCommand } from "@actalk/story-core";
+import { cardWrite, chapterCommit, decisionRecord, projectBook, readCards, readChapterLedger, readHead, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createStoryProject } from "../../../book/project-store.js";
@@ -18,14 +18,16 @@ import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, readOperation, type OperationRecord } from "../../../lib/operations/store.js";
 import { listSnapshots } from "../../../lib/snapshot.js";
 import { restoreForTest } from "../../../lib/history-test-helpers.js";
-import { DAY_ITEM_ID, openThreadsHintDue, type CommitPreviewView } from "../../commit-view.js";
+import { DAY_ITEM_ID, openThreadsHintDue, type AuthorChoicePreview, type CommitPreviewView } from "../../commit-view.js";
 import { undoInOperation } from "../test-helpers.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
 import {
+  AUTHOR_CHOICE_KIND,
   COMMIT_CONFIRM_ACTION,
   COMMIT_CONFIRM_KIND,
   COMMIT_PREPARE_KIND,
   createCommitPrepareRecipe,
+  ledgerFailedAction,
   readCommitPrepareParams,
   type CommitConfirmPreview,
   type CommitPrepareBody,
@@ -207,6 +209,9 @@ describe("交来的参数", () => {
     expect(readCommitPrepareParams("chat", { chapter: 0 })).toEqual({ invalid: "要定稿哪一章没说清。" });
     expect(readCommitPrepareParams("chat", { chapter: 2, allowShort: true })).toEqual({ chapter: 2 });
     expect(readCommitPrepareParams("button", { chapter: 2, allowShort: true })).toEqual({ chapter: 2, allowShort: true });
+    // 补账谁交都行（只出清单）。
+    expect(readCommitPrepareParams("chat", { chapter: 3, fill: true })).toEqual({ chapter: 3, fill: true });
+    expect(readCommitPrepareParams("chat", { fill: true })).toEqual({ invalid: "要补哪一章的账没说清。" });
   });
 });
 
@@ -246,15 +251,167 @@ describe("定不了：如实列原因，不出按钮", () => {
     expect(fresh.blockingReasons.join("")).toContain("1000");
   });
 
-  it("记账员没交成：这次没做成、原因如实，书一点没动", async () => {
+});
+
+describe("记账没成：停下请作者挑「再记一次」或「先定正文、账待记」（P2b 设计 3.1）", () => {
+  it("不整次失败：卡上原因如实、两个按钮；点之前书一点没动", async () => {
     await writeDraft(1, CH1);
     const base = (await readHead(book)).version;
     ledger = undefined;
-    const failed = await prepare(1);
-    expect(failed.state).toBe("failed");
-    expect(failed.failure?.message).toBeTruthy();
+    const record = await prepare(1);
+    expect(record.state).toBe("waiting_author");
+    expect(record.pendingActions[0]).toMatchObject({ actionId: ledgerFailedAction(1), kind: AUTHOR_CHOICE_KIND, decisions: ["retry", "pending"] });
+    const choice = record.pendingActions[0]!.preview as AuthorChoicePreview;
+    expect(choice.lines[0]).toContain("第 1 章的账这次没记成");
+    expect(choice.choices.map((item) => item.label)).toEqual(["再记一次", "先定正文、账待记"]);
+    expect(JSON.stringify(choice)).not.toMatch(RAW_ID);
     expect(await readHead(book)).toMatchObject({ version: base });
     expect(await exists(join(book, "chapters", "0001.md"))).toBe(false);
+  });
+
+  it("「再记一次」：同一次操作按新轮号再记，记成了照常出清单、能定稿；又没成再给一张卡", async () => {
+    await writeDraft(1, CH1);
+    ledger = undefined;
+    const record = await prepare(1);
+    expect(await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "retry" })).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const again = await stored(record.opId);
+    expect(again.state).toBe("waiting_author");
+    expect(again.pendingActions.find((action) => !action.decisionHash)).toMatchObject({ actionId: ledgerFailedAction(2), kind: AUTHOR_CHOICE_KIND });
+
+    ledger = LEDGER1;
+    expect(await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(2), decision: "retry" })).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const listed = await stored(record.opId);
+    expect(listed.pendingActions.find((action) => !action.decisionHash)).toMatchObject({ actionId: COMMIT_CONFIRM_ACTION, kind: COMMIT_CONFIRM_KIND });
+    const done = await confirm(listed);
+    expect(done.state).toBe("succeeded");
+    expect((await readChapterLedger(book, 1))?.status).toBe("ready");
+  });
+
+  it("「先定正文、账待记」：正文定了、账单待记；回执如实说、给「补记账」；哪天不知道；能撤销", async () => {
+    await writeDraft(1, CH1);
+    ledger = undefined;
+    const record = await prepare(1);
+    expect(await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "pending" })).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const done = await stored(record.opId);
+    expect(done.state).toBe("succeeded");
+    expect(bodyOf(done)).toMatchObject({ committed: true, done: { report: { chapter: 1, ledger: { status: "pending", facts: 0 } } } });
+    expect(bodyOf(done).done?.report?.ledger.day).toBeUndefined();
+    expect(summaryOf(done)).toContain("第 1 章正文定了，账还没记上");
+    expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
+    expect(await readChapterLedger(book, 1)).toMatchObject({ status: "pending", entries: [] });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "pending", dayBasis: "unknown" });
+
+    await undoInOperation(book, done.opId);
+    expect(await exists(join(book, "chapters", "0001.md"))).toBe(false);
+  });
+
+  it("记账那会儿之后正文又改过：不定稿、说清楚", async () => {
+    await writeDraft(1, CH1);
+    ledger = undefined;
+    const record = await prepare(1);
+    await writeDraft(1, `${CH1}\n又补了一句。`);
+    expect(await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "pending" })).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const done = await stored(record.opId);
+    expect(done.state).toBe("obsolete");
+    expect(done.failure?.message).toContain("记账那会儿之后正文又改过");
+    expect(await exists(join(book, "chapters", "0001.md"))).toBe(false);
+  });
+});
+
+describe("补账（P2b 设计 3.2）：按定稿那版正文补记，出清单，作者点「确认记账」才记，正文不动", () => {
+  async function pendingChapter1(): Promise<void> {
+    await writeDraft(1, CH1);
+    ledger = undefined;
+    const record = await prepare(1);
+    await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "pending" });
+    await __drainOperationsForTests();
+    ledger = LEDGER1;
+  }
+  async function prepareFill(chapter: number): Promise<OperationRecord> {
+    const outcome = await submitOperation(book, {
+      kind: COMMIT_PREPARE_KIND,
+      params: { chapter, fill: true },
+      requestKey: randomUUID(),
+      issuedAt: new Date().toISOString(),
+      origin: { kind: "chat", messageId: randomUUID() },
+    });
+    if (!outcome.ok || !("record" in outcome)) throw new Error(`没受理：${JSON.stringify(outcome)}`);
+    await __drainOperationsForTests();
+    return stored(outcome.record.opId);
+  }
+
+  it("出补账清单（标 fill、说「可以补上」）→ 确认记账：账换上、正文和定稿时间不动；回执标补账", async () => {
+    await pendingChapter1();
+    const before = await readChapterLedger(book, 1);
+    // 作者之后又在稿纸上改了工作稿：补账照定稿那版正文记，不碰工作稿。
+    await writeDraft(1, `${CH1}\n工作稿上又写了一句。`);
+    const record = await prepareFill(1);
+    expect(record).toMatchObject({ state: "waiting_author", mode: "fill" });
+    const view = viewOf(record);
+    expect(view).toMatchObject({ chapter: 1, canCommit: true, fill: true });
+    expect(view.summary).toContain("第 1 章的账可以补上");
+    expect(view.notes ?? []).not.toContain("这章定稿过，这次会换掉原来的账");
+
+    const done = await confirm(record);
+    expect(done.state).toBe("succeeded");
+    expect(bodyOf(done)).toMatchObject({ committed: true, fill: true, done: { report: { fill: true, ledger: { status: "ready", facts: 2 } } } });
+    expect(summaryOf(done)).toContain("第 1 章的账补上了");
+    expect(bodyOf(done).done?.draftBody).toBeUndefined();
+    expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
+    expect(await readChapterLedger(book, 1)).toMatchObject({ status: "ready", committedAt: before!.committedAt, textSha256: before!.textSha256 });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ ledgerStatus: "ready", day: 1 });
+  });
+
+  it("账待记那份没记天数：补账清单不说「上次定稿记的是第几天」（真点：拿估的天数当上次记的）", async () => {
+    await commit(1, CH1, LEDGER1);
+    await writeDraft(2, CH2);
+    ledger = undefined;
+    const record = await prepare(2);
+    await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "pending" });
+    await __drainOperationsForTests();
+    // 记账员这次看成隔了两天（第 3 天）；账待记时按「上一章 +1」估是第 2 天，那不是上次记的。
+    ledger = { ...LEDGER2, time: { ...LEDGER2.time, daysSincePrevious: 2 } };
+    const fill = await prepareFill(2);
+    expect(fill.state).toBe("waiting_author");
+    expect(JSON.stringify(viewOf(fill))).not.toContain("上次定稿记的");
+  });
+
+  it("补不了的如实说：账已经记上了；补账时记账又没成只给「再记一次」", async () => {
+    await commit(1, CH1, LEDGER1);
+    const ready = await prepareFill(1);
+    expect(ready.state).toBe("succeeded");
+    expect(bodyOf(ready)).toMatchObject({ committed: false, fill: true });
+    expect(bodyOf(ready).blocked?.blockingReasons.join("")).toContain("已经记上了");
+
+    await writeDraft(2, CH2);
+    ledger = undefined;
+    const record = await prepare(2);
+    await resumeOperation(book, record.opId, { actionId: ledgerFailedAction(1), decision: "pending" });
+    await __drainOperationsForTests();
+    const fill = await prepareFill(2);
+    expect(fill.pendingActions[0]).toMatchObject({ kind: AUTHOR_CHOICE_KIND, decisions: ["retry"] });
+  });
+
+  it("补账清单出来之后这章的账又变过：不写、说改过；又交了一次定稿的，旧的补账清单作废", async () => {
+    await pendingChapter1();
+    const record = await prepareFill(1);
+    expect(record.state).toBe("waiting_author");
+    // 别处（不经这次操作）把这章的账又写了一遍。
+    expect(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: randomUUID() }))
+      .toMatchObject({ ok: true });
+    const done = await confirm(record);
+    expect(done.state).toBe("obsolete");
+    expect(done.failure?.message).toContain("补账清单出来之后");
+    expect(await readChapterLedger(book, 1)).toMatchObject({ status: "pending" });
+
+    const again = await prepareFill(1);
+    await writeDraft(1, CH1);
+    await prepare(1);
+    expect((await stored(again.opId)).state).toBe("obsolete");
   });
 });
 

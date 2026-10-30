@@ -104,6 +104,18 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
     expect(done.statusLine).toBe("已定稿");
   });
 
+  it("已定稿、账没记上 / 没记全：主按钮「补记账」，状态照实说；没定稿时不管", () => {
+    const pending = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, nextChapter: 13, ledger: "pending" });
+    expect(pending.primary).toEqual({ kind: "fill", label: "补记账" });
+    expect(pending.statusLine).toBe("正文定了，账还没记上");
+    expect(pending.commit).toEqual({ done: true, text: "已定稿 · 账待记" });
+    expect(pending.next).toBeUndefined();
+    const partial = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, ledger: "partial" });
+    expect(partial.statusLine).toBe("已定稿，账没记全");
+    const drafting = chapterProgress({ paper: paper(), result: null, targetWords: null, ledger: "pending" });
+    expect(drafting.primary.kind).toBe("continuity");
+  });
+
   it("已定稿、知道后面第一个没定稿的章：主按钮「去第 N 章」（只换章不出稿）；没定稿时不带", () => {
     const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, nextChapter: 13 });
     expect(done.primary).toEqual({ kind: "open_next", label: "去第 13 章" });

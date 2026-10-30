@@ -162,6 +162,25 @@ describe("核账服务（核账员一路）", () => {
     expect(changed.sure).toEqual([]);
   });
 
+  it("前面有章账待记：照核，结论里如实说对账本那一遍没算它（写作版本 P2b）", async () => {
+    const dir = await makeBook();
+    const outcome = await runCommand(dir, chapterCommit, {
+      chapter: 2,
+      text: `# 第2章\n\n${CH2}\n`,
+      entries: [],
+      ledger: { status: "pending", reasonCodes: ["keeper_failed"] },
+    }, { caller: "author", idempotencyKey: "check-service-pending-2" });
+    expect(outcome.ok).toBe(true);
+    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
+    const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: quiet });
+    expect(result.ok).toBe(true);
+    expect(result.ledgerPending).toEqual([2]);
+    expect(result.summary).toContain("第 2 章的账还没记上，对账本的那一遍没算它。");
+    const plain = await checkChapterBody(await makeBook(), 3, BODY, { readerCallModel: quiet });
+    expect(plain.ledgerPending).toBeUndefined();
+    expect(plain.summary).not.toContain("账还没记上");
+  });
+
   it("核账员三遍全没跑成：如实说没跑成，不记进核账记忆", async () => {
     const dir = await makeBook();
     const broken: BrainCallModel = async (_messages, options) => {

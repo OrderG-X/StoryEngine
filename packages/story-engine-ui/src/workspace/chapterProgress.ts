@@ -26,6 +26,7 @@ export const STEP_HINTS = {
   write_next: "AI 写下一章的工作稿，要几分钟；写之前存档，能撤销。",
   continuity: "拿这一章对一遍前文和设定，找前后对不上的地方（人名、日子、谁知道什么……）。只看不改。",
   commit: "这章写完了就定稿：先出一张清单给你过目（这章记进账本的人、事、线索），你点确认才定；能撤销。",
+  fill: "这章定稿时账没记上（或没记全）：照定稿的正文再记一次账，出清单给你过目，你点确认才记；正文不动，能撤销。",
   show_issues: "在稿纸上看划线的那几句。",
 } as const satisfies Partial<Record<ChapterButton | "show_issues", string>>;
 
@@ -180,6 +181,8 @@ export function chapterProgress(input: {
   readonly targetWords: number | null;
   /** 后面第一个没定稿的章（章表算的）；已定稿时主按钮去这一章。 */
   readonly nextChapter?: number;
+  /** 这章定稿时账没记上（pending）/ 没记全（partial）：已定稿时主按钮是「补记账」。 */
+  readonly ledger?: "pending" | "partial";
 }): ChapterProgress {
   const { paper, result, targetWords } = input;
   const stage = paperStage(paper);
@@ -213,8 +216,9 @@ export function chapterProgress(input: {
           : open.maybe.length > 0 ? `没发现确定的问题，${open.maybe.length} 处可能` : "没发现问题",
   };
 
+  const ledgerShort = committed ? input.ledger : undefined;
   const commit = stage === "committed"
-    ? { done: true, text: "已定稿" }
+    ? { done: true, text: ledgerShort === "pending" ? "已定稿 · 账待记" : ledgerShort === "partial" ? "已定稿 · 账没记全" : "已定稿" }
     : stage === "edited"
       ? { done: false, text: "定稿后又改过" }
       : { done: false, text: "还没定稿" };
@@ -222,8 +226,8 @@ export function chapterProgress(input: {
   const primary: ChapterProgress["primary"] = stage === "empty"
     ? { kind: "write", label: "AI 写这一章" }
     : committed
-      // 已定稿：去后面第一个没定稿的章（那章有稿就接着弄，没稿就在那儿挑走法或写），不在这儿直接出稿。
-      ? input.nextChapter ? { kind: "open_next", label: `去第 ${input.nextChapter} 章` } : { kind: "write_next", label: "AI 写下一章" }
+      // 已定稿：账没记上 / 没记全的先补；不然去后面第一个没定稿的章（那章有稿就接着弄，没稿就在那儿挑走法或写），不在这儿直接出稿。
+      ? ledgerShort ? { kind: "fill", label: "补记账" } : input.nextChapter ? { kind: "open_next", label: `去第 ${input.nextChapter} 章` } : { kind: "write_next", label: "AI 写下一章" }
       : checkState === "none" || checkState === "stale"
         ? { kind: "continuity", label: checkState === "stale" ? "再核一遍" : "核账" }
         : checkState === "issues"
@@ -233,7 +237,7 @@ export function chapterProgress(input: {
   const statusLine = stage === "empty"
     ? "这一章还没写"
     : committed
-      ? "已定稿"
+      ? ledgerShort === "pending" ? "正文定了，账还没记上" : ledgerShort === "partial" ? "已定稿，账没记全" : "已定稿"
       : checkState === "none"
         ? "还没核账"
         : checkState === "stale"
@@ -242,7 +246,7 @@ export function chapterProgress(input: {
             ? `核过了：${open.sure.length} 处对不上${open.maybe.length > 0 ? `，${open.maybe.length} 处可能` : ""}`
             : open.maybe.length > 0 ? `核过了：没有确定对不上的，${open.maybe.length} 处可能` : "核过了，没发现对不上的地方";
 
-  return { chapter: paper.chapter, words, write, check, commit, primary, statusLine, ...(committed && input.nextChapter ? { next: input.nextChapter } : {}) };
+  return { chapter: paper.chapter, words, write, check, commit, primary, statusLine, ...(committed && input.nextChapter && !ledgerShort ? { next: input.nextChapter } : {}) };
 }
 
 /** 组件用：当前会话里这一章最新的核账结果。 */
@@ -266,5 +270,9 @@ export function useChapterProgress(targetWords: number | null): ChapterProgress 
   const result = useContinuityResult(paper.chapter);
   const chapters = useBookStore((s) => s.workspace.chapters);
   const nextChapter = useMemo(() => (paper.chapter > 0 ? nextUncommittedChapter(paper.chapter, chapters) : undefined), [paper.chapter, chapters]);
-  return useMemo(() => chapterProgress({ paper, result, targetWords, ...(nextChapter ? { nextChapter } : {}) }), [paper, result, targetWords, nextChapter]);
+  const ledger = useBookStore((s) => s.currentOverview?.ledgerShort?.find((item) => item.chapter === paper.chapter)?.status);
+  return useMemo(
+    () => chapterProgress({ paper, result, targetWords, ...(nextChapter ? { nextChapter } : {}), ...(ledger ? { ledger } : {}) }),
+    [paper, result, targetWords, nextChapter, ledger],
+  );
 }

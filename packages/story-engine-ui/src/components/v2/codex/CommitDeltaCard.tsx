@@ -38,19 +38,24 @@ export function CommitDeltaCard({
   elapsedMs,
   onUndo,
   undoDisabled,
+  onFill,
 }: {
   readonly report: unknown;
   readonly elapsedMs?: number;
   /** 撤销这次定稿 = 这回合整块回退（同「撤销到此」）；没有存档点的回合不给。 */
   readonly onUndo?: () => void;
   readonly undoDisabled?: boolean;
+  /** 「补记账」：这章的账没记上 / 没记全时给（交一次补账，出清单）。 */
+  readonly onFill?: (chapter: number) => void;
 }) {
-  const { chapter, detailLines } = summarizeCommitReport(report);
+  const { chapter, detailLines, ledgerStatus, fill } = summarizeCommitReport(report);
   const lines = displayDeltaLines(detailLines);
   // 撤销会连带撤掉这之后的对话和改动，先在卡片里确认一次。
   const [confirming, setConfirming] = useState(false);
+  const statusLabel = fill ? "已补账" : ledgerStatus === "pending" ? "账待记" : "已定稿";
+  const canFill = Boolean(onFill) && chapter !== undefined && ledgerStatus !== undefined;
   return (
-    <StepCard title={chapter ? `第 ${chapter} 章记下的账` : "记下的账"} status="done" statusLabel="已定稿" elapsedMs={elapsedMs} defaultOpen>
+    <StepCard title={chapter ? `第 ${chapter} 章记下的账` : "记下的账"} status="done" statusLabel={statusLabel} elapsedMs={elapsedMs} defaultOpen>
       {lines.length ? (
         <ul className="cdc-list">
           {lines.map((line) => {
@@ -64,15 +69,18 @@ export function CommitDeltaCard({
           })}
         </ul>
       ) : null}
+      {canFill ? (
+        <button type="button" className="cdc-undo" disabled={undoDisabled} onClick={() => onFill?.(chapter!)}>补记账</button>
+      ) : null}
       {onUndo ? (
         confirming ? (
-          <div className="cdc-undo-confirm" role="alertdialog" aria-label="确认撤销定稿">
-            <span>撤销后这一章回到工作稿，这之后的对话和改动也会一起撤掉。</span>
-            <button type="button" className="cdc-undo-go" disabled={undoDisabled} onClick={() => { setConfirming(false); onUndo(); }}>撤销定稿</button>
+          <div className="cdc-undo-confirm" role="alertdialog" aria-label={fill ? "确认撤销补账" : "确认撤销定稿"}>
+            <span>{fill ? "撤销后这章的账回到补之前，这之后的对话和改动也会一起撤掉。" : "撤销后这一章回到工作稿，这之后的对话和改动也会一起撤掉。"}</span>
+            <button type="button" className="cdc-undo-go" disabled={undoDisabled} onClick={() => { setConfirming(false); onUndo(); }}>{fill ? "撤销补账" : "撤销定稿"}</button>
             <button type="button" className="cdc-undo-cancel" onClick={() => setConfirming(false)}>算了</button>
           </div>
         ) : (
-          <button type="button" className="cdc-undo" disabled={undoDisabled} onClick={() => setConfirming(true)}>撤销这次定稿</button>
+          <button type="button" className="cdc-undo" disabled={undoDisabled} onClick={() => setConfirming(true)}>{fill ? "撤销这次补账" : "撤销这次定稿"}</button>
         )
       ) : null}
     </StepCard>
