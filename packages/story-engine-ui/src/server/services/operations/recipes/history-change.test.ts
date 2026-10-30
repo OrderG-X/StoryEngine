@@ -251,6 +251,32 @@ describe("撤销上一步", () => {
     expect(await bodyOf(1)).toBe("B 写的第一章。");
   });
 
+  for (const [when, stopAt] of [["记了撤哪次、算计划之前", 1], ["算了计划、应用之前", 2]] as const) {
+    it(`往前找跳过了撤掉的第 1 章、找到第 9 章；${when}断了，作者这时原样存回第 1 章：接着做照现在的样子重算，停下给作者看（Astra 第 16 轮第 1 条）`, async () => {
+      await aiWrites(9, "第九章。");
+      await aiWrites(1, "AI 写的。");
+      await undoInOperation(book);
+      expect(await bodyOf(1)).toBeUndefined();
+      let calls = 0;
+      hook.beforePlan = async () => {
+        calls += 1;
+        if (calls !== stopAt) return;
+        hook.beforePlan = undefined;
+        throw new OperationStopped("operation_stopped", `${when}断了`);
+      };
+      const paused = await submit("undo", {}, "button");
+      expect(paused.state).toBe("paused");
+      const saved = await runCommand(book, draftSave, { chapter: 1, title: "", body: "AI 写的。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
+      expect(saved.ok).toBe(true);
+      expect(await resumeOperation(book, paused.opId)).toMatchObject({ ok: true });
+      const waiting = await untilOperation(book, paused.opId, (record) => record.eventSeq > paused.eventSeq && (SETTLED_STATES.includes(record.state) || record.state === "waiting_author"));
+      expect(waiting.state).toBe("waiting_author");
+      const preview = operationView(waiting).pendingActions[0]?.preview as { lines: string[]; notes: string[] };
+      expect(preview.lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
+      expect(await bodyOf(9)).toBe("第九章。");
+    });
+  }
+
   it("上一次是升级之前、没留存档的写：如实说撤不了、指去「历史」，不说「没有能撤的」", async () => {
     const outcome = await runCommand(book, cardWrite, { ops: [{ op: "card.create", kind: "character", name: "沈舟" }] }, { caller: "author", idempotencyKey: "old-write" });
     if (!outcome.ok) throw new Error(outcome.message);

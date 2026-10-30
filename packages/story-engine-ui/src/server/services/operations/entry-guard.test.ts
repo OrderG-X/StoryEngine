@@ -91,7 +91,7 @@ describe("定稿只有执行器一个入口（片 4A）", () => {
 
 describe("撤销 / 恢复 / 裁剪只有执行器一个入口（片 4C）", () => {
   it("核心撤销 / 恢复的计划和写回、裁剪只在 history.change 配方里调（存档模块是裁剪的定义处；单测助手给要「恢复过」前提的测试用）", async () => {
-    expect(await filesMatching(SERVER, /\b(?:planRevert|planRestore|historyApply|lastUndoable)\b/u)).toEqual(["lib/history-test-helpers.ts", "services/operations/recipes/history-change.ts"]);
+    expect(await filesMatching(SERVER, /\b(?:planRevert|planRestore|historyApply|lastUndoable(?:In)?|undoUnsure(?:In)?)\b/u)).toEqual(["lib/history-test-helpers.ts", "services/operations/recipes/history-change.ts"]);
     expect(await filesMatching(SERVER, /\b(?:planPrune|applyPrune)\s*\(/u)).toEqual(["lib/snapshot.ts", "services/operations/recipes/history-change.ts"]);
   });
 

@@ -12,6 +12,7 @@
  * 撤销、恢复都是普通写命令：写前存档，再撤它就换回来。不调模型。
  */
 import {
+  canonicalJson,
   chapterFromFileName,
   draftChapterOfPath,
   HISTORY_APPLY_COMMAND,
@@ -22,6 +23,8 @@ import {
   planRestore,
   planRevert,
   readReceipts,
+  sha256Bytes,
+  undoUnsureIn,
   withBookLock,
   CARDS_PATH,
   DECISIONS_PATH,
@@ -177,16 +180,15 @@ interface UndoTarget {
   readonly what: string;
   /** 撤的是一次撤销 / 整本恢复（结论换个说法：它退回去了，那几处回到它之前）。 */
   readonly ofHistory: boolean;
-  /** 往前找「上一步」时跳过了在操作之外又改过的这几个文件上的那几次：撤之前停下给作者看。 */
-  readonly unsure?: readonly string[];
+  /** 「撤销上一步」找的（不是按钮带号）：往前找时跳过的那几次在不在说不准的，撤之前要作者看。 */
+  readonly implicit: boolean;
 }
 
 async function resolveUndoTarget(bookDir: string, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<UndoTarget | undefined> {
   const receipts = await readReceipts(bookDir);
-  const choice = params.target ? { target: params.target } : await lastUndoableIn(bookDir, receipts);
-  if (!choice) return undefined;
-  if ("ok" in choice) throw coded(choice.code, choice.message);
-  const { target, unsure } = choice;
+  const target = params.target ?? await lastUndoableIn(bookDir, receipts);
+  if (!target) return undefined;
+  if ("ok" in target) throw coded(target.code, target.message);
   const receipt = receipts.find((item) => ("opId" in target ? item.opId === target.opId : item.key === target.receiptKey));
   const opId = "opId" in target ? target.opId : undefined;
   if (opId) {
@@ -200,24 +202,48 @@ async function resolveUndoTarget(bookDir: string, params: Extract<HistoryChangeP
     target,
     what: await whatOf(bookDir, opId, receipt?.command ?? ""),
     ofHistory: receipt?.command === HISTORY_APPLY_COMMAND,
-    ...(unsure && unsure.length > 0 ? { unsure } : {}),
+    implicit: !params.target,
   };
 }
 
-type UndoCheck =
-  | { readonly kind: "ready"; readonly impact: readonly string[]; readonly impactDigest: string }
-  | { readonly kind: "done"; readonly paths: readonly string[]; readonly snapshotId?: string };
+/** 撤之前要作者看的：卡上一处一行，digest = 作者点的是哪一份（影响、说不准的都在里面，变了就重新问）。 */
+interface UndoAsk {
+  readonly lines: readonly string[];
+  /** 有后来又改过的（全撤会连带退掉）；没有就只是说不准。 */
+  readonly impacted: boolean;
+  readonly digest: string;
+}
 
-/** 书锁里算一次撤销（只读）。撤不了的如实失败（升级之前的、存档裁掉了、后来的接着它）。 */
-async function planUndo(bookDir: string, target: RevertTarget) {
-  const plan = await withBookLock(bookDir, () => withGitHistoryReader(bookDir, (reader) => planRevert(bookDir, target, reader)));
+type UndoCheck = ({ readonly kind: "ready" } & UndoAsk) | { readonly kind: "done"; readonly paths: readonly string[]; readonly snapshotId?: string };
+
+/**
+ * 书锁里算一次撤销（只读）：计划，加上「撤销上一步」往前找时跳过的那几次说不准的文件（照现在的谱系，已经在影响里列着的不再列）。
+ * 计划、应用两步都重算，记了撤哪次之后书又变了也认得出（Astra 第 15 轮第 1 条、第 16 轮第 1 条）。撤不了的如实失败（升级之前的、存档裁掉了、后来的接着它）。
+ */
+async function planUndo(bookDir: string, undo: UndoTarget) {
+  const { plan, unsure } = await withBookLock(bookDir, async () => ({
+    plan: await withGitHistoryReader(bookDir, (reader) => planRevert(bookDir, undo.target, reader)),
+    unsure: undo.implicit ? await undoUnsureIn(bookDir, await readReceipts(bookDir), undo.target) : [],
+  }));
   if (!plan.ok) {
     const restoreHint = plan.code === "legacy_receipt" || plan.code === "no_tree" || plan.code === "tree_gone"
       ? "要回到那之前，到顶栏「历史」里挑那之前的存档恢复。"
       : "";
     throw coded(plan.code, `${plan.message}${restoreHint}`);
   }
-  return plan;
+  if ("ok" in unsure) throw coded(unsure.code, unsure.message);
+  return { plan, unsure: unsure.filter((path) => !plan.impact.some((item) => item.path === path)) };
+}
+
+/** 要不要停下给作者看；不用返回 undefined。 */
+async function askOf(bookDir: string, planned: Awaited<ReturnType<typeof planUndo>>): Promise<UndoAsk | undefined> {
+  const { plan, unsure } = planned;
+  if (plan.impact.length === 0 && unsure.length === 0) return undefined;
+  return {
+    lines: [...await impactLines(bookDir, plan.impact), ...unsure.map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`)],
+    impacted: plan.impact.length > 0,
+    digest: unsure.length === 0 ? plan.impactDigest : sha256Bytes(canonicalJson({ impact: plan.impactDigest, unsure })),
+  };
 }
 
 /** 写回之后（同一把书锁里）：老格式镜像按新的账重生成、写作统计重数。没成只记日志（下次取依据时补）。 */
@@ -248,10 +274,10 @@ function appliedPaths(receipt: CommandReceipt): readonly string[] {
 /** 撤销的应用一步：书锁里重算；影响变了（或第一次算没有、这次有了）交回去重新问；照算好的写回，写的时候算好之后又改过就重算。 */
 async function applyUndo(bookDir: string, undo: UndoTarget, confirmed: string | null, caller: "author" | "ai"): Promise<UndoCheck> {
   for (let attempt = 0; attempt < MAX_APPLY_TRIES; attempt += 1) {
-    const plan = await planUndo(bookDir, undo.target);
-    if (plan.impact.length > 0 && plan.impactDigest !== confirmed) {
-      return { kind: "ready", impact: await impactLines(bookDir, plan.impact), impactDigest: plan.impactDigest };
-    }
+    const planned = await planUndo(bookDir, undo);
+    const { plan } = planned;
+    const ask = await askOf(bookDir, planned);
+    if (ask && ask.digest !== confirmed) return { kind: "ready", ...ask };
     if (plan.changes.length === 0) return { kind: "done", paths: [] };
     const outcome = await runApply(bookDir, {
       kind: "revert",
@@ -273,27 +299,20 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
   const caller = ctx.record.origin.kind === "chat" ? "ai" : "author";
   const resolved = await ctx.step("target", { target: params.target ?? null }, async () => (await resolveUndoTarget(bookDir, params)) ?? null);
   if (!resolved) return succeeded("undo", "没有能撤的改动了。", []);
-  const first = await ctx.step("plan", { target: resolved.target }, async () => {
-    const plan = await planUndo(bookDir, resolved.target);
-    // 跟操作记录接不上的文件：后来又改过的那几处已经一处一行列着，不再列第二遍。
-    const unsure = (resolved.unsure ?? []).filter((path) => !plan.impact.some((item) => item.path === path));
-    return { impact: await impactLines(bookDir, plan.impact), impactDigest: plan.impactDigest, unsure };
-  });
+  // 后来又改过的（这次自己写过的文件被改过、被撤掉又原样放回）、往前找时跳过的那几次说不准的（Astra 第 13 轮第 1 条），
+  // 第一回就停下给作者看；应用一步在书锁里照现在的样子重算，跟作者点的那份对不上就再问（第 15、16 轮第 1 条）。
+  const first = await ctx.step("plan", { target: resolved.target }, async () => (await askOf(bookDir, await planUndo(bookDir, resolved))) ?? null);
   let confirmed: string | null = null;
-  let impact: readonly string[] = first.impact;
-  let digest = first.impactDigest;
-  // 往前找的时候跳过了在操作之外又改过的文件上的那几次：找到的这次对不对说不准，第一回就停下给作者看（Astra 第 13 轮第 1 条）。
-  // 这次自己写过的文件现在怎么样（后来改过、被撤掉又原样放回）归影响，每回在书锁里照现在的谱系重算（第 15 轮第 1 条）。
-  const unsure = first.unsure.map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`);
+  let ask: UndoAsk | null = first;
   for (let round = 1; round <= MAX_UNDO_ROUNDS; round += 1) {
-    if (impact.length > 0 || (round === 1 && unsure.length > 0)) {
-      const notes = impact.length > 0 ? UNDO_NOTES : [UNSURE_NOTE];
+    if (ask) {
+      const notes = ask.impacted ? UNDO_NOTES : [UNSURE_NOTE];
       const preview: HistoryConfirmPreview = {
-        lines: round === 1 ? [...impact, ...unsure] : impact,
+        lines: ask.lines,
         notes: round === 1 ? [`要撤的是「${resolved.what}」。`, ...notes] : ["算好之后书又改过，这是重新算的。", ...notes],
       };
       await ctx.waitForAuthor({ actionId: round === 1 ? UNDO_CONFIRM_ACTION : `${UNDO_CONFIRM_ACTION}-${round}`, kind: UNDO_CONFIRM_KIND, decisions: ["apply"], preview });
-      confirmed = digest;
+      confirmed = ask.digest;
     }
     const outcome = await ctx.apply(round === 1 ? "apply" : `apply-${round}`, { target: resolved.target, confirmed }, () => applyUndo(bookDir, resolved, confirmed, caller),
       async (receipt): Promise<UndoCheck> => ({ kind: "done", paths: appliedPaths(receipt) }));
@@ -305,8 +324,7 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
           : `撤好了：「${resolved.what}」改的退回去了（${pathsText(outcome.paths)}）。`;
       return succeeded("undo", summary, outcome.paths, outcome.snapshotId);
     }
-    impact = outcome.impact;
-    digest = outcome.impactDigest;
+    ask = outcome;
   }
   throw coded("keeps_changing", "书一直在改，撤销算不稳，这次没撤。过一会儿再撤。");
 }

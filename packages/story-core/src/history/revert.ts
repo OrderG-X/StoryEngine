@@ -129,11 +129,6 @@ interface FileVersion {
   readonly outside?: number;
 }
 
-/** 「撤销上一步」撤哪次；unsure = 往前找的时候跳过了在回执之外又改过的文件上的那几次（在不在说不准），撤之前要作者点。 */
-export interface UndoChoice {
-  readonly target: RevertTarget;
-  readonly unsure?: readonly string[];
-}
 
 /** 各个文件现在这份的谱系：每次改动现在还在哪几个文件里（presentIn：文件 → 那几次的号）、每个文件最后一次回执之外的写是在第几张回执之前发现的。 */
 interface Lineage {
@@ -206,53 +201,83 @@ function lineageOf(receipts: readonly CommandReceipt[], current?: ReadonlyMap<st
   return { ids, presentIn, present, lastOutside };
 }
 
+/** 往前找「上一步」时跳过的：第 from 张回执起现在不在了的那几次（撤销本身、没写东西的不算）。 */
+function skipped(receipts: readonly CommandReceipt[], lineage: Lineage, from: number): number[] {
+  const out: number[] = [];
+  for (let index = from; index < receipts.length; index += 1) {
+    const receipt = receipts[index] as CommandReceipt;
+    if ((receipt.effects ?? []).length === 0 || lineage.present.has(lineage.ids[index] as string)) continue;
+    if (receipt.command === HISTORY_APPLY_COMMAND && (receipt.result as { readonly kind?: unknown } | null | undefined)?.kind !== "restore") continue;
+    out.push(index);
+  }
+  return out;
+}
+
 /**
  * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次**现在还在**的改动（谱系见 lineageOf）。被撤过的、被全撤退掉的跳过；
  * 整本恢复还在就是上一次（撤它 = 回到恢复之前）。只退了一部分的还在，照常算，撤它服从整组规则（它自己写过的文件现在
  * 怎么样、要不要作者点，planRevert 在书锁里照现在的谱系算）。撤销本身不算（撤销的撤销走「撤回来」带号）。
- *
- * 被跳过的那次写过的文件之后有过回执之外的写（比如原样放回了它那份），它在不在就说不准：照样往前找，找到的带上 unsure，
- * 撤之前停下给作者看、点了才撤，不自动去撤别章（Astra 第 13 轮第 1 条）。
+ * 往前找时跳过的那几次在不在说不准的，见 undoUnsure。
  *
  * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS）就停。
  * 没有返回 undefined。receipts 按写的先后排好。
  */
-export function lastUndoable(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): UndoChoice | undefined {
-  const { ids, present, lastOutside } = lineageOf(receipts, current);
-  const unsure = new Set<string>();
-  const skip = (receipt: CommandReceipt, index: number): void => {
-    for (const effect of receipt.effects ?? []) if (index < (lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
-  };
-  const choose = (receipt: CommandReceipt): UndoChoice => ({ target: targetOf(receipt), ...(unsure.size > 0 ? { unsure: [...unsure].sort() } : {}) });
+export function lastUndoable(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): RevertTarget | undefined {
+  const { ids, present } = lineageOf(receipts, current);
   for (let index = receipts.length - 1; index >= 0; index -= 1) {
     const receipt = receipts[index] as CommandReceipt;
-    const id = ids[index] as string;
     if (receipt.command === HISTORY_APPLY_COMMAND) {
       const result = receipt.result as { readonly kind?: unknown } | null | undefined;
       if (result?.kind !== "restore" || (receipt.effects ?? []).length === 0) continue;
-      if (present.has(id)) return choose(receipt);
-      skip(receipt, index);
+      if (present.has(ids[index] as string)) return targetOf(receipt);
       continue;
     }
     if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
-    if (receipt.effects === undefined) return choose(receipt);
-    if (receipt.effects.length === 0) continue;
-    if (present.has(id)) return choose(receipt);
-    skip(receipt, index);
+    if (receipt.effects === undefined || (receipt.effects.length > 0 && present.has(ids[index] as string))) return targetOf(receipt);
   }
   return undefined;
 }
 
-/** 「撤销上一步」撤哪次，照书里现在的样子核（撤销范围里每个文件现在的哈希一起交给 lastUndoable）。 */
-export async function lastUndoableIn(bookDir: string, receipts: readonly CommandReceipt[]): Promise<UndoChoice | CommandFailure | undefined> {
-  let files: Map<string, Buffer>;
+/**
+ * 「撤销上一步」找到 target 之后：往前找时跳过的那几次（target 之后、现在不在了的）写过的文件，之后又在回执之外改过
+ * （比如原样放回了它那份），它在不在就说不准，找到的这次对不对也说不准——这几个文件撤之前要作者看（Astra 第 13 轮第 1 条）。
+ * 照现在的谱系算：配方在计划、应用两步的书锁里都重算一遍，记了撤哪次之后才改的也认得出（第 16 轮第 1 条）。
+ */
+export function undoUnsure(receipts: readonly CommandReceipt[], target: RevertTarget, current?: ReadonlyMap<string, string>): readonly string[] {
+  const lineage = lineageOf(receipts, current);
+  const id = targetId(target);
+  const last = lineage.ids.lastIndexOf(id);
+  if (last < 0) return [];
+  const unsure = new Set<string>();
+  for (const index of skipped(receipts, lineage, last + 1)) {
+    for (const effect of (receipts[index] as CommandReceipt).effects ?? []) {
+      if (index < (lineage.lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
+    }
+  }
+  return [...unsure].sort();
+}
+
+/** 撤销范围里现在每个文件的哈希（谱系认最后一张回执之后在回执之外改的要它）。 */
+async function currentHashes(bookDir: string): Promise<ReadonlyMap<string, string> | CommandFailure> {
   try {
-    files = await readUndoableFiles(bookDir);
+    const files = await readUndoableFiles(bookDir);
+    return new Map([...files].map(([path, bytes]) => [path, sha256Bytes(bytes)]));
   } catch (error) {
     if (error instanceof HistoryFileError) return fail(error.code, error.message, { path: error.path });
     throw error;
   }
-  return lastUndoable(receipts, new Map([...files].map(([path, bytes]) => [path, sha256Bytes(bytes)])));
+}
+
+/** 「撤销上一步」撤哪次，照书里现在的样子核。 */
+export async function lastUndoableIn(bookDir: string, receipts: readonly CommandReceipt[]): Promise<RevertTarget | CommandFailure | undefined> {
+  const current = await currentHashes(bookDir);
+  return "ok" in current ? current : lastUndoable(receipts, current);
+}
+
+/** 找到 target 之后说不准的那几个文件，照书里现在的样子核。 */
+export async function undoUnsureIn(bookDir: string, receipts: readonly CommandReceipt[], target: RevertTarget): Promise<readonly string[] | CommandFailure> {
+  const current = await currentHashes(bookDir);
+  return "ok" in current ? current : undoUnsure(receipts, target, current);
 }
 
 const chapterOfTextPath = (path: string): number | undefined =>
