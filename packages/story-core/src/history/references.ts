@@ -5,10 +5,10 @@
  *
  *  | 来源 | 字段 | 指向 |
  *  |---|---|---|
- *  | 账单 · 事实 | replaces[]；subject | 事实；名字解析 |
- *  | 账单 · 线索 | advance / close 的 thread | 线索（由开它的那条定义） |
- *  | 账单 · 出场 | name | 名字解析 |
- *  | 账单 · 时间 | daysSincePrevious（不是作者直接定了第几天的） | 前一章（剩下的账单里排在本章前面的那一章；没有也是一个目标） |
+ *  | 账单 · 事实 | replaces[]；subjectRef | 事实；名字解析 |
+ *  | 账单 · 线索 | advance / close 的 threadRef | 线索（由开它的那条定义） |
+ *  | 账单 · 出场 | entityRef | 名字解析 |
+ *  | 账单 · 时间 | 本章开头相对上一章结尾的（offset · previousChapterEnd） | 前一章（剩下的账单里排在本章前面的那一章；没有也是一个目标） |
  *  | 裁定 · thread.merge | from[]、into | 线索 |
  *  | 裁定 · thread.close | thread；chapter | 线索；章 |
  *  | 裁定 · thread.weight | thread | 线索 |
@@ -25,7 +25,7 @@
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import type { ChapterLedger, LedgerEntry } from "../schema/ledger.js";
+import { presenceName, subjectOf, threadOf, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
 import { canonicalJson } from "../store/basis.js";
 import { CARDS_PATH, chapterLedgerPath, DECISIONS_PATH } from "../store/paths.js";
 import { sha256Bytes } from "../store/transaction.js";
@@ -59,20 +59,29 @@ export interface Referencer {
 
 export const digestOf = (value: unknown): string => sha256Bytes(canonicalJson(value));
 
+/**
+ * 一条账单条目的身份摘要：证据只算原句的字，不算它在哪一版正文的第几句（改章名、改齐别处的句子会换版本、挪句号，
+ * 这条说的事没变，后文接着它照旧接得上）。
+ */
+export const entryDigest = (entry: LedgerEntry): string => {
+  const { evidence, evidenceStatus: _status, ...rest } = entry;
+  return digestOf({ ...rest, quotes: evidence.map((item) => item.quote) });
+};
+
 /** 账单里一条条目指向什么（穷尽）。 */
 export function refsOfEntry(entry: LedgerEntry, chapter: number): Ref[] {
   switch (entry.kind) {
     case "summary":
       return [];
     case "fact":
-      return [...(entry.replaces ?? []).map((id): Ref => ({ kind: "fact", id })), ...(entry.subject ? [{ kind: "name", raw: entry.subject } as const] : [])];
+      return [...(entry.replaces ?? []).map((id): Ref => ({ kind: "fact", id })), ...(subjectOf(entry) ? [{ kind: "name", raw: subjectOf(entry) as string } as const] : [])];
     case "thread":
-      return entry.op === "open" ? [] : [{ kind: "thread", id: entry.thread }];
+      return entry.op === "open" ? [] : [{ kind: "thread", id: threadOf(entry) }];
     case "presence":
-      return [{ kind: "name", raw: entry.name }];
+      return [{ kind: "name", raw: presenceName(entry) }];
     case "time":
-      // 作者直接定了第几天的不按相对天数算；别的「隔几天」都接着前一章（不看裁定盖没盖住它，设计 8.1）。
-      return entry.daysSincePrevious !== undefined && !(entry.basis === "author" && entry.day !== undefined) ? [{ kind: "previous", chapter }] : [];
+      // 作者直接定了第几天的不按相对天数算；别的「隔几天」都接着前一章（不看裁定盖没盖住它，设计 8.1）。本章结尾那条只相对本章开头。
+      return entry.relation === "offset" && entry.anchor === "previousChapterEnd" ? [{ kind: "previous", chapter }] : [];
     default: {
       const never: never = entry;
       return never;
@@ -116,7 +125,7 @@ const decisionChapter = (decision: AuthorDecision): number | undefined => ("chap
 export function ledgerReferencers(ledger: ChapterLedger, file: string = chapterLedgerPath(ledger.chapter)): Referencer[] {
   return ledger.entries.flatMap((entry) => {
     const refs = refsOfEntry(entry, ledger.chapter);
-    return refs.length === 0 ? [] : [{ file, id: entry.id, digest: digestOf(entry), refs, where: { kind: "ledger", chapter: ledger.chapter } as const }];
+    return refs.length === 0 ? [] : [{ file, id: entry.id, digest: entryDigest(entry), refs, where: { kind: "ledger", chapter: ledger.chapter } as const }];
   });
 }
 
@@ -165,9 +174,9 @@ export class Resolver {
     for (const ledger of ledgers) {
       this.chapters.set(ledger.chapter, `${ledger.committedAt}|${ledger.origin}`);
       for (const entry of ledger.entries) {
-        if (entry.kind === "presence") this.names.addPresence(entry, `presence:${ledger.chapter}:${entry.id}@${digestOf(entry)}`);
-        if (entry.kind === "fact") add(this.facts, entry.id, `${ledger.chapter}@${digestOf(entry)}`);
-        if (entry.kind === "thread" && entry.op === "open") add(this.threads, entry.thread, `${ledger.chapter}@${digestOf(entry)}`);
+        if (entry.kind === "presence") this.names.addPresence(entry, `presence:${ledger.chapter}:${entry.id}@${entryDigest(entry)}`);
+        if (entry.kind === "fact") add(this.facts, entry.id, `${ledger.chapter}@${entryDigest(entry)}`);
+        if (entry.kind === "thread" && entry.op === "open") add(this.threads, threadOf(entry), `${ledger.chapter}@${entryDigest(entry)}`);
       }
     }
     for (const decision of truth.decisions) if (decision.type === "fact.assert") add(this.facts, decision.id, `decision@${digestOf(decision)}`);

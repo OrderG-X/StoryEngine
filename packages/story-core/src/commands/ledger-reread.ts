@@ -40,7 +40,7 @@ export const ledgerReread: WriteCommandSpec<LedgerRereadArgs, LedgerRereadResult
       label: `通读记账：第 ${args.chapter} 章`,
       writes: [{ path: chapterLedgerPath(args.chapter), content: `${JSON.stringify(built.ledger, null, 2)}\n` }],
       changed: { ledgers: [args.chapter] },
-      result: { chapter: args.chapter, recorded: built.ledger.entries.length, rejected: built.rejected },
+      result: { chapter: args.chapter, recorded: built.recorded, rejected: built.rejected },
     };
   },
 };

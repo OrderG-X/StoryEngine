@@ -8,10 +8,12 @@ import {
   applyCardOps,
   bibleView,
   emptySettingCards,
+  ledgerOf,
   project,
   type BibleView,
   type CardOp,
   type ChapterLedger,
+  type EntryDraft,
 } from "@actalk/story-core";
 import {
   EMPTY_BIBLE,
@@ -33,15 +35,8 @@ function bibleOf(ops: readonly CardOp[], ledgers: readonly ChapterLedger[] = [],
   return bibleView(project({ ledgers, decisions: [] }), applied.file);
 }
 
-function ledgerOf(chapter: number, entries: readonly Record<string, unknown>[]): ChapterLedger {
-  return {
-    schema: "chapter-ledger/1",
-    chapter,
-    textSha256: "0".repeat(64),
-    committedAt: AT,
-    origin: "commit",
-    entries: entries.map((entry, index) => ({ id: `e-${chapter}-${index}`, review: "auto", ...entry })),
-  } as unknown as ChapterLedger;
+function chapterLedger(chapter: number, entries: readonly Record<string, unknown>[]): ChapterLedger {
+  return ledgerOf({ chapter, committedAt: AT, entries: entries.map((entry, index) => ({ id: `e-${chapter}-${index}`, review: "auto", ...entry }) as unknown as EntryDraft) });
 }
 
 const character = (name: string, extra: Partial<Extract<CardOp, { op: "card.create" }>> = {}): CardOp =>
@@ -82,7 +77,7 @@ describe("buildSettingPack：选人", () => {
 
   it("账里出场过、还没建卡的人点到了也带上，标「还没建卡」，只有账里记的", () => {
     const bible = bibleOf([character("林远", { protagonist: true })], [
-      ledgerOf(1, [
+      chapterLedger(1, [
         { kind: "presence", name: "林远", nameUsed: "林远", quote: "林远推开门。" },
         { kind: "presence", name: "老周", nameUsed: "老周", quote: "老周在门口。" },
         { kind: "fact", nature: "state", subject: "老周", attribute: "在哪", value: "码头", text: "老周在码头", quote: "老周在门口。" },
@@ -160,11 +155,11 @@ describe("buildSettingPack：卡上的字", () => {
 
   it("账里记的：会变的进「现状」、不会变的进「正文里已经定下的」，都带章号", () => {
     const bible = bibleOf([character("林远", { protagonist: true })], [
-      ledgerOf(1, [
+      chapterLedger(1, [
         { kind: "presence", name: "林远", nameUsed: "林远", quote: "林远推开门。" },
         { kind: "fact", nature: "hard", subject: "林远", attribute: "左手", value: "缺一根小指", text: "林远左手缺一根小指", quote: "林远推开门。" },
       ]),
-      ledgerOf(2, [
+      chapterLedger(2, [
         { kind: "presence", name: "林远", nameUsed: "林远", quote: "林远到了码头。" },
         { kind: "fact", nature: "state", subject: "林远", attribute: "在哪", value: "码头", text: "林远在码头", quote: "林远到了码头。" },
       ]),

@@ -1,28 +1,21 @@
 // @vitest-environment node
 import {
-  CHAPTER_LEDGER_SCHEMA,
+  ledgerOf,
   project,
   type AuthorDecision,
   type ChapterLedger,
-  type LedgerEntry,
+  type EntryDraft,
 } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
 import { weekdayOfDay } from "./story-timeline.js";
 import { storyViewsOf } from "./story-views.js";
 
-type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string; review?: "auto" | "author" } : never) : never;
-const q = "原句原句";
+type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: "auto" | "author" } : never) : never;
 
 function ledger(chapter: number, drafts: Draft[]): ChapterLedger {
-  return {
-    schema: CHAPTER_LEDGER_SCHEMA,
-    chapter,
-    textSha256: "0".repeat(64),
-    committedAt: "2026-10-18T00:00:00.000Z",
-    origin: "commit",
-    entries: drafts.map((draft, index) => ({ review: "auto", ...draft, id: draft.id ?? `c${chapter}-${index + 1}` }) as LedgerEntry),
-  };
+  return ledgerOf({ chapter, committedAt: "2026-10-18T00:00:00.000Z", entries: drafts.map((draft) => ({ review: "auto", ...draft }) as EntryDraft & { id?: string }) });
 }
+const q = "原句原句";
 
 function sample() {
   const ledgers = [

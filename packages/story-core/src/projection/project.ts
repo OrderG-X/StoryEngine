@@ -13,7 +13,8 @@
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import type { ChapterLedger, FactEntry, ThreadEntry, TimeEntry } from "../schema/ledger.js";
+import { entryQuote, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
+import { timeDeclarationOf } from "../ledger/entries.js";
 import { nameKey } from "../text/quote.js";
 import { Names } from "./names.js";
 import type {
@@ -59,7 +60,7 @@ function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[
   for (const ledger of ledgers) {
     for (const entry of ledger.entries) {
       if (entry.kind !== "presence") continue;
-      const { key, name } = names.resolve(entry.name);
+      const { key, name } = names.resolve(presenceName(entry));
       let member = members.get(key);
       if (!member) {
         member = { name, aliases: new Set(), chapters: new Set(), viewpoint: new Set(), quotes: new Map() };
@@ -68,7 +69,8 @@ function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[
       if (nameKey(entry.nameUsed) !== key && !entry.generic) member.aliases.add(entry.nameUsed);
       member.chapters.add(ledger.chapter);
       if (entry.viewpoint) member.viewpoint.add(ledger.chapter);
-      if (entry.quote && !member.quotes.has(ledger.chapter)) member.quotes.set(ledger.chapter, entry.quote);
+      const quote = entryQuote(entry);
+      if (quote && !member.quotes.has(ledger.chapter)) member.quotes.set(ledger.chapter, quote);
     }
   }
   return [...members.entries()]
@@ -113,9 +115,14 @@ function buildFacts(
       id: decision.id,
       kind: "fact",
       review: "author",
+      source: { kind: "author_ruling", decision: decision.id },
+      transition: "unknown",
+      evidence: [],
+      evidenceStatus: "none",
+      provenance: "native",
       nature: decision.nature,
-      ...(decision.subject ? { subject: decision.subject } : {}),
-      ...(decision.attribute ? { attribute: decision.attribute } : {}),
+      ...(decision.subject ? { subjectRef: { mention: decision.subject } } : {}),
+      ...(decision.attribute ? { predicate: decision.attribute } : {}),
       ...(decision.value ? { value: decision.value } : {}),
       text: decision.text,
     });
@@ -228,16 +235,18 @@ function buildFacts(
 }
 
 function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean): MutableFact {
-  const subject = entry.subject ? names.resolve(entry.subject) : undefined;
+  const mention = subjectOf(entry);
+  const subject = mention ? names.resolve(mention) : undefined;
+  const quote = entryQuote(entry);
   return {
     id: entry.id,
     chapter,
     nature: entry.nature,
     ...(subject ? { subject: subject.name, subjectKey: subject.key } : {}),
-    ...(entry.attribute ? { attribute: entry.attribute, attributeKey: nameKey(entry.attribute) } : {}),
+    ...(entry.predicate ? { attribute: entry.predicate, attributeKey: nameKey(entry.predicate) } : {}),
     ...(entry.value ? { value: entry.value } : {}),
     text: entry.text,
-    ...(entry.quote ? { quote: entry.quote } : {}),
+    ...(quote ? { quote } : {}),
     review: entry.review,
     status: retracted ? "retracted" : "current",
   };
@@ -256,7 +265,8 @@ interface MutableThread {
 }
 
 function touchOf(entry: ThreadEntry, chapter: number): ThreadTouch {
-  return { chapter, op: entry.op, note: entry.note, ...(entry.quote ? { quote: entry.quote } : {}), entry: entry.id };
+  const quote = entryQuote(entry);
+  return { chapter, op: entry.op, note: entry.note, ...(quote ? { quote } : {}), entry: entry.id };
 }
 
 function buildThreads(
@@ -272,12 +282,13 @@ function buildThreads(
     // 同一章里先开后推：本章开、本章就推进的也接得上。
     for (const entry of entries) {
       if (entry.op !== "open") continue;
-      if (threads.has(entry.thread)) {
-        dangling.push({ kind: "thread", ref: entry.thread, chapter: ledger.chapter, source: entry.id });
+      const id = threadOf(entry);
+      if (threads.has(id)) {
+        dangling.push({ kind: "thread", ref: id, chapter: ledger.chapter, source: entry.id });
         continue;
       }
-      threads.set(entry.thread, {
-        id: entry.thread,
+      threads.set(id, {
+        id,
         type: entry.type ?? "question",
         title: entry.title ?? entry.note,
         openedAt: ledger.chapter,
@@ -288,9 +299,9 @@ function buildThreads(
     }
     for (const entry of entries) {
       if (entry.op === "open") continue;
-      const thread = threads.get(entry.thread);
+      const thread = threads.get(threadOf(entry));
       if (!thread) {
-        dangling.push({ kind: "thread", ref: entry.thread, chapter: ledger.chapter, source: entry.id });
+        dangling.push({ kind: "thread", ref: threadOf(entry), chapter: ledger.chapter, source: entry.id });
         continue;
       }
       thread.touches.push(touchOf(entry, ledger.chapter));
@@ -382,7 +393,7 @@ function buildChapters(
   const views: ChapterView[] = [];
   let previousEnd = 0;
   for (const ledger of ledgers) {
-    const time = ledger.entries.find((entry): entry is TimeEntry => entry.kind === "time");
+    const time = timeDeclarationOf(ledger.entries);
     const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
     const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
     const ruling = dayRulings.get(ledger.chapter);
@@ -412,7 +423,7 @@ function buildChapters(
     let viewpoint: string | undefined;
     for (const entry of ledger.entries) {
       if (entry.kind !== "presence") continue;
-      const { name } = names.resolve(entry.name);
+      const { name } = names.resolve(presenceName(entry));
       if (!present.includes(name)) present.push(name);
       if (entry.viewpoint && viewpoint === undefined) viewpoint = name;
     }

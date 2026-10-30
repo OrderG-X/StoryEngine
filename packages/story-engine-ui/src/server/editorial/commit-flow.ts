@@ -9,13 +9,17 @@
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
 import {
-  CHAPTER_LEDGER_SCHEMA,
   checkEntries,
   classifyForReview,
+  declarationOf,
+  declarationsOf,
+  ledgerOf,
   nameKey,
+  presenceName,
   project,
   readBookSnapshot,
   sha256,
+  threadOf,
   type BookProjection,
   type ChapterLedger,
   type ClassifiedEntry,
@@ -259,9 +263,9 @@ function laterThreadTouches(ledgers: readonly ChapterLedger[], chapter: number):
     if (ledger.chapter <= chapter) continue;
     for (const entry of ledger.entries) {
       if (entry.kind !== "thread" || entry.op === "open") continue;
-      const chapters = out.get(entry.thread) ?? [];
+      const chapters = out.get(threadOf(entry)) ?? [];
       if (!chapters.includes(ledger.chapter)) chapters.push(ledger.chapter);
-      out.set(entry.thread, chapters);
+      out.set(threadOf(entry), chapters);
     }
   }
   return out;
@@ -281,18 +285,13 @@ export function touchesHardFact(item: ClassifiedEntry, before: BookProjection): 
 
 /** 用核过的条目拼一份临时账单，算出「定稿后」这一章是第几天（只用来展示）。 */
 function previewDay(ledgers: readonly ChapterLedger[], chapter: number, entries: readonly EntryInput[], textSha: string) {
-  const draft: ChapterLedger = {
-    schema: CHAPTER_LEDGER_SCHEMA,
+  const draft = ledgerOf({
     chapter,
     textSha256: textSha,
-    committedAt: new Date(0).toISOString(),
-    origin: "commit",
     entries: entries.map((entry, index) =>
-      entry.kind === "thread" && entry.op === "open"
-        ? ({ ...entry, id: `preview-${index}`, thread: `preview-t${index}` } as LedgerEntry)
-        : ({ ...entry, id: `preview-${index}` } as LedgerEntry),
+      entry.kind === "thread" && entry.op === "open" ? { ...entry, id: `preview-${index}`, thread: `preview-t${index}` } : { ...entry, id: `preview-${index}` },
     ),
-  };
+  });
   const after = project({ ledgers: [...ledgers.filter((ledger) => ledger.chapter < chapter), draft], decisions: [] }, { upTo: chapter });
   return after.chapters.find((view) => view.chapter === chapter);
 }
@@ -319,39 +318,36 @@ function keepLastOpens(
   for (const { entry } of checked.accepted) {
     if (entry.kind !== "thread" || entry.op !== "open") continue;
     if (entry.thread) covered.add(entry.thread);
-    for (const last of lastOpens) if (nameKey(last.title ?? "") === nameKey(entry.title ?? "")) covered.add(last.thread);
+    for (const last of lastOpens) if (nameKey(last.title ?? "") === nameKey(entry.title ?? "")) covered.add(threadOf(last));
   }
   const later = new Set(ledgers
     .filter((ledger) => ledger.chapter > chapter)
-    .flatMap((ledger) => ledger.entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []))));
+    .flatMap((ledger) => ledger.entries.flatMap((entry) => (entry.kind === "thread" ? [threadOf(entry)] : []))));
   let nextIndex = Math.max(-1, ...checked.accepted.map((item) => item.index), ...checked.rejected.map((item) => item.index)) + 1;
   const accepted = [...checked.accepted];
   const folded = new Set<Rejected[number]>();
   const lost: string[] = [];
   for (const last of lastOpens) {
-    if (covered.has(last.thread)) continue;
-    const mentions = checked.rejected.filter((item) => item.entry.kind === "thread" && item.entry.op !== "open" && item.entry.thread === last.thread);
+    const lastThread = threadOf(last);
+    if (covered.has(lastThread)) continue;
+    const mentions = checked.rejected.filter((item) => item.entry.kind === "thread" && item.entry.op !== "open" && item.entry.thread === lastThread);
     const title = last.title ?? last.note;
+    const lastDeclared = declarationOf(last);
     const candidates: EntryInput[] = [
       ...mentions.flatMap((item) => (item.entry.kind === "thread"
-        ? [{ kind: "thread", review: "auto", op: "open", type: last.type ?? "question", title, note: item.entry.note, quote: item.entry.quote, thread: last.thread } satisfies ThreadInput]
+        ? [{ kind: "thread", review: "auto", op: "open", type: last.type ?? "question", title, note: item.entry.note, quote: item.entry.quote, thread: lastThread } satisfies ThreadInput]
         : [])),
-      ...(mentions.length > 0 || later.has(last.thread) ? [withoutId(last)] : []),
+      ...((mentions.length > 0 || later.has(lastThread)) && lastDeclared ? [lastDeclared] : []),
     ];
     const reopened = candidates.map((entry) => checkEntries([entry], text, before).accepted[0]?.entry).find((entry) => entry !== undefined);
     if (reopened) {
       accepted.push({ index: nextIndex++, entry: reopened });
       for (const item of mentions) folded.add(item);
-    } else if (later.has(last.thread)) {
+    } else if (later.has(lastThread)) {
       lost.push(title);
     }
   }
   return { accepted, rejected: checked.rejected.filter((item) => !folded.has(item)), lost };
-}
-
-function withoutId(entry: LedgerEntry): EntryInput {
-  const { id: _id, ...rest } = entry;
-  return rest as EntryInput;
 }
 
 /**
@@ -368,11 +364,11 @@ function keepLastDay(
   before: BookProjection,
   textSha: string,
 ): { readonly accepted: Accepted; readonly sinceLast: NonNullable<CommitPreview["time"]["sinceLast"]> } | undefined {
-  const last = previewDay(ledgers, chapter, previous.map(withoutId), textSha);
+  const last = previewDay(ledgers, chapter, declarationsOf(previous), textSha);
   const now = previewDay(ledgers, chapter, accepted.map((item) => item.entry), textSha);
   if (!last || !now || (last.day === now.day && last.dayEnd === now.dayEnd)) return undefined;
-  const lastTime = previous.find((entry) => entry.kind === "time");
-  const carried = lastTime ? checkEntries([withoutId(lastTime)], text, before).accepted[0]?.entry : undefined;
+  const lastTime = declarationsOf(previous).find((entry) => entry.kind === "time");
+  const carried = lastTime ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
   if (!carried) return { accepted, sinceLast: { kept: false, otherDay: last.day, otherDayEnd: last.dayEnd } };
   const at = accepted.findIndex((item) => item.entry.kind === "time");
   const next = at >= 0
@@ -422,7 +418,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const previous = snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter)?.entries ?? [];
   const reopenable = previous
     .flatMap((entry) => (entry.kind === "thread" && entry.op === "open"
-      ? [{ thread: entry.thread, type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
+      ? [{ thread: threadOf(entry), type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
       : []));
   const keeper = await runLedgerKeeper({
     projectDir: input.bookDir,
@@ -447,7 +443,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const accepted = kept?.accepted ?? opens?.accepted ?? checked.accepted;
   const rejected = opens?.rejected ?? checked.rejected;
   // 重定稿：这章上次定稿时作者认过的出场人物不再当「第一次出场」问一遍（真跑：改两个错字重定稿，又问老郑、刀疤军官是谁）。
-  const confirmedNames = previous.flatMap((entry) => (entry.kind === "presence" ? [entry.name] : []));
+  const confirmedNames = previous.flatMap((entry) => (entry.kind === "presence" ? [presenceName(entry)] : []));
   const knownNames = [...(input.knownNames ?? []), ...confirmedNames];
   const plan = classifyForReview(accepted, before, { chapter: input.chapter, ...(knownNames.length > 0 ? { knownNames } : {}) });
   // 清单序号 = 核过的条目里的下标。

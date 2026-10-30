@@ -41,8 +41,8 @@ export type RereadChapterOutcome =
   /** 读的时候书正在写、这章正文和快照对不上：照新的样子重来。 */
   | { readonly kind: "changed" };
 
-/** 这章的账单还是导入已写的书时那份空账单（要通读记）。老格式书导入的账 origin 也是 import，但带着老账，不算。 */
-export const awaitsReread = (ledger: Pick<ChapterLedger, "origin" | "entries">): boolean => ledger.origin === "import" && ledger.entries.length === 0;
+/** 这章是导入进来、账还待记的（要通读记）。老格式书导入的账 origin 也是 import，但带着老账（ready），不算。 */
+export const awaitsReread = (ledger: Pick<ChapterLedger, "origin" | "status">): boolean => ledger.origin === "import" && ledger.status === "pending";
 
 /** 记这一章读到的那一版书的指纹（只看内容，不看写入代次：撤销回原样照样认）。 */
 export function rereadInputDigest(basis: TruthBasis, chapter: number): string {

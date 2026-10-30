@@ -5,13 +5,21 @@
 export {
   CHAPTER_LEDGER_SCHEMA,
   ChapterLedger,
+  EntityRef,
   EntryInput,
+  EntryKind,
+  Evidence,
+  EvidenceStatus,
   FactEntry,
   FactInput,
   FactNature,
+  LedgerCoverage,
   LedgerEntry,
+  LedgerOrigin,
+  LedgerStatus,
   PresenceEntry,
   PresenceInput,
+  Provenance,
   ReviewMark,
   SummaryEntry,
   SummaryInput,
@@ -22,8 +30,32 @@ export {
   TimeBasis,
   TimeEntry,
   TimeInput,
+  UNITS_VERSION,
+  entryQuote,
   entryShapeProblem,
+  presenceName,
+  storedShapeProblem,
+  subjectOf,
+  threadOf,
 } from "./schema/ledger.js";
+export {
+  chapterEndTimeId,
+  chapterSource,
+  declarationOf,
+  declarationsOf,
+  EMPTY_COVERAGE,
+  evidenceFor,
+  ledgerOf,
+  locateQuote,
+  newLedger,
+  relocateEvidence,
+  storeEntry,
+  timeDeclarationOf,
+  type ChapterSource,
+  type EntryDraft,
+  type EntryIds,
+} from "./ledger/entries.js";
+export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";
 export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {
@@ -135,6 +167,7 @@ export {
 
 export {
   BookFileError,
+  LedgerNeedsUpgradeError,
   listChapterTexts,
   listChapterLedgers,
   readAllLedgers,
@@ -217,6 +250,7 @@ export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } f
 export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
+export { LEDGER_MIGRATE_COMMAND, ledgerMigrate, LedgerMigrateArgs, ledgerMigrateKey, ledgersToUpgrade, type LedgerMigrateResult } from "./commands/ledger-migrate.js";
 export { decisionRecord, DecisionRecordArgs, MAX_DECISIONS_PER_RECORD, type DecisionRecordResult } from "./commands/decision-record.js";
 export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
 export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";

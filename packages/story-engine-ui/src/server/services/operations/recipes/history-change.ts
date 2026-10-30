@@ -138,6 +138,7 @@ const COMMAND_LABELS: Readonly<Record<string, string>> = {
   "book.import": "导入老书",
   "book.importText": "导入已写的书",
   "ledger.reread": "通读记账",
+  "ledger.migrate": "账本升级",
   "draft.save": "存稿",
   "draft.applyGenerated": "AI 写稿",
   "draft.adoptCandidate": "换上 AI 稿",
@@ -225,7 +226,7 @@ async function planUndo(bookDir: string, undo: UndoTarget) {
     unsure: undo.implicit ? await undoUnsureIn(bookDir, await readReceipts(bookDir), undo.target) : [],
   }));
   if (!plan.ok) {
-    const restoreHint = plan.code === "legacy_receipt" || plan.code === "no_tree" || plan.code === "tree_gone"
+    const restoreHint = plan.code === "legacy_receipt" || plan.code === "no_tree" || plan.code === "tree_gone" || plan.code === "before_migration"
       ? "要回到那之前，到顶栏「历史」里挑那之前的存档恢复。"
       : "";
     throw coded(plan.code, `${plan.message}${restoreHint}`);

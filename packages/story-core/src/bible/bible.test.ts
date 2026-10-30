@@ -6,7 +6,8 @@ import { readBible } from "../index.js";
 import { runCommand } from "../commands/runner.js";
 import { project } from "../projection/project.js";
 import { emptySettingCards, type SettingCardsFile } from "../schema/cards.js";
-import { CHAPTER_LEDGER_SCHEMA, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
+import type { ChapterLedger, ReviewMark } from "../schema/ledger.js";
+import { ledgerOf, type EntryDraft } from "../ledger/entries.js";
 import { readCards, readHead } from "../store/book.js";
 import { readLegacyCards } from "../import/legacy-cards.js";
 import { cardFill, cardsImport, cardWrite } from "./commands.js";
@@ -152,17 +153,10 @@ describe("改设定卡（ops）", () => {
   });
 });
 
-type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string } : never) : never;
+type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: ReviewMark } : never) : never;
 
 function ledger(chapter: number, drafts: Draft[]): ChapterLedger {
-  return {
-    schema: CHAPTER_LEDGER_SCHEMA,
-    chapter,
-    textSha256: "0".repeat(64),
-    committedAt: AT,
-    origin: "commit",
-    entries: drafts.map((draft, index) => ({ review: "auto", ...draft, id: draft.id ?? `c${chapter}-${index + 1}` }) as LedgerEntry),
-  };
+  return ledgerOf({ chapter, committedAt: AT, entries: drafts.map((draft) => ({ review: "auto", ...draft }) as EntryDraft & { id?: string }) });
 }
 
 const presence = (name: string, nameUsed = name, viewpoint?: boolean): Draft => ({ kind: "presence", name, nameUsed, quote: `${nameUsed}来了`, ...(viewpoint ? { viewpoint } : {}) });

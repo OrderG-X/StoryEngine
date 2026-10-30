@@ -1,23 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { project } from "../projection/project.js";
-import { CHAPTER_LEDGER_SCHEMA, type EntryInput, type LedgerEntry } from "../schema/ledger.js";
+import type { EntryInput } from "../schema/ledger.js";
+import { ledgerOf } from "../ledger/entries.js";
 import { checkEntries } from "./check.js";
 import { classifyForReview } from "./classify.js";
 
 const before = project({
   ledgers: [
-    {
-      schema: CHAPTER_LEDGER_SCHEMA,
+    ledgerOf({
       chapter: 1,
-      textSha256: "0".repeat(64),
       committedAt: "2026-10-17T00:00:00.000Z",
-      origin: "commit",
       entries: [
         { id: "c1-1", kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: "老周没拦" },
         { id: "c1-2", kind: "fact", review: "auto", nature: "hard", subject: "老周", attribute: "年纪", value: "六十", text: "老周六十", quote: "六十岁" },
         { id: "c1-3", kind: "thread", review: "auto", op: "open", thread: "t1-1", type: "question", title: "钟为什么停", note: "停了", quote: "钟停了" },
-      ] satisfies LedgerEntry[],
-    },
+      ],
+    }),
   ],
   decisions: [],
 });

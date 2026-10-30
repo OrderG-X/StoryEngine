@@ -8,7 +8,8 @@
  * 后文对它们的推进、推翻才接得上；上次开的线索这次没了、后文又引用过它的，结果里如实列出。
  */
 import { z } from "zod";
-import { ChapterLedger, CHAPTER_LEDGER_SCHEMA, EntryInput, type LedgerEntry } from "../schema/ledger.js";
+import { EntryInput, threadOf, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
+import { chapterSource, declarationOf, newLedger, storeEntry } from "../ledger/entries.js";
 import { readAllLedgers, readDecisions, sha256 } from "../store/book.js";
 import { chapterLedgerPath, chapterTextPath } from "../store/paths.js";
 import { project } from "../projection/project.js";
@@ -38,7 +39,7 @@ export interface ChapterCommitResult {
 }
 
 /** 判断「同一条」的键：只认写法完全一样，不猜意思。 */
-function entryKey(entry: EntryInput | LedgerEntry): string {
+function entryKey(entry: EntryInput): string {
   switch (entry.kind) {
     case "summary":
       return "summary";
@@ -78,6 +79,8 @@ export interface BuiltChapterLedger {
   readonly rejected: ChapterCommitResult["rejected"];
   readonly previous: ChapterLedger | undefined;
   readonly orphanedThreads: readonly string[];
+  /** 记上的条数（一条声明算一条：时间存成两条也算一条）。 */
+  readonly recorded: number;
 }
 
 /**
@@ -97,42 +100,43 @@ export async function buildChapterLedger(
   const threadPrefix = `t${input.chapter}-`;
   const previousEntries = previous?.entries ?? [];
   const previousIdByKey = new Map<string, string>();
-  for (const entry of previousEntries) if (!previousIdByKey.has(entryKey(entry))) previousIdByKey.set(entryKey(entry), entry.id);
-  const previousOpens = previousEntries.filter((entry) => entry.kind === "thread" && entry.op === "open");
-  const previousOpenThreadByTitle = new Map(previousOpens.map((entry) => [entryKey(entry), entry.kind === "thread" ? entry.thread : ""]));
-  const previousOpenThreadIds = new Set(previousOpens.map((entry) => (entry.kind === "thread" ? entry.thread : "")));
+  for (const entry of previousEntries) {
+    const declared = declarationOf(entry, previousEntries);
+    if (declared && !previousIdByKey.has(entryKey(declared))) previousIdByKey.set(entryKey(declared), entry.id);
+  }
+  const previousOpens = previousEntries.flatMap((entry) => (entry.kind === "thread" && entry.op === "open" ? [entry] : []));
+  const previousOpenThreadByTitle = new Map(previousOpens.map((entry) => [`thread|open|${nameKey(entry.title ?? "")}`, threadOf(entry)]));
+  const previousOpenThreadIds = new Set(previousOpens.map(threadOf));
 
   let nextEntry = maxSeq(previousEntries.map((entry) => entry.id), entryPrefix);
   let nextThread = maxSeq([...previousOpenThreadIds], threadPrefix);
   const usedIds = new Set<string>();
   const usedThreads = new Set<string>();
+  const source = chapterSource(input.chapter, input.text);
   const entries: LedgerEntry[] = [];
   for (const { entry } of checked.accepted) {
     const key = entryKey(entry);
     const reuse = previousIdByKey.get(key);
     const id = reuse && !usedIds.has(reuse) ? reuse : `${entryPrefix}${(nextEntry += 1)}`;
     usedIds.add(id);
+    let thread: string | undefined;
     if (entry.kind === "thread" && entry.op === "open") {
       const keep = entry.thread && previousOpenThreadIds.has(entry.thread) && !usedThreads.has(entry.thread)
         ? entry.thread
         : previousOpenThreadByTitle.get(key);
-      const thread = keep && !usedThreads.has(keep) ? keep : `${threadPrefix}${(nextThread += 1)}`;
+      thread = keep && !usedThreads.has(keep) ? keep : `${threadPrefix}${(nextThread += 1)}`;
       usedThreads.add(thread);
-      entries.push({ ...entry, id, thread });
-    } else if (entry.kind === "thread") {
-      entries.push({ ...entry, id, thread: entry.thread as string });
-    } else {
-      entries.push({ ...entry, id } as LedgerEntry);
     }
+    entries.push(...storeEntry(entry, { id, ...(thread ? { thread } : {}) }, source));
   }
 
-  const ledger = ChapterLedger.safeParse({
-    schema: CHAPTER_LEDGER_SCHEMA,
+  const ledger = newLedger({
     chapter: input.chapter,
     textSha256: sha256(input.text),
     committedAt: input.now.toISOString(),
     origin: input.origin,
     entries,
+    coverage: { rejectedCount: checked.rejected.length },
   });
   if (!ledger.success) return fail("ledger_invalid", "这一章的账单没拼成，没有记上。", ledger.error.issues);
 
@@ -143,10 +147,10 @@ export async function buildChapterLedger(
     const referenced = new Set<string>();
     for (const later of ledgers) {
       if (later.chapter <= input.chapter) continue;
-      for (const entry of later.entries) if (entry.kind === "thread" && lost.has(entry.thread)) referenced.add(entry.thread);
+      for (const entry of later.entries) if (entry.kind === "thread" && lost.has(threadOf(entry))) referenced.add(threadOf(entry));
     }
     for (const entry of previousOpens) {
-      if (entry.kind === "thread" && referenced.has(entry.thread)) orphanedThreads.push(entry.title ?? entry.note);
+      if (referenced.has(threadOf(entry))) orphanedThreads.push(entry.title ?? entry.note);
     }
   }
 
@@ -156,6 +160,7 @@ export async function buildChapterLedger(
     rejected: checked.rejected.map(({ index, reason, message }) => ({ index, reason, message })),
     previous,
     orphanedThreads,
+    recorded: checked.accepted.length,
   };
 }
 
@@ -178,7 +183,7 @@ export const chapterCommit: WriteCommandSpec<ChapterCommitArgs, ChapterCommitRes
       changed: { chapters: [args.chapter], ledgers: [args.chapter] },
       result: {
         chapter: args.chapter,
-        recorded: built.ledger.entries.length,
+        recorded: built.recorded,
         rejected: built.rejected,
         recommitted: built.previous !== undefined,
         orphanedThreads: built.orphanedThreads,

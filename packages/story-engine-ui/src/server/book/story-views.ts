@@ -9,7 +9,7 @@
  *
  * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
-import { bibleView, nameKey, parseDraftFile, project, readBookSnapshot, readChapterText, readLegacyCards, type BibleView, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
+import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, threadOf, timeDeclarationOf, type BibleView, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
 import type { StoryTimeline, TimelineEntry, TimelineSource } from "./story-timeline.js";
 import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
@@ -73,7 +73,10 @@ function goalStatus(thread: ThreadView): ArcGoal["status"] {
 }
 
 export function storyViewsOf(projection: BookProjection, ledgers: readonly ChapterLedger[], chapterTitles: ReadonlyMap<number, string>): LedgerViews {
-  const timeEntries = new Map(ledgers.flatMap((ledger) => ledger.entries.flatMap((entry) => (entry.kind === "time" ? [[ledger.chapter, entry] as const] : []))));
+  const timeEntries = new Map(ledgers.flatMap((ledger) => {
+    const time = timeDeclarationOf(ledger.entries);
+    return time ? [[ledger.chapter, time] as const] : [];
+  }));
 
   const timeline: StoryTimeline = {
     schemaVersion: 1,
@@ -197,7 +200,7 @@ function turnsOf(ledger: ChapterLedger | undefined, types: ReadonlyMap<string, T
   for (const entry of ledger?.entries ?? []) {
     if (entry.kind !== "thread") continue;
     if (entry.op === "open" && entry.type === "intent") decisions.push(entry.note);
-    if (entry.op === "close" && types.get(entry.thread) === "question") discoveries.push(entry.note);
+    if (entry.op === "close" && types.get(threadOf(entry)) === "question") discoveries.push(entry.note);
   }
   return {
     ...(decisions.length > 0 ? { decision: unique(decisions).join("；") } : {}),
@@ -210,10 +213,10 @@ function aliasesOf(ledger: ChapterLedger | undefined, projection: BookProjection
   const out: { name: string; alias: string }[] = [];
   const seen = new Set<string>();
   for (const entry of ledger?.entries ?? []) {
-    if (entry.kind !== "presence" || entry.generic || nameKey(entry.name) === nameKey(entry.nameUsed)) continue;
-    const key = nameKey(entry.name);
+    if (entry.kind !== "presence" || entry.generic || nameKey(presenceName(entry)) === nameKey(entry.nameUsed)) continue;
+    const key = nameKey(presenceName(entry));
     const member = projection.cast.find((item) => item.key === key || item.aliases.some((alias) => nameKey(alias) === key));
-    const name = member?.name ?? entry.name;
+    const name = member?.name ?? presenceName(entry);
     const pair = `${nameKey(name)}\u0000${nameKey(entry.nameUsed)}`;
     if (nameKey(name) === nameKey(entry.nameUsed) || seen.has(pair)) continue;
     seen.add(pair);

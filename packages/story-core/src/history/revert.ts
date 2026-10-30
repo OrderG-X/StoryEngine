@@ -22,6 +22,7 @@ import type { CommandFailure } from "../commands/types.js";
 import { CommandReceipt } from "../schema/book.js";
 import { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DECISIONS_PATH } from "../store/paths.js";
 import { sha256Bytes, type TxEffect } from "../store/transaction.js";
+import { LEDGER_MIGRATE_COMMAND } from "../commands/ledger-migrate.js";
 import { cardReferencers, decisionReferencers, digestOf, ledgerReferencers, Resolver, type Referencer, type RefWhere, type TruthView } from "./references.js";
 import { HistoryFileError, HistoryStore, isReferenceFile, ledgerChapterOfPath, rangeDigestOf, readUndoableFiles, textOf, type HistoryReader, type Version } from "./store.js";
 
@@ -115,6 +116,18 @@ export const BOOK_START_KEYS = {
 } as const;
 
 const BOOK_START_KEY_SET: ReadonlySet<string> = new Set(Object.values(BOOK_START_KEYS));
+
+/** 账本升级（ledger.migrate）也是起点：「撤销上一步」到它就停，它和它之前的操作只能整本恢复（设计 2.3）。 */
+const isBookStart = (receipt: CommandReceipt): boolean => BOOK_START_KEY_SET.has(receipt.key) || receipt.command === LEDGER_MIGRATE_COMMAND;
+
+/** 最后一次账本升级在回执里排第几（没有 = -1）。 */
+function lastMigration(receipts: readonly CommandReceipt[]): number {
+  for (let index = receipts.length - 1; index >= 0; index -= 1) {
+    const receipt = receipts[index] as CommandReceipt;
+    if (receipt.command === LEDGER_MIGRATE_COMMAND && (receipt.effects ?? []).length > 0) return index;
+  }
+  return -1;
+}
 
 /**
  * 一个文件的一份内容：哪张回执写的（排第几；undefined = 不是回执写的：回执之前就在的那份、在回执之外改成的那份）、
@@ -225,7 +238,7 @@ function skipped(receipts: readonly CommandReceipt[], lineage: Lineage, from: nu
  * 怎么样、要不要作者点，planRevert 在书锁里照现在的谱系算）。撤销本身不算（撤销的撤销走「撤回来」带号）。
  * 往前找时跳过的那几次在不在说不准的，见 undoUnsure。
  *
- * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS）就停。
+ * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS、账本升级）就停。
  * 没有返回 undefined。receipts 按写的先后排好。
  */
 export function lastUndoable(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): RevertTarget | undefined {
@@ -238,7 +251,7 @@ export function lastUndoable(receipts: readonly CommandReceipt[], current?: Read
       if (present.has(ids[index] as string)) return targetOf(receipt);
       continue;
     }
-    if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
+    if (isBookStart(receipt)) return undefined;
     if (receipt.effects === undefined || (receipt.effects.length > 0 && present.has(ids[index] as string))) return targetOf(receipt);
   }
   return undefined;
@@ -313,6 +326,11 @@ async function plan(bookDir: string, target: RevertTarget, store: HistoryStore):
   const all = await readReceipts(bookDir);
   const group = all.filter((receipt) => ("opId" in target ? receipt.opId === target.opId : receipt.key === target.receiptKey));
   if (group.length === 0) return fail("nothing_to_undo", "找不到这次改动的记录，撤不了。");
+  // 迁移是撤销的边界（设计 2.3）：撤升级本身、撤它之前的操作（按号撤、全撤都一样），存档里的旧账会原样写回去。
+  const migrated = lastMigration(all);
+  if (migrated >= 0 && group.some((receipt) => all.indexOf(receipt) <= migrated)) {
+    return fail("before_migration", "这是账本升级之前的操作，只能整本恢复到那时候。", { blocked: "before_migration" });
+  }
   if (group.some((receipt) => receipt.effects === undefined)) return fail("legacy_receipt", "这次改动是升级之前做的，撤不了。");
   const writes = group.filter((receipt) => (receipt.effects ?? []).length > 0);
   if (writes.length === 0) return fail("nothing_to_undo", "这次没改过能撤的东西。");

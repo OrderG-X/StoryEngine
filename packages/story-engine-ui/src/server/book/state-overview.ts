@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
-import { bigramSimilarity, DEFAULT_STALE_AFTER, listChapterTexts, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
+import { bigramSimilarity, DEFAULT_STALE_AFTER, LedgerNeedsUpgradeError, listChapterTexts, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
 import { readStoryViews } from "./story-views.js";
 import type {
@@ -18,6 +18,8 @@ export interface BuildStateOverviewInput {
   readonly projectDir: string;
   readonly chapter?: number;
   readonly maxTimelineEvents?: number;
+  /** 开书时没接上新核心的原因（ensureBookOnCore 失败）：账读不出来时照它说，不让作者「重新打开」一个开了也没用的书。 */
+  readonly notOnCore?: string;
 }
 
 /**
@@ -157,7 +159,8 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     readJsonSafe<StoryProject>(input.projectDir, "project.json", { id: "unknown", title: "Untitled", createdAt: "", updatedAt: "" }, noteCorruptLedger),
     // 账是真相：读不出来如实挂警告，概况照常出（读侧不堵）。
     readStoryViews(input.projectDir).catch((error: unknown) => {
-      degradedReads.push(`账读不出来（${describeErrorBriefly(error, input.projectDir)}），线索和时间线按空显示。定稿等写入操作会如实报错。`);
+      const why = error instanceof LedgerNeedsUpgradeError && input.notOnCore ? `账本升级没成：${input.notOnCore}` : describeErrorBriefly(error, input.projectDir);
+      degradedReads.push(`账读不出来（${why}），线索和时间线按空显示。定稿等写入操作会如实报错。`);
       return undefined;
     }),
     // 设定卡是真相：读不出来如实挂警告，概况照常出（读侧不堵）。

@@ -8,7 +8,11 @@ import { runCommand } from "../commands/runner.js";
 import type { WriteCommandSpec } from "../commands/types.js";
 import { emptySettingCards } from "../schema/cards.js";
 import { AuthorDecision } from "../schema/decisions.js";
-import { CHAPTER_LEDGER_SCHEMA, LedgerEntry } from "../schema/ledger.js";
+import { ChapterLedger, LedgerEntry } from "../schema/ledger.js";
+import { ledgerOf, type EntryDraft } from "../ledger/entries.js";
+import { LEDGER_V1_SCHEMA } from "../ledger/migrate-v1.js";
+import { LEDGER_MIGRATE_COMMAND, ledgerMigrate, ledgerMigrateKey, ledgersToUpgrade } from "../commands/ledger-migrate.js";
+import { readBookSnapshot } from "../store/book.js";
 import { opBookEpoch, readBookEpoch, readDraftGens } from "../store/control.js";
 import { CARDS_PATH, chapterLedgerPath, chapterTextPath, DECISIONS_PATH, draftPath } from "../store/paths.js";
 import { sha256Bytes } from "../store/transaction.js";
@@ -90,8 +94,8 @@ const factOf = (chapter: number, n: number, subject: string, value: string) => (
 const timeOf = (chapter: number, n: number, time: Record<string, unknown>) => ({ id: `c${chapter}-${n}`, kind: "time", review: "auto", ...time });
 
 function ledgerText(chapter: number, entries: unknown[], options: { readonly stamp?: string; readonly text?: string } = {}): string {
-  const ledger = { schema: CHAPTER_LEDGER_SCHEMA, chapter, textSha256: sha256Bytes(options.text ?? TEXT(chapter)), committedAt: options.stamp ?? `stamp-${chapter}`, origin: "commit", entries };
-  return `${JSON.stringify(ledger, null, 2)}\n`;
+  const ledger = ledgerOf({ chapter, text: options.text ?? TEXT(chapter), committedAt: options.stamp ?? `stamp-${chapter}`, entries: entries as EntryDraft[] });
+  return `${JSON.stringify(ChapterLedger.parse(ledger), null, 2)}\n`;
 }
 
 /** 一章的正文 + 账单。 */
@@ -556,14 +560,15 @@ describe("引用表按 schema 穷举", () => {
     summary: [{ id: "e", kind: "summary", review: "auto", text: "梗概", quote: "q" }],
     fact: [factOf(2, 1, "林青", "伤"), { ...factOf(2, 2, "林青", "伤"), replaces: ["c1-1"] }],
     thread: [open(2, 1, "题"), advance(2, 2, "t1-1"), { ...advance(2, 3, "t1-1"), op: "close" }],
-    time: [timeOf(2, 1, { basis: "author", day: 3 }), timeOf(2, 2, { basis: "text", quote: "q", daysSincePrevious: 1 })],
+    time: [timeOf(2, 1, { basis: "author", day: 3 }), timeOf(2, 2, { basis: "text", quote: "q", daysSincePrevious: 1, daysInChapter: 1 })],
     presence: [{ id: "e", kind: "presence", review: "auto", name: "林青", nameUsed: "阿青", quote: "q" }],
   };
   const expected: Record<string, string[][]> = {
     summary: [[]],
     fact: [["name"], ["fact", "name"]],
     thread: [[], ["thread"], ["thread"]],
-    time: [[], ["previous"]],
+    // 第二条存成本章开头（接着上一章）+ 本章结尾（只相对本章开头）两条。
+    time: [[], ["previous"], []],
     presence: [["name"]],
   };
   const decisions: Record<string, unknown> = {
@@ -593,7 +598,8 @@ describe("引用表按 schema 穷举", () => {
     const kinds = LedgerEntry.options.map((option) => option.shape.kind.value);
     expect(Object.keys(entries).sort()).toEqual([...kinds].sort());
     for (const kind of kinds) {
-      const got = (entries[kind] ?? []).map((sample) => refsOfEntry(LedgerEntry.parse(sample), 2).map((ref) => ref.kind));
+      const stored = ledgerOf({ chapter: 2, entries: (entries[kind] ?? []) as EntryDraft[] }).entries;
+      const got = stored.map((entry) => refsOfEntry(LedgerEntry.parse(entry), 2).map((ref) => ref.kind));
       expect(got).toEqual(expected[kind]);
     }
   });
@@ -607,5 +613,88 @@ describe("引用表按 schema 穷举", () => {
     }
     const resolver = new Resolver({ ledgers: [], decisions: [], cards: undefined });
     expect(resolver.resolve({ kind: "issue", issue: "hard-fact:c1-1:c2-1" })).toBe("issue:hard-fact:c1-1:c2-1=fact:c1-1=none&fact:c2-1=none");
+  });
+});
+
+describe("跨账本升级（P2b 设计 2.3）", () => {
+  /** 一份旧格式账单（照 v1 写法，编号带着）。 */
+  const v1Ledger = (n: number, entries: unknown[], text = TEXT(n)): string =>
+    `${JSON.stringify({ schema: LEDGER_V1_SCHEMA, chapter: n, textSha256: sha256Bytes(new TextEncoder().encode(text)), committedAt: `stamp-${n}`, origin: "commit", entries }, null, 2)}\n`;
+  const v1Chapter = (n: number, entries: unknown[], text = TEXT(n)) => [
+    { path: chapterTextPath(n), content: text },
+    { path: chapterLedgerPath(n), content: v1Ledger(n, entries, text) },
+  ];
+
+  async function migrate(): Promise<string> {
+    const found = await ledgersToUpgrade(book);
+    if (!found) throw new Error("没有旧账");
+    const key = ledgerMigrateKey(found.digest);
+    const outcome = await runCommand(book, ledgerMigrate, { digest: found.digest }, { caller: "author", idempotencyKey: key, snapshot: () => git.capture(), now });
+    expect(outcome.ok).toBe(true);
+    return key;
+  }
+
+  it("升级之前的操作、升级本身都撤不了（只能整本恢复）；之后的照常撤；「撤销上一步」停在升级", async () => {
+    await write("A", v1Chapter(1, [open(1, 1, "铜钥匙")]));
+    const key = await migrate();
+    expect(await lastUndoableIn(book, await readReceipts(book))).toBeUndefined();
+    await write("B", chapter(2, [advance(2, 1, "t1-1")]));
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "B" });
+    expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "before_migration" });
+    expect(await planRevert(book, { receiptKey: key }, git)).toMatchObject({ ok: false, code: "before_migration" });
+    expect(await applyRevert("B", await revert("B"))).toMatchObject({ ok: true });
+    expect(await lastUndoableIn(book, await readReceipts(book))).toBeUndefined();
+  });
+
+  it("一次操作里有一步在升级之前：整次撤不了", async () => {
+    await write("A", v1Chapter(1, []));
+    await migrate();
+    await write("A", chapter(2, []));
+    expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "before_migration" });
+  });
+
+  it("写回只认新格式：计划里塞旧账一处都不写", async () => {
+    await write("A", chapter(1, []));
+    const current = sha256Bytes(new TextEncoder().encode(await read(chapterLedgerPath(1))));
+    const outcome = await runCommand(book, historyApply, { kind: "revert", label: "撤销", target: { opId: "A" }, changes: [
+      { path: chapterTextPath(1), expect: sha256Bytes(new TextEncoder().encode(TEXT(1))), content: TEXT(1, "改") },
+      { path: chapterLedgerPath(1), expect: current, content: v1Ledger(1, []) },
+    ] }, options("U"));
+    expect(outcome).toMatchObject({ ok: false, code: "ledger_needs_upgrade" });
+    expect(await read(chapterTextPath(1))).toBe(TEXT(1));
+  });
+
+  it("整本恢复到升级之前的存档：写下去的是升好的新格式（原句按同一份存档的正文定位），这次恢复照样能撤", async () => {
+    const old = TEXT(1, "，铜钥匙在钟箱里");
+    await write("A", v1Chapter(1, [{ ...open(1, 1, "铜钥匙"), quote: "铜钥匙在钟箱里" }], old));
+    const before = await git.capture();
+    await migrate();
+    await write("B", chapter(1, [open(1, 1, "铜钥匙"), factOf(1, 2, "沈青禾", "轻伤")], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" }));
+    const plan = await planRestore(book, before, git);
+    if (!plan.ok) throw new Error(plan.message);
+    expect(await runCommand(book, historyApply, { kind: "restore", label: "恢复", target: { tree: before }, changes: plan.changes.map((change) => ({ ...change })), rangeDigest: plan.rangeDigest }, options("R"))).toMatchObject({ ok: true });
+    const restored = ChapterLedger.parse(JSON.parse(await read(chapterLedgerPath(1))));
+    expect(restored).toMatchObject({ schema: "chapter-ledger/2", legacy: { schema: LEDGER_V1_SCHEMA }, entries: [{ id: "c1-1", evidenceStatus: "located", provenance: "migrated" }] });
+    expect(await read(chapterTextPath(1))).toBe(old);
+    expect((await readBookSnapshot(book)).ledgers).toHaveLength(1);
+    expect(await lastUndoableIn(book, await readReceipts(book))).toEqual({ opId: "R" });
+    expect(await applyRevert("R", await revert("R"))).toMatchObject({ ok: true });
+    expect(await read(chapterTextPath(1))).toBe(TEXT(1, "，第二版"));
+  });
+
+  it("接上新核心之前的存档（有正文没账单、现在有设定卡存档里没有）：整本恢复如实拦下，一处不动", async () => {
+    await write("A", [{ path: chapterTextPath(1), content: TEXT(1) }]);
+    const preCore = await git.capture();
+    await write("I", chapter(1, []));
+    expect(await planRestore(book, preCore, git)).toMatchObject({ ok: false, code: "before_core" });
+    const noCards = await git.capture();
+    await write("C", [{ path: CARDS_PATH, content: `${JSON.stringify(emptySettingCards())}\n` }]);
+    expect(await planRestore(book, noCards, git)).toMatchObject({ ok: false, code: "before_core" });
+  });
+
+  it("升级回执记在命令名下", async () => {
+    await write("A", v1Chapter(1, []));
+    await migrate();
+    expect((await readReceipts(book)).map((receipt) => receipt.command)).toEqual(["test.write", LEDGER_MIGRATE_COMMAND]);
   });
 });

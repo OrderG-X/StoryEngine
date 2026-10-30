@@ -53,6 +53,7 @@ export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void 
       // 读路径不拿锁、不写盘（重构 P7）：老定稿链的事务残留在上面开书那步收。
       const coreOverview = await buildStateOverview({
         projectDir,
+        ...(!onCore.ok ? { notOnCore: onCore.reason } : {}),
         ...(chapter !== undefined ? { chapter } : {}),
         ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
       });

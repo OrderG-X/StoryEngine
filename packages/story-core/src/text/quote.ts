@@ -46,17 +46,8 @@ export function quoteInText(quote: string, text: string): boolean {
  */
 export function quoteFromText(quote: string, text: string): string | undefined {
   if (!quoteInText(quote, text)) return undefined;
-  let haystack = "";
-  const origin: number[] = [];
-  for (let index = 0; index < text.length; ) {
-    const char = String.fromCodePoint(text.codePointAt(index)!);
-    for (const part of normalizeForQuote(char)) {
-      haystack += part;
-      origin.push(index);
-    }
-    index += char.length;
-  }
-  const segments = normalizeForQuote(quote).split("...").filter((segment) => segment.length > 0);
+  const { haystack, origin } = normalizedWithOrigin(text);
+  const segments = quoteSegments(quote);
   const pieces: string[] = [];
   let from = 0;
   for (const segment of segments) {
@@ -68,6 +59,24 @@ export function quoteFromText(quote: string, text: string): string | undefined {
   }
   return pieces.join("……");
 }
+
+/** 归一后的正文，和每个归一后的字在原文里的位置（原句定位用）。 */
+export function normalizedWithOrigin(text: string): { readonly haystack: string; readonly origin: readonly number[] } {
+  let haystack = "";
+  const origin: number[] = [];
+  for (let index = 0; index < text.length; ) {
+    const char = String.fromCodePoint(text.codePointAt(index)!);
+    for (const part of normalizeForQuote(char)) {
+      haystack += part;
+      origin.push(index);
+    }
+    index += char.length;
+  }
+  return { haystack, origin };
+}
+
+/** 原句按省略号切成的几截（归一后）。 */
+export const quoteSegments = (quote: string): string[] => normalizeForQuote(quote).split("...").filter((segment) => segment.length > 0);
 
 /**
  * 名字、主体、属性的比对键：同一个写法的不同排版算同一个（去空白、引号、全半角、大小写）。

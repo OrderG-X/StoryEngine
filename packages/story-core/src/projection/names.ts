@@ -10,7 +10,7 @@
  * （Astra 第 11 轮第 1 条：只比名字字符串，删卡重建同名的另一张卡就认不出换了人）。
  */
 import type { Card, SettingCardsFile } from "../schema/cards.js";
-import type { PresenceEntry } from "../schema/ledger.js";
+import { presenceName, type PresenceEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
 
 /** 一条别名的出处：给了就记。 */
@@ -43,10 +43,10 @@ export class Names {
   }
 
   addPresence(entry: PresenceEntry, source?: NameSource): void {
-    const name = nameKey(entry.name);
+    const name = nameKey(presenceName(entry));
     const used = nameKey(entry.nameUsed);
     if (!this.display.has(name)) {
-      this.display.set(name, entry.name);
+      this.display.set(name, presenceName(entry));
       if (source !== undefined) this.keySource.set(name, source);
     }
     if (used !== name && !entry.generic && !this.aliasTo.has(used)) {

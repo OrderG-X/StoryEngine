@@ -170,4 +170,42 @@ describe("开书接到新核心（ensureBookOnCore，重构 P9：先导账单、
     const { bible } = await readBible(projectDir);
     expect(bible.characters.map((entry) => entry.card.name)).toEqual(["林远"]);
   });
+
+  /** P2b 以前定稿的书：账单还是 v1。 */
+  const v1Ledger = (entries: unknown[]): string => `${JSON.stringify({
+    schema: "chapter-ledger/1", chapter: 1, textSha256: createHash("sha256").update(CH1, "utf-8").digest("hex"), committedAt: "2026-10-01T00:00:00.000Z", origin: "commit", entries,
+  }, null, 2)}\n`;
+
+  it("旧格式账单（P2b 以前）：开书先存撤销点、一次升成新格式，读者照常读；再开不再升", async () => {
+    const { projectDir } = await createStoryProject({ rootDir: book, title: "升级", protagonistName: "沈青禾" });
+    await writeFile(join(projectDir, "chapters", "0001.md"), CH1);
+    await mkdir(join(projectDir, "ledger", "chapters"), { recursive: true });
+    await writeFile(join(projectDir, "ledger", "chapters", "0001.json"), v1Ledger([
+      { id: "c1-1", kind: "thread", review: "auto", op: "open", type: "question", title: "钟为什么停", note: "停了", quote: "钟停在三点十五分", thread: "t1-1" },
+    ]));
+    await expect(readStoryViews(projectDir)).rejects.toMatchObject({ needsUpgrade: true });
+    const snapshots: string[] = [];
+
+    const result = await ensureBookOnCore(projectDir, { snapshot: async (_label, command, mode) => { if (!mode) snapshots.push(command); } });
+
+    expect(result).toMatchObject({ ok: true, migrated: { chapters: 1, pending: 0, evidence: { located: 1 } } });
+    expect(snapshots).toEqual(["ledger.migrate"]);
+    expect(JSON.parse(await readFile(join(projectDir, "ledger", "chapters", "0001.json"), "utf-8")).schema).toBe("chapter-ledger/2");
+    expect((await readStoryViews(projectDir)).threads.threads.map((thread) => thread.title)).toEqual(["钟为什么停"]);
+    expect(await ensureBookOnCore(projectDir)).toEqual({ ok: true });
+  });
+
+  it("旧账有一章升不了：如实说没接上，一份不动", async () => {
+    const { projectDir } = await createStoryProject({ rootDir: book, title: "坏账", protagonistName: "沈青禾" });
+    await writeFile(join(projectDir, "chapters", "0001.md"), CH1);
+    await mkdir(join(projectDir, "ledger", "chapters"), { recursive: true });
+    // 定稿记的条目当年就必须带原句：这份当年就不成立。
+    const broken = v1Ledger([{ id: "c1-1", kind: "summary", review: "auto", text: "梗概" }]);
+    await writeFile(join(projectDir, "ledger", "chapters", "0001.json"), broken);
+
+    const result = await ensureBookOnCore(projectDir);
+
+    expect(result).toMatchObject({ ok: false, code: "ledger_unreadable", reason: expect.stringContaining("第 1 章") });
+    expect(await readFile(join(projectDir, "ledger", "chapters", "0001.json"), "utf-8")).toBe(broken);
+  });
 });

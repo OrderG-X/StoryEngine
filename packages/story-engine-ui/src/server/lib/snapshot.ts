@@ -405,6 +405,7 @@ const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "decision.record": "bible",
   "book.import": "bible",
   "book.importText": "commit",
+  "ledger.migrate": "bible",
   "draft.applyGenerated": "draft",
   "draft.adoptCandidate": "draft",
   "card.write": "bible",

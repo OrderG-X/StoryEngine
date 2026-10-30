@@ -3,7 +3,7 @@ import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
-import { CHAPTER_LEDGER_SCHEMA, cardWrite, composeDraftFile, runCommand, type CardOp, type ChapterLedger } from "@actalk/story-core";
+import { cardWrite, composeDraftFile, ledgerOf, runCommand, type CardOp, type ChapterLedger } from "@actalk/story-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "./context-gateway.js";
 import { runFastDraft, resolveDraftMaxOutputTokens, type WriterClient } from "./fast-draft-writer.js";
@@ -779,14 +779,11 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
   it("账里上一章出场、还没建卡的人也进设定包，正文写到他就算写到了人", async () => {
     const projectDir = await createFixtureProject();
-    const ledger: ChapterLedger = {
-      schema: CHAPTER_LEDGER_SCHEMA,
+    const ledger: ChapterLedger = ledgerOf({
       chapter: 1,
-      textSha256: "0".repeat(64),
       committedAt: "2026-10-19T00:00:00.000Z",
-      origin: "commit",
       entries: [{ kind: "presence", id: "c1-1", review: "auto", name: "陆沉", nameUsed: "陆沉", quote: "陆沉来了" }],
-    };
+    });
     await mkdir(join(projectDir, "ledger", "chapters"), { recursive: true });
     await writeFile(join(projectDir, "ledger", "chapters", "0001.json"), JSON.stringify(ledger), "utf-8");
 

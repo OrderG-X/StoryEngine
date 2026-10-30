@@ -4,7 +4,7 @@
  * 线索编号由核心发（t<章>-<序>）：新开时 `thread` 写个测试里好认的名字，后面推进、收口、裁定照名字写，这里换成真编号。
  */
 import { randomUUID } from "node:crypto";
-import { chapterCommit, decisionRecord, readChapterLedger, runCommand, type EntryInput } from "@actalk/story-core";
+import { chapterCommit, decisionRecord, readChapterLedger, runCommand, threadOf, type EntryInput } from "@actalk/story-core";
 
 const threadIds = new Map<string, Map<string, string>>();
 
@@ -46,10 +46,11 @@ export async function seedChapters(projectDir: string, chapters: readonly SeedCh
     const outcome = await runCommand(projectDir, chapterCommit, { chapter: seed.chapter, text: `# ${seed.title ?? `第${seed.chapter}章`}\n\n${body}`, entries }, { caller: "author", idempotencyKey: `seed-${seed.chapter}-${randomUUID()}` });
     if (!outcome.ok) throw new Error(`第 ${seed.chapter} 章没记上：${outcome.message}`);
     if (outcome.result.rejected.length > 0) throw new Error(`第 ${seed.chapter} 章有条目没记上：${JSON.stringify(outcome.result.rejected)}`);
-    const ledger = await readChapterLedger(projectDir, seed.chapter);
+    // 一条声明一条（时间存成开头、结尾两条，结尾那条不算）。
+    const stored = (await readChapterLedger(projectDir, seed.chapter))?.entries.filter((entry) => !(entry.kind === "time" && entry.appliesTo === "chapterEnd")) ?? [];
     named.forEach((name, index) => {
-      const entry = ledger?.entries[index];
-      if (name !== undefined && entry?.kind === "thread") ids.set(name, entry.thread);
+      const entry = stored[index];
+      if (name !== undefined && entry?.kind === "thread") ids.set(name, threadOf(entry));
     });
   }
 }

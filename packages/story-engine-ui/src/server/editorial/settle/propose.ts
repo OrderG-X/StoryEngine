@@ -20,7 +20,9 @@ import {
   projectBook,
   quoteInText,
   readCardsOrLegacy,
+  entryQuote,
   readChapterLedger,
+  subjectOf,
   readChapterText,
   readDraftFile,
   sha256,
@@ -754,20 +756,22 @@ export async function proposeSettle(input: {
     const loose: FactRef[] = [];
     for (const entry of ledger?.entries ?? []) {
       if (entry.kind !== "fact") continue;
+      const subject = subjectOf(entry);
+      const quote = entryQuote(entry);
       const ref = {
         factId: entry.id,
         nature: entry.nature,
-        ...(entry.subject ? { subject: entry.subject } : {}),
-        ...(entry.attribute ? { attribute: entry.attribute } : {}),
+        ...(subject ? { subject } : {}),
+        ...(entry.predicate ? { attribute: entry.predicate } : {}),
         ...(entry.value ? { value: entry.value } : {}),
         text: entry.text,
       };
-      if (!entry.quote) {
+      if (!quote) {
         loose.push({ id: `L${loose.length + 1}`, ...ref });
         continue;
       }
-      if (!quoteInText(entry.quote, doc.text) || quoteInText(entry.quote, applied.text)) continue;
-      affected.push({ id: `F${affected.length + 1}`, ...ref, quote: entry.quote });
+      if (!quoteInText(quote, doc.text) || quoteInText(quote, applied.text)) continue;
+      affected.push({ id: `F${affected.length + 1}`, ...ref, quote });
     }
     if (affected.length === 0 && loose.length === 0) return;
     try {
