@@ -1,14 +1,13 @@
 /**
- * 用户结构化动作（2026-10-07 拆补丁塔）：界面按钮（定稿预览卡 / 建议条「确认定稿」）发来的明确指令，
- * 服务端直接执行对应工具，不经模型判断——按钮点击本身就是授权，不再用正则去猜用户原话。
+ * 用户结构化动作（2026-10-07 拆补丁塔）：界面按钮（定稿清单「确认定稿」、建议条、卡上的按钮）发来的明确指令，
+ * 服务端直接执行，不经模型判断——按钮点击本身就是授权，不再用正则去猜用户原话。
  *
- * 事件协议与 agent 回合完全一致（tool-call / tool-result / text-delta），前端投影零分叉：
- * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
+ * 新操作、「接着做」「不要了」、等作者点的按钮都交给执行器（写作版本 P2a）；还没迁过来的（裁剪、撤销上一步）按工具名直接跑，
+ * 事件协议与 agent 回合一致（tool-call / tool-result / text-delta），收尾文本确定性生成，不调模型。
  */
 import type { RequestContext } from "@mastra/core/di";
 
 import { isOperationId } from "../lib/operations/store.js";
-import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
@@ -16,6 +15,7 @@ import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-ch
 import { LEDGER_CHANGE_KIND, MAX_LEDGER_CHANGES } from "../services/operations/recipes/ledger-change.js";
 import { readLedgerRequest, type LedgerChangeRequest } from "../services/ledger-change/plan.js";
 import { CANON_PROPOSE_KIND, canonInputOf, readCanonProposeParams, type CanonProposeInput } from "../services/operations/recipes/canon-propose.js";
+import { COMMIT_PREPARE_KIND, readCommitPrepareParams, type CommitPrepareParams } from "../services/operations/recipes/commit-prepare.js";
 import {
   isCandidateDecisionKind,
   isDraftEditMode,
@@ -29,33 +29,11 @@ import {
   type DraftEditMode,
   type DraftEditParams,
 } from "../services/draft-change/params.js";
-import {
-  humanizeToolNames,
-  resolveNextDraftTarget,
-  writeNextChoice,
-  type NextDraftTarget,
-  type NextStepChoice,
-} from "./next-steps.js";
 import { runOperationAction } from "./operation-turn.js";
-
-export {
-  checkChapterAction,
-  continueChoice,
-  humanizeToolNames,
-  newDraftAction,
-  newOperationAction,
-  nextDraftChapterAfter,
-  readCommittedChapterNumbers,
-  writeNextChoice,
-  type NextDraftTarget,
-  type NextStepChoice,
-} from "./next-steps.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
 export const USER_ACTION_TOOL_NAMES = [
-  "commit_apply",
   "prune_snapshots",
-  "commit_preview",
   "manage_snapshots",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
@@ -135,32 +113,34 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
-  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」「确认改账」）带上是哪个按钮、点的哪个、划掉了哪几处。 */
-  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
+  /** 「定稿」「就这么短，照样定稿」：出这一章的定稿清单（allowShort 只认按钮）。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof COMMIT_PREPARE_KIND;
+    readonly params: CommitPrepareParams;
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」「确认改账」「确认定稿」）带上是哪个按钮、点的哪个、划掉了哪几处、填的几栏。 */
+  | {
+    readonly kind: "resume";
+    readonly opId: string;
+    /** 填的几栏（定稿清单上作者改的天数）：只收形状对的，是不是卡上有的、在不在范围里由执行器对着待办核。 */
+    readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[]; readonly values?: Readonly<Record<string, number>> };
+  }
   | { readonly kind: "cancel"; readonly opId: string };
 
-/** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
+/** 「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
   | OperationAction
-  | {
-    readonly toolName: "commit_apply";
-    readonly chapter: number;
-    readonly previewToken?: string;
-    /** 作者在定稿预览的账本清单上去掉的条目 id（这些不写进账本）。 */
-    readonly excluded?: readonly string[];
-    /** 作者改的「第几天」。 */
-    readonly dayOverride?: number;
-    /** 作者改的「到第几天」（这一章跨天）。 */
-    readonly dayEndOverride?: number;
-  }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。allowShort=「就这么短，照样定稿」：这一章不拿字数下限挡。 */
-  | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" };
 
-/** 账本清单一次最多去掉多少条（防异常请求体）。 */
+/** 清单一次最多划掉多少处（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
+/** 按钮一次最多填几栏。 */
+const MAX_VALUES = 8;
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -191,12 +171,25 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
       if (!excluded || excluded.length > MAX_EXCLUDED || excluded.some((key) => typeof key !== "string" || !/^[A-Za-z0-9:_-]{1,40}$/u.test(key))) {
         return { kind: "invalid", reason: "划掉的那几处不对，请刷新后再点。" };
       }
-      return { kind: "action", action: { kind: "resume", opId, answer: { actionId, decision, ...(excluded.length > 0 ? { excluded: excluded as string[] } : {}) } } };
+      const rawValues = answer.values === undefined ? {} : typeof answer.values === "object" && answer.values !== null && !Array.isArray(answer.values) ? answer.values as Record<string, unknown> : undefined;
+      const valueEntries = rawValues ? Object.entries(rawValues) : undefined;
+      if (!valueEntries || valueEntries.length > MAX_VALUES || valueEntries.some(([key, value]) => !/^[A-Za-z0-9_]{1,32}$/u.test(key) || typeof value !== "number" || !Number.isInteger(value))) {
+        return { kind: "invalid", reason: "填的数不对，请刷新后再点。" };
+      }
+      const values = Object.fromEntries(valueEntries) as Record<string, number>;
+      return {
+        kind: "action",
+        action: {
+          kind: "resume",
+          opId,
+          answer: { actionId, decision, ...(excluded.length > 0 ? { excluded: excluded as string[] } : {}), ...(valueEntries.length > 0 ? { values } : {}) },
+        },
+      };
     }
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
-  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && record.type !== CANON_PROPOSE_KIND && !isCandidateDecisionKind(record.type)) {
+  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && record.type !== CANON_PROPOSE_KIND && record.type !== COMMIT_PREPARE_KIND && !isCandidateDecisionKind(record.type)) {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
   const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
@@ -223,6 +216,11 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     const canon = readCanonProposeParams("button", params, typeof record.mode === "string" ? record.mode : undefined);
     if ("invalid" in canon) return { kind: "invalid", reason: canon.invalid };
     return { kind: "action", action: { kind: "new", type: CANON_PROPOSE_KIND, mode: canon.mode, params: canonInputOf(canon), ...stamp } };
+  }
+  if (record.type === COMMIT_PREPARE_KIND) {
+    const commit = readCommitPrepareParams("button", params);
+    if ("invalid" in commit) return { kind: "invalid", reason: "缺少有效章号。" };
+    return { kind: "action", action: { kind: "new", type: COMMIT_PREPARE_KIND, params: commit, ...stamp } };
   }
   const chapter = params.chapter;
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
@@ -273,81 +271,12 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
   if (toolName === "manage_snapshots") return { kind: "invalid", reason: "不支持的操作。" };
-  if (toolName === "prune_snapshots") {
-    const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
-    if (rawKeep === undefined || rawKeep === null || rawKeep === "") return { kind: "action", action: { toolName: "prune_snapshots" } };
-    if (typeof rawKeep !== "number" || !Number.isInteger(rawKeep) || rawKeep < 0) {
-      return { kind: "invalid", reason: "保留条数不对。" };
-    }
-    return { kind: "action", action: { toolName: "prune_snapshots", ...(rawKeep > 0 ? { keep: rawKeep } : {}) } };
+  const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
+  if (rawKeep === undefined || rawKeep === null || rawKeep === "") return { kind: "action", action: { toolName: "prune_snapshots" } };
+  if (typeof rawKeep !== "number" || !Number.isInteger(rawKeep) || rawKeep < 0) {
+    return { kind: "invalid", reason: "保留条数不对。" };
   }
-  const chapter = typeof record.chapter === "string" ? Number(record.chapter.trim()) : record.chapter;
-  if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
-    return { kind: "invalid", reason: "缺少有效章号。" };
-  }
-  if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter, ...(record.allowShort === true ? { allowShort: true as const } : {}) } };
-  const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
-    ? record.previewToken.trim()
-    : undefined;
-  const excluded = Array.isArray(record.excluded)
-    ? [...new Set(record.excluded.filter((id): id is string => typeof id === "string" && id.trim().length > 0 && id.length <= 200).map((id) => id.trim()))].slice(0, MAX_EXCLUDED)
-    : [];
-  const dayOf = (raw: unknown): number | undefined => {
-    const value = typeof raw === "string" ? Number(raw.trim()) : raw;
-    return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100_000 ? value : undefined;
-  };
-  const dayOverride = dayOf(record.dayOverride);
-  const dayEndOverride = dayOverride === undefined ? undefined : dayOf(record.dayEndOverride);
-  return {
-    kind: "action",
-    action: {
-      toolName: "commit_apply",
-      chapter,
-      ...(previewToken ? { previewToken } : {}),
-      ...(excluded.length > 0 ? { excluded } : {}),
-      ...(dayOverride !== undefined ? { dayOverride } : {}),
-      ...(dayEndOverride !== undefined ? { dayEndOverride } : {}),
-    },
-  };
-}
-
-interface CommitApplyLikeOutput {
-  readonly committed?: unknown;
-  readonly summary?: unknown;
-  readonly chapter?: unknown;
-  readonly threadMaintenanceHint?: unknown;
-}
-
-/**
- * 定稿动作收尾的下一步选项（确定性）：成功 → 写下一章（+线索堆积时清理）；未成 → 重新预览。
- * next（R7.7）：推荐写的「下一章」默认还是 N+1（旧行为，无书目录信息时），
- * 有书目录时由调用方传写作前沿章（第一个没定稿的章），重定旧章后不再推荐回去写旧章；那章已有工作稿就推荐核它。
- */
-export function commitApplyNextSteps(
-  chapter: number,
-  output: CommitApplyLikeOutput | undefined,
-  next: NextDraftTarget = { chapter: chapter + 1, hasDraft: false },
-): { readonly question: string; readonly choices: readonly NextStepChoice[] } {
-  if (output?.committed === true) {
-    return {
-      question: `第 ${chapter} 章定稿了，接下来？`,
-      choices: [
-        { ...writeNextChoice(next), recommended: true },
-        ...(output.threadMaintenanceHint === "escalated"
-          ? [{ label: "归并线索", intent: "看看开着的线索里有没有讲同一件事的，提一份归并方案给我确认" }]
-          : []),
-      ],
-    };
-  }
-  return {
-    question: `第 ${chapter} 章还没定稿，接下来？`,
-    choices: [{
-      label: "重新预览",
-      intent: `生成第 ${chapter} 章定稿预览`,
-      recommended: true,
-      action: { toolName: "commit_preview", chapter },
-    }],
-  };
+  return { kind: "action", action: { toolName: "prune_snapshots", ...(rawKeep > 0 ? { keep: rawKeep } : {}) } };
 }
 
 export type UserActionToolExecutor = (
@@ -367,7 +296,7 @@ export async function runUserAction(args: {
   readonly sendEvent: (event: string, data: unknown) => void;
   readonly scrubber: { push(text: string): string; flush(): string };
   readonly scrubError: (error: unknown) => string;
-  /** 项目目录（编辑部 R4.6 建议项用：定稿后判占位主角卡要不要给改名建议）；缺省不给建议，行为不变。 */
+  /** 书目录（交给执行器的操作要它）。 */
   readonly projectDir?: string;
   /** 作者断开了（关页、网断）：交给执行器的操作照跑，只是不再转发。 */
   readonly signal?: AbortSignal;
@@ -385,7 +314,6 @@ export async function runUserAction(args: {
       sendEvent: args.sendEvent,
       scrubber: args.scrubber,
       signal: args.signal ?? new AbortController().signal,
-      previewCommit: (chapter) => runCommitPreviewAction({ ...args, action: { toolName: "commit_preview", chapter } }),
     });
     return;
   }
@@ -393,123 +321,7 @@ export async function runUserAction(args: {
     await runPruneAction({ ...args, action });
     return;
   }
-  if (action.toolName === "commit_preview") {
-    await runCommitPreviewAction({ ...args, action });
-    return;
-  }
-  if (action.toolName === "undo") {
-    await runUndoAction(args);
-    return;
-  }
-  const stamp = Date.now();
-  const toolCallId = `user-action-${action.toolName}-${stamp}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-  };
-
-  args.sendEvent("tool-call", { toolCallId, toolName: action.toolName, args: { chapter: action.chapter } });
-  let output: unknown;
-  markUserConfirmedTool(args.requestContext, action.toolName);
-  try {
-    output = await args.executeTool(
-      action.toolName,
-      {
-        chapter: action.chapter,
-        ...(action.previewToken ? { previewToken: action.previewToken } : {}),
-        ...(action.excluded && action.excluded.length > 0 ? { excluded: action.excluded } : {}),
-        ...(action.dayOverride !== undefined ? { dayOverride: action.dayOverride } : {}),
-        ...(action.dayEndOverride !== undefined ? { dayEndOverride: action.dayEndOverride } : {}),
-      },
-      args.requestContext,
-    );
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: action.toolName, error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章定稿没有完成：${humanizeToolNames(message)}。可以再点一次「确认定稿」重试。`);
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-    return;
-  } finally {
-    markUserConfirmedTool(args.requestContext, undefined);
-  }
-
-  args.sendEvent("tool-result", { toolCallId, toolName: action.toolName, output });
-  const result = output as CommitApplyLikeOutput | undefined;
-  const summary = typeof result?.summary === "string" && result.summary.trim()
-    ? result.summary.trim()
-    : result?.committed === true
-      ? `第 ${action.chapter} 章已定稿。`
-      : `第 ${action.chapter} 章没有定稿。`;
-  emitText(humanizeToolNames(summary));
-  const rest = args.scrubber.flush();
-  if (rest) args.sendEvent("text-delta", { text: rest });
-
-  const nextSteps = commitApplyNextSteps(action.chapter, result, await resolveNextDraftTarget(args.projectDir, action.chapter));
-  // 定稿成功后，设定本里还没标主角、账里有视角人物 → 多给一个「把『X』设为主角」。只是建议：作者点了
-  // 才把 intent 发给模型，由模型走 change_settings 设（可撤销）；建议判不了/判挂了按无建议处理。
-  const renameSuggestion = result?.committed === true && args.projectDir
-    ? await buildProtagonistRenameSuggestion(args.projectDir).catch(() => undefined)
-    : undefined;
-  const choices = renameSuggestion
-    ? [...nextSteps.choices, { label: renameSuggestion.label, intent: renameSuggestion.intent }]
-    : nextSteps.choices;
-  const nextCallId = `user-action-next-${stamp}`;
-  args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
-  args.sendEvent("tool-result", {
-    toolCallId: nextCallId,
-    toolName: "suggest_next_steps",
-    output: { ok: true, question: nextSteps.question, choices },
-  });
-}
-
-interface CommitPreviewLikeOutput {
-  readonly canCommit?: unknown;
-  readonly summary?: unknown;
-}
-
-/**
- * 「定稿」按钮：服务端直接跑 commit_preview（只读；可定稿时登记票据），结果按 agent 回合同款事件推给前端，
- * 前端照常渲染定稿预览卡（账本清单 + 确认定稿按钮）。收尾只回工具自己的用户可见摘要，不调模型。
- */
-async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "commit_preview" }>;
-}): Promise<void> {
-  const { action } = args;
-  const toolCallId = `user-action-commit_preview-${Date.now()}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-  };
-  const flush = (): void => {
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: "commit_preview", args: { chapter: action.chapter } });
-  let output: unknown;
-  // 「就这么短，照样定稿」：作者确认标记只在这次执行里有效（工具据它放字数下限）。
-  if (action.allowShort) markUserConfirmedTool(args.requestContext, "commit_preview");
-  try {
-    output = await args.executeTool("commit_preview", { chapter: action.chapter }, args.requestContext);
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "commit_preview", error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章的定稿预览没生成出来：${humanizeToolNames(message)}。可以再点一次「定稿」。`);
-    flush();
-    return;
-  } finally {
-    if (action.allowShort) markUserConfirmedTool(args.requestContext, undefined);
-  }
-  args.sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output });
-  const result = output as CommitPreviewLikeOutput | undefined;
-  // 清单（含定不了的原因）在弹窗和对话小卡里都有，回话只说一句结论（重构 P6）。
-  const summary = result?.canCommit === true
-    ? `第 ${action.chapter} 章可以定稿，清单打开了。`
-    : result?.canCommit === false
-      ? `第 ${action.chapter} 章现在还定不了，原因在清单里。`
-      : typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : `第 ${action.chapter} 章暂时不能定稿。`;
-  emitText(humanizeToolNames(summary));
-  flush();
+  await runUndoAction(args);
 }
 
 interface PruneLikeOutput {

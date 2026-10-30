@@ -1,7 +1,7 @@
 // @vitest-environment node
 // 对话里交的操作怎么收尾（写作版本 P2a 契约第三、四节）：run_check 只回受理回执；服务端订阅、把记录转进对话、按结构化结果出结论和下一步；
 // 作者断开只是不再转发；按钮交的新操作、「接着做」「不要了」走同一套；read_operation、每轮开头的「最近的操作」只读记录。
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { draftSave, parseDraftFile, readDraftState, runCommand } from "@actalk/story-core";
@@ -18,8 +18,9 @@ import { finishOperationTurn, followOperation, runOperationAction } from "./oper
 import { buildProjectRequestContext } from "./request-context.js";
 import { runCheckTool, type SubmitReceipt } from "./tools/op-tools.js";
 import { readOperationTool, type ReadOperationOutput } from "./tools/read-operation.js";
-import { checkChapterAction, type OperationAction } from "./user-actions.js";
-import { newDraftAction } from "./next-steps.js";
+import type { OperationAction } from "./user-actions.js";
+import { checkChapterAction, commitAction, newDraftAction } from "./next-steps.js";
+import { COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
 import { createDraftChangeRecipe } from "../services/operations/recipes/draft-change.js";
 import { draftAdoptRecipe } from "../services/operations/recipes/draft-candidate.js";
 import { fakeDraftDeps, writerOf } from "../services/operations/recipes/draft-change-kit.js";
@@ -122,7 +123,7 @@ async function stored(opId: string): Promise<OperationRecord> {
 }
 
 describe("订阅、转发、收尾", () => {
-  it("对话交的核账做完：先发一份当前记录、再发之后的，到做完为止；结论按结果出，下一步推荐「预览定稿」", async () => {
+  it("对话交的核账做完：先发一份当前记录、再发之后的，到做完为止；结论按结果出，下一步推荐「定稿」", async () => {
     const gate = deferred();
     fakeInspect({ result: CLEAN, hold: gate.promise });
     const record = await submitted();
@@ -136,7 +137,7 @@ describe("订阅、转发、收尾", () => {
 
     await finishOperationTurn({ record: last!, projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber() });
     expect(out.text()).toBe("第 1 章前后对得上。");
-    expect(out.choices().map((choice) => choice.label)).toEqual(["预览定稿", expect.any(String)]);
+    expect(out.choices().map((choice) => choice.label)).toEqual(["定稿", expect.any(String)]);
   });
 
   it("作者断开了：不再转发、马上返回；操作照跑完", async () => {
@@ -178,7 +179,7 @@ describe("订阅、转发、收尾", () => {
     const out = collector();
     await finishOperationTurn({ record: await stored(record.opId), projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber() });
     expect(out.text()).toBe("这次没核成：核账员没读完前文。");
-    expect(out.choices().map((choice) => choice.label)).not.toContain("预览定稿");
+    expect(out.choices().map((choice) => choice.label)).not.toContain("定稿");
     expect(out.choices()[0]).toMatchObject({ label: "再核一遍", action: { kind: "new", mode: "continuity" } });
   });
 
@@ -238,7 +239,7 @@ describe("按钮交的操作", () => {
     expect(second.operationStates()).toEqual(["succeeded"]);
   });
 
-  it("「不要了」：停掉、不再接着做；已经结束的说不用停；「接着做」没停着的如实说", async () => {
+  it("「不要了」：停掉、不再接着做；已经结束的说不用停；「接着做」已经停掉的如实说", async () => {
     const gate = deferred();
     fakeInspect({ result: CLEAN, hold: gate.promise });
     const record = await submitted();
@@ -255,7 +256,8 @@ describe("按钮交的操作", () => {
     expect(again.text()).toBe("核账·第 1 章已经结束了，不用停。");
     const resume = collector();
     await runOperationAction({ action: { kind: "resume", opId: record.opId }, projectDir: book, sendEvent: resume.sendEvent, scrubber: scrubber(), signal });
-    expect(resume.text()).toBe("这次没有停着，不用接着做。");
+    expect(resume.text()).toBe("这次已经停掉了。");
+    expect(resume.operationStates()).toEqual(["cancelled"]);
   });
 
   it("「接着做」：停着的从停下那一步接着跑完，收尾照常", async () => {
@@ -313,7 +315,7 @@ describe("写稿按钮（draft.change）", () => {
     expect(parseDraftFile(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).body.trim()).toBe("他推开门。");
   });
 
-  it("AI 另写几版给作者挑：一句结论（写了几版、稿子没动）；挑一版换上：说换上了，下一步推荐核账、再给预览定稿", async () => {
+  it("AI 另写几版给作者挑：一句结论（写了几版、稿子没动）；挑一版换上：说换上了，下一步推荐核账、再给定稿", async () => {
     expect(await runCommand(book, draftSave, { chapter: 1, body: "作者的稿。", baseVersion: null, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
     registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ writerClient: writerOf(prose) })));
     registerRecipe(draftAdoptRecipe);
@@ -332,7 +334,7 @@ describe("写稿按钮（draft.change）", () => {
     await runOperationAction({ action, projectDir: book, sendEvent: adopt.sendEvent, scrubber: scrubber(), signal });
     expect(adopt.operationStates().at(-1)).toBe("succeeded");
     expect(adopt.text()).toContain("换上了 AI 这一版");
-    expect(adopt.choices().map((choice) => choice.label)).toEqual(["核账", "预览定稿"]);
+    expect(adopt.choices().map((choice) => choice.label)).toEqual(["核账", "定稿"]);
     expect(parseDraftFile(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).body.trim()).toBe(prose);
   });
 
@@ -355,6 +357,75 @@ const runCheck = (input: Record<string, unknown>, context: ToolExecutionContext)
   (runCheckTool as unknown as { execute: (input: unknown, context: ToolExecutionContext) => Promise<SubmitReceipt> }).execute(input, context);
 const readOp = (input: Record<string, unknown>) =>
   (readOperationTool as unknown as { execute: (input: unknown, context: ToolExecutionContext) => Promise<ReadOperationOutput> }).execute(input, toolContext());
+
+describe("定稿按钮（commit.prepare）收尾", () => {
+  /** 假的定稿配方：照给的结果收；fail 给了就抛；wait 给了就停着等作者。 */
+  function fakeCommit(options: { readonly body?: Partial<CommitPrepareBody>; readonly fail?: string; readonly wait?: true }): void {
+    registerRecipe<{ readonly chapter: number }>({
+      kind: COMMIT_PREPARE_KIND,
+      version: 1,
+      lane: "foreground",
+      async prepare(_bookDir, input) {
+        return { ok: true, params: input.params as { readonly chapter: number }, writeScope: { chapters: [] }, budget: 1 };
+      },
+      async run(ctx) {
+        const chapter = ctx.params.chapter;
+        if (options.fail) throw new Error(options.fail);
+        if (options.wait) await ctx.waitForAuthor({ actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: { chapter } } });
+        return { schema: "operation-result/1", summary: `第 ${chapter} 章已定稿。`, body: { kind: COMMIT_PREPARE_KIND, chapter, committed: true, ...options.body } };
+      },
+      stepBudget: () => 0,
+      modelTasks: () => [],
+    });
+  }
+  const press = async (chapter: number) => {
+    const out = collector();
+    await runOperationAction({ action: commitAction(chapter), projectDir: book, sendEvent: out.sendEvent, scrubber: scrubber(), signal: new AbortController().signal });
+    return out;
+  };
+  const commitFiles = async (chapters: readonly number[]) => {
+    await mkdir(join(book, "chapters"), { recursive: true });
+    for (const chapter of chapters) await writeFile(join(book, "chapters", `${String(chapter).padStart(4, "0")}.md`), `# 第${chapter}章\n\n正文。\n`, "utf-8");
+  };
+
+  it("定稿了：说结论，下一步推荐写前沿章（重定旧章不拽回去）；线索堆积加重档加「归并线索」（不带动作，改账要作者点）", async () => {
+    fakeCommit({ body: { done: { threadMaintenanceHint: "escalated" } as CommitPrepareBody["done"] } });
+    await commitFiles([1, 2, 3, 4, 5]);
+    const out = await press(3);
+    expect(out.text()).toBe("第 3 章已定稿。");
+    expect(out.choices()).toEqual([
+      expect.objectContaining({ label: "AI 写第 6 章", recommended: true, action: expect.objectContaining({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } }) }),
+      { label: "归并线索", intent: expect.any(String) },
+    ]);
+  });
+
+  it("下一章已经有工作稿（回头重定了旧章）：推荐核那一章，不推荐「AI 写」", async () => {
+    fakeCommit({});
+    await commitFiles([1, 2]);
+    expect((await runCommand(book, draftSave, { chapter: 3, title: "", body: "第三章写到一半。", baseVersion: null }, { caller: "author" })).ok).toBe(true);
+    const out = await press(2);
+    expect(out.choices()[0]).toMatchObject({ label: "核第 3 章", recommended: true, action: { kind: "new", type: INSPECT_KIND, mode: "continuity", params: { chapter: 3 } } });
+  });
+
+  it("定不了：说原因在清单里，不给下一步；清单出来停着：说清单打开了", async () => {
+    fakeCommit({ body: { committed: false } });
+    const blocked = await press(1);
+    expect(blocked.text()).toBe("第 1 章现在还定不了，原因在清单里。");
+    expect(blocked.choices()).toEqual([]);
+    __resetRecipesForTests();
+    fakeCommit({ wait: true });
+    const waiting = await press(2);
+    expect(waiting.operationStates().at(-1)).toBe("waiting_author");
+    expect(waiting.text()).toBe("第 2 章可以定稿，清单在卡上：点「确认定稿」才定。");
+  });
+
+  it("没做成：说原因，给「再来一次」（新的一次定稿）", async () => {
+    fakeCommit({ fail: "记账员没交成" });
+    const out = await press(1);
+    expect(out.text()).toContain("记账员没交成");
+    expect(out.choices()).toEqual([expect.objectContaining({ label: "再来一次", recommended: true, action: expect.objectContaining({ kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter: 1 } }) })]);
+  });
+});
 
 describe("run_check：只交、只回受理回执", () => {
   it("受理：回操作号和一句「交出去了」；同一条消息再交（同样的、别的）都回原来那次，不另开", async () => {

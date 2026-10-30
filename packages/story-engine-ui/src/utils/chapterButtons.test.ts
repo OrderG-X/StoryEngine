@@ -18,7 +18,7 @@ describe("chapterButtonAction：按钮 → 结构化动作（不靠文案）", (
     const first = chapterButtonAction("review", { chapter: 3, chapters }) as { requestKey: string };
     const second = chapterButtonAction("review", { chapter: 3, chapters }) as { requestKey: string };
     expect(first.requestKey).not.toBe(second.requestKey);
-    expect(chapterButtonAction("commit_preview", { chapter: 3, chapters })).toEqual({ toolName: "commit_preview", chapter: 3 });
+    expect(chapterButtonAction("commit", { chapter: 3, chapters })).toEqual({ kind: "new", type: "commit.prepare", params: { chapter: 3 }, requestKey: expect.stringMatching(/^[A-Za-z0-9_-]{1,64}$/u), issuedAt: expect.any(String) });
   });
 
   it("写这一章：方向框有字就带上（原样），空白不带", () => {

@@ -81,10 +81,12 @@ export interface ChapterMessage {
  * 老会话读的时候把老字段转成这里的卡。一条消息上同一种卡最多一张。
  */
 export type MessageCard =
-  /** 定稿预览（commit_preview）：裁决照实显示，不靠模型转述。 */
-  /** 定稿预览。checkedVersion＝预览时稿纸的版本号：稿子没再变就直接打开这份清单，不再重跑记账员（重构 P6）。 */
-  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData; readonly checkedVersion?: string | null }
-  /** 定稿回执（commit_apply 的入库报告）：这章改了哪些账。原样存，渲染侧防御解析。 */
+  /**
+   * 定稿清单（写作版本 P2a 片 4A：commit.prepare 出的清单或定不了的原因）：裁决照实显示，不靠模型转述。opId＝出它的那次定稿
+   * （在等作者点「确认定稿」时，确认就是接着做它）；checkedVersion＝清单到时稿纸的版本号：稿子没再变就直接打开这份，不再重跑记账员。
+   */
+  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData; readonly opId?: string; readonly checkedVersion?: string | null }
+  /** 定稿回执（定成了的那次定稿记了多少账）：原样存，渲染侧防御解析。 */
   | { readonly type: "commit-report"; readonly report: unknown }
   /**
    * 核账（check_continuity）。dismissed＝作者点过「不是问题」的条目（continuityItemKey），对话卡和稿纸划线共用；
@@ -239,25 +241,19 @@ export interface ContinuityCheckItemData {
   readonly revisited?: { readonly from: string };
 }
 
-/** 「定稿预览」卡的确定性数据（commit_preview 工具输出的投影子集，渲染侧防御解析）。 */
+/** 定稿清单卡的数据（服务端 services/commit-view.ts 的 CommitPreviewView；防御解析见 utils/commitPreviewCard.ts）。 */
 export interface CommitPreviewCardData {
   readonly chapter: number;
   readonly canCommit: boolean;
-  /** 阻断理由（引擎确定性判定：缺稿/质检硬伤/名字漂移等）。非空时 canCommit 必为 false。 */
+  /** 定不了的原因（引擎确定性判定：缺稿 / 硬伤 / 记账员没记成等）。非空时 canCommit 必为 false。 */
   readonly blockingReasons?: readonly string[];
   readonly summary?: string;
-  /** 质量问题分层计数；缺省时不渲染该行。 */
-  readonly draftIssueCount?: number;
-  readonly semanticIssueCount?: number;
-  /** R7.7·报告 4.3：质量问题明细文案，卡内默认折叠展开；不再指向界面上不存在的「质检卡」。 */
+  /** 正文硬闸没过的地方（卡内默认折叠）。 */
   readonly draftIssues?: readonly string[];
-  readonly semanticIssues?: readonly string[];
   /** 记账员交了、但原句在正文里找不到或指向前文没有的东西，这次没记上的（带原因，人话）。 */
   readonly notRecorded?: readonly string[];
   /** 要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……）。 */
   readonly notes?: readonly string[];
-  /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
-  readonly previewToken?: string;
   /** 只差字数下限：定稿窗口给「就这么短，照样定稿」。 */
   readonly shortOnly?: boolean;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */

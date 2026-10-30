@@ -27,10 +27,6 @@ export function userActionChoiceText(
 ): string {
   if ("kind" in action) return operationActionText(action, directionTitle);
   switch (action.toolName) {
-    case "commit_preview":
-      return `预览第 ${action.chapter} 章的定稿改动`;
-    case "commit_apply":
-      return `确认定稿第 ${action.chapter} 章`;
     case "prune_snapshots":
       return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
     case "undo":
@@ -38,8 +34,8 @@ export function userActionChoiceText(
   }
 }
 
-/** 等作者点的按钮点了哪个：先按按钮认（「确认改设定」「确认改账」），再按选法认（改写的「换上 / 再改一版」）。 */
-const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定", "confirm-ledger": "确认改账", "confirm-canon": "确认定论，改齐前文" };
+/** 等作者点的按钮点了哪个：先按按钮认（「确认改设定」「确认改账」「确认定稿」），再按选法认（改写的「换上 / 再改一版」）。 */
+const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定", "confirm-ledger": "确认改账", "confirm-canon": "确认定论，改齐前文", "confirm-commit": "确认定稿" };
 const DECISION_TEXT: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
 
 const WEIGHT_TEXT = { major: "大伏笔", normal: "普通线索", minor: "小线索" } as const;
@@ -83,6 +79,7 @@ function operationActionText(action: import("../api/agentChatClient.js").Operati
     return truth.where === "setting" ? `以设定为准：${truth.label}「${truth.quote}」` : `以第 ${truth.chapter} 章为准：「${truth.quote}」`;
   }
   const chapter = action.params.chapter;
+  if (action.type === "commit.prepare") return action.params.allowShort ? `第 ${chapter} 章就这么短，照样定稿` : `定稿第 ${chapter} 章`;
   if (isDraftEditAction(action)) return editActionText(action.params);
   if (action.type === "draft.adopt") return `第 ${chapter} 章换成 AI 写好的那版`;
   if (action.type === "draft.discard") return `第 ${chapter} 章 AI 写好的那版不要了`;

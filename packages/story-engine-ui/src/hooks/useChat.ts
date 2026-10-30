@@ -1,5 +1,4 @@
 import { useCallback, useRef } from "react";
-import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
 import { isCandidateDecisionType, isDraftEditMode, isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
 import { cancelOperationRequest } from "../api/operationsClient.js";
@@ -21,7 +20,7 @@ import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
 import { directionGoal, pickedDirection, pickedDirectionGoal } from "../utils/brainstormCard.js";
 import type { StateOverview } from "../api/types.js";
-import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
+import type { ChapterMessage, SuggestedAction } from "../types.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
 import { useUiStore } from "../stores/uiStore.js";
@@ -47,7 +46,7 @@ import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/apply
 import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
 import { fetchChapterPaper } from "../api/workingDraftClient.js";
 import { patchChapterFlagsFromPaper } from "../utils/bookUtils.js";
-import { ENDED_OPERATION_STATES, projectOperationEverywhere, projectOperationProgressEverywhere } from "../workspace/operationCards.js";
+import { claimOperation, ENDED_OPERATION_STATES, projectOperationEverywhere, projectOperationProgressEverywhere } from "../workspace/operationCards.js";
 import { applyDraftDelta, draftPhaseOfStep, EMPTY_DRAFT_STREAM, type DraftStreamState } from "../workspace/draftStream.js";
 import { aiErrorAfterWriteBody, aiErrorBody } from "../lib/ai-error-text.js";
 import { pageLeaving } from "../lib/page-leaving.js";
@@ -221,6 +220,8 @@ export function useChat(params: UseChatParams): UseChatResult {
         intentTitle: deriveIntentTitle(text),
         turnStartedAt: Date.now(),
       }));
+      // 接着卡上那一次（「接着做」「确认定稿」「不要了」）：这一轮一开始就挂上它，结果、回执落在这一轮。
+      if (action && isOperationAction(action) && action.kind !== "new") claimOperation(action.opId, assistantMsgId);
 
       const project = (event: AgentProjectionEvent) => {
         if (!ownsCurrentWorkspace()) return;
@@ -296,11 +297,9 @@ export function useChat(params: UseChatParams): UseChatResult {
             : {}),
         });
       };
-      // 本轮是否出现过章节写类动作（写稿、改稿操作、commit_apply）——出错 / 停止收尾时
+      // 本轮是否出现过章节写类动作（写稿、改稿、定稿操作）——出错 / 停止收尾时
       // 据此重读一次盘上的稿纸和状态（回执可能丢了，盘上其实已写）。纯读 / 问答回合不浪费这次 IO。
       let sawChapterWriteToolCall = false;
-      // 定稿在飞：记下发起时盘上那份定稿，收尾时据它判断「其实已经定稿、只是回执丢了」。
-      let commitAttempt: { readonly committedBefore: string | null } | null = null;
       // 出稿在飞：记下发起时稿纸开着哪章、盘上那版的版本号。停止 / 出错收尾时盘上换成了别的版本、又不是这个窗口自己存的，
       // 才说「盘上其实已经写完了」（只和同一章比，第 5 轮 S4；作者自己存的字不算，第 6 轮 T4）。
       let generateAttempt: { readonly chapter: number; readonly versionBefore: string | null } | null = null;
@@ -325,10 +324,9 @@ export function useChat(params: UseChatParams): UseChatResult {
         const next = flowStatusAfterGenerateFailure(wsBook.workspace.flowStatus, useDraftStore.getState().body.trim().length > 0);
         if (next) wsBook.updateWorkspace({ flowStatus: next });
       };
-      // 写类工具在飞时出错 / 被停止：SSE 回执丢了，但服务端可能已经写完（出稿落了 drafts/fast、定稿已入库）。
-      // 重读盘上这一章的稿纸和书的状态：
-      //   ① 定稿在飞、盘上的定稿变了 → 其实已经定稿，更正状态并说一声；
-      //   ② 停止时流出了半章、盘上没有更全的一版 → 把流出来的字留给作者（照常存盘）。
+      // 写类动作在飞时出错 / 被停止：SSE 回执丢了，但服务端可能已经写完（出稿落了工作稿）。
+      // 重读盘上这一章的稿纸和书的状态；停止时流出了半章、盘上没有更全的一版 → 把流出来的字留给作者（照常存盘）。
+      // 定稿是操作：流断了操作照做，卡跟着它变（operationReconnect），不在这里猜盘上定没定。
       let resyncPromise: Promise<void> | null = null;
       const resyncAfterInterruptedWrite = async (partial: { readonly text: string; readonly chapter: number } | null): Promise<void> => {
         try {
@@ -340,19 +338,6 @@ export function useChat(params: UseChatParams): UseChatResult {
           if (!ownsCurrentWorkspace()) return;
           applyOverviewToWorkspace(overview);
           const paper = useDraftStore.getState();
-          if (commitAttempt && paper.committed && paper.committed.body !== commitAttempt.committedBefore) {
-            const current = useBookStore.getState().workspace;
-            useBookStore.getState().updateWorkspace({
-              flowStatus: "committed",
-              currentChapter: { ...current.currentChapter, hasCommittedChapter: true, hasDraftFile: true },
-            });
-            appendMessage({
-              id: `assistant-reconcile-${Date.now()}`,
-              role: "assistant",
-              content: `（核对盘上：第 ${paper.chapter} 章其实已经定稿——上一步可能因为连接中断没收到结果、看起来像失败，但确实已写入。状态已更正为「已定稿」。）`,
-            });
-            return;
-          }
           // 盘上已经是这一轮写的新稿（停晚了一步、服务端已写进去）：用盘上那版，如实说——不管流出来的字还在不在、长短。
           if (
             generateAttempt
@@ -490,6 +475,28 @@ export function useChat(params: UseChatParams): UseChatResult {
         }
         apply();
       };
+      // 这一轮交的定稿（片 4A）：清单 / 定不了的原因头一回到就弹出定稿清单，记下清单到时稿纸是哪一版（稿子没再变时再点「定稿」
+      // 直接打开这份，不再重跑记账员）；定成了按盘上重读稿纸和书的状态，顶栏「设定本」亮个小点（点进去先看这章改了什么）。
+      const shownCommits = new Set<string>();
+      const settledCommits = new Set<string>();
+      const followCommit = (view: OperationViewData): void => {
+        sawChapterWriteToolCall = true;
+        if ((view.pending?.kind === "commit" || view.commit?.blocked) && !shownCommits.has(view.opId)) {
+          shownCommits.add(view.opId);
+          const paper = useDraftStore.getState();
+          if (paper.chapter === view.chapter) useChatStore.getState().stampPreviewVersion(assistantMsgId, paper.baseVersion);
+          openCommitSheet(assistantMsgId);
+        }
+        if (view.state !== "succeeded" || !view.commit?.committed || settledCommits.has(view.opId) || !projectPath) return;
+        settledCommits.add(view.opId);
+        const chapter = view.commit.chapter;
+        useNavigationStore.getState().setUnseenChangesChapter(chapter);
+        track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 }).then((overview) => {
+          if (!ownsCurrentWorkspace()) return;
+          applyOverviewToWorkspace(overview, chapter === operation.chapter ? { flowStatus: "committed", chapter } : {});
+        }).catch(() => undefined));
+        track(refreshPaper());
+      };
       // 这一轮跟着的那次改稿操作（片 2C：按核账改 / 去 AI 味 / 改写）：不流正文，做完了才按盘上重读稿纸。
       let editOpId: string | null = null;
       let editSettled = false;
@@ -560,6 +567,8 @@ export function useChat(params: UseChatParams): UseChatResult {
               } else if (view.kind === "draft.change") {
                 if (draftOpId === null) beginDraftStream(view);
                 if (!LIVE_STATES.has(view.state)) finishDraftStream(view);
+              } else if (view.kind === "commit.prepare") {
+                followCommit(view);
               }
               // 改设定、改账、定论改齐了（结果不带概况）：重读一份，设定本、主角、线索、待处理跟着变。同一次只读一回。
               // 定论还可能改了这一章的正文 / 工作稿：按盘上重读稿纸（作者手上有没存的字就出提示让作者选）。
@@ -570,11 +579,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                   .catch(() => undefined));
                 if (view.changed.what === "canon") track(refreshPaper());
               }
-              if (view.state === "succeeded") {
-                const flowBefore = useBookStore.getState().workspace.flowStatus;
-                const flow = flowAfterOperation(view, flowBefore);
-                if (flow !== flowBefore && view.chapter === operation.chapter) useBookStore.getState().updateWorkspace({ flowStatus: flow });
-              }
+              const flowBefore = useBookStore.getState().workspace.flowStatus;
+              const flow = flowAfterOperation(view, flowBefore);
+              if (flow !== flowBefore && view.chapter === operation.chapter) useBookStore.getState().updateWorkspace({ flowStatus: flow });
             },
             onOperationProgress: ({ opId, text: progress }) => {
               if (!ownsCurrentWorkspace()) return;
@@ -598,10 +605,6 @@ export function useChat(params: UseChatParams): UseChatResult {
             onToolCall: ({ toolName, toolCallId }) => {
               if (!ownsCurrentWorkspace()) return;
               project({ type: "tool-call", toolCallId: stepIdFor(toolName, toolCallId), toolName, startedAt: Date.now() });
-              if (toolName === "commit_apply") {
-                sawChapterWriteToolCall = true;
-                commitAttempt = { committedBefore: useDraftStore.getState().committed?.body ?? null };
-              }
             },
             onToolResult: (info) => {
               if (!ownsCurrentWorkspace()) return;
@@ -614,18 +617,13 @@ export function useChat(params: UseChatParams): UseChatResult {
                 output: info,
               });
               const apply = (): void => {
-                // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）：按这时的当前章判。
+                // 跨章工具结果（用户在第 1 章、agent 改了第 99 章的设定等）：按这时的当前章判。
                 const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
-                // 定稿预览一到就弹出定稿清单（重构 P6）；记下预览的是哪一版，稿子没再变时再点「定稿」直接打开这份。
-                if (info.toolName === "commit_preview" && !chapterMismatch) {
-                  useChatStore.getState().stampPreviewVersion(assistantMsgId, useDraftStore.getState().baseVersion);
-                  openCommitSheet(assistantMsgId);
-                }
                 if (chapterMismatch) {
                   // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
                   if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
-                  // 只有真写了那一章（出稿 / 改稿 / 定稿回 refreshScope:"full"，或打了存档点）才重读它、提示一句；
-                  // 核账回执、定稿预览这类没写的，说「写的是第 N 章」就是瞎说。
+                  // 只有真写了那一章（回 refreshScope:"full"，或打了存档点）才重读它、提示一句；
+                  // 交操作的回执这类没写的，说「写的是第 N 章」就是瞎说。
                   if (info.ok === false || (info.refreshScope !== "full" && info.snapshotId === undefined)) {
                     unstickGeneratingFlow();
                     return;
@@ -646,9 +644,6 @@ export function useChat(params: UseChatParams): UseChatResult {
                   unstickGeneratingFlow();
                   return;
                 }
-                if (info.toolName === "commit_apply") commitAttempt = null;
-                // 定稿成了：顶栏「设定本」亮个小点，点进去先看这章改了什么（重构 P6 第 6 步）。
-                if (info.toolName === "commit_apply" && info.committed === true) useNavigationStore.getState().setUnseenChangesChapter(operation.chapter);
                 const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
                 if (undone) {
                   agentUndone = true;
@@ -664,17 +659,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                       .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
                       .catch(() => undefined));
                   }
-                  if (info.toolName === "commit_apply" && info.committed === true) {
-                    const storeBook = useBookStore.getState();
-                    const current = storeBook.workspace;
-                    storeBook.updateWorkspace({
-                      flowStatus: "committed",
-                      currentChapter: { ...current.currentChapter, hasCommittedChapter: true, hasDraftFile: true },
-                      chapters: current.chapters.map((item) => item.chapterNumber === operation.chapter
-                        ? { ...item, hasCommittedChapter: true, hasDraftFile: true }
-                        : item),
-                    });
-                  } else if (nextFlow !== flowBefore) {
+                  if (nextFlow !== flowBefore) {
                     // 没带 overview 的工具（如质检 / 预览只读）也要推进流程状态，否则地图卡在写稿不动。
                     useBookStore.getState().updateWorkspace({ flowStatus: nextFlow });
                   }
@@ -688,7 +673,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                 } else if (info.refreshScope === "foundation") {
                   refreshWorkspaceFromOverview?.(info.overview);
                 }
-                // 工具可能改了这一章的稿子（出稿、改稿、定稿、改名、撤销……）：按盘上重读稿纸。
+                // 工具可能改了这一章的稿子（改名、撤销……）：按盘上重读稿纸。
                 // 盘上没变什么都不发生；变了而作者手上没有没存的字就换上，有就出提示让作者选（撤销也一样）。
                 track(refreshPaper()
                   .then(() => {
@@ -965,61 +950,9 @@ export function useChat(params: UseChatParams): UseChatResult {
   );
 
 
-  /* ---- handleConfirmCommit：「确认定稿」按钮 ---- */
-
-  // 结构化动作（2026-10-07 拆补丁塔）：按钮点击即授权，服务端直接执行 commit_apply——不经模型、
-  // 不靠文本意图词表。对话里留一条「确认定稿第 N 章」作记录，后续回合模型能看到发生过什么。
-  const handleConfirmCommit = useCallback(
-    async (target?: CommitConfirmTarget): Promise<void> => {
-      if (!projectPath) {
-        setChatError("请先打开真实本地项目。");
-        return;
-      }
-      const liveBook = useBookStore.getState();
-      const liveChat = useChatStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading) {
-        showToast("已有操作正在进行，请等它结束后再定稿。", 4200);
-        return;
-      }
-      const chapter = target?.chapter ?? liveBook.workspace.currentChapter?.chapterNumber;
-      if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
-        showToast("没找到要定稿的章节，请先打开那一章。", 4200);
-        return;
-      }
-      // 作者在预览卡上动过的账本条目：从卡上点带着；从建议条点的没带，按章取回（否则会把勾掉的照写）。
-      // 两类混在一个数组里、按前缀分流：勾掉的（fact:/change:…）＝去掉不写；勾上的要确认改记（change_confirm:）＝确认作废旧条。
-      const excluded = target?.excluded ?? ledgerExclusionsForConfirm(chapter, target?.previewToken);
-      const confirmedChanges = excluded.filter((id) => id.startsWith("change_confirm:")).length;
-      const removedCount = excluded.length - confirmedChanges;
-      const dayOverride = target?.dayOverride !== undefined
-        ? { day: target.dayOverride, ...(target.dayEndOverride !== undefined ? { dayEnd: target.dayEndOverride } : {}) }
-        : ledgerDayOverrideForConfirm(chapter, target?.previewToken);
-      const dayEnd = dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? dayOverride.dayEnd : undefined;
-      clearLedgerExclusions(chapter);
-      const notes = [
-        ...(removedCount > 0 ? [`账本清单去掉了 ${removedCount} 条`] : []),
-        ...(confirmedChanges > 0 ? [`确认改记 ${confirmedChanges} 条`] : []),
-        ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride.day} 天${dayEnd !== undefined ? `到第 ${dayEnd} 天` : ""}`] : []),
-      ];
-      const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
-      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      const echo = authorMessage(text);
-      appendMessage(echo.message);
-      await runAgentDispatch(text, conversation, {
-        toolName: "commit_apply",
-        chapter,
-        ...(target?.previewToken ? { previewToken: target.previewToken } : {}),
-        ...(excluded.length > 0 ? { excluded } : {}),
-        ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
-        ...(dayEnd !== undefined ? { dayEndOverride: dayEnd } : {}),
-      }, echo.ref);
-    },
-    [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
-  );
-
   /* ---- handleConfirmPrune：「确认裁剪」按钮 ---- */
 
-  // 与「确认定稿」同一套结构化动作：按钮点击即授权，服务端直接真裁操作历史（裁前自动备份），不经模型。
+  // 结构化动作：按钮点击即授权，服务端直接真裁操作历史（裁前自动备份），不经模型。
   const handleConfirmPrune = useCallback(
     async (target?: { readonly keep?: number }): Promise<void> => {
       if (!projectPath) {
@@ -1078,8 +1011,8 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
   const handleChapterButton = useCallback(
     (button: ChapterButton): void => {
-      // 「定稿」：上次预览后稿子没变，直接打开那份定稿清单，不再重跑记账员。
-      if (button === "commit_preview") {
+      // 「定稿」：上次出清单后稿子没变、那次定稿还在等作者点，直接打开那份清单，不再重跑记账员。
+      if (button === "commit") {
         const reusable = reusableCommitPreviewId(useChatStore.getState().messages, useDraftStore.getState());
         if (reusable) {
           openCommitSheet(reusable);
@@ -1152,15 +1085,6 @@ export function useChat(params: UseChatParams): UseChatResult {
         case "revision-preview":
           void handleSendMessage("按我的方向给这一章改一版，先出预览。");
           return;
-        case "commit-preview":
-          handleChapterButton("commit_preview");
-          return;
-        case "commit-apply":
-          void handleConfirmCommit(action.commitTarget);
-          return;
-        case "commit-short":
-          if (action.commitTarget?.chapter) void handleSendUserAction({ toolName: "commit_preview", chapter: action.commitTarget.chapter, allowShort: true });
-          return;
         case "prune-confirm":
           consumeSuggestedAction(action);
           void handleConfirmPrune(action.pruneTarget);
@@ -1198,6 +1122,8 @@ export function useChat(params: UseChatParams): UseChatResult {
           return;
         }
         default:
+          // 认不出的按钮（老会话里存下的、现在已经没有的那几种）：如实说点不了，不静默吞掉。
+          showToast("这个按钮已经不管用了，跟 AI 说一声要做什么就行。", 4200);
           return;
       }
     },
@@ -1205,7 +1131,6 @@ export function useChat(params: UseChatParams): UseChatResult {
       showToast,
       handleSendMessage,
       handleChapterButton,
-      handleConfirmCommit,
       handleConfirmPrune,
       handleSendUserAction,
       appendMessage,

@@ -414,7 +414,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(legacy).not.toHaveProperty("intentTitle");
   });
 
-  it("定稿预览卡 commitPreview 与「确认定稿」按钮 commitTarget 持久化（刷新后卡与按钮不丢）；坏值不写", () => {
+  it("老会话的定稿预览 commitPreview 读成只看的清单卡；老「确认定稿」按钮不再摆（定稿清单上点）；坏卡不要", () => {
     const out = readWorkspaceMessages([
       {
         id: "assistant-preview",
@@ -439,12 +439,11 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
             commitTarget: { chapter: 2, previewToken: "tok-2", junk: 1 },
           },
           {
-            id: "commit-apply-bad-target",
-            label: "确认定稿",
-            description: "写入定稿章节",
+            id: "prune-confirm",
+            label: "确认裁剪",
+            description: "裁剪操作历史",
             permission: "formal_state_write",
             requiresConfirmation: false,
-            commitTarget: { chapter: 0 },
           },
         ],
       },
@@ -452,18 +451,9 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
 
-    expect(cardOf(out[0]!, "commit-preview")?.preview).toEqual({
-      chapter: 2,
-      canCommit: true,
-      blockingReasons: ["x"],
-      summary: "可以定稿。",
-      draftIssueCount: 0,
-      previewToken: "tok-2",
-    });
-    expect(out[0]!.suggestedActions?.[0]).toMatchObject({ id: "commit-apply", commitTarget: { chapter: 2, previewToken: "tok-2" } });
-    expect(out[0]!.suggestedActions?.[0]?.commitTarget).toEqual({ chapter: 2, previewToken: "tok-2" });
-    expect(out[0]!.suggestedActions?.[1]).not.toHaveProperty("commitTarget");
-    expect(out[1]).not.toHaveProperty("commitPreview");
+    expect(cardOf(out[0]!, "commit-preview")).toEqual({ type: "commit-preview", preview: { chapter: 2, canCommit: true, blockingReasons: ["x"], summary: "可以定稿。" } });
+    expect(out[0]!.suggestedActions?.map((action) => action.id)).toEqual(["prune-confirm"]);
+    expect(cardOf(out[1]!, "commit-preview")).toBeUndefined();
   });
 
   it("「确认裁剪」按钮的 pruneTarget 持久化（刷新后按钮仍按预览的保留条数裁）；坏 keep 丢掉但按钮还在", () => {
@@ -490,13 +480,13 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         role: "assistant",
         content: "质检完成。",
         suggestedActions: [
-          { id: "commit-apply", label: "确认定稿", description: "写入", permission: "draft_write", requiresConfirmation: true, disabledReason: "必须先生成定稿预览。" },
-          { id: "commit-preview", label: "生成定稿预览", description: "预览", permission: "safe_read", requiresConfirmation: false, disabledReason: "" },
+          { id: "quality-check", label: "硬伤检查", description: "检查", permission: "safe_read", requiresConfirmation: false, disabledReason: "先写出这一章。" },
+          { id: "ai-review", label: "内容审阅", description: "审阅", permission: "safe_read", requiresConfirmation: false, disabledReason: "" },
         ],
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
-    expect(out[0]!.suggestedActions?.[0]?.disabledReason).toBe("必须先生成定稿预览。");
+    expect(out[0]!.suggestedActions?.[0]?.disabledReason).toBe("先写出这一章。");
     expect(out[0]!.suggestedActions?.[1]).not.toHaveProperty("disabledReason");
   });
 
@@ -593,19 +583,19 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         nextStepPrompt: {
           question: "核账做完了，接下来？",
           choices: [
-            { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
+            { label: "定稿", intent: "定稿第 5 章", recommended: true, action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, requestKey: "rk-0", issuedAt: "2026-10-29T00:00:00.000Z" } },
             { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" } },
             { label: "缺请求号丢", intent: "c", action: { kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 5 } } },
             { label: "我自己改", intent: "我自己改，先放着" },
-            { label: "坏动作丢", intent: "a", action: { toolName: "commit_apply", chapter: 5 } },
-            { label: "残缺动作丢", intent: "b", action: { toolName: "commit_preview" } },
+            { label: "老动作丢", intent: "a", action: { toolName: "commit_preview", chapter: 5 } },
+            { label: "残缺动作丢", intent: "b", action: { kind: "new", type: "commit.prepare", params: {}, requestKey: "rk-9", issuedAt: "2026-10-29T00:00:00.000Z" } },
           ],
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ]);
     const choices = cardOf(out[0], "next-steps")!.prompt.choices;
-    expect(choices[0]).toEqual({ label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } });
+    expect(choices[0]).toEqual({ label: "定稿", intent: "定稿第 5 章", recommended: true, action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, requestKey: "rk-0", issuedAt: "2026-10-29T00:00:00.000Z" } });
     expect(choices[1]).toEqual({
       label: "再细核一遍",
       intent: "再细核一遍：这一章重新对一遍前文",

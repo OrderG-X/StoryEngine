@@ -30,29 +30,21 @@ describe("agentFlowStatusForTool", () => {
     expect(flowAfterOperation(op("quality"), "committed")).toBe("committed");
   });
 
-  it("预览入库 → waiting_commit_confirmation", () => {
-    expect(agentFlowStatusForTool("commit_preview", {}, "quality_checked")).toBe("waiting_commit_confirmation");
-  });
-
-  it("入库成功（committed=true）→ committed；未成功保持原状", () => {
-    expect(agentFlowStatusForTool("commit_apply", { committed: true }, "waiting_commit_confirmation")).toBe("committed");
-    expect(agentFlowStatusForTool("commit_apply", { committed: false }, "waiting_commit_confirmation")).toBe("waiting_commit_confirmation");
-  });
-
-  it("入库 ok:false 时即便 committed 字段异常为 true 也不推进（防御性一致）", () => {
-    expect(agentFlowStatusForTool("commit_apply", { committed: true, ok: false }, "waiting_commit_confirmation")).toBe("waiting_commit_confirmation");
+  it("定稿（操作）：出了清单等作者点 → waiting_commit_confirmation（已定稿不往回拨）；定成了 → committed；定不了、没做完的不推", () => {
+    const op = (state: OperationViewData["state"], committed?: boolean): OperationViewData => ({
+      opId: "op-0123456789abcdef0123", kind: "commit.prepare", chapter: 3, what: "定稿", state, stateText: "", allowed: [], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat" },
+      ...(committed !== undefined ? { commit: { chapter: 3, committed } } : {}),
+    });
+    expect(flowAfterOperation(op("waiting_author"), "quality_checked")).toBe("waiting_commit_confirmation");
+    expect(flowAfterOperation(op("waiting_author"), "committed")).toBe("committed");
+    expect(flowAfterOperation(op("succeeded", true), "waiting_commit_confirmation")).toBe("committed");
+    expect(flowAfterOperation(op("succeeded", false), "draft_ready")).toBe("draft_ready");
+    expect(flowAfterOperation(op("obsolete"), "waiting_commit_confirmation")).toBe("waiting_commit_confirmation");
+    expect(flowAfterOperation(op("running"), "draft_ready")).toBe("draft_ready");
   });
 
   it("工具失败（ok:false）不推进——不把失败当进度", () => {
-    expect(agentFlowStatusForTool("revise_draft", { ok: false }, "steering_ready")).toBe("steering_ready");
-    expect(agentFlowStatusForTool("quality_check", { ok: false }, "draft_ready")).toBe("draft_ready");
-    expect(agentFlowStatusForTool("commit_preview", { ok: false }, "quality_checked")).toBe("quality_checked");
-  });
-
-  it("已入库后，打磨/预览类工具不把状态往回拨", () => {
-    expect(agentFlowStatusForTool("quality_check", {}, "committed")).toBe("committed");
-    expect(agentFlowStatusForTool("commit_preview", {}, "committed")).toBe("committed");
-    expect(agentFlowStatusForTool("ai_review", {}, "ready_for_next")).toBe("ready_for_next");
+    expect(agentFlowStatusForTool("generate_chapter_steering", { ok: false }, "idle")).toBe("idle");
   });
 
   it("读类/资料类/体检类工具不改本章生命周期", () => {

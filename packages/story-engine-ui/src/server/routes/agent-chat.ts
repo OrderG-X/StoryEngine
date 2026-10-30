@@ -23,8 +23,6 @@ import { buildProjectRequestContext, parseLastTurnUndoHint, parseMessageRef } fr
 import { endsByFlow, releaseTurnFlow } from "../agent/turn-flow.js";
 import { getStoryAgent, getStoryAgentModel, getStoryAgentToolNames, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
-import { commitApplyTool } from "../agent/tools/commit-apply.js";
-import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
@@ -130,7 +128,7 @@ export function buildCurrentChapterSystemMessage(
       (truthLine ? `${truthLine}\n` : "") +
       `【当前上下文】用户此刻正停留在第 ${currentChapter} 章。` +
       (statusLine ? statusLine : "") +
-      `凡涉及具体章号的操作（读取该章、出稿/续写、修订、质检、内容审阅、定稿预览/定稿）：` +
+      `凡涉及具体章号的操作（读取该章、出稿/续写、修订、质检、内容审阅、定稿）：` +
       `如果用户明确点名了某一章（例如「写第 7 章」「改第 3 章」「入库第 5 章」），一律以用户点名的章号为准，` +
       `即使它不是第 ${currentChapter} 章——把该章号原样填进工具的 chapter 入参，绝不用第 ${currentChapter} 章顶替。` +
       `只有当用户没有明确点名另一章时，才默认作用于第 ${currentChapter} 章，绝不要擅自跳到最新章或别的章。` +
@@ -602,7 +600,7 @@ async function handleAgentChat(
     // 工具长调用期间 SSE 会长时间静默，靠心跳喂活客户端 90s 空闲看门狗，避免误判超时掐流。
     stopHeartbeat = startSseHeartbeat(res).stop;
 
-    // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
+    // 结构化动作（作者点了按钮）：交给执行器或服务端直接做，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
       const actionStarted = Date.now();
       const { usage: actionUsage, notices: actionNotices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(() => runUserAction({
@@ -612,17 +610,17 @@ async function handleAgentChat(
         sendEvent,
         scrubber: createStreamingScrubber(),
         scrubError: stringifyError,
-        // 编辑部 R4.6：定稿后判「占位主角卡改名建议」用（缺省不给建议）。
+        // 交给执行器的操作要它。
         projectDir,
         // 按钮交的操作：作者断开了只是不再转发，操作照跑。
         signal: disconnectAbort.signal,
       })));
-      // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
+      // 按钮不经对话 AI，但定稿记账、核账这些步骤也调模型，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
       for (const notice of actionNotices) sendEvent("status", { message: notice });
       sendEvent("usage", actionUsage);
       const action = parsedAction.action;
-      const actionChapter = "kind" in action ? (action.kind === "new" && "chapter" in action.params ? action.params.chapter : currentChapter) : "chapter" in action ? action.chapter : currentChapter;
+      const actionChapter = "kind" in action && action.kind === "new" && "chapter" in action.params ? action.params.chapter : currentChapter;
       await appendTurnMetrics(projectDir, actionChapter, {
         kind: "action",
         label: "kind" in action ? (action.kind === "new" ? ("mode" in action ? `${action.type}:${action.mode}` : action.type) : `operation:${action.kind}`) : action.toolName,
@@ -687,22 +685,8 @@ async function handleAgentChat(
         releaseTurnFlow(requestContext);
         const record = await followOperation({ bookDir: projectDir, opId: turn.acceptedOperation.opId, sendEvent, signal: disconnectAbort.signal });
         if (record && !disconnectAbort.signal.aborted && settlesTurn(record.state)) {
-          await finishOperationTurn({
-            record,
-            projectDir,
-            sendEvent,
-            scrubber: visibleTextScrubber,
-            // 写完就出定稿预览：和「定稿」按钮同一条路（服务端直接出预览，不经模型）。
-            previewCommit: (chapter) => runUserAction({
-              action: { toolName: "commit_preview", chapter },
-              requestContext,
-              executeTool: executeUserActionTool,
-              sendEvent,
-              scrubber: visibleTextScrubber,
-              scrubError: stringifyError,
-              projectDir,
-            }),
-          });
+          // 写完就定稿：和「写这一章」按钮同一条路（接着交这一章的定稿、出清单，不经模型）。
+          await finishOperationTurn({ record, projectDir, sendEvent, scrubber: visibleTextScrubber, signal: disconnectAbort.signal });
         }
       }
       return turn;
@@ -737,20 +721,6 @@ async function handleAgentChat(
 /** 结构化动作的工具执行器：按白名单取工具、带同一 requestContext 直接 execute。 */
 const executeUserActionTool: UserActionToolExecutor = async (toolName, input, requestContext) => {
   switch (toolName) {
-    case "commit_preview": {
-      const execute = commitPreviewTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
-    case "commit_apply": {
-      const execute = commitApplyTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
     case "manage_snapshots": {
       const execute = manageSnapshotsTool.execute as unknown as (
         input: Record<string, unknown>,

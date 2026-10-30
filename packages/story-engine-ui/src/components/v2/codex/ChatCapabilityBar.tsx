@@ -43,8 +43,8 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
       { key: "review", label: "内容审阅", intent: "审阅这一章的内容，给评分和改进建议", button: "review" },
       { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
       { key: "quality", label: "硬伤检查", intent: "对这一章做硬伤检查，列出硬伤", button: "quality" },
-      // 定稿按钮 = 定稿流程入口，确定性走预览（commit_preview）；预览卡再引导「确认定稿」走 commit_apply。
-      { key: "commit", label: "定稿", intent: "预览这一章的定稿改动", button: "commit_preview" },
+      // 定稿按钮 = 交一次定稿：先出定稿清单；清单上的「确认定稿」才真定稿。
+      { key: "commit", label: "定稿", intent: "定稿这一章", button: "commit" },
     ],
   },
   {

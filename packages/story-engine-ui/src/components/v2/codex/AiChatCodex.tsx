@@ -48,9 +48,8 @@ import { targetChapterWordsOf } from "./WritingDeskCodex.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, withoutRailDuplicates, type NextStepPrompt } from "./nextStepChoices.js";
-import type { AgentUserAction } from "../../../api/agentChatClient.js";
-import { confirmableCommitPreviewMessageId, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
-import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
+import { newCommitAction, type AgentUserAction } from "../../../api/agentChatClient.js";
+import { confirmableCommitPreviewIds, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import { chapterTurns } from "./chapterTurns.js";
@@ -397,8 +396,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
   const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages), Boolean(nextStepPrompt && props.onSendMessage));
   const nextStep = withoutRailDuplicates(nextStepPrompt, railActions.map((action) => action.label));
-  // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
-  const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
+  // 能点「确认定稿」的定稿清单（那次定稿还在等作者点，见 commitConfirm.ts）。
+  const confirmablePreviewIds = confirmableCommitPreviewIds(messages);
   // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。
   const undoableCommitId = undoableCommitReportMessageId(messages);
   // 同一章后来又核过的旧核账卡不再给「改这处」（见 commitConfirm.ts）。
@@ -581,7 +580,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSendMessage={props.onSendMessage}
             onSendUserAction={props.onSendUserAction}
             onSuggestedAction={props.onSuggestedAction}
-            commitConfirmable={message.id === confirmablePreviewId}
+            commitConfirmable={confirmablePreviewIds.has(message.id)}
             commitUndoable={message.id === undoableCommitId}
             continuitySuperseded={staleContinuityIds.has(message.id)}
             continuitySettled={settledContinuity.get(message.id)}
@@ -795,9 +794,9 @@ function buildReviseIntent(issue: DraftReviewIssueView): string {
   return `${parts.join("。")}。`;
 }
 
-/** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——预览定稿时说「正在定稿」会吓人）。 */
+/** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——出清单时说「正在定稿」会吓人，点了确认才定）。 */
 const RUNNING_STEP_WORDS: Readonly<Record<string, string>> = {
-  "定稿预览": "生成定稿预览",
+  "定稿": "出定稿清单",
 };
 
 function runningStepCaption(step: ToolStep | undefined): string | null {
@@ -976,14 +975,14 @@ function MessageBubbles({
         // 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。
         return withStaleNote(card.type, card.checkedVersion, <QualityCheckCard key={card.type} report={card.report} />);
       case "commit-preview":
-        // 定稿预览卡（R3）：commit_preview 的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。
+        // 定稿清单卡（R3）：定稿的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。
         return (
           <CommitPreviewCard
             key={card.type}
             preview={card.preview}
             confirmable={commitConfirmable}
             onOpen={() => openCommitSheet(message.id)}
-            {...(onSendUserAction ? { onCommitShort: () => onSendUserAction({ toolName: "commit_preview", chapter: card.preview.chapter, allowShort: true }) } : {})}
+            {...(onSendUserAction ? { onCommitShort: () => onSendUserAction(newCommitAction(card.preview.chapter, { allowShort: true })) } : {})}
           />
         );
       case "commit-report":

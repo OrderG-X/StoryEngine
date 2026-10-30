@@ -71,7 +71,7 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
       targetWords: null,
     });
     expect(p.check.state).toBe("clean");
-    expect(p.primary).toEqual({ kind: "commit_preview", label: "定稿" });
+    expect(p.primary).toEqual({ kind: "commit", label: "定稿" });
     expect(p.statusLine).toBe("核过了：没有确定对不上的，1 处可能");
   });
 

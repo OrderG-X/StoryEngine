@@ -4,7 +4,6 @@
  *
  * 界面照旧拿完整结果（SSE tool-result 原样转发、写作区刷新靠它）；模型只看去掉总览与正文的精简版。
  * 读类工具（read_*）的本职就是把资料给模型看，原样保留。
- * 定稿预览：整份引擎计划（几千字的 JSON）不给模型，给它账本清单的人话标签就够转述（界面本来就不用 plan）。
  */
 
 /** 读类工具：结果就是给模型读的，不精简。 */
@@ -35,13 +34,8 @@ export function slimToolOutputForModel(toolName: string, output: unknown): unkno
       }
       continue;
     }
-    if (toolName === "commit_preview" && key === "plan") continue;
     // 「接着往下写」「重写这一章」按钮带的动作只给界面；模型照 summary 告诉作者点按钮就够。
     if (toolName === "change_draft" && key === "rewriteChoices") continue;
-    if (key === "ledgerChecklist" && Array.isArray(value)) {
-      slim.ledgerChecklist = value.map((item) => (item && typeof item === "object" ? (item as { label?: unknown }).label : item));
-      continue;
-    }
     slim[key] = value;
   }
   return slim;

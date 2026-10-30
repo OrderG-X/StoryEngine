@@ -5,15 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { isUserConfirmedTool } from "./request-context.js";
-import {
-  commitApplyNextSteps,
-  humanizeToolNames,
-  nextDraftChapterAfter,
-  parseUserAction,
-  readCommittedChapterNumbers,
-  runUserAction,
-  type UserActionToolExecutor,
-} from "./user-actions.js";
+import { humanizeToolNames, nextDraftChapterAfter, readCommittedChapterNumbers } from "./next-steps.js";
+import { parseUserAction, runUserAction, type UserActionToolExecutor } from "./user-actions.js";
 
 describe("parseUserAction 结构化动作解析", () => {
   it("线索板 / 梗概上直接改账：只认作者直接改、每笔认得出才收；老的「确认改账」按钮（ledger_decision）不再认", () => {
@@ -46,15 +39,32 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction(null)).toEqual({ kind: "none" });
   });
 
-  it("合法定稿动作 → action（previewToken 可选、去空白）", () => {
-    expect(parseUserAction({ toolName: "commit_apply", chapter: 5 })).toEqual({
+  it("「定稿」「就这么短，照样定稿」（commit.prepare，片 4A）：章号要对；allowShort 只认 true；老的按工具名的定稿按钮不再收", () => {
+    const stamp = { requestKey: "k-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(parseUserAction({ kind: "new", type: "commit.prepare", params: { chapter: 5 }, ...stamp })).toEqual({
       kind: "action",
-      action: { toolName: "commit_apply", chapter: 5 },
+      action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, ...stamp },
     });
-    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, previewToken: " tok " })).toEqual({
+    expect(parseUserAction({ kind: "new", type: "commit.prepare", params: { chapter: 5, allowShort: true }, ...stamp })).toMatchObject({ action: { params: { chapter: 5, allowShort: true } } });
+    expect(parseUserAction({ kind: "new", type: "commit.prepare", params: { chapter: 5, allowShort: "true" }, ...stamp })).toMatchObject({ action: { params: { chapter: 5 } } });
+    expect(parseUserAction({ kind: "new", type: "commit.prepare", params: { chapter: 0 }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "commit.prepare", params: { chapter: 5 } }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "commit_preview", chapter: 5 }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, previewToken: "tok" }).kind).toBe("invalid");
+  });
+
+  it("「确认定稿」：划掉的行、改的天数随接着做带上；形状不对、填的不是整数按非法处理", () => {
+    const opId = "op-0123456789abcdef0123";
+    const answer = { actionId: "confirm-commit", decision: "commit" };
+    expect(parseUserAction({ kind: "resume", opId, answer: { ...answer, excluded: ["i3", "o1"], values: { day: 21, dayEnd: 22 } } })).toEqual({
       kind: "action",
-      action: { toolName: "commit_apply", chapter: 5, previewToken: "tok" },
+      action: { kind: "resume", opId, answer: { ...answer, excluded: ["i3", "o1"], values: { day: 21, dayEnd: 22 } } },
     });
+    expect(parseUserAction({ kind: "resume", opId, answer: { ...answer, values: {} } })).toEqual({ kind: "action", action: { kind: "resume", opId, answer } });
+    for (const values of [{ day: "21" }, { day: 1.5 }, [21], { "第几天": 3 }, Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`k${index}`, 1]))]) {
+      expect(parseUserAction({ kind: "resume", opId, answer: { ...answer, values } }).kind).toBe("invalid");
+    }
+    expect(parseUserAction({ kind: "resume", opId, answer: { ...answer, excluded: ["../x"] } }).kind).toBe("invalid");
   });
 
   it("操作动作（写作版本 P2a）：新检查要种类、章号、请求号、发出时间；接着做 / 不要了要操作号", () => {
@@ -114,74 +124,16 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction({ toolName: "quality_check", chapter: 3 }).kind).toBe("invalid");
   });
 
-  it("改的天数随定稿动作带上：到第几天只跟着第几天一起认", () => {
-    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, dayOverride: "21", dayEndOverride: 22 })).toEqual({
-      kind: "action",
-      action: { toolName: "commit_apply", chapter: 5, dayOverride: 21, dayEndOverride: 22 },
-    });
-    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, dayEndOverride: 22 })).toEqual({
-      kind: "action",
-      action: { toolName: "commit_apply", chapter: 5 },
-    });
-  });
-
-  it("账本清单去掉的条目随定稿动作带上（去空白、去重、丢非字符串）", () => {
-    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, excluded: [" fact:1 ", "fact:1", 3, "", "hook:hook-a"] })).toEqual({
-      kind: "action",
-      action: { toolName: "commit_apply", chapter: 5, excluded: ["fact:1", "hook:hook-a"] },
-    });
-    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, excluded: "fact:1" })).toEqual({
-      kind: "action",
-      action: { toolName: "commit_apply", chapter: 5 },
-    });
-  });
-
-  it("章号数字字符串宽容还原；空 previewToken 丢掉", () => {
-    expect(parseUserAction({ toolName: "commit_apply", chapter: "7", previewToken: "" })).toEqual({
-      kind: "action",
-      action: { toolName: "commit_apply", chapter: 7 },
-    });
-  });
-
   it.each([
-    ["非对象", "commit_apply"],
+    ["非对象", "prune_snapshots"],
     ["数组", []],
     ["白名单外工具", { toolName: "foundation_write", chapter: 1 }],
-    ["缺章号", { toolName: "commit_apply" }],
-    ["章号 0", { toolName: "commit_apply", chapter: 0 }],
-    ["章号小数", { toolName: "commit_apply", chapter: 1.5 }],
-    ["章号乱写", { toolName: "commit_apply", chapter: "abc" }],
+    ["老定稿按钮", { toolName: "commit_apply", chapter: 5 }],
+    ["章号 0", { kind: "new", type: "commit.prepare", params: { chapter: 0 }, requestKey: "k-1", issuedAt: "2026-10-30T00:00:00.000Z" }],
+    ["章号小数", { kind: "new", type: "commit.prepare", params: { chapter: 1.5 }, requestKey: "k-1", issuedAt: "2026-10-30T00:00:00.000Z" }],
+    ["章号乱写", { kind: "new", type: "commit.prepare", params: { chapter: "abc" }, requestKey: "k-1", issuedAt: "2026-10-30T00:00:00.000Z" }],
   ])("%s → invalid（路由回 400，不当普通对话静默处理）", (_label, raw) => {
     expect(parseUserAction(raw).kind).toBe("invalid");
-  });
-});
-
-describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
-  it("定稿成功 → 推荐写下一章（带结构化动作：R4.7 点击直达，交一次写稿，不经模型）", () => {
-    expect(commitApplyNextSteps(5, { committed: true })).toEqual({
-      question: "第 5 章定稿了，接下来？",
-      choices: [{ label: "AI 写第 6 章", intent: "继续写第 6 章的正文", recommended: true, action: expect.objectContaining({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } }) }],
-    });
-  });
-
-  it("定稿成功 + 线索堆积加重档 → 加「归并线索」（开放式选项，不带结构化动作，照旧发文本给 agent，改账要作者点确认）", () => {
-    const steps = commitApplyNextSteps(5, { committed: true, threadMaintenanceHint: "escalated" });
-    expect(steps.choices.map((c) => c.label)).toEqual(["AI 写第 6 章", "归并线索"]);
-    expect(steps.choices[1]).not.toHaveProperty("action");
-  });
-
-  it("下一章已经有工作稿（回头重定了旧章）→ 推荐核那一章，不推荐「AI 写」（点了会整章重写手头的稿子）", () => {
-    expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: true }).choices).toEqual([
-      { label: "核第 18 章", intent: "核第 18 章的账", recommended: true, action: expect.objectContaining({ kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 18 } }) },
-    ]);
-    expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: false }).choices[0])
-      .toMatchObject({ label: "AI 写第 18 章", action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 18 } } });
-  });
-
-  it("没定稿 → 只给「重新预览」（带结构化动作：直达 commit_preview）", () => {
-    expect(commitApplyNextSteps(5, { committed: false }).choices).toEqual([
-      { label: "重新预览", intent: "生成第 5 章定稿预览", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
-    ]);
   });
 });
 
@@ -203,46 +155,12 @@ describe("nextDraftChapterAfter 写作前沿章（R7.7·报告 4.2：重定旧�
   });
 });
 
-describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () => {
+describe("readCommittedChapterNumbers 写作前沿章读书目录（R7.7）", () => {
   const tempDirs = new Set<string>();
   const cleanup = async (): Promise<void> => {
     await Promise.all([...tempDirs].map((dir) => rm(dir, { recursive: true, force: true })));
     tempDirs.clear();
   };
-
-  it("重定第 3 章（1～5 章已定稿）→ 建议条推荐「写第 6 章」、直达写第 6 章", async () => {
-    const projectDir = await makeProjectWithCommittedChapters([1, 2, 3, 4, 5]);
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 3 },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true, committed: true, chapter: 3, summary: "第 3 章已定稿。" }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-      projectDir,
-    });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: unknown }[] };
-    expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } } });
-    await cleanup();
-  });
-
-  it("书目录读不到定稿章（chapters/ 缺失）→ 旧口径 N+1 兜底，不炸", async () => {
-    const projectDir = await makeProjectWithCommittedChapters([]);
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 5 },
-      requestContext: new RequestContext(),
-      executeTool: async () => ({ ok: true, committed: true, chapter: 5, summary: "第 5 章已定稿。" }),
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-      projectDir,
-    });
-    const next = events.at(-1)!.data.output as { choices: { label: string; action?: unknown }[] };
-    expect(next.choices[0]).toMatchObject({ label: "AI 写第 6 章", action: { kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } } });
-    await cleanup();
-  });
 
   it("readCommittedChapterNumbers 只认 chapters/ 下的 000N.md，别的文件不算", async () => {
     const projectDir = await makeProjectWithCommittedChapters([1, 3]);
@@ -265,120 +183,7 @@ describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () =
 
 describe("humanizeToolNames", () => {
   it("工具名换人话", () => {
-    expect(humanizeToolNames("尚未对该章执行 commit_preview，不能 commit_apply")).toBe("尚未对该章执行 定稿预览，不能 定稿");
-  });
-});
-
-describe("runUserAction 执行结构化动作", () => {
-  const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
-
-  function collect() {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    return { events, sendEvent: (event: string, data: unknown) => events.push({ event, data: data as Record<string, unknown> }) };
-  }
-
-  it("成功定稿：按 agent 回合同款事件推送 tool-call/tool-result + 摘要 + 下一步卡；执行期间带确认标记、结束即清", async () => {
-    const requestContext = new RequestContext();
-    let markedDuringExecution = false;
-    let receivedInput: Record<string, unknown> | undefined;
-    const executeTool: UserActionToolExecutor = async (toolName, input, context) => {
-      markedDuringExecution = isUserConfirmedTool({ requestContext: context } as never, toolName);
-      receivedInput = input;
-      return { ok: true, committed: true, chapter: 5, summary: "第 5 章已定稿，资料已更新。" };
-    };
-    const { events, sendEvent } = collect();
-
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 5, previewToken: "tok" },
-      requestContext,
-      executeTool,
-      sendEvent,
-      scrubber: passthroughScrubber(),
-      scrubError: String,
-    });
-
-    expect(markedDuringExecution).toBe(true);
-    expect(isUserConfirmedTool({ requestContext } as never, "commit_apply")).toBe(false);
-    expect(receivedInput).toEqual({ chapter: 5, previewToken: "tok" });
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta", "tool-call", "tool-result"]);
-    expect(events[0]!.data.toolName).toBe("commit_apply");
-    expect(events[1]!.data.toolCallId).toBe(events[0]!.data.toolCallId);
-    expect(events[1]!.data.output).toMatchObject({ committed: true });
-    expect(events[2]!.data.text).toBe("第 5 章已定稿，资料已更新。");
-    expect(events[3]!.data.toolName).toBe("suggest_next_steps");
-    expect(events[4]!.data.output).toMatchObject({ ok: true, choices: [{ label: "AI 写第 6 章" }] });
-  });
-
-  it("被拒（如预览后改过稿）：如实转述 summary（工具名换人话）+ 「重新预览」选项", async () => {
-    const executeTool: UserActionToolExecutor = async () => ({
-      ok: false,
-      committed: false,
-      summary: "未定稿：尚未对该章执行 commit_preview，按规则不能直接定稿；请先预览确认。",
-    });
-    const { events, sendEvent } = collect();
-
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 3 },
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent,
-      scrubber: passthroughScrubber(),
-      scrubError: String,
-    });
-
-    const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
-    expect(text).toBe("未定稿：尚未对该章执行 定稿预览，按规则不能直接定稿；请先预览确认。");
-    expect(events.at(-1)!.data.output).toMatchObject({ choices: [{ label: "重新预览", intent: "生成第 3 章定稿预览" }] });
-  });
-
-  it("工具抛错：tool-error（可重试）+ 如实文案，不推下一步卡，标记照样清掉", async () => {
-    const requestContext = new RequestContext();
-    const executeTool: UserActionToolExecutor = async () => {
-      throw new Error("磁盘满了");
-    };
-    const { events, sendEvent } = collect();
-
-    await runUserAction({
-      action: { toolName: "commit_apply", chapter: 2 },
-      requestContext,
-      executeTool,
-      sendEvent,
-      scrubber: passthroughScrubber(),
-      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
-    });
-
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
-    expect(events[1]!.data).toMatchObject({ toolName: "commit_apply", error: "磁盘满了", retryable: true });
-    expect(events[2]!.data.text).toContain("第 2 章定稿没有完成：磁盘满了");
-    expect(isUserConfirmedTool({ requestContext } as never, "commit_apply")).toBe(false);
-  });
-});
-
-describe("「定稿」按钮结构化动作（commit_preview）", () => {
-  it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 一句结论（清单在弹窗里，重构 P6），不调模型", async () => {
-    expect(parseUserAction({ toolName: "commit_preview", chapter: "4" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
-    // 「就这么短，照样定稿」只认布尔 true（别的值当没点）。
-    expect(parseUserAction({ toolName: "commit_preview", chapter: 4, allowShort: true })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4, allowShort: true } });
-    expect(parseUserAction({ toolName: "commit_preview", chapter: 4, allowShort: "true" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
-    const requestContext = new RequestContext();
-    let marked = true;
-    const executeTool: UserActionToolExecutor = async (toolName, _input, context) => {
-      marked = isUserConfirmedTool({ requestContext: context } as never, toolName);
-      return { ok: true, canCommit: true, chapter: 4, summary: "第 4 章可以定稿，点 commit_apply 前先看清单。" };
-    };
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "commit_preview", chapter: 4 },
-      requestContext,
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    expect(marked).toBe(false);
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
-    expect(events[1]!.data.output).toMatchObject({ canCommit: true });
-    expect(events[2]!.data.text).toBe("第 4 章可以定稿，清单打开了。");
+    expect(humanizeToolNames("请先 prepare_commit 再说")).toBe("请先 定稿 再说");
   });
 });
 

@@ -109,6 +109,8 @@ export interface KeeperInput {
   readonly notesRoot?: string;
   /** 缺省 KEEPER_MAX_CATCH_UP。 */
   readonly maxCatchUp?: number;
+  /** 补笔记时当场最多新生成几个卷节点（缺省不限）。 */
+  readonly maxVolumeBuilds?: number;
   /** 拿到记账员原始输出时调一次（考卷、排查用；不进清单）。 */
   readonly onRawOutput?: (text: string) => void;
 }
@@ -234,6 +236,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxVolumeBuilds !== undefined ? { maxVolumeBuilds: input.maxVolumeBuilds } : {}),
       waitingAs: "记账",
     }));
   } catch (error) {

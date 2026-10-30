@@ -87,7 +87,7 @@ const inputSchema = z.object({
   authorPicks: coerceBoolean(z.boolean().optional().describe(
     "作者要自己挑（「多写几版给我挑」「另写两版我看看」）才带 true：几版都摆给作者挑，一版都不换进工作稿、不核账，这章有稿也照样写；没填 candidates 就写 2 版。continue 不用。",
   )),
-  thenPreview: coerceBoolean(z.boolean().optional().describe("作者明说写完就出定稿预览才带 true：稿写成了系统接着用这版出预览（不是定稿）。")),
+  thenPreview: coerceBoolean(z.boolean().optional().describe("作者明说写完就定稿才带 true：稿写成了系统接着出这一章的定稿清单（作者点「确认定稿」才写入）。")),
 });
 
 export const changeDraftTool = createTool({

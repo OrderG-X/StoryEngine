@@ -3,7 +3,7 @@
  * 「接着往下写」「重写这一章」交的都是这一套，写成了不再交给对话 AI 多说一轮。
  *
  * - 写成了：一句结论（作者要的要点可能没写到的照说）→ 写完那遍核过的账出核账卡（只读核账记忆，不再调模型）→
- *   作者要写完就出定稿预览的接着出预览，否则给下一步。
+ *   作者要写完就定稿的接着出定稿清单（交一次定稿），否则给下一步。
  * - 写好了没换上（写的途中稿子或前文改过）：照结论说，AI 这版在稿纸上等作者选，不再写一遍。
  * - 没写成 / 没受理：照原因说，按原因给下一步（再写一次、改成从头写、先定稿前一章、重写 / 接着写这一章）。
  * - 改稿（revise / fix / deai，片 2C）：一句结论（改了几处、哪几处没改成为什么）；按核账改的给「再核一遍」，没改成的给「让 AI 改」。
@@ -21,6 +21,7 @@ import type { OperationResult } from "../services/operations/executor.js";
 import { operationWhat } from "../services/operations/view.js";
 import {
   checkChapterAction,
+  commitChoice,
   continueChoice,
   humanizeToolNames,
   newDraftAction,
@@ -36,7 +37,7 @@ export interface DraftFinishArgs {
   readonly projectDir: string;
   readonly sendEvent: SendEvent;
   readonly scrubber: { push(text: string): string; flush(): string };
-  /** 出这一章的定稿预览（写完就出定稿预览）：调用方给（要走定稿预览工具）；没给就改成下一步里的「预览定稿」。 */
+  /** 写完就定稿：交一次这一章的定稿、跟着出清单（调用方给，它跟着那次定稿收尾）；没给就改成下一步里的「定稿」。 */
   readonly previewCommit?: (chapter: number) => Promise<void>;
   /** 读核账记忆（测试注入）；缺省按盘上工作稿读，记忆对不上就是 null。 */
   readonly readCachedCheck?: (projectDir: string, chapter: number) => Promise<unknown>;
@@ -121,7 +122,7 @@ export async function draftRetryChoices(
       return rewriteChoices(params, await isChapterCommitted(projectDir, chapter).catch(() => false));
     case "previous_chapter_not_committed":
       return [
-        { label: `先定稿第 ${chapter - 1} 章`, intent: `预览第 ${chapter - 1} 章的定稿改动`, recommended: true, action: { toolName: "commit_preview", chapter: chapter - 1 } },
+        commitChoice(chapter - 1, { label: `先定稿第 ${chapter - 1} 章`, recommended: true }),
         { label: `仍要先写第 ${chapter} 章`, intent: `知道风险，仍要先写第 ${chapter} 章`, action: newDraftAction(mode, { ...params, allowWriteAhead: true }) },
       ];
     default:
@@ -144,7 +145,7 @@ function bodyOf(record: OperationRecord): DraftChangeBody | undefined {
   return body?.kind === "draft.change" && typeof body.chapter === "number" ? (body as DraftChangeBody) : undefined;
 }
 
-/** 写成了：结论 → 核账卡 → 定稿预览或下一步。 */
+/** 写成了：结论 → 核账卡 → 定稿清单或下一步。 */
 async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenPreview: boolean): Promise<void> {
   const { chapter } = body;
   const emit = emitter(args);
@@ -179,13 +180,13 @@ async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenP
       return;
     }
     if (check.ok === false) return;
-    // 确定 N 处时改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」），稿纸工具条照样有「定稿」：不再挂预览和写下一章。
+    // 确定 N 处时改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」），稿纸工具条照样有「定稿」：不再挂定稿和写下一章。
     const sure = Array.isArray(check.sure) ? check.sure.length : 0;
     const choices: NextStepChoice[] = sure > 0
       ? more
       : [
         ...more,
-        { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, recommended: more.length === 0, action: { toolName: "commit_preview", chapter } },
+        commitChoice(chapter, { recommended: more.length === 0 }),
         writeNextChoice(await resolveNextDraftTarget(args.projectDir, chapter), "AI 写下一章"),
       ];
     sendNextSteps(args.sendEvent, "接下来？", choices);
@@ -198,7 +199,7 @@ async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenP
   }
   sendNextSteps(args.sendEvent, `第 ${chapter} 章写好了，接下来？`, [
     ...more,
-    { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, recommended: more.length === 0, action: { toolName: "commit_preview", chapter } },
+    commitChoice(chapter, { recommended: more.length === 0 }),
     { label: "核账", intent: "核账", action: checkChapterAction(chapter) },
   ]);
 }

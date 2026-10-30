@@ -337,7 +337,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
                         disabled={workspaceBusy || draftWordCount <= 0}
                         // 结构化动作（和稿纸底下的「定稿」同一个）：以前发一句「生成定稿预览」给模型，
                         // 模型照抄前文回「预览好了，清单打开着」却没调工具（2026-10-19 试写）。
-                        onClick={() => props.onChapterButton?.("commit_preview")}
+                        onClick={() => props.onChapterButton?.("commit")}
                       >
                         预览定稿改动
                       </button>

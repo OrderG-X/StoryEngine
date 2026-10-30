@@ -7,20 +7,22 @@
  * - 结论和下一步只按操作记录里的结构化结果出，不看模型说了什么。卡（核账卡、审稿卡……）前端按结果画。
  */
 import type { OperationRecord, OperationState } from "../lib/operations/store.js";
-import { isTerminal } from "../lib/operations/store.js";
+import { isTerminal, readOperation } from "../lib/operations/store.js";
 import { rereadBlocker } from "../editorial/reread-state.js";
 import { cancelOperation, resumeOperation, submitOperation, subscribeOperation, type OperationEvent, type OperationResult } from "../services/operations/executor.js";
 import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { LEDGER_CHANGE_KIND } from "../services/operations/recipes/ledger-change.js";
 import { CANON_PROPOSE_KIND, canonInputOf, type CanonConfirmPreview, type CanonProposeBody, type CanonProposeParams } from "../services/operations/recipes/canon-propose.js";
+import { COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
 import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { DRAFT_ADOPT_KIND, DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
 import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
-import { checkChapterAction, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { checkChapterAction, commitChoice, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
 
@@ -121,7 +123,7 @@ async function continuityNextSteps(projectDir: string, chapter: number, body: Co
   return {
     question: "接下来？",
     choices: [
-      { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, recommended: true, action: { toolName: "commit_preview", chapter } },
+      commitChoice(chapter, { recommended: true }),
       writeNextChoice(await resolveNextDraftTarget(projectDir, chapter), "AI 写下一章"),
       ...fresh,
     ],
@@ -137,17 +139,26 @@ export async function finishOperationTurn(args: {
   readonly projectDir: string;
   readonly sendEvent: SendEvent;
   readonly scrubber: { push(text: string): string; flush(): string };
-  /** 写完就出定稿预览：出这一章的定稿预览（按钮那条路给）；没给就只给下一步。 */
-  readonly previewCommit?: (chapter: number) => Promise<void>;
+  /** 作者那边还连着：写完就定稿的接着交这一章的定稿、跟着它收尾（没给就只给下一步里的「定稿」）。 */
+  readonly signal?: AbortSignal;
 }): Promise<void> {
-  const { record } = args;
-  // 写稿做完、没写成：结论、核账卡、定稿预览、下一步按写稿那一套出。
+  const { record, signal } = args;
+  // 写稿做完、没写成：结论、核账卡、定稿清单、下一步按写稿那一套出。
   if (record.kind === DRAFT_CHANGE_KIND && (record.state === "succeeded" || record.state === "failed" || record.state === "obsolete")) {
     await finishDraftOperation(record, {
       projectDir: args.projectDir,
       sendEvent: args.sendEvent,
       scrubber: args.scrubber,
-      ...(args.previewCommit ? { previewCommit: args.previewCommit } : {}),
+      // 写完就定稿：请求号由这次写稿定（收尾再来一遍也是同一次定稿）。
+      ...(signal ? {
+        previewCommit: (chapter: number) => runOperationAction({
+          action: { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: `then-${record.opId}`, issuedAt: record.issuedAt },
+          projectDir: args.projectDir,
+          sendEvent: args.sendEvent,
+          scrubber: args.scrubber,
+          signal,
+        }),
+      } : {}),
     });
     return;
   }
@@ -177,12 +188,16 @@ export async function finishOperationTurn(args: {
         sendNextSteps(args.sendEvent, next.question, next.choices);
         return;
       }
+      if (record.kind === COMMIT_PREPARE_KIND && chapter !== undefined) {
+        await finishCommit(args.projectDir, chapter, result?.body as Partial<CommitPrepareBody> | undefined, view.conclusion, emitText, args.sendEvent);
+        return;
+      }
       emitText(`${humanizeToolNames(view.conclusion)}${changed}`);
       // 换上了作者挑的那版 AI 稿：这版没核过账，核了再定稿。
       if (record.kind === DRAFT_ADOPT_KIND && chapter !== undefined && (result?.body as { readonly applied?: unknown } | undefined)?.applied === true) {
         sendNextSteps(args.sendEvent, "接下来？", [
           { label: "核账", intent: `核第 ${chapter} 章的账`, recommended: true, action: checkChapterAction(chapter) },
-          { label: "预览定稿", intent: `预览第 ${chapter} 章的定稿改动`, action: { toolName: "commit_preview", chapter } },
+          commitChoice(chapter),
         ]);
       }
       // 定论改齐了：从哪一章点进来的就给「再核这一章」；没改（没有要改的）但没查全：给「重新查」。
@@ -213,6 +228,10 @@ export async function finishOperationTurn(args: {
         const params = record.params as CanonProposeParams;
         sendNextSteps(args.sendEvent, "接下来？", [{ label: "重新查", intent: "重新查这条定论", recommended: true, action: newCanonAction(params.mode, canonInputOf(params)) }]);
       }
+      // 定稿没成（记账员没交成、清单出来之后正文或前文改过）：再出一次清单（新的一次）。
+      if (record.kind === COMMIT_PREPARE_KIND && chapter !== undefined && view.failure?.retryable !== false) {
+        sendNextSteps(args.sendEvent, "接下来？", [commitChoice(chapter, { label: "再来一次", recommended: true })]);
+      }
       // 想走法没想出来：照原来的想法、避开的走法再想一次（新的一次，请求号另给）。
       const plan = record.kind === PLAN_PROPOSE_KIND ? readPlanProposeParams(record.params) : undefined;
       if (plan && view.failure?.retryable !== false) {
@@ -236,11 +255,39 @@ export async function finishOperationTurn(args: {
             ? `${record.mode === "review" ? "理出来收了的" : "要改的账"}在卡上：点「确认改账」才记。`
             : record.kind === CANON_PROPOSE_KIND
               ? canonWaitingText(record)
-              : `${what}在等你点卡上的按钮。`);
+              : record.kind === COMMIT_PREPARE_KIND && chapter !== undefined
+                // 清单（要你看的、自动记下的、提醒）在弹窗和对话小卡里，回话只说一句（刷新后弹窗没开也说得通）。
+                ? `第 ${chapter} 章可以定稿，清单在卡上：点「确认定稿」才定。`
+                : `${what}在等你点卡上的按钮。`);
       return;
     default:
       return;
   }
+}
+
+/**
+ * 定稿做完：定不了的只说一句（原因在清单里，只差字数的清单上有「就这么短，照样定稿」）；定了的说结论，
+ * 下一步给写下一章（线索堆多了加「归并线索」；设定本里还没标主角、账里有视角人物的加「把『X』设为主角」，点了交给对话 AI 设）。
+ */
+async function finishCommit(
+  projectDir: string,
+  chapter: number,
+  body: Partial<CommitPrepareBody> | undefined,
+  conclusion: string,
+  emitText: (text: string) => void,
+  sendEvent: SendEvent,
+): Promise<void> {
+  if (body?.committed !== true) {
+    emitText(`第 ${chapter} 章现在还定不了，原因在清单里。`);
+    return;
+  }
+  emitText(humanizeToolNames(conclusion));
+  const rename = await buildProtagonistRenameSuggestion(projectDir).catch(() => undefined);
+  sendNextSteps(sendEvent, `第 ${chapter} 章定稿了，接下来？`, [
+    { ...writeNextChoice(await resolveNextDraftTarget(projectDir, chapter)), recommended: true },
+    ...(body.done?.threadMaintenanceHint === "escalated" ? [{ label: "归并线索", intent: "看看开着的线索里有没有讲同一件事的，提一份归并方案给我确认" }] : []),
+    ...(rename ? [{ label: rename.label, intent: rename.intent }] : []),
+  ]);
 }
 
 /** 定论查完等作者点：卡上面那句话（查到几处、在哪几章、没查全的），定论本身卡上有。 */
@@ -264,7 +311,6 @@ export async function runOperationAction(args: {
   readonly sendEvent: SendEvent;
   readonly scrubber: { push(text: string): string; flush(): string };
   readonly signal: AbortSignal;
-  readonly previewCommit?: (chapter: number) => Promise<void>;
 }): Promise<void> {
   const { action, projectDir } = args;
   const emitText = (text: string): void => {
@@ -297,6 +343,9 @@ export async function runOperationAction(args: {
   } else if (action.kind === "resume") {
     const resumed = await resumeOperation(projectDir, action.opId, action.answer);
     if (!resumed.ok) {
+      // 卡上的按钮旧了（作废了、做完了、别处点过）：卡跟着换成这次现在的样子，再如实说一句。
+      const stored = await readOperation(projectDir, action.opId);
+      if (stored.kind === "record") args.sendEvent("operation", { type: "record", operation: operationView(stored.record) });
       emitText(resumed.message);
       return;
     }
@@ -317,5 +366,5 @@ export async function runOperationAction(args: {
   }
   const record = await followOperation({ bookDir: projectDir, opId, sendEvent: args.sendEvent, signal: args.signal });
   if (!record || args.signal.aborted || !settlesTurn(record.state)) return;
-  await finishOperationTurn({ record, projectDir, sendEvent: args.sendEvent, scrubber: args.scrubber, ...(args.previewCommit ? { previewCommit: args.previewCommit } : {}) });
+  await finishOperationTurn({ record, projectDir, sendEvent: args.sendEvent, scrubber: args.scrubber, signal: args.signal });
 }

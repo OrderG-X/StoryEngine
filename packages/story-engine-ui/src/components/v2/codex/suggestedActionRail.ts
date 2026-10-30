@@ -48,7 +48,6 @@ export const RAIL_MAX_VISIBLE = 3;
 
 /** 作者档确认按钮：AI 只提议、作者点了服务端才执行，AI 的话里会叫作者「点按钮」，所以有「下一步」选项时也得在。 */
 const AUTHOR_CONFIRM_ACTION_IDS: ReadonlySet<string> = new Set([
-  "commit-apply",
   "prune-confirm",
   "rewrite-confirm",
   "continue-confirm",

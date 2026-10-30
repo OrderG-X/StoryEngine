@@ -76,6 +76,8 @@ export interface PendingAction {
   readonly preview?: unknown;
   /** 作者能划掉的那几项的键（卡上每项一个）：点按钮时带的「划掉哪几处」只认这里有的。 */
   readonly excludable?: readonly string[];
+  /** 作者能填的整数栏（栏名 → 范围，含两头）：点按钮时带的数只认这里有的、在范围里的。 */
+  readonly inputs?: Readonly<Record<string, { readonly min: number; readonly max: number }>>;
   /** 第一次点的那个决定的哈希（连同划掉的几处）：同一个按钮换决定、换划法再来 = decision_conflict。 */
   readonly decisionHash?: string;
 }

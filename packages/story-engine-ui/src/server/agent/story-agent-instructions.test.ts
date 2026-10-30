@@ -17,7 +17,7 @@ vi.mock("./model.js", () => ({
 
 import { buildInstructions, getStoryAgent, invalidateStoryAgent } from "./story-agent.js";
 
-describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内容审阅 / 查 AI 味合成 run_check，写稿 change_draft 收编 generate_draft，加 read_operation，17 个）", () => {
+describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内容审阅 / 查 AI 味合成 run_check，写稿 change_draft 收编 generate_draft，定稿 prepare_commit 收编 commit_preview，加 read_operation，17 个）", () => {
   it("17 个工具；旧的四个检查工具、generate_draft 和老的补全/文风样本工具都没了；指令里也不再提它们", async () => {
     invalidateStoryAgent();
     const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
@@ -26,9 +26,9 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
       "change_draft",
       "change_ledger",
       "change_settings",
-      "commit_preview",
       "manage_snapshots",
       "plan_chapter",
+      "prepare_commit",
       "propose_canon",
       "read_chapters_overview",
       "read_draft",
@@ -93,7 +93,7 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("写正文 / 接着写=change_draft");
     expect(instructions).toContain("改稿=revise_draft");
     expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=change_settings");
-    expect(instructions).toContain("定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮");
+    expect(instructions).toContain("定稿（入库）=prepare_commit（出定稿清单，用户点「确认定稿」才写入）");
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
 
@@ -116,15 +116,16 @@ describe("story agent instructions（确认口径唯一）", () => {
   });
 
   // R2#1：定稿「下一步卡」intent 是模型自由生成，须用能干净映射工具的措辞。
-  it("下一步卡的预览 intent 用能干净触发工具的措辞；定稿不放进选项卡（预览卡自带按钮）", () => {
-    expect(instructions).toContain("生成第N章定稿预览");
-    expect(instructions).toContain("定稿不放进选项卡");
+  it("下一步卡的定稿 intent 用能干净触发工具的措辞；「确认定稿」不放进选项卡（清单卡自带按钮）", () => {
+    expect(instructions).toContain("定稿用『定稿第N章』");
+    expect(instructions).toContain("「确认定稿」不放进选项卡");
+    expect(instructions).not.toContain("定稿预览");
   });
 
-  // R3#4 + R5：用户可见泄漏——绝不把内部 id / 资料编号 / previewToken 复述给用户；调工具前别先吐英文思考/preamble。
-  it("禁止把 id/资料编号/previewToken 复述给用户、禁止输出英文 reasoning preamble", () => {
+  // R3#4 + R5：用户可见泄漏——绝不把内部 id / 资料编号 / 操作号复述给用户；调工具前别先吐英文思考/preamble。
+  it("禁止把 id/资料编号/操作号复述给用户、禁止输出英文 reasoning preamble", () => {
     expect(instructions).toMatch(/绝不(把|向用户).{0,8}(id|资料编号)/u);
-    expect(instructions).toMatch(/previewToken|预览令牌/u);
+    expect(instructions).toMatch(/操作号/u);
     expect(instructions).toMatch(/英文(思考|旁白|reasoning|preamble)/iu);
   });
 
@@ -285,24 +286,19 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
   });
 });
 
-describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07）", () => {
+describe("buildInstructions 定稿 = 模型交、用户点按钮（片 4A：commit.prepare）", () => {
   const instructions = buildInstructions();
 
-  it("定稿真写入只由用户点「确认定稿」按钮完成，模型负责预览并请用户点按钮", () => {
-    expect(instructions).toContain("【定稿 = 你预览、用户点按钮】");
-    expect(instructions).toContain("先对该章 commit_preview");
-    expect(instructions).toContain("请用户在定稿清单里点「确认定稿」");
-  });
-
-  // 2026-10-10 瘦身：commit_apply 不再给对话 AI（它调了也只是再出一个按钮），定稿只能点按钮。
-  it("对话 AI 没有定稿工具，定稿只能由用户点按钮", () => {
-    expect(instructions).toContain("你没有定稿工具");
+  it("定稿真写入只由用户点「确认定稿」按钮完成，模型只交 prepare_commit 出清单", () => {
+    expect(instructions).toContain("【定稿 = 你交、用户点按钮】");
+    expect(instructions).toContain("用户想定稿时交 prepare_commit");
+    expect(instructions).toContain("用户在清单里点「确认定稿」才写入");
+    expect(instructions).not.toContain("commit_preview");
     expect(instructions).not.toContain("commit_apply");
   });
 
-  it("绝不说已定稿；不可定稿时如实说明、不让用户去点按钮", () => {
+  it("绝不说已定稿", () => {
     expect(instructions).toContain("**绝不说『已定稿/已入库』**");
-    expect(instructions).toContain("canCommit=false 时如实说明阻断原因");
   });
 
   it("旧的组合意图/强制执行条款已删（不再靠模型一轮走完定稿）", () => {

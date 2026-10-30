@@ -11,8 +11,7 @@
  *   并（对已知工具）push 一张 agentCards{ status:"running" }，其 agentName 必须命中
  *   components/v2/agentTimelineModel.ts 的 agentDisplayLabel 字典，这样 AiChatCodex
  *   经 buildTimelineModel 零改就能渲染。
- * - tool-result 把对应 step / card 置 completed + endedAt（裁决类只读工具的 ok:false 置 verdict「裁决未过」，
- *   写类工具 ok:false 置 failed）；tool-error 置 failed（绝不静默失败）。
+ * - tool-result 把对应 step / card 置 completed + endedAt（ok:false 置 failed）；tool-error 置 failed（绝不静默失败）。
  *
  * 工具 → agent 名映射（与后端工具 id 对齐，命中 agentDisplayLabel 的 byAgentName）：
  *   read_state_overview → stateOverviewReader（显示「资料助手」）
@@ -21,14 +20,9 @@
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { InspectCardsData, OperationViewData, RewriteChoiceData } from "../api/agentChatClient.js";
 import type { ChapterMessage, MessageCard, MessageSegment } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, NextStepPrompt, OperationCardData } from "../type-defs/workspace.js";
-import { cardOf, updateCard, withCard, withCards } from "../utils/messageCards.js";
-/** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
-const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
-function isVerdictToolName(toolName: string | undefined): boolean {
-  return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
-}
-import { commitConfirmAction, draftChoiceAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
+import type { BrainstormCardData, NextStepPrompt, OperationCardData } from "../type-defs/workspace.js";
+import { cardOf, hasCard, updateCard, withCard, withCards } from "../utils/messageCards.js";
+import { draftChoiceAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -37,8 +31,7 @@ export interface AgentToolResultOutput {
    * 写类/出稿工具的统一诚实成功标志：false = 引擎拒绝/出稿失败/未写入/需确认。
    * 前端据此把时间线步骤置 failed，**不被 agent 文本可能的「已完成」幻觉盖过**（结构性防谎报），
    * 并据此决定是否挂「撤销到此」/染「影响范围」徽标（ok===false 的回合不挂、不染）。
-   * 所有写类工具都已带 ok（foundation_write=applied、commit_apply=committed、
-   * change_draft / revise_draft / run_check=交没交上）；读类工具无此字段（undefined）→ 视为完成、不受影响。
+   * 所有写类工具都已带 ok（change_draft / run_check / prepare_commit=交没交上）；读类工具无此字段（undefined）→ 视为完成、不受影响。
    */
   readonly ok?: boolean;
   /**
@@ -54,8 +47,7 @@ export interface AgentToolResultOutput {
   readonly partialMiss?: boolean;
   /**
    * 工具参数/输出没过 Mastra 校验（服务端 agent-chat 归一时打上的标记；见 normalizeForwardedToolResult）。
-   * 为 true 时步骤一律显示「失败」——即便它是裁决类工具（commit_preview 的 ok:false 语义是「裁决未过」，
-   * 但校验失败意味着工具根本没跑、没有裁决），且 summary 里带给人话原因，步骤卡点开不再空白。
+   * 为 true 时步骤一律显示「失败」（工具根本没跑），且 summary 里带给人话原因，步骤卡点开不再空白。
    */
   readonly toolValidationFailure?: boolean;
   /** 工具边界没让它执行（这一轮已经出了稿，先等作者看稿）：步骤「已停止」，不红、不当裁决未过。 */
@@ -69,13 +61,7 @@ export interface AgentToolResultOutput {
   readonly chapter?: number;
   /** suggest_next_steps 专属：agent 提议的下一步选项（agentChatClient 透传）。投影时挂到该消息→驱动「下一步」卡。 */
   readonly nextStepPrompt?: NextStepPrompt;
-  /** commit_apply 专属：入库报告 CommitReport（agentChatClient 透传）。投影时挂到该消息→渲染「入库」delta 卡。 */
-  readonly commitReport?: unknown;
   readonly brainstorm?: BrainstormCardData;
-  /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
-  readonly commitPreview?: CommitPreviewCardData;
-  /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
-  readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** change_draft 专属：有稿的章 AI 不覆盖，挂「接着往下写」「重写这一章」按钮（服务端出的写稿动作）。 */
@@ -168,7 +154,8 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   check_continuity: { stepLabel: "核账", card: null },
   ai_review: { stepLabel: "内容审阅", card: null },
   check_ai_flavor: { stepLabel: "检查机器腔", card: null },
-  // 入库簇
+  // 定稿（写作版本 P2a 片 4A）：交一次定稿；commit_preview / commit_apply 是之前的工具（老会话回放仍显示原名）
+  prepare_commit: { stepLabel: "定稿", card: null },
   commit_preview: { stepLabel: "定稿预览", card: null },
   commit_apply: { stepLabel: "定稿", card: null },
   // 线索与杂项簇
@@ -206,7 +193,6 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "plan_chapter",
   "run_check",
   "read_operation",
-  "commit_preview",
   "settle_preview",
   "settle_fact",
 ]);
@@ -266,11 +252,9 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         card.op.opId === event.opId && LIVE_OPERATION_STATES.has(card.op.state) ? { ...card, op: { ...card.op, progress: event.text } } : card
       ));
     case "tool-result": {
-      // 结构性防谎报 + 待确认 + 裁决：
+      // 结构性防谎报 + 待确认：
       // - needsConfirmation===true（如删角色未确认）→「待确认」(暖色 pending，不是失败)，优先级最高。
-      // - ok===false 分两种（复审 T4 三轮修法 2）：裁决类只读工具（commit_preview，ok===canCommit）的
-      //   ok:false 是「裁决未过」（工具没崩、给了真实否定答案）→「裁决未过」落定形态，不红不绿；
-      //   其余工具（写类/出稿）的 ok:false（引擎拒绝/出稿失败/未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
+      // - ok===false（引擎拒绝 / 没交上 / 未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
       // - skipped===true（出完稿这一轮别的工具先不做）→「已停止」，不红、不当裁决未过。
       // - 否则「已完成」。并把真实 summary 显示在时间线上。
       const status = event.output?.toolValidationFailure === true
@@ -280,7 +264,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           : event.output?.needsConfirmation === true
             ? "needs_confirmation"
             : event.output?.ok === false
-              ? (isVerdictToolName(event.toolName) ? "verdict" : "failed")
+              ? "failed"
               : event.output?.partialMiss === true
                 ? "partial"
                 : "completed";
@@ -291,18 +275,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // agent 主动提议的「下一步」选项：挂到这条消息，驱动「下一步」选项卡（替代写死选项）。
       if (event.toolName === "suggest_next_steps" && event.output?.nextStepPrompt) {
         return withCard(withEffects, { type: "next-steps", prompt: event.output.nextStepPrompt });
-      }
-      // 入库 delta：commit_apply 的 CommitReport 随消息走，渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。
-      if (event.toolName === "commit_apply" && event.output?.commitReport) {
-        return withCard(withEffects, { type: "commit-report", report: event.output.commitReport });
-      }
-      // 模型发起的定稿请求：没写盘，挂「确认定稿」按钮（建议条渲染），用户点了才由服务端直接执行。
-      if (event.toolName === "commit_apply" && event.output?.commitConfirmAction) {
-        const button = commitConfirmAction(event.output.commitConfirmAction);
-        return {
-          ...withEffects,
-          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
-        };
       }
       // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
       if ((event.toolName === "prune_snapshots" || event.toolName === "manage_snapshots") && event.output?.pruneConfirmAction) {
@@ -321,10 +293,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => !ids.has(a.id)), ...buttons],
         };
       }
-      // commit_preview 的定稿预览卡（R3）：裁决（可否定稿）+ 阻断项 + 问题计数照实显示——模型可能把硬阻断说软或略过。
-      if (event.toolName === "commit_preview" && event.output?.commitPreview) {
-        return withCard(withEffects, { type: "commit-preview", preview: event.output.commitPreview });
-      }
       return withEffects;
     }
     case "tool-error":
@@ -339,8 +307,8 @@ const LIVE_OPERATION_STATES: ReadonlySet<OperationCardData["state"]> = new Set([
 
 /**
  * 操作又变了（写作版本 P2a）：操作卡换成这一份（迟到的旧记录不盖新的；还在做的留着上一句进度）。检查头一回做完时按种类挂结果卡
- * （核账卡、硬伤检查卡……，checkedVersion＝查的是工作稿哪一版），写稿一次写了几版的挂「另外几版」卡，想走法挂走法卡；
- * 同一次做完的记录再来一遍不重挂（作者在卡上点过的「不是问题」不被冲掉）。
+ * （核账卡、硬伤检查卡……，checkedVersion＝查的是工作稿哪一版），写稿一次写了几版的挂「另外几版」卡，想走法挂走法卡，
+ * 定稿挂定稿清单卡（等作者点、定不了）或定稿回执卡（定成了）；同一次做完的记录再来一遍不重挂（作者在卡上点过的「不是问题」不被冲掉）。
  */
 function applyOperation(message: ChapterMessage, view: OperationViewData, announced: boolean): ChapterMessage {
   const current = cardOf(message, "operation")?.op;
@@ -364,7 +332,7 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     // 定论做完的结果（核账卡认哪几条被它改掉了）：存进消息，重开书也认得。
     ...(view.canon ? { canon: view.canon } : same && current.canon ? { canon: current.canon } : {}),
   };
-  const next = withChangeEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view);
+  const next = withCommitCards(withChangeEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view), view);
   if (same && current.state === "succeeded") return next;
   // 一次写几版时落选的几版（「另外几版」卡）：作者点开挑一版换进工作稿。
   const cards = [
@@ -389,6 +357,24 @@ function withDraftEffects(message: ChapterMessage, view: OperationViewData): Cha
   const scopes = next.affectedScopes ?? [];
   if (draft.applied && !scopes.includes("full")) next = { ...next, affectedScopes: [...scopes, "full"] };
   return next;
+}
+
+/**
+ * 定稿（片 4A）：清单等作者点 / 定不了 → 定稿清单卡（这一次的清单只挂一次：重连、补发的记录再来不冲掉记下的稿纸版本号）；
+ * 定成了 → 定稿回执卡，这一轮记下它打的存档点（「撤销这次定稿」「撤销到此」从它退），块头标「影响了正文·草稿」。
+ */
+function withCommitCards(message: ChapterMessage, view: OperationViewData): ChapterMessage {
+  if (view.kind !== "commit.prepare") return message;
+  const preview = view.pending?.kind === "commit" ? view.pending.preview : view.commit?.blocked;
+  if (preview) return cardOf(message, "commit-preview")?.opId === view.opId ? message : withCard(message, { type: "commit-preview", preview, opId: view.opId });
+  const commit = view.commit;
+  if (!commit?.committed || hasCard(message, "commit-report")) return message;
+  let next = withCard(message, { type: "commit-report", report: commit.report });
+  if (commit.snapshotId && !(next.turnSnapshots ?? []).some((entry) => entry.snapshotId === commit.snapshotId)) {
+    next = { ...next, turnSnapshots: [...(next.turnSnapshots ?? []), { toolName: "prepare_commit", snapshotId: commit.snapshotId, chapterNumber: commit.chapter }] };
+  }
+  const scopes = next.affectedScopes ?? [];
+  return scopes.includes("full") ? next : { ...next, affectedScopes: [...scopes, "full"] };
 }
 
 /** 做完打了存档点的那一类 → 这一轮记的工具名（「撤销到此」按它说退的是什么）。 */
@@ -496,7 +482,7 @@ function appendTextSegment(
 function settleTool(
   message: ChapterMessage,
   toolCallId: string,
-  status: "completed" | "failed" | "needs_confirmation" | "partial" | "verdict" | "stopped",
+  status: "completed" | "failed" | "needs_confirmation" | "partial" | "stopped",
   endedAt: number,
   summary?: string,
   output?: AgentToolResultOutput,
@@ -517,10 +503,8 @@ function settleTool(
       : step,
   );
   // 把工具的真实 summary（成功摘要 / 失败原因）写进卡片，让用户看到引擎真实结果，而非只看 agent 文本。
-  // verdict 不落卡：出卡的工具（read_state_overview/foundation_write）都不是裁决类工具，防御性归 completed。
-  const cardStatus: ChapterAgentCard["status"] = status === "verdict" ? "completed" : status;
   const agentCards = message.agentCards?.map((card) =>
-    card.id === cardId ? { ...card, status: cardStatus, ...(detail ? { summary: detail } : {}) } : card,
+    card.id === cardId ? { ...card, status, ...(detail ? { summary: detail } : {}) } : card,
   );
   return {
     ...message,
@@ -536,7 +520,7 @@ function settleTool(
  *   **仅当该工具不是只读工具时**才计入（按 READONLY_TOOL_NAMES 判定）：只读工具 read_state_overview 也回
  *   refreshScope:"full"（只为刷新面板），若据此染色会把纯问答/摸底回合误标成「影响了正文·草稿」(#2)。
  *   产生效果的工具——generate_draft/revise_draft（refreshScope:"full"、**无** snapshotId=草稿待保存）、
- *   commit_apply（"full"+snapshotId）、foundation_write（"foundation"+snapshotId）——
+ *   foundation_write（"foundation"+snapshotId）——
  *   都不在只读集里 → 影响范围徽标照常显示。**不能用 snapshotId 判**：那会误伤无快照的出稿回合。
  * - turnSnapshots 仍按 snapshotId 写（草稿类无 snapshotId → 无「撤销到此」，是既有设计、与 affectedScopes 解耦）。
  * 纯函数、不改入参。注意：refreshScope 仍照常由 useChat 用于工作台刷新（那条路径不读 affectedScopes）。
@@ -549,7 +533,7 @@ function recordTurnEffects(
   let next = message;
   // ok===false（引擎拒绝/出稿失败/未写入/需确认）→ 本回合实际没改任何东西，
   // 既不挂「撤销到此」（否则点了把提问删掉+整页刷却啥也没撤）、也不染「影响范围」徽标（否则界面对不上）。
-  // 写类工具都已带 ok（foundation_write=applied、commit_apply=committed），
+  // 写类工具都已带 ok（foundation_write=applied、交操作的工具=交没交上），
   // 读类工具 ok 为 undefined（!==false）→ 不受此守卫影响，照旧逻辑（它们本就无 snapshotId、在只读集里）。
   const reallyWrote = output?.ok !== false;
   if (output?.snapshotId && reallyWrote) {

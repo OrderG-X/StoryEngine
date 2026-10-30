@@ -5,7 +5,7 @@ import { useNavigationStore } from "../stores/navigationStore.js";
 import type { ChapterMessage } from "../types.js";
 import type { OperationCardData } from "../type-defs/workspace.js";
 import { cardOf } from "../utils/messageCards.js";
-import { projectOperationEverywhere } from "./operationCards.js";
+import { claimOperation, projectOperationEverywhere } from "./operationCards.js";
 
 const client = vi.hoisted(() => ({
   list: vi.fn(),
@@ -15,6 +15,10 @@ vi.mock("../api/operationsClient.js", () => ({
   listActiveOperations: client.list,
   followOperationEvents: client.follow,
 }));
+const disk = vi.hoisted(() => ({ refreshPaper: vi.fn(async () => undefined), overview: vi.fn(async () => ({ marker: "盘上" })), apply: vi.fn() }));
+vi.mock("../drafts/draftSync.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../drafts/draftSync.js")>()), refreshPaper: disk.refreshPaper }));
+vi.mock("../api/client.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../api/client.js")>()), fetchStateOverview: disk.overview }));
+vi.mock("./applyOverview.js", () => ({ applyOverviewToWorkspace: disk.apply }));
 
 const { ownerOfOperation, reconnectOperations, stopOperationReconnect } = await import("./operationReconnect.js");
 
@@ -48,6 +52,9 @@ beforeEach(() => {
   useNavigationStore.setState({ projectPath: BOOK });
   client.list.mockReset();
   client.follow.mockReset();
+  disk.refreshPaper.mockClear();
+  disk.overview.mockClear();
+  disk.apply.mockClear();
 });
 afterEach(() => {
   stopOperationReconnect();
@@ -118,6 +125,73 @@ describe("reconnectOperations", () => {
   });
 });
 
+describe("重开书接着看定稿", () => {
+  const OP_C = "op-cccccccccccccccccccc";
+  const checklist = { chapter: 3, canCommit: true };
+  const commitView = (overrides: Partial<OperationViewData>): OperationViewData => view(OP_C, { kind: "commit.prepare", mode: undefined, what: "定稿·第 3 章", ...overrides });
+
+  it("还在等作者点的：清单摆回原来那条（能接着点）；关页期间定成了的：挂回执、按盘上重读稿纸和书的状态（只一次）", async () => {
+    useChatStore.setState({ messages: [{ id: "u1", role: "user", content: "定稿" }, { id: "a1", role: "assistant", content: "" }], activeSessionId: "s1" });
+    let push: ((v: OperationViewData) => void) | undefined;
+    client.list.mockResolvedValue([commitView({ state: "waiting_author", allowed: [], eventSeq: 3 })]);
+    client.follow.mockImplementation(async (_book: string, _opId: string, handlers: { onOperation: (v: OperationViewData) => void }) => {
+      push = handlers.onOperation;
+      handlers.onOperation(commitView({ state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } }));
+    });
+    reconnectOperations(BOOK);
+    await flush();
+    const owner = () => useChatStore.getState().messages[1]!;
+    expect(cardOf(owner(), "commit-preview")).toEqual({ type: "commit-preview", preview: checklist, opId: OP_C });
+    expect(disk.refreshPaper).not.toHaveBeenCalled();
+
+    const done = commitView({ state: "succeeded", allowed: [], eventSeq: 8, commit: { chapter: 3, committed: true, report: { chapter: 3 }, snapshotId: "s-1" } });
+    push?.(done);
+    push?.({ ...done, eventSeq: 9 });
+    await flush();
+    expect(cardOf(owner(), "commit-report")).toMatchObject({ report: { chapter: 3 } });
+    expect(useNavigationStore.getState().unseenChangesChapter).toBe(3);
+    expect(disk.refreshPaper).toHaveBeenCalledTimes(1);
+    expect(disk.refreshPaper).toHaveBeenCalledWith({ chapter: 3 });
+    expect(disk.apply).toHaveBeenCalledTimes(1);
+    expect(disk.apply.mock.calls[0]![0]).toEqual({ marker: "盘上" });
+  });
+});
+
+describe("作者在卡上接着那一次（点「确认定稿」）", () => {
+  it("这一轮那条一开始就挂上（不带按钮、清单）；接着看的订阅后到的结果、回执都落在这一轮，原来那条只留一行状态", async () => {
+    const OP_C = "op-cccccccccccccccccccc";
+    const checklist = { chapter: 3, canCommit: true };
+    const waiting = view(OP_C, { kind: "commit.prepare", mode: undefined, what: "定稿·第 3 章", state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } });
+    useChatStore.setState({ messages: [{ id: "u1", role: "user", content: "定稿" }, { id: "a1", role: "assistant", content: "" }], activeSessionId: "s1" });
+    let push: ((v: OperationViewData) => void) | undefined;
+    client.list.mockResolvedValue([waiting]);
+    client.follow.mockImplementation(async (_book: string, _opId: string, handlers: { onOperation: (v: OperationViewData) => void }) => {
+      push = handlers.onOperation;
+      handlers.onOperation(waiting);
+    });
+    reconnectOperations(BOOK);
+    await flush();
+
+    useChatStore.getState().appendMessage({ id: "u2", role: "user", content: "确认定稿第 3 章" });
+    useChatStore.getState().appendMessage({ id: "a2", role: "assistant", content: "" });
+    claimOperation(OP_C, "a2");
+    const turn = () => useChatStore.getState().messages.find((message) => message.id === "a2")!;
+    const original = () => useChatStore.getState().messages.find((message) => message.id === "a1")!;
+    expect(cardOf(turn(), "operation")?.op).toMatchObject({ opId: OP_C, state: "waiting_author", allowed: [] });
+    expect(cardOf(turn(), "operation")?.op.pending).toBeUndefined();
+
+    push?.(view(OP_C, { kind: "commit.prepare", mode: undefined, what: "定稿·第 3 章", state: "succeeded", allowed: [], eventSeq: 8, conclusion: "第 3 章已定稿。", commit: { chapter: 3, committed: true, report: { chapter: 3 }, snapshotId: "s-1" } }));
+    await flush();
+    expect(cardOf(turn(), "commit-report")).toBeDefined();
+    expect(turn().turnSnapshots).toEqual([{ toolName: "prepare_commit", snapshotId: "s-1", chapterNumber: 3 }]);
+    expect(cardOf(original(), "commit-report")).toBeUndefined();
+    expect(original().turnSnapshots).toBeUndefined();
+    expect(cardOf(original(), "operation")?.op).toMatchObject({ state: "succeeded" });
+    expect(cardOf(original(), "operation")?.op.conclusion).toBeUndefined();
+    expect(cardOf(original(), "commit-preview")).toBeDefined();
+  });
+});
+
 describe("projectOperationEverywhere", () => {
   it("owner 那条出结果卡、记 announced；别的挂着同一次的只换操作卡", () => {
     useChatStore.setState({
@@ -138,5 +212,21 @@ describe("projectOperationEverywhere", () => {
     expect(cardOf(a1!, "quality")).toBeUndefined();
     expect(cardOf(a2!, "operation")?.op.announced).toBe(true);
     expect(cardOf(a2!, "quality")).toBeDefined();
+  });
+
+  it("定稿：清单、回执只挂在 owner 上；别的挂着同一次的只换操作卡", () => {
+    useChatStore.setState({
+      messages: [
+        { id: "a1", role: "assistant", content: "", cards: opCard(OP_A) },
+        { id: "a2", role: "assistant", content: "", cards: opCard(OP_A) },
+      ],
+    });
+    projectOperationEverywhere(view(OP_A, { kind: "commit.prepare", mode: undefined, state: "succeeded", allowed: [], eventSeq: 4, commit: { chapter: 3, committed: true, report: { chapter: 3 }, snapshotId: "s-1" } }), "a2");
+    const [a1, a2] = useChatStore.getState().messages;
+    expect(cardOf(a1!, "operation")?.op.state).toBe("succeeded");
+    expect(cardOf(a1!, "commit-report")).toBeUndefined();
+    expect(a1!.turnSnapshots).toBeUndefined();
+    expect(cardOf(a2!, "commit-report")).toBeDefined();
+    expect(a2!.turnSnapshots).toEqual([{ toolName: "prepare_commit", snapshotId: "s-1", chapterNumber: 3 }]);
   });
 });

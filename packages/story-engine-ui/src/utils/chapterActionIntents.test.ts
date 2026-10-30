@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newCanonPick, newCanonStatement, newDraftAction, newEditAction, newInspectAction } from "../api/agentChatClient.js";
+import { newCanonPick, newCanonStatement, newCommitAction, newDraftAction, newEditAction, newInspectAction } from "../api/agentChatClient.js";
 
 import {
   DIRECT_WRITE_FALLBACK_GOAL,
@@ -27,7 +27,8 @@ describe("resolveDirectWriteChapterGoal（写这一章按钮：没方向也直�
 
 describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你：…」回显文案）", () => {
   it("各动作给作者看得懂的一句话", () => {
-    expect(userActionChoiceText({ toolName: "commit_preview", chapter: 5 })).toBe("预览第 5 章的定稿改动");
+    expect(userActionChoiceText(newCommitAction(5))).toBe("定稿第 5 章");
+    expect(userActionChoiceText(newCommitAction(5, { allowShort: true }))).toBe("第 5 章就这么短，照样定稿");
     expect(userActionChoiceText({ kind: "new", type: "settings.change", params: { accept: "op-0123456789abcdef0123" }, requestKey: "k", issuedAt: "2026-10-30T00:00:00.000Z" })).toBe("认下 AI 刚写的设定");
     expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-settings", decision: "apply" } })).toBe("确认改设定");
     expect(userActionChoiceText(newDraftAction("write", { chapter: 12, direction: "寄往上海的存根：1. …" }), "寄往上海的存根")).toBe("照「寄往上海的存根」写第 12 章的正文");
@@ -48,7 +49,7 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText(newInspectAction("continuity", 5, { fresh: true }))).toBe("再核一遍第 5 章的账");
     expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123" })).toBe("接着做");
     expect(userActionChoiceText({ kind: "cancel", opId: "op-0123456789abcdef0123" })).toBe("不要了");
-    expect(userActionChoiceText({ toolName: "commit_apply", chapter: 5 })).toBe("确认定稿第 5 章");
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-commit", decision: "commit", values: { day: 3 } } })).toBe("确认定稿");
     expect(userActionChoiceText({ toolName: "prune_snapshots" })).toBe("确认裁剪操作历史");
     expect(userActionChoiceText({ toolName: "prune_snapshots", keep: 50 })).toBe("确认裁剪操作历史（保留最近 50 条）");
     // 改稿（片 2C）：按核账改、去 AI 味、改写；引的原文太长截短。改写停着等作者点的说点的哪个。

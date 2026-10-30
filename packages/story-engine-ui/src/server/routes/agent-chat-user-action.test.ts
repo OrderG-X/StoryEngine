@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
-// agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：用户点「确认定稿」按钮 → body.action →
-// 服务端直接执行 commit_apply，不经模型（agent.stream 一次都不调）。真项目 + 真预览票据 + 真落盘。
+// agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：作者点「定稿」「确认定稿」按钮 → body.action →
+// 交给执行器（commit.prepare），不经模型（agent.stream 一次都不调）。真项目 + 真执行器 + 真落盘，记账员是假的。
 // 「确认改设定」「确认改账」（写作版本 P2a：改设定、改账是一次操作，按钮接着那次）、梗概上直接改、定稿回执里的「还没建卡的人」也在这里走真链。
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -25,9 +25,9 @@ vi.mock("../editorial/index.js", async (importOriginal) => ({
   warmUpReaders: brainMocks.warmUpReaders,
 }));
 
-import { buildCommitPreviewToolOutput } from "../agent/tools/commit-preview.js";
 import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, submitOperation } from "../services/operations/executor.js";
+import { COMMIT_CONFIRM_ACTION, COMMIT_PREPARE_KIND, createCommitPrepareRecipe } from "../services/operations/recipes/commit-prepare.js";
 import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
@@ -74,58 +74,37 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     rootDirs.clear();
   });
 
-  it("有效预览 + 点按钮 → 直接定稿落盘，事件同 agent 回合（tool-call/tool-result/文本/下一步卡），模型零调用", { timeout: 30_000 }, async () => {
+  it("点「定稿」→ 清单停着等作者、书没动；点「确认定稿」→ 定稿落盘、一句结论 + 下一步卡；模型零调用", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1, callModel: fakeKeeper });
-    expect(preview.canCommit).toBe(true);
+    const prepared = await prepareByButton(projectDir, 1, fakeKeeper);
+    expect(prepared.waiting).toMatchObject({ state: "waiting_author" });
+    expect(textOf(prepared.events)).toBe("第 1 章可以定稿，清单在卡上：点「确认定稿」才定。");
+    await expect(access(join(projectDir, "chapters", "0001.md"))).rejects.toThrow();
 
-    const { handlerPromise, res } = callAgentChatRoute({
-      projectPath: projectDir,
-      messages: [{ role: "user", content: "确认定稿第 1 章" }],
-      currentChapter: 1,
-      action: { toolName: "commit_apply", chapter: 1, previewToken: preview.previewToken },
-    });
-    await handlerPromise;
-
-    const events = parseSse(res.written.join(""));
-    const commitResult = events.find((e) => e.event === "tool-result" && e.data.toolName === "commit_apply");
-    expect(commitResult?.data.output).toMatchObject({ ok: true, committed: true, chapter: 1 });
+    const { events } = await confirmByButton(projectDir, prepared.opId);
+    expect(textOf(events)).toContain("第 1 章已定稿");
     expect(events.some((e) => e.event === "tool-result" && e.data.toolName === "suggest_next_steps")).toBe(true);
     expect(events.at(-1)?.event).toBe("done");
     await expect(access(join(projectDir, "chapters", "0001.md"))).resolves.toBeUndefined();
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
-    expect(res.writableEnded).toBe(true);
   });
 
-  it("没有预览就点按钮 → 如实拒绝不落盘，给「重新预览」选项", { timeout: 30_000 }, async () => {
+  it("老的「确认定稿」按钮（按工具名、带票号）→ 400，不定稿", async () => {
     const projectDir = await makeProjectWithDraft(1);
-
     const { handlerPromise, res } = callAgentChatRoute({
       projectPath: projectDir,
       messages: [{ role: "user", content: "确认定稿第 1 章" }],
-      action: { toolName: "commit_apply", chapter: 1 },
+      action: { toolName: "commit_apply", chapter: 1, previewToken: "0123456789abcdef" },
     });
     await handlerPromise;
-
-    const events = parseSse(res.written.join(""));
-    const commitResult = events.find((e) => e.event === "tool-result" && e.data.toolName === "commit_apply");
-    expect(commitResult?.data.output).toMatchObject({ ok: false, committed: false });
-    const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
-    expect(text).toContain("没定稿");
-    expect(text).not.toContain("commit_preview");
+    expect(res.statusCode).toBe(400);
     await expect(access(join(projectDir, "chapters", "0001.md"))).rejects.toThrow();
   });
 
   it("「确认改账」：AI 提的改账停着等作者 → 点了记成作者裁定、老格式账本跟着变；点两次只记一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1, callModel: fakeKeeper });
-    const committed = callAgentChatRoute({
-      projectPath: projectDir,
-      messages: [{ role: "user", content: "确认定稿第 1 章" }],
-      action: { toolName: "commit_apply", chapter: 1, previewToken: preview.previewToken },
-    });
-    await committed.handlerPromise;
+    await commitByButtons(projectDir, 1, fakeKeeper);
 
     registerRecipe(ledgerChangeRecipe);
     const proposal = await submitOperation(projectDir, {
@@ -175,12 +154,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
 
   it("梗概上「改」：直接改账（不再问），对话里如实说改好了", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1, callModel: fakeKeeper });
-    await callAgentChatRoute({
-      projectPath: projectDir,
-      messages: [{ role: "user", content: "确认定稿第 1 章" }],
-      action: { toolName: "commit_apply", chapter: 1, previewToken: preview.previewToken },
-    }).handlerPromise;
+    await commitByButtons(projectDir, 1, fakeKeeper);
     registerRecipe(ledgerChangeRecipe);
     const { handlerPromise, res } = callAgentChatRoute({
       projectPath: projectDir,
@@ -299,7 +273,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
 });
 
 // 定稿回执（P9）：出场了还没建卡的人列出来、引去设定本「还没建卡」；没建卡的人出场满 3 章单独点一次名。
-// 前两章直接走核心定稿命令打底，第 3 章走真预览 + 真按钮。
+// 前两章直接走核心定稿命令打底，第 3 章走真按钮（「定稿」→「确认定稿」）。
 describe("agent-chat route：定稿回执里的「还没建卡的人」", () => {
   const rootDirs = new Set<string>();
 
@@ -309,6 +283,9 @@ describe("agent-chat route：定稿回执里的「还没建卡的人」", () => 
   });
 
   afterEach(async () => {
+    await __drainOperationsForTests();
+    __resetRecipesForTests();
+    __resetOperationStoreForTests();
     storyAgentMocks.getStoryAgent.mockReset();
     await Promise.all([...rootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
     rootDirs.clear();
@@ -354,17 +331,10 @@ describe("agent-chat route：定稿回执里的「还没建卡的人」", () => 
       : "笔记。";
 
   async function commitChapter3(projectDir: string): Promise<string> {
-    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 3, callModel: keeper3 });
-    expect(preview.canCommit).toBe(true);
-    const { handlerPromise, res } = callAgentChatRoute({
-      projectPath: projectDir,
-      messages: [{ role: "user", content: "确认定稿第 3 章" }],
-      action: { toolName: "commit_apply", chapter: 3, previewToken: preview.previewToken },
-    });
-    await handlerPromise;
-    const result = parseSse(res.written.join("")).find((e) => e.event === "tool-result" && e.data.toolName === "commit_apply");
-    expect(result?.data.output).toMatchObject({ ok: true, committed: true, chapter: 3 });
-    return (result?.data.output as { summary: string }).summary;
+    const { events } = await commitByButtons(projectDir, 3, keeper3);
+    const summary = textOf(events);
+    expect(summary).toContain("第 3 章已定稿");
+    return summary;
   }
 
   it("头一回出场的没卡的人列出来；没卡的人这章正好出场满 3 章 → 单独提醒一次；有卡的不提", { timeout: 60_000 }, async () => {
@@ -388,6 +358,43 @@ describe("agent-chat route：定稿回执里的「还没建卡的人」", () => 
     expect(summary).not.toContain("还没有人物卡");
   });
 });
+
+const textOf = (events: readonly SseEvent[]): string => events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
+
+/** 点「定稿」：清单出来停着等作者（记账员用给的假的）。 */
+async function prepareByButton(projectDir: string, chapter: number, keeper: BrainCallModel): Promise<{ readonly opId: string; readonly waiting: Record<string, unknown> | undefined; readonly events: SseEvent[] }> {
+  registerRecipe(createCommitPrepareRecipe({ callModel: keeper, modelProblem: () => undefined }));
+  const { handlerPromise, res } = callAgentChatRoute({
+    projectPath: projectDir,
+    messages: [{ role: "user", content: `定稿第 ${chapter} 章` }],
+    action: { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: randomUUID(), issuedAt: new Date().toISOString() },
+  });
+  await handlerPromise;
+  const events = parseSse(res.written.join(""));
+  const operations = events.filter((e) => e.event === "operation").map((e) => e.data.operation as Record<string, unknown> | undefined).filter((op) => op !== undefined);
+  const waiting = operations.at(-1);
+  const opId = typeof waiting?.opId === "string" ? waiting.opId : "";
+  return { opId, waiting, events };
+}
+
+/** 在清单上点「确认定稿」（什么都不动）。 */
+async function confirmByButton(projectDir: string, opId: string): Promise<{ readonly events: SseEvent[] }> {
+  const { handlerPromise, res } = callAgentChatRoute({
+    projectPath: projectDir,
+    messages: [{ role: "user", content: "确认定稿" }],
+    action: { kind: "resume", opId, answer: { actionId: COMMIT_CONFIRM_ACTION, decision: "commit" } },
+  });
+  await handlerPromise;
+  await __drainOperationsForTests();
+  return { events: parseSse(res.written.join("")) };
+}
+
+/** 「定稿」→「确认定稿」走完。 */
+async function commitByButtons(projectDir: string, chapter: number, keeper: BrainCallModel): Promise<{ readonly events: SseEvent[] }> {
+  const { opId } = await prepareByButton(projectDir, chapter, keeper);
+  expect(opId).toMatch(/^op-/u);
+  return confirmByButton(projectDir, opId);
+}
 
 function parseSse(raw: string): SseEvent[] {
   return raw

@@ -88,9 +88,6 @@ const METRICS_EXCLUDE_MARKER = "# story-engine-ui: 分步计量记录不入快�
 const AGENTS_EXCLUDE_DIR = "agents";
 const AGENTS_EXCLUDE_MARKER = "# story-engine-ui: 专员读书笔记不入快照（按正文哈希自校验的缓存）";
 
-/** 新核心的定稿预览票（重构 P3）：只是缓存，丢了重新预览；进快照的话撤销会把过期的票翻回来。 */
-const CORE_PREVIEW_DIR = "ledger/.preview";
-const CORE_PREVIEW_MARKER = "# story-engine-ui: 定稿预览票不入快照（缓存）";
 /** 新核心的写盘事务目录：核心自己收拾，和旧引擎的 .story-engine-tx 同理。 */
 const CORE_TX_DIR = ".story-core-tx";
 const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（核心自管）";
@@ -113,7 +110,6 @@ const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: strin
   { dir: SNAPSHOT_EXCLUDED_TX_DIR, line: TX_EXCLUDE_LINE, marker: TX_EXCLUDE_MARKER },
   { dir: METRICS_EXCLUDE_DIR, line: `/${METRICS_EXCLUDE_DIR}/`, marker: METRICS_EXCLUDE_MARKER },
   { dir: AGENTS_EXCLUDE_DIR, line: `/${AGENTS_EXCLUDE_DIR}/`, marker: AGENTS_EXCLUDE_MARKER },
-  { dir: CORE_PREVIEW_DIR, line: `/${CORE_PREVIEW_DIR}/`, marker: CORE_PREVIEW_MARKER },
   { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
   { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
   { dir: CORE_SAVED_DIR, line: `/${CORE_SAVED_DIR}/`, marker: CORE_SAVED_MARKER },

@@ -65,15 +65,15 @@ export type WriteInstructionTarget =
 // 对话提取出的低风险资料更新候选；是否自动应用由客户端和写入网关共同裁决。
 /**
  * running=进行中；completed=正常完成；failed=工具失败/被拒绝（红）；needs_confirmation=待确认；
- * partial=部分完成；stopped=人喊停；verdict=裁决类只读工具（commit_preview）正常执行后的「否定裁决」
- * （ok===canCommit:false，如「暂不可定稿」）——落定形态，不红不绿，不是失败。
+ * partial=部分完成；stopped=人喊停；verdict=老会话里裁决类只读工具（P2a 前的 commit_preview）正常执行后的「否定裁决」
+ * （如「暂不可定稿」）——落定形态，不红不绿，不是失败；现在不再产生，只为老会话照原样显示。
  */
 export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped" | "verdict";
 
 export interface ToolStep {
   readonly id: string;
   readonly label: string;
-  /** 触发该步的工具名（如 change_draft / revise_draft / commit_apply）；供进度卡把步骤映射到「构思/写稿/审校/入库」四相。 */
+  /** 触发该步的工具名（如 change_draft / run_check / prepare_commit）；供进度卡把步骤映射到「构思/写稿/审校/入库」四相。 */
   readonly toolName?: string;
   readonly status: ToolStepStatus;
   readonly startedAt: number;

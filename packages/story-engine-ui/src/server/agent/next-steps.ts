@@ -12,6 +12,7 @@ import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
 import { CANON_PROPOSE_KIND, type CanonCard, type CanonProposeInput } from "../services/operations/recipes/canon-propose.js";
+import { COMMIT_PREPARE_KIND } from "../services/operations/recipes/commit-prepare.js";
 import type { OperationAction, UserAction } from "./user-actions.js";
 
 export interface NextStepChoice {
@@ -21,14 +22,14 @@ export interface NextStepChoice {
   /**
    * 结构化动作（R4.7/验收 3.8）：带上它的选项，前端点击直接发 body.action 到 /api/agent/chat，
    * 不再发一句意图给模型（一次省 3～5 万输入）。只给**服务端自己生成**的确定性选项填
-   * （预览定稿/再核一次/写下一章…）；模型 suggest_next_steps 生成的选项没有这个字段，照旧发文本。
+   * （定稿/再核一次/写下一章…）；模型 suggest_next_steps 生成的选项没有这个字段，照旧发文本。
    */
   readonly action?: UserAction;
 }
 
-/** 给用户看的收尾文本：工具 summary 里偶有工具名（「尚未对该章执行 commit_preview」），换成人话。 */
+/** 给用户看的收尾文本：模型的话里偶有工具名（「先 prepare_commit」），换成人话。 */
 export function humanizeToolNames(text: string): string {
-  return text.replace(/commit_preview/gu, "定稿预览").replace(/commit_apply/gu, "定稿");
+  return text.replace(/prepare_commit/gu, "定稿");
 }
 
 /**
@@ -62,6 +63,16 @@ export function newCanonAction(mode: "pick" | "statement", params: CanonProposeI
 export function recheckCanonAction(card: CanonCard): OperationAction {
   const also = card.missed.map((item) => ({ where: "chapter" as const, chapter: item.chapter, quote: item.quote }));
   return newCanonAction("statement", { statement: card.canon, ...(card.chapter !== undefined ? { chapter: card.chapter } : {}), ...(also.length > 0 ? { also } : {}) });
+}
+
+/** 「定稿」：出这一章的定稿清单（记账员记账，作者在清单上点「确认定稿」才定）。 */
+export function commitAction(chapter: number): OperationAction {
+  return { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 下一步里的「定稿」。 */
+export function commitChoice(chapter: number, options: { readonly label?: string; readonly recommended?: boolean } = {}): NextStepChoice {
+  return { label: options.label ?? "定稿", intent: `定稿第 ${chapter} 章`, ...(options.recommended ? { recommended: true } : {}), action: commitAction(chapter) };
 }
 
 /** 「核账」「再核一遍」：交一次核账。fresh＝正文没改也重新核。 */

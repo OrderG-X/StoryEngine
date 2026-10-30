@@ -5,6 +5,7 @@
  * 挂在哪条：已经有这次操作的卡的那条；没有（流断在头一份记录到之前）就是交它的那句话后面的那条助手消息。都找不到
  * （别的会话里交的、后台补读）不挂。卡上还说在做、其实关页期间已经结束的，也问一下拿到结果。换书、换会话就停掉旧的订阅。
  * 写稿的：稿纸开着那章就接着流式显示（订阅时服务端先补发到现在流出来的那份），停下来了按盘上重读稿纸和书的状态。
+ * 定稿的：等作者点的清单重新摆回卡上（「确认定稿」接着能点）；关页期间定成了的，按盘上重读稿纸和书的状态。
  */
 import { fetchStateOverview } from "../api/client.js";
 import { followOperationEvents, listActiveOperations } from "../api/operationsClient.js";
@@ -61,6 +62,7 @@ export function reconnectOperations(projectPath: string): void {
     && useNavigationStore.getState().projectPath === projectPath
     && useChatStore.getState().activeSessionId === sessionId;
   const followed = new Set<string>();
+  const committed = new Set<string>();
   const follow = (opId: string, owner: string): void => {
     if (followed.has(opId) || !stillHere()) return;
     followed.add(opId);
@@ -68,9 +70,14 @@ export function reconnectOperations(projectPath: string): void {
     void followOperationEvents(projectPath, opId, {
       onOperation: (next) => {
         if (!stillHere()) return;
-        projectOperationEverywhere(next, owner);
+        // owner 跟着变：作者在卡上点了「接着做」「确认定稿」，那一轮那条接管（见 claimOperation）。
+        projectOperationEverywhere(next, ownerOfOperation(useChatStore.getState().messages, next) ?? owner);
         if ((next.kind === "draft.change" && isDraftEditMode(next.mode)) || isCandidateDecisionType(next.kind)) settleFollowedEdit(projectPath, next, stillHere);
         else if (next.kind === "draft.change") draft.onOperation(next);
+        else if (next.kind === "commit.prepare" && next.commit?.committed && !committed.has(next.opId)) {
+          committed.add(next.opId);
+          settleFollowedCommit(projectPath, next.commit.chapter, stillHere);
+        }
       },
       onProgress: (text) => { if (stillHere()) projectOperationProgressEverywhere(opId, text); },
       onLive: (event) => { if (stillHere()) draft.onLive(event); },
@@ -99,6 +106,17 @@ function settleFollowedEdit(projectPath: string, view: OperationViewData, stillH
     const workspace = useBookStore.getState().workspace;
     const here = workspace.currentChapter?.chapterNumber === view.chapter;
     applyOverviewToWorkspace(overview, here ? { flowStatus: flowAfterOperation(view, workspace.flowStatus) } : {});
+  }).catch(() => undefined);
+}
+
+/** 跟着的一次定稿定成了：按盘上重读稿纸和书的状态（稿纸开着那章就成了「已定稿」），顶栏「设定本」亮个小点。 */
+function settleFollowedCommit(projectPath: string, chapter: number, stillHere: () => boolean): void {
+  useNavigationStore.getState().setUnseenChangesChapter(chapter);
+  void refreshPaper({ chapter }).catch(() => undefined);
+  void fetchStateOverview({ projectPath, maxTimelineEvents: 8 }).then((overview) => {
+    if (!stillHere()) return;
+    const here = useBookStore.getState().workspace.currentChapter?.chapterNumber === chapter;
+    applyOverviewToWorkspace(overview, here ? { flowStatus: "committed", chapter } : {});
   }).catch(() => undefined);
 }
 

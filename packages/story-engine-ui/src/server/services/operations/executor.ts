@@ -116,12 +116,30 @@ export interface AuthorAction {
   readonly preview?: unknown;
   /** 作者能划掉的那几项的键（定论卡上每句一个）；不给 = 不能划。 */
   readonly excludable?: readonly string[];
+  /** 作者能填的整数栏（定稿清单上的天数）：栏名 → 范围；不给 = 不能填。 */
+  readonly inputs?: AuthorInputs;
 }
 
-/** 作者点的：哪个决定、划掉了哪几项（只会是 excludable 里的，排好序）。 */
+/** 作者能填的整数栏：栏名 → 范围（含两头）。 */
+export type AuthorInputs = Readonly<Record<string, { readonly min: number; readonly max: number }>>;
+
+/** 作者点的：哪个决定、划掉了哪几项（只会是 excludable 里的，排好序）、填了哪几栏（只会是 inputs 里的、在范围里）。 */
 export interface AuthorDecision {
   readonly decision: string;
   readonly excluded: readonly string[];
+  readonly values: Readonly<Record<string, number>>;
+}
+
+/** 填的几栏里只留配方给了、在范围里的整数（按栏名排好）。 */
+export function allowedValues(values: unknown, inputs: AuthorInputs | undefined): Record<string, number> {
+  if (!values || typeof values !== "object" || Array.isArray(values) || !inputs) return {};
+  const kept: Record<string, number> = {};
+  for (const name of Object.keys(inputs).sort()) {
+    const value = (values as Record<string, unknown>)[name];
+    const range = inputs[name]!;
+    if (typeof value === "number" && Number.isInteger(value) && value >= range.min && value <= range.max) kept[name] = value;
+  }
+  return kept;
 }
 
 /** 作者点了的决定存在这一步的检查点里。 */
@@ -139,6 +157,11 @@ export interface Recipe<P = unknown> {
   readonly autoResume?: boolean;
   /** 这类最新的那次记录清理时不清（别的文件照清）：状态要一直从它读的（通读记账停着就一直挡着定稿）。 */
   readonly keepLatest?: boolean;
+  /**
+   * 同一章新交一次时，之前还在等作者点的同类那几次作废（定稿清单：一章只留一张能点的，旧清单是照旧稿记的账）；
+   * message = 作者再点旧卡上的按钮时看到的原因。
+   */
+  readonly supersedesWaiting?: { readonly message: string };
   /** 归一、校验参数，算写位和额度（设计 4.5 的算式，跟模型有关的项按这次冻结的模型选择算）；不受理返回失败。 */
   prepare(bookDir: string, input: { readonly mode?: string; readonly params: unknown; readonly origin: OperationOrigin; readonly models: FrozenModels }): Promise<PrepareOutcome<P>>;
   run(ctx: RecipeContext<P>): Promise<OperationResult>;
@@ -204,8 +227,24 @@ export async function submitOperation(bookDir: string, input: SubmitInput): Prom
   }, { bookEpoch: () => readBookEpoch(bookDir), inputs: { models } });
   if (!accepted.ok) return accepted;
   if ("tombstone" in accepted) return accepted;
-  if (!accepted.existing) track(startOperation(bookDir, accepted.record.opId));
+  if (!accepted.existing) {
+    if (recipe.supersedesWaiting) await supersedeWaiting(bookDir, accepted.record, recipe.supersedesWaiting.message);
+    track(startOperation(bookDir, accepted.record.opId));
+  }
   return accepted;
+}
+
+/** 新交的这次之前、同一章还在等作者点的同类那几次：作废（换状态在书锁里，和「接着做」抢的时候只有一个成）。 */
+async function supersedeWaiting(bookDir: string, record: OperationRecord, message: string): Promise<void> {
+  const shares = (other: OperationRecord): boolean => other.writeScope.chapters.some((chapter) => record.writeScope.chapters.includes(chapter));
+  const waiting = (await listOperations(bookDir)).filter((other) => other.opId !== record.opId && other.kind === record.kind && other.state === "waiting_author" && shares(other));
+  for (const other of waiting) {
+    await changeOperation(bookDir, other.opId, (current) => {
+      if (current.state !== "waiting_author") return undefined;
+      const { currentStep: _step, pauseReason: _pause, ...rest } = current;
+      return { ...rest, state: "obsolete", failure: { code: "superseded", message, retryable: false } };
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -347,12 +386,12 @@ function contextFor(record: OperationRecord, operation: OperationContext): Recip
     },
     async waitForAuthor(action: AuthorAction): Promise<AuthorDecision> {
       const decided = await readCheckpoint(bookDir, opId, authorStepId(action.actionId));
-      const output = decided?.output as { readonly decision?: unknown; readonly excluded?: unknown } | null | undefined;
+      const output = decided?.output as { readonly decision?: unknown; readonly excluded?: unknown; readonly values?: unknown } | null | undefined;
       const decision = output?.decision;
       if (typeof decision === "string" && action.decisions.includes(decision)) {
         const allowed = new Set(action.excludable ?? []);
         const excluded = Array.isArray(output?.excluded) ? output.excluded.filter((key): key is string => typeof key === "string" && allowed.has(key)) : [];
-        return { decision, excluded };
+        return { decision, excluded, values: allowedValues(output?.values, action.inputs) };
       }
       if (operation.signal.aborted) throw stoppedError(operation);
       // 先掐这次执行（之后的写过不了栅栏），再在书锁里换状态：记下按钮、换 waiting_author、runEpoch + 1。
@@ -365,6 +404,7 @@ function contextFor(record: OperationRecord, operation: OperationContext): Recip
           decisions: [...action.decisions],
           ...(action.preview !== undefined ? { preview: action.preview } : {}),
           ...(action.excludable && action.excludable.length > 0 ? { excludable: [...action.excludable] } : {}),
+          ...(action.inputs && Object.keys(action.inputs).length > 0 ? { inputs: action.inputs } : {}),
         };
         // 停在等作者那一步：接着做时额度按它加（配方给「点了按钮之后最多还要再跑的」，比如再改一版）。
         return {
@@ -488,19 +528,20 @@ export type ResumeOutcome =
     readonly occupant?: OperationRecord;
   };
 
-/** 作者点了等着的那个按钮：哪一个、点的哪个决定、划掉了哪几项。 */
+/** 作者点了等着的那个按钮：哪一个、点的哪个决定、划掉了哪几项、填了哪几栏。 */
 export interface AuthorAnswer {
   readonly actionId: string;
   readonly decision: string;
   readonly excluded?: readonly string[];
+  readonly values?: Readonly<Record<string, number>>;
 }
 
 /** 划掉的几项去重排序（同一组划法哈希一样）。 */
 const normalizedExcluded = (excluded: readonly string[] | undefined): string[] => [...new Set(excluded ?? [])].sort();
 
-/** 决定的哈希：没划掉什么的和以前一样只按决定算（改写那种按钮不变）。 */
-const decisionHashOf = (decision: string, excluded: readonly string[]): string =>
-  sha256(canonicalJson(excluded.length > 0 ? { decision, excluded } : { decision }));
+/** 决定的哈希：没划掉什么、没填什么的和以前一样只按决定算（改写那种按钮不变）。 */
+const decisionHashOf = (decision: string, excluded: readonly string[], values: Readonly<Record<string, number>>): string =>
+  sha256(canonicalJson({ decision, ...(excluded.length > 0 ? { excluded } : {}), ...(Object.keys(values).length > 0 ? { values } : {}) }));
 
 /**
  * 接着做（暂停之后作者点了「接着做」、等作者时作者点了按钮）：这时还没处理的结果不明的 attempt 记成作者处理过，
@@ -508,28 +549,40 @@ const decisionHashOf = (decision: string, excluded: readonly string[]): string =
  * 等作者的先核按钮和决定、把决定落进检查点，再换成 running。
  * 等作者的按钮：不在待办里 unknown_action；这个按钮点过同一个决定 → 回放（不再跑）；点过别的 → decision_conflict。
  */
+/** 卡上的按钮旧了、这次已经结束：说结束成什么样（作废、没成的说原因），不笼统说「没有停着」。 */
+function endedMessage(record: OperationRecord): string {
+  if (record.state === "succeeded") return "这次已经做完了。";
+  if (record.state === "cancelled") return "这次已经停掉了。";
+  return record.failure?.message ?? "这次已经结束了。";
+}
+
 export async function resumeOperation(bookDir: string, opId: string, answer?: AuthorAnswer): Promise<ResumeOutcome> {
   const notPaused: ResumeOutcome = { ok: false, code: "not_paused", message: "这次没有停着，不用接着做。" };
   let toLaunch: OperationRecord | undefined;
   const excluded = normalizedExcluded(answer?.excluded);
+  const values = Object.fromEntries(Object.entries(answer?.values ?? {}).sort(([a], [b]) => a.localeCompare(b)));
   const outcome = await withBookLock(bookDir, async (): Promise<ResumeOutcome> => {
     const stored = await readOperation(bookDir, opId);
     if (stored.kind !== "record") return { ok: false, code: "absent", message: "找不到这次操作了。" };
     const record = stored.record;
+    const ended: ResumeOutcome | undefined = isTerminal(record.state) ? { ok: false, code: "not_paused", message: endedMessage(record) } : undefined;
     const pending = answer ? record.pendingActions.find((action) => action.actionId === answer.actionId) : undefined;
     if (answer) {
       if (!pending) return { ok: false, code: "unknown_action", message: "这个按钮已经不管用了（这次操作没在等它）。" };
       if (!pending.decisions.includes(answer.decision)) return { ok: false, code: "bad_decision", message: "这个按钮没有这个选法。" };
       const allowed = new Set(pending.excludable ?? []);
       if (excluded.some((key) => !allowed.has(key))) return { ok: false, code: "bad_decision", message: "划掉的那几处卡上没有，请刷新后再点。" };
+      if (Object.keys(values).length !== Object.keys(allowedValues(values, pending.inputs)).length) {
+        return { ok: false, code: "bad_decision", message: "填的数不对，请刷新后再点。" };
+      }
       if (pending.decisionHash !== undefined) {
-        return pending.decisionHash === decisionHashOf(answer.decision, excluded)
+        return pending.decisionHash === decisionHashOf(answer.decision, excluded, values)
           ? { ok: true, record, replayed: true }
           : { ok: false, code: "decision_conflict", message: "这个按钮已经点过别的选法了，这次不算。" };
       }
-      if (record.state !== "waiting_author") return notPaused;
+      if (record.state !== "waiting_author") return ended ?? notPaused;
     } else if (record.state !== "paused") {
-      return record.state === "waiting_author" ? { ok: false, code: "unknown_action", message: "这次在等你点卡上的按钮。" } : notPaused;
+      return record.state === "waiting_author" ? { ok: false, code: "unknown_action", message: "这次在等你点卡上的按钮。" } : ended ?? notPaused;
     }
     const recipe = recipes.get(record.kind);
     if (!recipe) return { ok: false, code: "unknown_operation", message: "这类操作还没有。" };
@@ -546,12 +599,12 @@ export async function resumeOperation(bookDir: string, opId: string, answer?: Au
         stepId: authorStepId(answer.actionId),
         inputHash: inputHashOf({ actionId: answer.actionId }),
         exec: `${record.runEpoch}:${authorStepId(answer.actionId)}`,
-        output: { decision: answer.decision, ...(excluded.length > 0 ? { excluded } : {}) },
+        output: { decision: answer.decision, ...(excluded.length > 0 ? { excluded } : {}), ...(Object.keys(values).length > 0 ? { values } : {}) },
         finishedAt: new Date().toISOString(),
       });
       await changeOperation(bookDir, opId, (current) => (current.state !== "waiting_author" ? undefined : {
         ...current,
-        pendingActions: current.pendingActions.map((action) => (action.actionId === answer.actionId ? { ...action, decisionHash: decisionHashOf(answer.decision, excluded) } : action)),
+        pendingActions: current.pendingActions.map((action) => (action.actionId === answer.actionId ? { ...action, decisionHash: decisionHashOf(answer.decision, excluded, values) } : action)),
       }));
     }
     const settle = unsettledUnknowns(await listAttempts(bookDir, opId), record.settledUnknowns).map((attempt) => attempt.attemptId);

@@ -5,7 +5,7 @@
 import type { OperationViewData } from "../api/agentChatClient.js";
 import { projectAgentEvent } from "../hooks/agentEventProjection.js";
 import { useChatStore } from "../stores/chatStore.js";
-import { cardOf } from "../utils/messageCards.js";
+import { cardOf, withCard } from "../utils/messageCards.js";
 import type { ChapterMessage } from "../types.js";
 import type { OperationCardData } from "../type-defs/workspace.js";
 
@@ -19,8 +19,9 @@ const carries = (message: ChapterMessage, opId: string): boolean => cardOf(messa
  * announced＝这一轮接着会把结论说出来（对话这一轮里收到的终态），owner 的卡上就不再重复。
  */
 export function projectOperationEverywhere(view: OperationViewData, ownerMessageId?: string, options: { readonly announced?: boolean } = {}): void {
-  // 老的那几条只留一行记录：按钮、等作者点的改法、结论都只在 owner 上（点「再改一版」后不摆两份改法、两个「不要了」，结论不说两遍）。
-  const { inspect: _inspect, draft: _draft, pending: _pending, ...rest } = view;
+  // 老的那几条只留一行记录：按钮、等作者点的改法、结论、结果卡、打的存档点都只在 owner 上（点「再改一版」后不摆两份改法、
+  // 两个「不要了」，结论不说两遍；点「确认定稿」那一轮挂回执、记存档点，出清单那条不再记一遍）。
+  const { inspect: _inspect, draft: _draft, pending: _pending, changed: _changed, commit: _commit, ...rest } = view;
   const bare: OperationViewData = { ...rest, allowed: [], summary: "", conclusion: "" };
   const store = useChatStore.getState();
   for (const message of store.messages) {
@@ -29,6 +30,19 @@ export function projectOperationEverywhere(view: OperationViewData, ownerMessage
     }
     else if (carries(message, view.opId)) store.updateMessage(message.id, (current) => projectAgentEvent(current, { type: "operation", operation: bare }));
   }
+}
+
+/**
+ * 作者在卡上点了「接着做」「确认定稿」「不要了」这类（接着那一次）：这一轮那条一开始就挂上这次操作（照最近那张卡，按钮、
+ * 等作者点的都不带），它就成了 owner——开书后接着看的订阅和这一轮的流谁先到，结果、回执都落在这一轮，不落回原来那条。
+ */
+export function claimOperation(opId: string, messageId: string): void {
+  const store = useChatStore.getState();
+  const carrier = [...store.messages].reverse().find((message) => message.id !== messageId && carries(message, opId));
+  const op = carrier ? cardOf(carrier, "operation")?.op : undefined;
+  if (!op) return;
+  const { pending: _pending, conclusion: _conclusion, progress: _progress, announced: _announced, ...rest } = op;
+  store.updateMessage(messageId, (current) => withCard(current, { type: "operation", op: { ...rest, allowed: [], summary: "" } }));
 }
 
 /** 这次操作的一句进度：挂着它的卡都记上。 */

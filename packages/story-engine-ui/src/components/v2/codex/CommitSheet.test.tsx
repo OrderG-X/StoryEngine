@@ -9,10 +9,11 @@ import { clearLedgerExclusions } from "../../../utils/ledgerExclusions.js";
 import { closeCommitSheet, openCommitSheet, reusableCommitPreviewId } from "../../../workspace/commitSheet.js";
 import { CommitSheet, CommitSheetHost } from "./CommitSheet.js";
 
+const OP = "op-0123456789abcdef0123";
+const OP2 = "op-0123456789abcdef0124";
 const preview = (over: Partial<CommitPreviewCardData> = {}): CommitPreviewCardData => ({
   chapter: 7,
   canCommit: true,
-  previewToken: `tok-${Math.random()}`,
   ledgerChecklist: [
     { id: "day", kind: "time", label: "这一章记为故事第 3 天（正文明写）", detail: "三天后的上午", removable: false, editableDay: 3 },
     { id: "0", kind: "fact", label: "钟箱门：锁死 → 没锁（和第 6 章对不上）", detail: "钟箱门一推就开了。", removable: true, needsConfirm: true },
@@ -24,7 +25,7 @@ const preview = (over: Partial<CommitPreviewCardData> = {}): CommitPreviewCardDa
 });
 
 describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
-  afterEach(() => { cleanup(); clearLedgerExclusions(7); });
+  afterEach(() => { cleanup(); clearLedgerExclusions(OP); });
 
   it("分三份：天数在头上、要你看的逐条两个按钮、其余收在「另外自动记下 N 条」", () => {
     render(<CommitSheet preview={preview()} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
@@ -90,14 +91,14 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], { day: 5, dayEnd: 5 });
   });
 
-  const spanning = (token: string) => {
-    const base = preview({ previewToken: token });
+  const spanning = () => {
+    const base = preview();
     return { ...base, ledgerChecklist: base.ledgerChecklist!.map((item) => (item.id === "day" ? { ...item, label: "这一章记为故事第 3 天到第 4 天（按前后文判断）", editableDayEnd: 4 } : item)) };
   };
 
   it("记账员记成跨两天、其实没跨：「到第几天」也填成同一天（按这一天记）", () => {
     const onConfirm = vi.fn();
-    render(<CommitSheet preview={spanning("tok-span")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    render(<CommitSheet preview={spanning()} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
     // 删空再重打：删空时框里先空着（不弹回 4），再打 3。
     const end = screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement;
@@ -113,7 +114,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
   // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；改头一天只能记成一天，章里第二天那段丢了。
   it("跨天的章改头一天：跨的天数跟着挪", () => {
     const onConfirm = vi.fn();
-    render(<CommitSheet preview={spanning("tok-shift")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    render(<CommitSheet preview={spanning()} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "4" } });
     expect((screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement).value).toBe("5");
@@ -124,7 +125,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
 
   it("先填「到第几天」再改头一天：到第几天按填的不动，框里和上面那行说的一样", () => {
     const onConfirm = vi.fn();
-    render(<CommitSheet preview={spanning("tok-end-first")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    render(<CommitSheet preview={spanning()} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
     const end = screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement;
     fireEvent.change(end, { target: { value: "5" } });
@@ -139,15 +140,21 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(onConfirm).toHaveBeenLastCalledWith([], { day: 6, dayEnd: 6 });
   });
 
-  it("关了再开（同一份预览）动过的还在", () => {
-    const same = preview({ previewToken: "tok-same" });
-    const first = render(<CommitSheet preview={same} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
+  it("关了再开（同一次定稿）动过的条目和天数还在；别的一次不带", () => {
+    const same = preview();
+    const first = render(<CommitSheet preview={same} opId={OP} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
     fireEvent.click(within(screen.getByRole("group", { name: "钟箱门：锁死 → 没锁（和第 6 章对不上）" })).getByRole("button", { name: "不记" }));
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "5" } });
     first.unmount();
     const onConfirm = vi.fn();
-    render(<CommitSheet preview={same} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    const second = render(<CommitSheet preview={same} opId={OP} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "确认定稿（不记 1 条）" }));
-    expect(onConfirm).toHaveBeenCalledWith(["0"], undefined);
+    expect(onConfirm).toHaveBeenCalledWith(["0"], { day: 5, dayEnd: 5 });
+    second.unmount();
+    render(<CommitSheet preview={same} opId={OP2} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], undefined);
   });
 
   it("定不了：照实列原因，只有【知道了】；有动作在跑时【定稿】不让点", () => {
@@ -202,51 +209,76 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
 });
 
 describe("定稿清单开在哪、什么时候能直接再开", () => {
-  const msg = (id: string, card: Partial<{ preview: CommitPreviewCardData; checkedVersion: string | null }>): ChapterMessage => ({
-    id, role: "assistant", content: "", cards: [{ type: "commit-preview", preview: card.preview ?? preview(), ...(card.checkedVersion !== undefined ? { checkedVersion: card.checkedVersion } : {}) }],
-  });
+  /** 一条出了定稿清单的消息：在等作者点（op 在等、等的是这张清单）；opId 为空＝只有清单（定不了、用掉了的）。 */
+  const msg = (id: string, card: Partial<{ preview: CommitPreviewCardData; checkedVersion: string | null; opId: string; state: "waiting_author" | "succeeded" }>): ChapterMessage => {
+    const shown = card.preview ?? preview();
+    const opId = card.opId;
+    const state = card.state ?? "waiting_author";
+    return {
+      id, role: "assistant", content: "",
+      cards: [
+        ...(opId ? [{ type: "operation" as const, op: { opId, kind: "commit.prepare", what: "定稿", state, stateText: "", allowed: [], summary: "", eventSeq: 1, ...(state === "waiting_author" ? { pending: { kind: "commit" as const, actionId: "confirm-commit", decisions: ["commit"], preview: shown } } : {}) } }] : []),
+        { type: "commit-preview", preview: shown, ...(opId ? { opId } : {}), ...(card.checkedVersion !== undefined ? { checkedVersion: card.checkedVersion } : {}) },
+      ],
+    };
+  };
   const paper = { chapter: 7, baseVersion: "v1", body: "稿", savedBody: "稿", title: "", savedTitle: "" };
 
   beforeEach(() => { useChatStore.setState({ messages: [] }); closeCommitSheet(); });
-  afterEach(() => { cleanup(); closeCommitSheet(); });
+  afterEach(() => { cleanup(); closeCommitSheet(); clearLedgerExclusions(OP); clearLedgerExclusions(OP2); });
 
-  it("预览后稿子没变（版本一样、没有没存的字）才直接再开；否则要重新预览", () => {
-    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1" })], paper)).toBe("a");
-    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v0" })], paper)).toBeNull();
-    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1" })], { ...paper, body: "稿，又写一句" })).toBeNull();
-    expect(reusableCommitPreviewId([msg("a", {})], paper)).toBeNull();
-    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", preview: preview({ chapter: 8 }) })], paper)).toBeNull();
-    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", preview: preview({ canCommit: false }) })], paper)).toBeNull();
+  it("清单还在等作者点、出完稿子没变（版本一样、没有没存的字）才直接再开；否则要重新出一张", () => {
+    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", opId: OP })], paper)).toBe("a");
+    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v0", opId: OP })], paper)).toBeNull();
+    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", opId: OP })], { ...paper, body: "稿，又写一句" })).toBeNull();
+    expect(reusableCommitPreviewId([msg("a", { opId: OP })], paper)).toBeNull();
+    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", opId: OP, preview: preview({ chapter: 8 }) })], paper)).toBeNull();
+    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", opId: OP, state: "succeeded" })], paper)).toBeNull();
+    expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1" })], paper)).toBeNull();
   });
 
-  it("只差字数下限：【知道了】旁边给【就这么短，照样定稿】，点了关窗、发这一章的照样定稿；别的挡住的原因不给", () => {
-    const short = preview({ canCommit: false, previewToken: undefined, ledgerChecklist: undefined, shortOnly: true, blockingReasons: ["正文 1137 字，低于写作规则要求的下限 2000 字"] });
+  it("只差字数下限：【知道了】旁边给【就这么短，照样定稿】，点了关窗、交一次这一章照样定稿；别的挡住的原因不给", () => {
+    const short = preview({ canCommit: false, ledgerChecklist: undefined, shortOnly: true, blockingReasons: ["正文 1137 字，低于写作规则要求的下限 2000 字"] });
     useChatStore.setState({ messages: [msg("short", { preview: short })] });
-    const onSuggestedAction = vi.fn();
-    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    const onSendUserAction = vi.fn();
+    render(<CommitSheetHost busy={false} onSendUserAction={onSendUserAction} />);
     act(() => openCommitSheet("short"));
     expect(screen.getByRole("button", { name: "知道了" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "就这么短，照样定稿" }));
-    expect(onSuggestedAction).toHaveBeenCalledWith(expect.objectContaining({ id: "commit-short", commitTarget: { chapter: 7 } }));
+    expect(onSendUserAction).toHaveBeenCalledWith({ kind: "new", type: "commit.prepare", params: { chapter: 7, allowShort: true }, requestKey: expect.any(String), issuedAt: expect.any(String) });
     expect(screen.queryByRole("dialog")).toBeNull();
     cleanup();
     useChatStore.setState({ messages: [msg("other", { preview: { ...short, shortOnly: undefined } })] });
-    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    render(<CommitSheetHost busy={false} onSendUserAction={onSendUserAction} />);
     act(() => openCommitSheet("other"));
     expect(screen.queryByRole("button", { name: "就这么短，照样定稿" })).toBeNull();
   });
 
-  it("挂在外层的弹窗：打开那条消息上的预览；只有最新一张能点【定稿】，点了关窗、发确认定稿", () => {
-    useChatStore.setState({ messages: [msg("old", { checkedVersion: "v1" }), msg("new", { checkedVersion: "v1" })] });
+  it("挂在外层的弹窗：打开那条消息上的清单；只有这一章最新、还在等的那张能点【定稿】，点了关窗、接着那次定稿（带上动过的、回显一句）", () => {
+    useChatStore.setState({ messages: [msg("old", { checkedVersion: "v1", opId: OP }), msg("new", { checkedVersion: "v1", opId: OP2 })] });
     useDraftStore.setState(paper);
-    const onSuggestedAction = vi.fn();
-    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    const onSendUserAction = vi.fn();
+    render(<CommitSheetHost busy={false} onSendUserAction={onSendUserAction} />);
     expect(screen.queryByRole("dialog")).toBeNull();
     act(() => openCommitSheet("old"));
     expect(screen.queryByRole("button", { name: "确认定稿" })).toBeNull();
     act(() => openCommitSheet("new"));
-    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
-    expect(onSuggestedAction).toHaveBeenCalledWith(expect.objectContaining({ commitTarget: expect.objectContaining({ chapter: 7 }) }));
+    fireEvent.click(within(screen.getByRole("group", { name: "钟箱门：锁死 → 没锁（和第 6 章对不上）" })).getByRole("button", { name: "不记" }));
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿（不记 1 条）" }));
+    expect(onSendUserAction).toHaveBeenCalledWith(
+      { kind: "resume", opId: OP2, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["0"], values: { day: 4, dayEnd: 4 } } },
+      { echo: "确认定稿第 7 章（账本清单去掉了 1 条，这一章改记为故事第 4 天）" },
+    );
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("那次定稿已经用掉了：清单只看，没有【定稿】", () => {
+    useChatStore.setState({ messages: [msg("done", { checkedVersion: "v1", opId: OP, state: "succeeded" })] });
+    render(<CommitSheetHost busy={false} onSendUserAction={vi.fn()} />);
+    act(() => openCommitSheet("done"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "确认定稿" })).toBeNull();
   });
 });

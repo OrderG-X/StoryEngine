@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { newInspectAction } from "../../../api/agentChatClient.js";
+import { newCommitAction, newInspectAction } from "../../../api/agentChatClient.js";
 import { NextStepChoicesRow } from "./AiChatCodex.js";
 import type { NextStepPrompt } from "./nextStepChoices.js";
 
@@ -14,19 +14,20 @@ describe("NextStepChoicesRow 点击分派（R4.7：有 action 直发结构化动
   it("choice 带 action → 只调 onSendUserAction（发 body.action，不经模型），不把 intent 当文本发", () => {
     const onSendUserAction = vi.fn();
     const onSendMessage = vi.fn();
+    const commit = newCommitAction(5);
     render(
       <NextStepChoicesRow
         nextStep={prompt([
-          { label: "预览定稿", intent: "预览第 5 章的定稿改动", primary: true, action: { toolName: "commit_preview", chapter: 5 } },
+          { label: "定稿", intent: "定稿第 5 章", primary: true, action: commit },
         ])}
         busy={false}
         onSendMessage={onSendMessage}
         onSendUserAction={onSendUserAction}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /预览定稿/ }));
+    fireEvent.click(screen.getByRole("button", { name: /定稿/ }));
     expect(onSendUserAction).toHaveBeenCalledTimes(1);
-    expect(onSendUserAction).toHaveBeenCalledWith({ toolName: "commit_preview", chapter: 5 });
+    expect(onSendUserAction).toHaveBeenCalledWith(commit);
     expect(onSendMessage).not.toHaveBeenCalled();
   });
 

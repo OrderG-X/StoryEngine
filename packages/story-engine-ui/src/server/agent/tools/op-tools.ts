@@ -4,7 +4,7 @@
  * 进度、结果、下一步都由服务端出，模型不再多说一轮。没受理（参数不对、前提不满足）回 ok:false + code + 一句原因，模型照常往下走。
  *
  * run_check（收编核账、硬伤检查、内容审阅、查 AI 味）、change_draft（收编出稿、接着写，在 change-draft.ts）、revise_draft（改稿，在 revise-draft.ts）、
- * plan_chapter（想走法，在 plan-chapter.ts）、change_settings（改设定，在 change-settings.ts）；
+ * plan_chapter（想走法，在 plan-chapter.ts）、change_settings（改设定，在 change-settings.ts）、prepare_commit（定稿，在 prepare-commit.ts）；
  * 别的提交工具随各自那一片加。
  */
 import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
@@ -22,7 +22,7 @@ import {
 } from "../request-context.js";
 
 /** 提交操作的对话工具名（turn-flow 按它们判「这一步交了操作」）。 */
-export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft", "revise_draft", "plan_chapter", "change_settings", "change_ledger", "propose_canon"]);
+export const SUBMIT_TOOL_NAMES: ReadonlySet<string> = new Set(["run_check", "change_draft", "revise_draft", "plan_chapter", "change_settings", "change_ledger", "propose_canon", "prepare_commit"]);
 
 /** 受理回执（给模型看、也给界面认「这一步交出去了」）。 */
 export interface SubmitReceipt {

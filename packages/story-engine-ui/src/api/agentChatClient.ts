@@ -16,8 +16,9 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
+import { readCommitPreviewCard } from "../utils/commitPreviewCard.js";
 import { readDraftVersions } from "../utils/draftVersions.js";
 import { readSettleData, readSettleExcluded } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
@@ -42,7 +43,7 @@ export interface StreamAgentChatRequest {
   readonly lastTurnUndoHint?: { readonly snapshotId: string; readonly changes: number };
   /** 作者给当前章挑中的走法（稿纸上方点的「用这个」）：作者在对话里说「照这个写」时 AI 才知道是哪条。 */
   readonly pickedDirection?: { readonly chapter: number; readonly text: string };
-  /** 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
+  /** 结构化动作（作者点了按钮）：服务端直接交给执行器或直接做，不经模型。 */
   readonly action?: AgentUserAction;
   /** 这一轮是作者哪条消息发起的（写作版本 P2a）：消息号随消息存、重发沿用；对话里交的操作按它去重（一条消息只做一件）。 */
   readonly messageId?: string;
@@ -147,8 +148,35 @@ export type OperationActionData =
   /** 定论（片 3C）：核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（pick）；「以定论为准」、设定本「查前文」、定论卡「重新查」（statement）。 */
   | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "pick"; readonly params: CanonPickData; readonly requestKey: string; readonly issuedAt: string }
   | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "statement"; readonly params: CanonStatementData; readonly requestKey: string; readonly issuedAt: string }
-  | { readonly kind: "resume"; readonly opId: string; readonly answer?: { readonly actionId: string; readonly decision: string; readonly excluded?: readonly string[] } }
+  /** 定稿（片 4A）：「定稿」出清单；「就这么短，照样定稿」带 allowShort（只认按钮）。 */
+  | { readonly kind: "new"; readonly type: "commit.prepare"; readonly params: CommitPrepareParamsData; readonly requestKey: string; readonly issuedAt: string }
+  | { readonly kind: "resume"; readonly opId: string; readonly answer?: AuthorAnswerData }
   | { readonly kind: "cancel"; readonly opId: string };
+
+/** 作者点了等着的那个按钮：哪一个、点的哪个决定、划掉了哪几项、填了哪几栏（定稿清单上改的天数 day / dayEnd）。 */
+export interface AuthorAnswerData {
+  readonly actionId: string;
+  readonly decision: string;
+  readonly excluded?: readonly string[];
+  readonly values?: Readonly<Record<string, number>>;
+}
+
+/** 定稿参数（和服务端 recipes/commit-prepare.ts 的 CommitPrepareParams 同形）。 */
+export interface CommitPrepareParamsData {
+  readonly chapter: number;
+  readonly allowShort?: true;
+}
+
+/** 一个定稿按钮（请求号这时候给）。allowShort＝这一章就这么短，不拿字数下限挡。 */
+export function newCommitAction(chapter: number, options: { readonly allowShort?: boolean } = {}): OperationActionData {
+  return {
+    kind: "new",
+    type: "commit.prepare",
+    params: { chapter, ...(options.allowShort ? { allowShort: true as const } : {}) },
+    requestKey: crypto.randomUUID(),
+    issuedAt: new Date().toISOString(),
+  };
+}
 
 /** 作者直接改的一笔账（和服务端 services/ledger-change/plan.ts 的 LedgerChangeRequest 同形，界面只用到这几种）。title 只给对话里回显用，服务端不读。 */
 export type LedgerChangeData =
@@ -271,29 +299,8 @@ export function isOperationAction(action: AgentUserAction): action is OperationA
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
   | OperationActionData
-  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number; readonly dayEndOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   | { readonly toolName: "undo" };
-
-/** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
-export interface LedgerChecklistItemView {
-  readonly id: string;
-  readonly kind: string;
-  readonly label: string;
-  /** 为什么要作者看（同一原因的条目清单里归在一起）。 */
-  readonly reason?: string;
-  readonly detail?: string;
-  readonly removable: boolean;
-  /** 作者能改的「第几天」（故事时间线）。 */
-  readonly editableDay?: number;
-  /** 记账员记的这一章到第几天（跨天才有）。 */
-  readonly editableDayEnd?: number;
-  /** 引擎没把握、请作者确认。 */
-  readonly needsConfirm?: boolean;
-  /** 默认不勾（要确认的改记）：不勾＝这条改记不作数，勾上才算确认。 */
-  readonly defaultUnchecked?: boolean;
-}
 
 /** 核账结果里的一条：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文（R7.3）。 */
 export interface ContinuityCheckItem {
@@ -358,20 +365,6 @@ function readRevisited(value: unknown): { readonly revisited: { readonly from: s
   return typeof from === "string" && from.trim() ? { revisited: { from: from.trim() } } : undefined;
 }
 
-/** commit_preview 的质量问题明细（{severity,type,message} → 给作者看的文案）。防御解析：非字符串丢掉、截超长、最多 20 条。 */
-function toIssueMessages(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .flatMap((item): string[] => {
-      if (typeof item === "string") return [item];
-      if (!item || typeof item !== "object") return [];
-      const message = (item as Record<string, unknown>).message;
-      return typeof message === "string" && message.trim() ? [message.trim()] : [];
-    })
-    .map((message) => (message.length > 300 ? `${message.slice(0, 300)}…` : message))
-    .slice(0, 20);
-}
-
 export interface AgentToolResult {
   readonly toolCallId?: string;
   readonly toolName: string;
@@ -392,8 +385,6 @@ export interface AgentToolResult {
   readonly draftTitle?: string;
   /** 这份正文写回时的版本号（revise_draft 带，同一进程严格递增）：并行改稿的结果到达顺序不等于写入顺序，前端只套用更新的。 */
   readonly draftVersion?: number;
-  /** commit_apply 入库成功标志：前端据此把 draftBody 以 committed 状态（而非 draft_ready）载入工作区，防 autosave 复活已入库章节。 */
-  readonly committed?: boolean;
   /** undo_last_change 专属：true=磁盘真的被 git 回退了。前端据此冻结 autosave、改读磁盘真值、回合收尾后整页重载——
    *  否则内存里撤销前的旧稿会被 autosave 写回去（此前只靠 409 冲突兜底）。 */
   readonly undone?: boolean;
@@ -402,8 +393,6 @@ export interface AgentToolResult {
   readonly snapshotId?: string;
   /** 写类/出稿工具实际操作的章号：透传给投影层回写进 turnSnapshots，供「撤销到此回合」写回该回合实际操作的章。 */
   readonly chapter?: number;
-  /** commit_apply 专属：整份入库报告（CommitReport）。前端据此渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。 */
-  readonly commitReport?: unknown;
   /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。
    *  choice.action（R4.7）：服务端自己生成的确定性选项带结构化动作，点击直接发 body.action 不经模型；
    *  模型生成的选项没有 action。 */
@@ -411,22 +400,6 @@ export interface AgentToolResult {
     readonly question: string;
     readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: AgentUserAction }[];
   };
-  /** commit_preview 专属：结构化定稿预览（R3）——裁决/阻断项/质量问题计数透传给投影层渲染固定「定稿预览」卡。
-   *  裁决不靠模型转述：模型可能把「暂不可定稿」说成小问题或略过不提。 */
-  readonly commitPreview?: {
-    readonly chapter: number;
-    readonly canCommit: boolean;
-    readonly blockingReasons?: readonly string[];
-    readonly summary?: string;
-    readonly draftIssueCount?: number;
-    readonly semanticIssueCount?: number;
-    /** R7.7·报告 4.3：质量问题明细直接进卡（默认折叠），不再指向界面上不存在的「质检卡」。 */
-    readonly draftIssues?: readonly string[];
-    readonly semanticIssues?: readonly string[];
-    readonly previewToken?: string;
-  };
-  /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认——投影层据此挂「确认定稿」按钮。 */
-  readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：模型只做了预览、有可裁内容，等用户点「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** change_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「接着往下写」「重写这一章」（服务端出的按钮动作）。 */
@@ -485,6 +458,8 @@ export interface OperationViewData {
   readonly changed?: ChangedData;
   /** 定论做完了：卡、作者划掉的、改没改（核账卡认哪几条被改掉了）。 */
   readonly canon?: CanonResultData;
+  /** 定稿做完了：定不了的原因（定稿清单卡照摆），或定成了（定稿回执、打的存档点）。 */
+  readonly commit?: CommitResultData;
   /** 等作者点的（改写的改前改后 +「换上 / 再改一版」、改设定的「确认改设定」、改账的「确认改账」）；点过的不算。 */
   readonly pending?: PendingActionData;
 }
@@ -492,6 +467,15 @@ export interface OperationViewData {
 /** 改设定、改账、定论改齐了（都在设定本里：设定卡、线索板和故事地图、定论；定论还可能改了正文）：打的存档点。 */
 export interface ChangedData {
   readonly what: "settings" | "ledger" | "canon";
+  readonly snapshotId?: string;
+}
+
+/** 定稿做完了（服务端 CommitPrepareBody 的子集）：定不了的带清单卡（原因、「就这么短」），定成了的带回执原样（渲染侧防御解析）。 */
+export interface CommitResultData {
+  readonly chapter: number;
+  readonly committed: boolean;
+  readonly blocked?: CommitPreviewCardData;
+  readonly report?: unknown;
   readonly snapshotId?: string;
 }
 
@@ -518,7 +502,9 @@ export type PendingActionData =
   | { readonly kind: "revise"; readonly actionId: string; readonly decisions: readonly string[]; readonly revise: RevisePreviewData }
   /** 定论查完了等作者点「确认」（服务端 CanonConfirmPreview）：卡上每处能划掉。 */
   | { readonly kind: "canon"; readonly actionId: string; readonly decisions: readonly string[]; readonly card: SettleCardData; readonly summary: string }
-  | { readonly kind: "confirm"; readonly what: "settings" | "ledger"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] };
+  | { readonly kind: "confirm"; readonly what: "settings" | "ledger"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] }
+  /** 定稿清单等作者点「确认定稿」（服务端 CommitConfirmPreview）：清单上每行能划掉、天数两栏能改。 */
+  | { readonly kind: "commit"; readonly actionId: string; readonly decisions: readonly string[]; readonly preview: CommitPreviewCardData };
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
 export interface DraftOperationData {
@@ -568,6 +554,7 @@ function editChanges(value: unknown): readonly EditChangeData[] | undefined {
 const REVISE_CONFIRM_KIND = "draft.revise.confirm";
 const CONFIRM_KINDS: Readonly<Record<string, "settings" | "ledger">> = { settings_confirm: "settings", ledger_confirm: "ledger" };
 const CANON_CONFIRM_KIND = "canon_confirm";
+const COMMIT_CONFIRM_KIND = "commit_confirm";
 
 function readPendingAction(value: unknown): PendingActionData | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -581,6 +568,11 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
       const lines = preview ? textList(preview.lines, 60) : undefined;
       if (!lines || decisions.length === 0) continue;
       return { kind: "confirm", what, actionId: item.actionId, decisions, lines, notes: textList(preview!.notes, 20) ?? [] };
+    }
+    if (item.kind === COMMIT_CONFIRM_KIND) {
+      const view = preview ? readCommitPreviewCard(preview.view) : undefined;
+      if (!view || decisions.length === 0) continue;
+      return { kind: "commit", actionId: item.actionId, decisions, preview: view };
     }
     if (item.kind === CANON_CONFIRM_KIND) {
       const card = preview ? readSettleData(preview.card) : undefined;
@@ -802,54 +794,15 @@ export async function streamAgentChat(
             ...(typeof output.draftBody === "string" ? { draftBody: output.draftBody } : {}),
             ...(typeof output.draftTitle === "string" ? { draftTitle: output.draftTitle } : {}),
             ...(typeof output.draftVersion === "number" && Number.isFinite(output.draftVersion) ? { draftVersion: output.draftVersion } : {}),
-            // 入库成功标志：让 draftBody 以 committed 状态载入（commit_apply 专用）。
-            ...(output.committed === true ? { committed: true } : {}),
             // 撤销标志（undo_last_change / 今并入 manage_snapshots op=undo）：只在布尔时透传，前端据此冻结 autosave、改读磁盘真值。
             ...(typeof output.undone === "boolean" && (parsed.toolName === "undo_last_change" || parsed.toolName === "manage_snapshots")
               ? { undone: output.undone }
               : {}),
             // suggest_next_steps 专属：agent 提议的下一步选项（question/choices 不在轻量白名单里），透传给投影层挂到消息。
-            // choice.action（R4.7）按白名单防御解析（toNextStepPrompt）：只放行下一步级的只读/写稿工具，
-            // commit_apply、prune_snapshots 这类授权写盘动作必须走各自的确认按钮，不许藏在选项里被点击直达。
+            // choice.action（R4.7）按白名单防御解析（toNextStepPrompt）：只放行下一步级的操作按钮，
+            // 「确认定稿」「确认裁剪」这类授权写盘动作必须走各自的确认卡，不许藏在选项里被点击直达。
             ...(parsed.toolName === "suggest_next_steps" && isNextStepPrompt(output)
               ? { nextStepPrompt: toNextStepPrompt(output) }
-              : {}),
-            // commit_apply 专属：入库成功且带 report（整份 CommitReport，不在轻量白名单里）→ 透传，前端渲染「入库」delta 卡。
-            ...(parsed.toolName === "commit_apply" && output.committed === true && isRecord(output.report)
-              ? { commitReport: output.report }
-              : {}),
-            // commit_preview 专属：结构化定稿预览（R3）→ 透传，前端渲染固定「定稿预览」卡。裁决/阻断项不靠模型
-            // 转述（模型可能把硬阻断说成「小问题」或干脆不提）。字段防御解析：缺 chapter/canCommit 的残缺输出不挂卡。
-            ...(parsed.toolName === "commit_preview" && typeof output.chapter === "number" && typeof output.canCommit === "boolean"
-              ? {
-                  commitPreview: {
-                    chapter: output.chapter,
-                    canCommit: output.canCommit,
-                    ...(Array.isArray(output.blockingReasons)
-                      ? { blockingReasons: output.blockingReasons.filter((reason): reason is string => typeof reason === "string") }
-                      : {}),
-                    ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
-                    ...(Array.isArray(output.draftQualityIssues) ? { draftIssueCount: output.draftQualityIssues.length } : {}),
-                    ...(Array.isArray(output.semanticQualityIssues) ? { semanticIssueCount: output.semanticQualityIssues.length } : {}),
-                    // R7.7·报告 4.3：明细文案直接带进卡（默认折叠展示），不再让作者去找不存在的「质检卡」。
-                    ...(toIssueMessages(output.draftQualityIssues).length > 0 ? { draftIssues: toIssueMessages(output.draftQualityIssues) } : {}),
-                    ...(toIssueMessages(output.semanticQualityIssues).length > 0 ? { semanticIssues: toIssueMessages(output.semanticQualityIssues) } : {}),
-                    ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
-                    ...(output.shortOnly === true ? { shortOnly: true } : {}),
-                    ...(toIssueMessages(output.notRecorded).length > 0 ? { notRecorded: toIssueMessages(output.notRecorded) } : {}),
-                    ...(toIssueMessages(output.notes).length > 0 ? { notes: toIssueMessages(output.notes) } : {}),
-                    ...(toLedgerChecklist(output.ledgerChecklist).length > 0 ? { ledgerChecklist: toLedgerChecklist(output.ledgerChecklist) } : {}),
-                  },
-                }
-              : {}),
-            // commit_apply 专属：模型发起的定稿请求只出确认按钮（needsConfirmation + confirmAction），透传给投影层挂按钮。
-            ...(parsed.toolName === "commit_apply" && output.needsConfirmation === true && isCommitConfirmAction(output.confirmAction)
-              ? {
-                  commitConfirmAction: {
-                    chapter: output.confirmAction.chapter,
-                    ...(typeof output.confirmAction.previewToken === "string" ? { previewToken: output.confirmAction.previewToken } : {}),
-                  },
-                }
               : {}),
             ...((parsed.toolName === "prune_snapshots" || parsed.toolName === "manage_snapshots")
               && output.needsConfirmation === true
@@ -958,26 +911,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** 定稿预览的账本清单（防御解析：缺 id / label 的条目丢掉）。 */
-function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!isRecord(item) || typeof item.id !== "string" || !item.id || typeof item.label !== "string" || !item.label.trim()) return [];
-    return [{
-      id: item.id,
-      kind: typeof item.kind === "string" ? item.kind : "",
-      label: item.label,
-      ...(typeof item.reason === "string" && item.reason.trim() ? { reason: item.reason } : {}),
-      ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail } : {}),
-      removable: item.removable === true,
-      ...(typeof item.editableDay === "number" && Number.isInteger(item.editableDay) && item.editableDay > 0 ? { editableDay: item.editableDay } : {}),
-      ...(typeof item.editableDayEnd === "number" && Number.isInteger(item.editableDayEnd) && item.editableDayEnd > 0 ? { editableDayEnd: item.editableDayEnd } : {}),
-      ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
-      ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
-    }];
-  });
-}
-
 /** change_draft 回执里的「接着往下写」「重写这一章」（防御解析：动作对不上写稿的丢掉）。 */
 function readRewriteChoices(value: unknown): readonly RewriteChoiceData[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -987,10 +920,6 @@ function readRewriteChoices(value: unknown): readonly RewriteChoiceData[] | unde
     return action?.kind === "new" && action.type === "draft.change" && (action.mode === "write" || action.mode === "continue") ? [{ label: item.label.trim(), mode: action.mode, action }] : [];
   });
   return choices.length > 0 ? choices : undefined;
-}
-
-function isCommitConfirmAction(value: unknown): value is { readonly chapter: number; readonly previewToken?: unknown } {
-  return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
 }
 
 /**
@@ -1015,6 +944,7 @@ export function readOperationView(value: unknown): OperationViewData | undefined
   const plan = state === "succeeded" && value.kind === "plan.propose" && result ? readBrainstormData(result.body) : undefined;
   const changed = state === "succeeded" && result ? readChanged(value.kind, result.body) : undefined;
   const canon = state === "succeeded" && value.kind === "canon.propose" && result ? readCanonResult(result.body) : undefined;
+  const commit = state === "succeeded" && value.kind === "commit.prepare" && result ? readCommitResult(result.body) : undefined;
   const pending = state === "waiting_author" ? readPendingAction(value.pendingActions) : undefined;
   const allowed = Array.isArray(value.allowed)
     ? value.allowed.filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel")
@@ -1043,8 +973,23 @@ export function readOperationView(value: unknown): OperationViewData | undefined
     ...(plan ? { plan } : {}),
     ...(changed ? { changed } : {}),
     ...(canon ? { canon } : {}),
+    ...(commit ? { commit } : {}),
     ...(pending ? { pending } : {}),
   };
+}
+
+/** 定稿的结果：定不了的清单卡认不出、定成了没带回执都不认。 */
+function readCommitResult(body: unknown): CommitResultData | undefined {
+  if (!isRecord(body) || body.kind !== "commit.prepare") return undefined;
+  const chapter = positiveInt(body.chapter);
+  if (chapter === undefined) return undefined;
+  if (body.committed !== true) {
+    const blocked = readCommitPreviewCard(body.blocked);
+    return blocked ? { chapter, committed: false, blocked } : undefined;
+  }
+  const report = isRecord(body.done) && isRecord(body.done.report) ? body.done.report : undefined;
+  if (!report) return undefined;
+  return { chapter, committed: true, report, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}) };
 }
 
 /** 改设定、改账、定论改齐了：改了哪一片、打的存档点（这一轮的「撤销到此」从它退）。不是这几类、定论没改是 undefined。 */
@@ -1119,21 +1064,12 @@ function isNextStepPrompt(value: Record<string, unknown>): boolean {
 }
 
 /**
- * 「下一步」选项里允许直达的结构化动作白名单（R4.7）：只有下一步级的动作能藏在选项里被点击直达——
- * 定稿预览（只读）、检查（新操作，只读）、写稿（新操作，写工作稿、可撤销）、接着做 / 不要了。commit_apply / prune_snapshots 这类
- * 授权写盘动作**不在**白名单：定稿要走定稿预览卡的「确认定稿」、裁剪要走「确认裁剪」，各带各的授权语义。
- * 按工具名的老检查、出稿按钮（check_continuity / ai_review / quality_check / generate_draft，P2a 前存下的）不认：那几个工具已经没了，选项照留、点了交给 AI。
+ * 「下一步」选项里允许直达的结构化动作（R4.7）：只有操作按钮——定稿（出清单）、检查、写稿、接着做 / 不要了。「确认裁剪」这类
+ * 授权写盘动作**不在**里面：要走各自的确认卡。按工具名的老按钮（commit_preview、check_continuity、generate_draft……P2a 前存下的）
+ * 不认：那几个工具已经没了，选项照留、点了交给 AI。
  */
 export function parseNextStepUserAction(value: unknown): AgentUserAction | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.kind !== undefined) return parseOperationActionData(value);
-  const chapter = typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0
-    ? value.chapter
-    : undefined;
-  if (chapter === undefined) return undefined;
-  // 下面的逐个相等判断就是白名单本身：别的工具名（含 commit_apply / prune_snapshots）一律 undefined。
-  if (value.toolName === "commit_preview") return { toolName: "commit_preview", chapter };
-  return undefined;
+  return isRecord(value) && value.kind !== undefined ? parseOperationActionData(value) : undefined;
 }
 
 /** 操作按钮（防御解析，和服务端 user-actions 的 parseOperationAction 同一口径）。 */
@@ -1144,14 +1080,22 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
     const answer = isRecord(value.answer) ? value.answer : {};
     const { actionId, decision } = answer;
     const excluded = Array.isArray(answer.excluded) ? answer.excluded.filter((key): key is string => typeof key === "string" && /^[A-Za-z0-9:_-]{1,40}$/u.test(key)) : [];
+    const values: Record<string, number> = Object.fromEntries((isRecord(answer.values) ? Object.entries(answer.values) : [])
+      .filter((entry): entry is [string, number] => /^[A-Za-z0-9_]{1,32}$/u.test(entry[0]) && typeof entry[1] === "number" && Number.isInteger(entry[1]))
+      .slice(0, 8));
     return typeof actionId === "string" && /^[A-Za-z0-9:_-]{1,64}$/u.test(actionId) && typeof decision === "string" && /^[A-Za-z0-9_-]{1,32}$/u.test(decision)
-      ? { kind: "resume", opId: value.opId, answer: { actionId, decision, ...(excluded.length > 0 ? { excluded } : {}) } }
+      ? { kind: "resume", opId: value.opId, answer: { actionId, decision, ...(excluded.length > 0 ? { excluded } : {}), ...(Object.keys(values).length > 0 ? { values } : {}) } }
       : undefined;
   }
   if (value.kind !== "new") return undefined;
   if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
   if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
   const stamp = { requestKey: value.requestKey, issuedAt: value.issuedAt };
+  if (value.type === "commit.prepare") {
+    const params = isRecord(value.params) ? value.params : {};
+    const chapter = positiveInt(params.chapter);
+    return chapter ? { kind: "new", type: "commit.prepare", params: { chapter, ...(params.allowShort === true ? { allowShort: true as const } : {}) }, ...stamp } : undefined;
+  }
   if (value.type === "plan.propose") {
     const params = readPlanParams(value.params);
     return params ? { kind: "new", type: "plan.propose", params, ...stamp } : undefined;

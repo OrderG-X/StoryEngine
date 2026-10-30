@@ -1,5 +1,5 @@
 import type { OperationActionData } from "../api/agentChatClient.js";
-import type { CommitConfirmTarget, SuggestedAction } from "../types.js";
+import type { SuggestedAction } from "../types.js";
 
 export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
   const actions: Record<string, SuggestedAction> = {
@@ -59,27 +59,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       requiresConfirmation: true,
       endpoint: "/api/draft/revision/apply",
     },
-    "commit-preview": {
-      id: "commit-preview",
-      label: "生成定稿预览",
-      description: "生成定稿预览，不写已定稿版。",
-      permission: "safe_read",
-      requiresConfirmation: false,
-    },
-    "commit-short": {
-      id: "commit-short",
-      label: "就这么短，照样定稿",
-      description: "只这一章不拿字数下限挡，重新出定稿清单；不改每章下限。",
-      permission: "safe_read",
-      requiresConfirmation: false,
-    },
-    "commit-apply": {
-      id: "commit-apply",
-      label: "确认定稿",
-      description: "写入定稿章节，写入前自动存档，可在操作历史撤销。",
-      permission: "formal_state_write",
-      requiresConfirmation: false,
-    },
     "prune-confirm": {
       id: "prune-confirm",
       label: "确认裁剪",
@@ -110,19 +89,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
     },
   };
   return actions[id] ?? actions["generate-steering"];
-}
-
-/**
- * 「确认定稿」按钮（预览卡 / 建议条 / 诚实更正都用它）：点了发结构化动作、由服务端直接执行定稿，
- * 不经模型、不靠文本意图词表（2026-10-07）。
- */
-export function commitConfirmAction(target?: CommitConfirmTarget): SuggestedAction {
-  return { ...suggestedAction("commit-apply"), ...(target ? { commitTarget: target } : {}) };
-}
-
-/** 「就这么短，照样定稿」（定稿窗口只差字数下限时）：重新出这一章的定稿清单，这一章不拿下限挡。 */
-export function commitShortAction(chapter: number): SuggestedAction {
-  return { ...suggestedAction("commit-short"), commitTarget: { chapter } };
 }
 
 /** 「确认裁剪」按钮：点了发结构化动作、由服务端直接真裁（裁剪快照预览之后出现）。 */

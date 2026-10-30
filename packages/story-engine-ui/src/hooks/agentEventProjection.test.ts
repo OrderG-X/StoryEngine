@@ -326,45 +326,15 @@ describe("projectAgentEvent", () => {
     expect(msg.affectedScopes).toBeUndefined(); // 没真删 → 不染「影响范围」
   });
 
-  it("commit_preview 否定裁决(ok:false=canCommit:false) → 步骤落定 verdict「裁决未过」，不红不绿不永转（复审 T4 三轮·副产品 B）", () => {
-    // commit_preview 是只读裁决工具：ok:false 是「暂不可定稿」的真实答案（无稿章/有阻断），不是工具崩了——
-    // 落 verdict（落定、带真实 summary、不算失败），修前落 failed 会让「把第 99 章定稿→核实不可定稿→如实拒绝」
-    // 的合法回合四步环亮红（A-4 亮红实锤）。
-    // fixture 用真实工具 payload 形状（commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons 含 missing_draft）。
-    let msg = emptyAssistantMessage("preview-fail");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        chapter: 99,
-        ok: false,
-        summary: "第 99 章还没有工作稿，无法生成定稿预览。",
-      },
-    });
-    expect(msg.toolSteps![0].status).toBe("verdict");
-    expect(msg.toolSteps![0].label).toBe("定稿预览");
-    // 落定：补 endedAt、带真实 summary 作详情——不再永远 running。
-    expect(msg.toolSteps![0].endedAt).toBe(2);
-    expect(msg.toolSteps![0].detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
-  });
-
-  it("写类工具 ok:false 仍落 failed（commit_apply 被拒不是「裁决未过」，红不回归）", () => {
-    let msg = emptyAssistantMessage("apply-fail");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "a1", toolName: "commit_apply", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "a1",
-      toolName: "commit_apply",
-      endedAt: 2,
-      output: { ok: false, summary: "未定稿：第 99 章工作稿不存在，无法定稿。" },
-    });
+  it("工具 ok:false 落 failed（没有「裁决未过」这一档了：定稿是一次操作，定不了的原因在清单上）", () => {
+    let msg = emptyAssistantMessage("read-fail");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "a1", toolName: "read_draft", startedAt: 1 });
+    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "a1", toolName: "read_draft", endedAt: 2, output: { ok: false, summary: "第 99 章没有工作稿。" } });
     expect(msg.toolSteps![0].status).toBe("failed");
+    expect(msg.toolSteps![0].detail).toBe("第 99 章没有工作稿。");
   });
 
-  it("R7.9：Mastra 校验失败（toolValidationFailure）→ 步骤落 failed、summary 进详情，点开不再空——即便裁决类工具也不是「裁决未过」", () => {
+  it("R7.9：Mastra 校验失败（toolValidationFailure）→ 步骤落 failed、summary 进详情，点开不再空", () => {
     // 服务端 agent-chat normalizeForwardedToolResult 归一后的形状：ok:false + 中文 summary + 标记。
     let msg = emptyAssistantMessage("draft-validation-fail");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
@@ -409,50 +379,6 @@ describe("projectAgentEvent", () => {
     ok = projectAgentEvent(ok, { type: "tool-call", toolCallId: "o1", toolName: "read_state_overview", startedAt: 1 });
     ok = projectAgentEvent(ok, { type: "tool-result", toolCallId: "o1", toolName: "read_state_overview", endedAt: 2, output: {} });
     expect(ok.toolSteps![0].detail).toBeUndefined();
-  });
-
-  it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
-    let msg = emptyAssistantMessage("preview-verdict");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: false,
-        commitPreview: {
-          chapter: 7,
-          canCommit: false,
-          blockingReasons: ["第 7 章还没有工作稿。"],
-          summary: "暂不可定稿。",
-          draftIssueCount: 2,
-        },
-      },
-    });
-    expect(cardOf(msg, "commit-preview")?.preview).toEqual({
-      chapter: 7,
-      canCommit: false,
-      blockingReasons: ["第 7 章还没有工作稿。"],
-      summary: "暂不可定稿。",
-      draftIssueCount: 2,
-    });
-  });
-
-  it("commit_preview 可定稿（R3）→ 挂 commitPreview", () => {
-    let msg = emptyAssistantMessage("preview-ok");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: true,
-        commitPreview: { chapter: 7, canCommit: true, summary: "可以定稿。" },
-      },
-    });
-    expect(cardOf(msg, "commit-preview")?.preview?.canCommit).toBe(true);
   });
 
   it("status 事件（R4）→ 挂状态说明卡照实展示，且不污染助手正文", () => {
@@ -684,49 +610,41 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
   });
 });
 
-describe("入库 delta 投影（commit_apply → message 的 commit-report 卡）", () => {
-  it("入库成功带 commitReport → 挂到 message 的 commit-report 卡", () => {
+describe("定稿投影（写作版本 P2a 片 4A：定稿是一次操作）", () => {
+  const OP = "op-0123456789abcdef0123";
+  const checklist = { chapter: 4, canCommit: true, ledgerChecklist: [{ id: "2", kind: "fact", label: "钥匙放回柜台", removable: true }] };
+  const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: OP, kind: "commit.prepare", chapter: 4, what: "定稿·第 4 章", state: "running", stateText: "在做", allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 2, origin: { kind: "chat" },
+    ...overrides,
+  });
+
+  it("出了清单等作者点 → 挂定稿清单卡（记着是哪一次）；同一次再来不重挂", () => {
+    const waiting = view({ state: "waiting_author", allowed: [], eventSeq: 4, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } });
+    let msg = project([{ type: "operation", operation: view() }]);
+    expect(cardOf(msg, "commit-preview")).toBeUndefined();
+    msg = projectAgentEvent(msg, { type: "operation", operation: waiting });
+    expect(cardOf(msg, "commit-preview")).toEqual({ type: "commit-preview", preview: checklist, opId: OP });
+    const again = projectAgentEvent(msg, { type: "operation", operation: { ...waiting, eventSeq: 5 } });
+    expect(again.cards?.filter((card) => card.type === "commit-preview")).toHaveLength(1);
+  });
+
+  it("定不了 → 挂清单卡照实列原因，不挂回执、不记存档点", () => {
+    const blocked = { chapter: 4, canCommit: false, blockingReasons: ["第 4 章还没有工作稿。"] };
+    const msg = project([{ type: "operation", operation: view({ state: "succeeded", allowed: [], commit: { chapter: 4, committed: false, blocked } }) }]);
+    expect(cardOf(msg, "commit-preview")?.preview).toEqual(blocked);
+    expect(cardOf(msg, "commit-report")).toBeUndefined();
+    expect(msg.turnSnapshots).toBeUndefined();
+  });
+
+  it("定成了 → 挂回执、记下存档点（撤销这次定稿用）、整本重读；同一次只记一次", () => {
     const report = { updatedCharacters: ["c1"], timelineEventIds: [], updatedHooks: [] };
-    const message = project([
-      { type: "tool-call", toolCallId: "t1", toolName: "commit_apply", startedAt: 1 },
-      { type: "tool-result", toolCallId: "t1", toolName: "commit_apply", endedAt: 2, output: { ok: true, commitReport: report } },
-    ]);
-    expect(cardOf(message, "commit-report")?.report).toEqual(report);
-  });
-
-  it("入库未通过（无 commitReport）→ 不挂", () => {
-    const message = project([
-      { type: "tool-result", toolCallId: "t2", toolName: "commit_apply", endedAt: 2, output: { ok: false } },
-    ]);
-    expect(cardOf(message, "commit-report")?.report).toBeUndefined();
-  });
-});
-
-describe("定稿待确认投影（模型发起的 commit_apply 只出「确认定稿」按钮）", () => {
-  it("needsConfirmation + commitConfirmAction → 步骤待确认、消息挂「确认定稿」按钮（带目标章与令牌）", () => {
-    const message = project([
-      { type: "tool-call", toolCallId: "a1", toolName: "commit_apply", startedAt: 1 },
-      {
-        type: "tool-result",
-        toolCallId: "a1",
-        toolName: "commit_apply",
-        endedAt: 2,
-        output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 4, previewToken: "t4" }, summary: "等你点确认定稿。" },
-      },
-    ]);
-    expect(message.toolSteps?.[0]?.status).toBe("needs_confirmation");
-    expect(cardOf(message, "commit-report")?.report).toBeUndefined();
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "commit-apply", label: "确认定稿", commitTarget: { chapter: 4, previewToken: "t4" } }),
-    ]);
-  });
-
-  it("同回合多次请求 → 只留最后一个按钮（不堆重复「确认定稿」）", () => {
-    const message = project([
-      { type: "tool-result", toolCallId: "a1", toolName: "commit_apply", endedAt: 2, output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 4 } } },
-      { type: "tool-result", toolCallId: "a2", toolName: "commit_apply", endedAt: 3, output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 5 } } },
-    ]);
-    expect(message.suggestedActions?.map((a) => a.commitTarget?.chapter)).toEqual([5]);
+    const done = view({ state: "succeeded", allowed: [], eventSeq: 7, commit: { chapter: 4, committed: true, report, snapshotId: "s-9" } });
+    let msg = project([{ type: "operation", operation: done }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...done, eventSeq: 8 } });
+    expect(cardOf(msg, "commit-report")?.report).toEqual(report);
+    expect(msg.turnSnapshots).toEqual([{ toolName: "prepare_commit", snapshotId: "s-9", chapterNumber: 4 }]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    expect(presentationFor("prepare_commit").stepLabel).toBe("定稿");
   });
 });
 

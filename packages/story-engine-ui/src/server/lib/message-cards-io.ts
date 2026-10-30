@@ -6,7 +6,6 @@
  */
 import type {
   AiFlavorReport,
-  CommitPreviewCardData,
   ContinuityCheckData,
   ContinuityCheckItemData,
   MessageCard,
@@ -17,6 +16,7 @@ import type {
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
+import { readCommitPreviewCard } from "../../utils/commitPreviewCard.js";
 import { readDraftVersions } from "../../utils/draftVersions.js";
 import { readSettleData, readSettleExcluded } from "../../utils/settleCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
@@ -78,8 +78,9 @@ function readMessageCard(value: unknown): MessageCard | undefined {
     case "commit-preview": {
       const card = cardFromCommitPreview(value.preview);
       if (!card || card.type !== "commit-preview") return undefined;
+      const opId = readString(value.opId);
       const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
-      return { ...card, ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
+      return { ...card, ...(opId && /^op-[0-9a-f]{20}$/u.test(opId) ? { opId } : {}), ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
     }
     case "commit-report":
       // 定稿回执原样存（体量大、结构跟着引擎走），渲染侧 summarizeCommitReport 防御解析。
@@ -182,7 +183,7 @@ function cardFromContinuity(value: unknown): MessageCard | undefined {
 }
 
 function cardFromCommitPreview(value: unknown): MessageCard | undefined {
-  const preview = readCommitPreview(value);
+  const preview = readCommitPreviewCard(value);
   return preview ? { type: "commit-preview", preview } : undefined;
 }
 
@@ -245,56 +246,3 @@ function readNextStepPrompt(value: unknown): NextStepPrompt | undefined {
   return { question, choices: choices.slice(0, 8) };
 }
 
-/** 定稿预览卡：章号 + 能不能定是必须的，其余逐项校验。 */
-function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
-  if (!isRecord(value)) return undefined;
-  const chapter = readPositiveInteger(value.chapter);
-  if (chapter === undefined || typeof value.canCommit !== "boolean") return undefined;
-  const blockingReasons = readStringList(value.blockingReasons).slice(0, 20);
-  const summary = readString(value.summary);
-  const previewToken = readString(value.previewToken);
-  const draftIssueCount = readNonNegativeInteger(value.draftIssueCount);
-  const semanticIssueCount = readNonNegativeInteger(value.semanticIssueCount);
-  const draftIssues = readStringList(value.draftIssues).slice(0, 20);
-  const semanticIssues = readStringList(value.semanticIssues).slice(0, 20);
-  const ledgerChecklist = Array.isArray(value.ledgerChecklist)
-    ? value.ledgerChecklist.filter(isRecord).slice(0, 200).flatMap((item) => {
-      const id = readString(item.id);
-      const label = readString(item.label);
-      if (!id || !label) return [];
-      const detail = readString(item.detail);
-      const reason = readString(item.reason);
-      const editableDay = readPositiveInteger(item.editableDay);
-      const editableDayEnd = readPositiveInteger(item.editableDayEnd);
-      return [{
-        id,
-        kind: readString(item.kind) ?? "",
-        label,
-        ...(reason ? { reason } : {}),
-        ...(detail ? { detail } : {}),
-        removable: item.removable === true,
-        ...(editableDay !== undefined ? { editableDay } : {}),
-        ...(editableDayEnd !== undefined ? { editableDayEnd } : {}),
-        ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
-        ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
-      }];
-    })
-    : [];
-  const notRecorded = readStringList(value.notRecorded).slice(0, 50);
-  const notes = readStringList(value.notes).slice(0, 20);
-  return {
-    chapter,
-    canCommit: value.canCommit,
-    ...(blockingReasons.length > 0 ? { blockingReasons } : {}),
-    ...(summary ? { summary } : {}),
-    ...(draftIssueCount !== undefined ? { draftIssueCount } : {}),
-    ...(semanticIssueCount !== undefined ? { semanticIssueCount } : {}),
-    ...(draftIssues.length > 0 ? { draftIssues } : {}),
-    ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
-    ...(previewToken ? { previewToken } : {}),
-    ...(value.shortOnly === true ? { shortOnly: true } : {}),
-    ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
-    ...(notRecorded.length > 0 ? { notRecorded } : {}),
-    ...(notes.length > 0 ? { notes } : {}),
-  };
-}

@@ -76,6 +76,19 @@ describe("想走法只有执行器一个入口（片 2D）", () => {
   });
 });
 
+describe("定稿只有执行器一个入口（片 4A）", () => {
+  it("定稿命令只在 commit.prepare 配方里调；清单只在那里出", async () => {
+    expect(await filesMatching(SERVER, /\bchapterCommit\b/u)).toEqual(["services/operations/recipes/commit-prepare.ts"]);
+    expect(await filesMatching(SERVER, /\bprepareChapterCommit\s*\(/u)).toEqual(["editorial/commit-flow.ts", "services/operations/recipes/commit-prepare.ts"]);
+  });
+
+  it("对话工具、按钮分发、界面里没有片 4A 前的定稿入口名", async () => {
+    const legacy = /["'](?:commit_preview|commit_apply)["']/u;
+    expect(await filesMatching(join(SERVER, "agent"), legacy)).toEqual([]);
+    expect(await filesMatching(join(SERVER, "routes"), legacy)).toEqual([]);
+  });
+});
+
 describe("改账只有执行器一个入口（片 3B）", () => {
   it("记裁定、理线索只在 ledger.change 配方里调", async () => {
     expect(await filesMatching(SERVER, /\bdecisionRecord\b/u)).toEqual(["services/operations/recipes/ledger-change.ts"]);
@@ -91,11 +104,10 @@ describe("改账只有执行器一个入口（片 3B）", () => {
   });
 });
 
-/** 路由以外登记过的几处；后两处在迁那一类操作的那片里删（设计第十一节）。 */
+/** 路由以外登记过的几处（设计第十一节；定稿预览那处随片 4A 删了，定稿走执行器受理之前那处）。 */
 const ON_CORE_CALLERS: Readonly<Record<string, string>> = {
   "book/mirror/ensure.ts": "定义处",
   "services/operations/executor.ts": "submitOperation 受理之前",
-  "agent/tools/commit-preview.ts": "定稿预览",
 };
 
 it("老书上新核心（ensureBookOnCore）只在登记的几处调：开书 / 读书的路由、导入、受理之前", async () => {

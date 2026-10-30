@@ -28,7 +28,7 @@ export interface OperationView {
   readonly summary: string;
   /**
    * 结束了的那一句：对话里收尾说的、卡上显示的同一句。做成的就是结论（结论自己说是哪章做的什么），
-   * 没成的「X 没做成：原因」，停掉的「X 停掉了。」；没结束是空串。界面不拿 what 和结论自己拼。
+   * 没成的「X 没做成：原因」，作废的「X 作废了：原因」，停掉的「X 停掉了。」；没结束是空串。界面不拿 what 和结论自己拼。
    */
   readonly conclusion: string;
   readonly result?: OperationResult;
@@ -112,6 +112,7 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   "settings.change": "改设定",
   "ledger.change": "改账",
   "canon.propose": "定论",
+  "commit.prepare": "定稿",
 };
 
 /** 一次操作做的什么（中文）：认不出的种类如实说「别的操作」，不把英文种类名给模型念。 */
@@ -124,8 +125,8 @@ export function operationWhat(kind: string, mode: string | undefined, chapter: n
 export function operationConclusion(state: OperationState, what: string, summary: string, failureMessage: string | undefined): string {
   switch (state) {
     case "succeeded": return summary || `${what}做完了。`;
-    case "failed":
-    case "obsolete": return `${what}没做成：${failureMessage ?? "原因没记下来"}`;
+    case "failed": return `${what}没做成：${failureMessage ?? "原因没记下来"}`;
+    case "obsolete": return `${what}作废了：${failureMessage ?? "原因没记下来"}`;
     case "cancelled": return `${what}停掉了。`;
     default: return "";
   }

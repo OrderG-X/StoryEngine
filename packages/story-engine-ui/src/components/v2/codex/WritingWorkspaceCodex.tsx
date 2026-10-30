@@ -791,7 +791,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         />
       ) : null}
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
-      <CommitSheetHost busy={workspaceBusy} {...(props.onSuggestedAction ? { onSuggestedAction: props.onSuggestedAction } : {})} />
+      <CommitSheetHost busy={workspaceBusy} {...(props.onSendUserAction ? { onSendUserAction: props.onSendUserAction } : {})} />
       <ExportDialog book={exportOpen && props.projectPath ? { title: projectName, projectPath: props.projectPath } : null} onClose={() => setExportOpen(false)} />
       {settingsPresence.mounted ? <SettingsModal tab={settingsTab ?? lastSettingsTabRef.current} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} presence={settingsPresence} /> : null}
     </div>

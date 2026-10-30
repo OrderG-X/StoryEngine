@@ -528,67 +528,52 @@ describe("streamAgentChat", () => {
     expect(progress).toEqual([{ opId: OP_ID, text: "核账员在读第 3 章" }]);
   });
 
-  it("translates commit_apply output.report (真实字段名) → commitReport for the 入库 delta 卡", async () => {
-    // commit_apply 真实输出字段名是 report（commit-apply.ts），且只有 committed:true 才透传。
-    // 测翻译层：原始帧给 report（不是 commitReport），断言 onToolResult 收到 commitReport。
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "c1",
-          toolName: "commit_apply",
-          output: {
-            ok: true,
-            committed: true,
-            report: { updatedCharacters: ["c1", "c2"], timelineEventIds: ["e1"], updatedHooks: [] },
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "入库这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
+  it("定稿（片 4A）：清单等作者点 → pending 是定稿清单（防御解析，认不出的不算）；定不了 → 带清单卡；定成了 → 带回执和存档点；按钮存下来读回来", async () => {
+    const commitView = (overrides: Record<string, unknown>) => opView("", null, { kind: "commit.prepare", mode: undefined, what: "定稿·第 2 章", chapter: 2, ...overrides });
+    const checklist = {
+      chapter: 2, canCommit: true, blockingReasons: [], summary: "第 2 章可以定稿：2 条自动记下。", notRecorded: [],
+      ledgerChecklist: [
+        { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
+        { id: "i0", kind: "fact", label: "林远到了钟楼", detail: "林远推门进了钟楼。", removable: true },
+        { id: "", kind: "fact", label: "没键的丢掉", removable: true },
+      ],
+    };
+    const blocked = { chapter: 2, canCommit: false, blockingReasons: ["正文 120 字，不到每章下限 300 字。这章就该这么短的话，点「就这么短，照样定稿」"], summary: "第 2 章现在还定不了。", notRecorded: [], shortOnly: true };
+    const report = { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 1, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, day: 3, dayEnd: 3, notRecorded: 0 } };
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: checklist }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: { chapter: 2 } }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "定不了", body: { kind: "commit.prepare", chapter: 2, committed: false, blocked } } }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "第 2 章已定稿。", body: { kind: "commit.prepare", chapter: 2, committed: true, done: { report, summary: "第 2 章已定稿。", draftBody: "正文" }, snapshotId: "s-7" } } }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "坏的", body: { kind: "commit.prepare", chapter: 2, committed: true } } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({
+      kind: "commit",
+      actionId: "confirm-commit",
+      decisions: ["commit"],
+      preview: {
+        chapter: 2, canCommit: true, summary: "第 2 章可以定稿：2 条自动记下。",
+        ledgerChecklist: [
+          { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
+          { id: "i0", kind: "fact", label: "林远到了钟楼", detail: "林远推门进了钟楼。", removable: true },
+        ],
       },
-    );
+    });
+    expect(views[1]?.pending).toBeUndefined();
+    expect(views[2]?.commit).toEqual({ chapter: 2, committed: false, blocked: { ...blocked, notRecorded: undefined } });
+    expect(views[3]?.commit).toEqual({ chapter: 2, committed: true, report, snapshotId: "s-7" });
+    expect(views[4]?.commit).toBeUndefined();
 
-    expect(received?.commitReport).toBeDefined();
-    expect((received?.commitReport as { updatedCharacters?: readonly unknown[] }).updatedCharacters).toHaveLength(2);
-  });
-
-  it("does NOT translate commit_apply.report when committed=false (反谎报：入库未通过不挂卡)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "c2",
-          toolName: "commit_apply",
-          output: { ok: false, committed: false, report: { updatedCharacters: ["c1"] } },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitReport?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "入库这章" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitReport).toBeUndefined();
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "commit.prepare", params: { chapter: 2, allowShort: true }, ...stamp }))
+      .toEqual({ kind: "new", type: "commit.prepare", params: { chapter: 2, allowShort: true }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "commit.prepare", params: { chapter: "2" }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4, dayEnd: 5, bad: 1.5 } } }))
+      .toEqual({ kind: "resume", opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4, dayEnd: 5 } } });
   });
 
   it("定论（片 3C）：停着等作者的卡防御解析后带上；做完了带结果（划掉的只认卡上有的），改了才算「改过」；按钮存下来读回来，不对的不认", async () => {
@@ -644,14 +629,15 @@ describe("streamAgentChat", () => {
             ok: true,
             question: "核账做完了，接下来？",
             choices: [
-              { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
+              { label: "定稿第5章", intent: "定稿第 5 章", recommended: true, action: { kind: "new", type: "commit.prepare", params: { chapter: 5 }, requestKey: "rk-0", issuedAt: "2026-10-29T00:00:00.000Z" } },
               { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1", issuedAt: "2026-10-29T00:00:00.000Z" } },
               // 操作按钮缺了请求号 / 交的时间：不透传（服务端也拒）。
               { label: "缺请求号", intent: "w", action: { kind: "new", type: "inspect.run", mode: "quality", params: { chapter: 5 } } },
               { label: "我自己改", intent: "我自己改，先放着" },
               // 白名单外（授权写盘动作不许藏在选项里直达）→ action 丢掉，选项照旧发文本。
               { label: "假确认定稿", intent: "x", action: { toolName: "commit_apply", chapter: 5 } },
-              { label: "坏章号", intent: "y", action: { toolName: "commit_preview", chapter: 0 } },
+              // P2a 前按工具名的老按钮：工具没了，不认。
+              { label: "老定稿预览", intent: "y", action: { toolName: "commit_preview", chapter: 5 } },
               { label: "认不出的工具", intent: "z", action: { toolName: "web_search" } },
             ],
           },
@@ -675,171 +661,18 @@ describe("streamAgentChat", () => {
 
     const prompt = received?.nextStepPrompt as { question: string; choices: { label: string; action?: Record<string, unknown> }[] };
     expect(prompt.question).toBe("核账做完了，接下来？");
-    expect(prompt.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview" } });
+    expect(prompt.choices[0]).toMatchObject({ label: "定稿第5章", action: { kind: "new", type: "commit.prepare", params: { chapter: 5 } } });
     expect(prompt.choices[1]).toMatchObject({ label: "再细核一遍", action: { kind: "new", mode: "continuity", params: { chapter: 5, fresh: true }, requestKey: "rk-1" } });
     for (const index of [2, 3, 4, 5, 6]) expect(prompt.choices[index]).not.toHaveProperty("action");
   });
 
-  it("translates commit_preview 裁决（R3）→ commitPreview for 定稿预览卡（不靠模型转述）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "commit_preview",
-          output: {
-            ok: false,
-            chapter: 7,
-            canCommit: false,
-            blockingReasons: ["第 7 章还没有工作稿。"],
-            summary: "暂不可定稿。",
-            draftQualityIssues: [{ severity: "error", type: "too_short", message: "正文过短" }],
-            semanticQualityIssues: [],
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitPreview?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitPreview).toEqual({
-      chapter: 7,
-      canCommit: false,
-      blockingReasons: ["第 7 章还没有工作稿。"],
-      summary: "暂不可定稿。",
-      draftIssueCount: 1,
-      semanticIssueCount: 0,
-      // R7.7·报告 4.3：明细文案直接透传进卡（默认折叠展示），不再指向不存在的「质检卡」。
-      draftIssues: ["正文过短"],
-    });
-  });
-
-  it("commit_preview 质量问题明细防御解析：非对象丢掉、无 message 丢掉、裸字符串宽容保留（R7.7）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "commit_preview",
-          output: {
-            chapter: 7,
-            canCommit: false,
-            semanticQualityIssues: [
-              { severity: "warning", type: "stale_thread", message: "伏笔「钥匙」已 4 章未推进。" },
-              { severity: "warning", type: "no_message" },
-              "裸字符串不算",
-              null,
-            ],
-          },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitPreview?: { semanticIssues?: readonly string[] } } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitPreview?.semanticIssues).toEqual(["伏笔「钥匙」已 4 章未推进。", "裸字符串不算"]);
-  });
-
-  it("结构化动作（「确认定稿」按钮）→ 请求体带 action；commit_preview 的 previewToken 透传给卡（按钮带回）", async () => {
-    const fetchMock = vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "commit_preview",
-          output: { ok: true, chapter: 2, canCommit: true, previewToken: "tok-2", summary: "可以定稿。" },
-        }),
-        frame("done", {}),
-      ]),
-    );
+  it("结构化动作（「确认定稿」按钮）→ 请求体带 action（接着做那次定稿：划掉的、改的天数原样带上）", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([frame("done", {})]));
     vi.stubGlobal("fetch", fetchMock);
-
-    let received: { commitPreview?: unknown } | undefined;
-    await streamAgentChat(
-      {
-        projectPath: "/tmp/p",
-        messages: [{ role: "user", content: "确认定稿第 2 章" }],
-        action: { toolName: "commit_apply", chapter: 2, previewToken: "tok-2" },
-      },
-      { ...noopHandlers(), onToolResult: (info) => { received = info; } },
-    );
-
+    const action = { kind: "resume" as const, opId: OP_ID, answer: { actionId: "confirm-commit", decision: "commit", excluded: ["i0"], values: { day: 4 } } };
+    await streamAgentChat({ projectPath: "/tmp/p", messages: [{ role: "user", content: "确认定稿第 2 章" }], action }, noopHandlers());
     const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(requestInit.body)).action).toEqual({ toolName: "commit_apply", chapter: 2, previewToken: "tok-2" });
-    expect(received?.commitPreview).toMatchObject({ chapter: 2, canCommit: true, previewToken: "tok-2" });
-  });
-
-  it("模型发起的 commit_apply 只出确认按钮（needsConfirmation + confirmAction）→ 透传 commitConfirmAction；残缺 confirmAction 不透传", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "a1",
-          toolName: "commit_apply",
-          output: { ok: false, committed: false, needsConfirmation: true, confirmAction: { toolName: "commit_apply", chapter: 4, previewToken: "t4" }, summary: "等你点确认定稿。" },
-        }),
-        frame("tool-result", {
-          toolCallId: "a2",
-          toolName: "commit_apply",
-          output: { ok: false, committed: false, needsConfirmation: true, confirmAction: { toolName: "commit_apply" }, summary: "残缺。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    const received: { commitConfirmAction?: unknown; needsConfirmation?: boolean }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "确认定稿" }] },
-      { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
-    );
-
-    expect(received[0]?.needsConfirmation).toBe(true);
-    expect(received[0]?.commitConfirmAction).toEqual({ chapter: 4, previewToken: "t4" });
-    expect(received[1]?.commitConfirmAction).toBeUndefined();
-  });
-
-  it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", { toolCallId: "p1", toolName: "commit_preview", output: { ok: true, summary: "可以。" } }),
-        frame("done", {}),
-      ]),
-    ));
-
-    let received: { commitPreview?: unknown } | undefined;
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => { received = info; },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    expect(received?.commitPreview).toBeUndefined();
+    expect(JSON.parse(String(requestInit.body)).action).toEqual(action);
   });
 
   it("routes an SSE status event to onStatus（R4：历史裁剪等说明不静默吞掉）", async () => {

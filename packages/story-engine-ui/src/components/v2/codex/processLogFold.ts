@@ -26,11 +26,13 @@ function hidden(step: ToolStep): boolean {
 }
 
 /**
- * 结果自带一张卡的工具 → 那张卡（卡上已经写清做了什么、结果如何）。run_check 交上的检查挂操作卡（写作版本 P2a）；
- * check_continuity / quality_check / ai_review / check_ai_flavor 是 P2a 前的工具，只在存下的老会话里出现。
+ * 结果自带一张卡的工具 → 那张卡（卡上已经写清做了什么、结果如何）。run_check 交上的检查、prepare_commit 交上的定稿挂操作卡
+ * （写作版本 P2a）；check_continuity / quality_check / ai_review / check_ai_flavor / commit_preview / commit_apply 是 P2a 前的工具，
+ * 只在存下的老会话里出现。
  */
 const CARD_OF_TOOL: Readonly<Record<string, string>> = {
   run_check: "operation",
+  prepare_commit: "operation",
   check_continuity: "continuity",
   commit_preview: "commit-preview",
   quality_check: "quality",

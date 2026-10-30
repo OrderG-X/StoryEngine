@@ -1,14 +1,20 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, projectBook, readHead, readTruthBasis, runCommand } from "@actalk/story-core";
+import { chapterCommit, projectBook, readTruthBasis, runCommand, type BasisChange } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { confirmChapterCommit, fileTicketStore, memoryTicketStore, prepareChapterCommit, type CommitPreview, type PrepareFailure, type PrepareInput } from "./commit-flow.js";
+import { describeBasisChanges } from "../book/truth-basis.js";
+import { commitEntriesOf, draftFingerprint, prepareChapterCommit, type CommitChoices, type CommitPreview, type PrepareFailure, type PrepareInput, type PreviewTicket } from "./commit-flow.js";
 import type { BrainCallModel } from "./reader-window.js";
 
 /** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
 const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
+
+/** 照票和作者的选择定稿（commit.prepare 的「确认定稿」那步同一个做法：条目照票算、依据照票核）。 */
+const confirmNow = (ticket: PreviewTicket, text: string, choices: CommitChoices = {}, idempotencyKey: string = randomUUID()) =>
+  runCommand(book, chapterCommit, { chapter: ticket.chapter, text, entries: commitEntriesOf(ticket, choices) }, { caller: "author", basis: ticket.basis, idempotencyKey });
 
 let book: string;
 beforeEach(async () => {
@@ -48,10 +54,10 @@ function expectPreview(outcome: CommitPreview | PrepareFailure): CommitPreview {
   return outcome;
 }
 
-async function commitChapter1(tickets = memoryTicketStore()) {
-  const preview = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets, knownNames: ["沈青禾"] }));
-  const confirmed = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH1, tickets });
-  if (!confirmed.ok) throw new Error(confirmed.reason);
+async function commitChapter1() {
+  const preview = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), knownNames: ["沈青禾"] }));
+  const confirmed = await confirmNow(preview.ticket, CH1);
+  if (!confirmed.ok) throw new Error(confirmed.message);
   return { preview, confirmed };
 }
 
@@ -78,7 +84,6 @@ describe("定稿编排", () => {
       bookDir: book,
       chapter: 2,
       text: CH2,
-      tickets: memoryTicketStore(),
       callModel: fakeModel({
         summary: { text: "外乡人又来", quote: "外乡人又来了" },
         time: { basis: "text", daysSincePrevious: 1, quote: "第二天上午" },
@@ -89,15 +94,13 @@ describe("定稿编排", () => {
   });
 
   it("一句说明推进两条线索：清单并成一行、标题并排；去掉这行两条都不记", async () => {
-    const tickets = memoryTicketStore();
     const twoThreads = { ...LEDGER1, threads: [...LEDGER1.threads, { op: "open", type: "question", title: "钥匙开哪把锁", note: "钟箱里的铜钥匙", quote: "她在钟箱里摸到一把铜钥匙" }] };
-    const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(twoThreads), tickets, knownNames: ["沈青禾", "周守义"] }));
-    expect((await confirmChapterCommit({ bookDir: book, ticket: first.ticket, text: CH1, tickets })).ok).toBe(true);
+    const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(twoThreads), knownNames: ["沈青禾", "周守义"] }));
+    expect((await confirmNow(first.ticket, CH1)).ok).toBe(true);
     const preview = expectPreview(await prepareNow({
       bookDir: book,
       chapter: 2,
       text: CH2,
-      tickets,
       callModel: fakeModel({
         summary: { text: "外乡人又来", quote: "外乡人又来了" },
         time: { basis: "text", daysSincePrevious: 1, quote: "第二天上午" },
@@ -107,20 +110,18 @@ describe("定稿编排", () => {
     const rows = preview.auto.filter((item) => item.kind === "thread");
     expect(rows.map((item) => item.label)).toEqual(["推进「钟为什么停」「钥匙开哪把锁」：钥匙锁进铜盒"]);
     expect(rows[0]?.merged).toHaveLength(1);
-    const confirmed = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, excluded: [rows[0]?.index, ...(rows[0]?.merged ?? [])] });
+    const confirmed = await confirmNow(preview.ticket, CH2, { excluded: [rows[0]!.index, ...(rows[0]?.merged ?? [])] });
     expect(confirmed.ok).toBe(true);
     expect((await projectBook(book)).threads.map((thread) => thread.lastTouchedAt)).toEqual([1, 1]);
   });
 
   it("第 2 章：推进 / 收口用短号接上前文；原句对不上的如实列出；作者去掉一条、改天数；点两次只定稿一次", async () => {
     await commitChapter1();
-    const tickets = memoryTicketStore();
     const preview = expectPreview(
       await prepareNow({
         bookDir: book,
         chapter: 2,
         text: CH2,
-        tickets,
         callModel: fakeModel({
           summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
           // 记账员把同一天的章多填了「章内过了 1 天」（摘的换天原句正文里确有，代码核得上）：作者改天数后按作者说的那一天记（P6 第 7 步）。
@@ -141,9 +142,9 @@ describe("定稿编排", () => {
     expect(preview.time).toMatchObject({ day: 2, dayEnd: 3, basis: "text" });
 
     const stranger = preview.review.find((item) => item.label === "出场：外乡人");
-    const first = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, excluded: [String(stranger?.index), -1, "x"], day: "5" });
+    const first = await confirmNow(preview.ticket, CH2, { excluded: [stranger!.index], day: 5 }, "ch2");
     expect(first).toMatchObject({ ok: true, version: 2, replayed: false });
-    const again = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, excluded: [stranger?.index], day: 5 });
+    const again = await confirmNow(preview.ticket, CH2, { excluded: [stranger!.index], day: 5 }, "ch2");
     expect(again).toMatchObject({ ok: true, version: 2, replayed: true });
 
     const view = await projectBook(book);
@@ -157,13 +158,11 @@ describe("定稿编排", () => {
   // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；作者只能改成一天，章里第二天那段丢了。
   it("作者改天数也能记跨天：第 5 天到第 6 天", async () => {
     await commitChapter1();
-    const tickets = memoryTicketStore();
     const preview = expectPreview(
       await prepareNow({
         bookDir: book,
         chapter: 2,
         text: CH2,
-        tickets,
         callModel: fakeModel({
           summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
           time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, dayChangeQuote: "沈青禾把钥匙锁进铜盒", timeOfDay: "上午", quote: "第二天上午" },
@@ -174,18 +173,17 @@ describe("定稿编排", () => {
       }),
     );
     expect(preview.time).toMatchObject({ day: 2, dayEnd: 3 });
-    expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, day: 5, dayEnd: 6 })).toMatchObject({ ok: true });
+    expect(await confirmNow(preview.ticket, CH2, { day: 5, dayEnd: 6 })).toMatchObject({ ok: true });
     expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 5, dayEnd: 6, dayBasis: "author" });
   });
 
   it("改了前面一章再定稿：记账员看得到这章上次开的线索，本章还在开就沿用编号，后文的推进接得上", async () => {
     await commitChapter1();
-    const tickets = memoryTicketStore();
     const ch2 = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: CH2, tickets,
+      bookDir: book, chapter: 2, text: CH2,
       callModel: fakeModel({ threads: [{ op: "advance", thread: "T1", note: "知道是人为拨停", quote: "钟是被人故意拨停的" }] }),
     }));
-    expect(await confirmChapterCommit({ bookDir: book, ticket: ch2.ticket, text: CH2, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(ch2.ticket, CH2)).toMatchObject({ ok: true });
 
     const edited = CH1.replace("老周没有拦她", "老周侧身让开了");
     const asked: string[] = [];
@@ -196,9 +194,9 @@ describe("定稿编排", () => {
       // 换了个说法（标题对不上上次的），但填了上次的编号。
       return JSON.stringify({ threads: [{ op: "open", type: "question", title: "钟停在三点十五的缘故", thread: "r1", note: "钟停了", quote: "钟为什么偏偏停在这个时刻" }] });
     };
-    const again = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: edited, callModel: keeper, tickets }));
+    const again = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: edited, callModel: keeper }));
     expect(asked[0]).toContain("R1 [悬念] 钟为什么停（上次记的：钟停在三点十五分）");
-    const confirmed = await confirmChapterCommit({ bookDir: book, ticket: again.ticket, text: edited, tickets });
+    const confirmed = await confirmNow(again.ticket, edited);
     expect(confirmed).toMatchObject({ ok: true, result: { recommitted: true, orphanedThreads: [] } });
     const view = await projectBook(book);
     expect(view.threads).toHaveLength(1);
@@ -208,33 +206,32 @@ describe("定稿编排", () => {
   // 作者长篇实跑 2026-10-27：第 5 章改错字重定稿，记账员把本章开的线索报成推进、被拒，定稿了第 45 章的收口就接不上。
   it("重定稿别丢本章开的线索：报成推进的按开记、没提但后文接着的照上次开、原句也没了如实说", async () => {
     await commitChapter1();
-    const tickets = memoryTicketStore();
     const ch2 = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: CH2, tickets,
+      bookDir: book, chapter: 2, text: CH2,
       callModel: fakeModel({ threads: [{ op: "close", thread: "T1", note: "钟是被人故意拨停的", quote: "钟是被人故意拨停的" }] }),
     }));
-    expect(await confirmChapterCommit({ bookDir: book, ticket: ch2.ticket, text: CH2, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(ch2.ticket, CH2)).toMatchObject({ ok: true });
 
     const typo = `${CH1}\n\n风停了。`;
     const asAdvance = expectPreview(await prepareNow({
-      bookDir: book, chapter: 1, text: typo, tickets,
+      bookDir: book, chapter: 1, text: typo,
       callModel: fakeModel({ ...LEDGER1, threads: [{ op: "advance", thread: "R1", note: "钟停的缘故还没解开", quote: "钟为什么偏偏停在这个时刻" }] }),
     }));
     expect(asAdvance.notRecorded).toEqual([]);
     expect([...asAdvance.review, ...asAdvance.auto].find((item) => item.kind === "thread")?.label).toContain("钟为什么停");
     expect(asAdvance.lostThreads).toBeUndefined();
-    expect(await confirmChapterCommit({ bookDir: book, ticket: asAdvance.ticket, text: typo, tickets })).toMatchObject({ ok: true, result: { orphanedThreads: [] } });
+    expect(await confirmNow(asAdvance.ticket, typo)).toMatchObject({ ok: true, result: { orphanedThreads: [] } });
     expect((await projectBook(book)).threads).toEqual([expect.objectContaining({ title: "钟为什么停", openedAt: 1, status: "closed", closedAt: 2 })]);
 
     const omitted = expectPreview(await prepareNow({
-      bookDir: book, chapter: 1, text: `${typo}\n\n钟楼外起了风。`, tickets,
+      bookDir: book, chapter: 1, text: `${typo}\n\n钟楼外起了风。`,
       callModel: fakeModel({ ...LEDGER1, threads: [] }),
     }));
     expect([...omitted.review, ...omitted.auto].some((item) => item.kind === "thread")).toBe(true);
     expect(omitted.lostThreads).toBeUndefined();
 
     const gone = expectPreview(await prepareNow({
-      bookDir: book, chapter: 1, text: typo.replace("钟为什么偏偏停在这个时刻？", ""), tickets,
+      bookDir: book, chapter: 1, text: typo.replace("钟为什么偏偏停在这个时刻？", ""),
       callModel: fakeModel({ ...LEDGER1, threads: [] }),
     }));
     expect(gone.lostThreads).toEqual(["钟为什么停"]);
@@ -243,48 +240,46 @@ describe("定稿编排", () => {
   // 换题材长篇实跑 2026-10-28：第 4 章改一个词重定稿，记账员把第 5～11 章还在推进的线索报成收口。
   it("重定稿收掉一条后文还在接着的线索：要你看、说清后文哪几章还接着、默认不记", async () => {
     await commitChapter1();
-    const tickets = memoryTicketStore();
     const advance = (quote: string) => fakeModel({ threads: [{ op: "advance", thread: "T1", note: "钟停的缘故还没解开", quote }] });
     for (const [chapter, text, quote] of [[2, CH2, "老周站在门口，没让他进"], [3, "# 第3章 · 雨\n\n雨下了一夜，钟楼没人上去。", "钟楼没人上去"]] as const) {
-      const preview = expectPreview(await prepareNow({ bookDir: book, chapter, text, tickets, callModel: advance(quote) }));
-      expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets })).toMatchObject({ ok: true });
+      const preview = expectPreview(await prepareNow({ bookDir: book, chapter, text, callModel: advance(quote) }));
+      expect(await confirmNow(preview.ticket, text)).toMatchObject({ ok: true });
     }
     const typo = CH2.replace("又来了", "又来了一趟");
     const recommit = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: typo, tickets,
+      bookDir: book, chapter: 2, text: typo,
       callModel: fakeModel({ threads: [{ op: "close", thread: "T1", note: "钟是被人故意拨停的", quote: "钟是被人故意拨停的" }] }),
     }));
     const close = recommit.review.find((item) => item.kind === "thread");
     expect(close).toMatchObject({ optIn: true, reasons: [{ code: "closes-thread", text: "后文第 3 章还在接着这条：这里收了，后面就接不上，默认不记" }] });
-    expect(await confirmChapterCommit({ bookDir: book, ticket: recommit.ticket, text: typo, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(recommit.ticket, typo)).toMatchObject({ ok: true });
     expect((await projectBook(book)).threads[0]).toMatchObject({ title: "钟为什么停", status: "active", lastTouchedAt: 3 });
   });
 
   // 作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把天数看错一天，后面 45 章跟着挪。
   it("重定稿天数：上次记时间那句还在就照上次的，记账员这次看的不一样两边都给作者看；那句改没了按这次的", async () => {
     await commitChapter1();
-    const tickets = memoryTicketStore();
     const ch2Ledger = (time: Record<string, unknown>) => fakeModel({ time, presence: [{ name: "周守义", nameUsed: "老周", quote: "老周" }] });
     const first = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: CH2, tickets,
+      bookDir: book, chapter: 2, text: CH2,
       callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" }),
     }));
-    expect(await confirmChapterCommit({ bookDir: book, ticket: first.ticket, text: CH2, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(first.ticket, CH2)).toMatchObject({ ok: true });
     expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 2 });
 
     // 只改了一个字，记账员这次看成当天：照上次的第 2 天记，列出这次看成的第 1 天。
     const typo = CH2.replace("没让他进", "没让他进门");
     const same = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: typo, tickets,
+      bookDir: book, chapter: 2, text: typo,
       callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 0, timeOfDay: "上午", quote: "外乡人又来了" }),
     }));
     expect(same.time).toMatchObject({ day: 2, dayEnd: 2, needsConfirm: true, sinceLast: { kept: true, otherDay: 1, otherDayEnd: 1 } });
-    expect(await confirmChapterCommit({ bookDir: book, ticket: same.ticket, text: typo, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(same.ticket, typo)).toMatchObject({ ok: true });
     expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 2, timeOfDay: "上午" });
 
     // 天数一样：不多问。
     const again = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: typo, tickets,
+      bookDir: book, chapter: 2, text: typo,
       callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" }),
     }));
     expect(again.time.needsConfirm).toBe(false);
@@ -293,55 +288,46 @@ describe("定稿编排", () => {
     // 记时间那句改掉了：上次那条接不上，按这次的记，列出上次的第 2 天。
     const rewritten = typo.replace("第二天上午", "三天后的上午");
     const moved = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: rewritten, tickets,
+      bookDir: book, chapter: 2, text: rewritten,
       callModel: ch2Ledger({ basis: "text", daysSincePrevious: 3, timeOfDay: "上午", quote: "三天后的上午" }),
     }));
     expect(moved.time).toMatchObject({ day: 4, needsConfirm: true, sinceLast: { kept: false, otherDay: 2, otherDayEnd: 2 } });
   });
 
   it("重定稿：上次定稿认过的出场人物（含泛称）不再当第一次出场问；这次新冒出来的照问", async () => {
-    const tickets = memoryTicketStore();
-    const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets }));
+    const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1) }));
     expect(first.review.map((item) => item.label)).toEqual(expect.arrayContaining(["出场：沈青禾，视角人物", "出场：周守义（正文叫「老周」）"]));
-    expect(await confirmChapterCommit({ bookDir: book, ticket: first.ticket, text: CH1, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(first.ticket, CH1)).toMatchObject({ ok: true });
 
     const edited = CH1.replace("老周没有拦她", "老周没有拦她，门边站着个老头");
     const ledger = { ...LEDGER1, presence: [...LEDGER1.presence, { name: "老头", nameUsed: "老头", generic: true, quote: "门边站着个老头" }] };
-    const again = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: edited, callModel: fakeModel(ledger), tickets }));
+    const again = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: edited, callModel: fakeModel(ledger) }));
     const askedNames = (preview: CommitPreview) => preview.review.filter((item) => item.reasons.some((reason) => reason.code === "new-character")).map((item) => item.label);
     expect(askedNames(again)).toEqual(["出场：老头"]);
-    expect(await confirmChapterCommit({ bookDir: book, ticket: again.ticket, text: edited, tickets })).toMatchObject({ ok: true });
-    const third = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: `${edited}\n\n钟又走了。`, callModel: fakeModel(ledger), tickets }));
+    expect(await confirmNow(again.ticket, edited)).toMatchObject({ ok: true });
+    const third = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: `${edited}\n\n钟又走了。`, callModel: fakeModel(ledger) }));
     expect(askedNames(third)).toEqual([]);
   });
 
-  it("正文预览后又改过、票过期了、跳章、老书没导入、记账员没交上：都不定稿，如实说", async () => {
-    const tickets = memoryTicketStore();
-    const preview = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets }));
-    expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: `${CH1}\n加了一句。`, tickets })).toMatchObject({ ok: false, code: "text_changed" });
-    expect(await confirmChapterCommit({ bookDir: book, ticket: "0123456789abcdef", text: CH1, tickets })).toMatchObject({ ok: false, code: "ticket_missing" });
-    expect(await readHead(book)).toMatchObject({ version: 0 });
-
-    expect(await prepareNow({ bookDir: book, chapter: 3, text: CH2, callModel: fakeModel(LEDGER1), tickets })).toMatchObject({ ok: false, code: "chapter_gap" });
-    expect(await prepareNow({ bookDir: book, chapter: 1, text: "  ", callModel: fakeModel(LEDGER1), tickets })).toMatchObject({ ok: false, code: "empty_text" });
-    expect(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: async () => "记不了", tickets })).toMatchObject({ ok: false, code: "keeper_failed" });
+  it("跳章、空正文、老书没导入、记账员没交上：都不出清单，如实说", async () => {
+    expect(await prepareNow({ bookDir: book, chapter: 3, text: CH2, callModel: fakeModel(LEDGER1) })).toMatchObject({ ok: false, code: "chapter_gap" });
+    expect(await prepareNow({ bookDir: book, chapter: 1, text: "  ", callModel: fakeModel(LEDGER1) })).toMatchObject({ ok: false, code: "empty_text" });
+    expect(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: async () => "记不了" })).toMatchObject({ ok: false, code: "keeper_failed" });
 
     const old = await makeHomeTempDir("commit-flow-old-");
     try {
       await mkdir(join(old, "chapters"), { recursive: true });
       await writeFile(join(old, "chapters/0001.md"), CH1);
-      expect(await prepareNow({ bookDir: old, chapter: 2, text: CH2, callModel: fakeModel(LEDGER1), tickets })).toMatchObject({ ok: false, code: "not_imported" });
+      expect(await prepareNow({ bookDir: old, chapter: 2, text: CH2, callModel: fakeModel(LEDGER1) })).toMatchObject({ ok: false, code: "not_imported" });
     } finally {
       await rm(old, { recursive: true, force: true });
     }
   });
 
-  it("稿纸重新载入只收掉了多余空行（字没动）：照样能确认，定稿的是现在这份", async () => {
-    const tickets = memoryTicketStore();
+  it("正文指纹：只收掉了多余空行、行尾空白（字没动）对得上；多一个字就对不上", () => {
     const loose = CH1.replace(/\n\n/gu, "\n\n\n\n").concat("  \n");
-    const preview = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: loose, callModel: fakeModel(LEDGER1), tickets }));
-    expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH1, tickets })).toMatchObject({ ok: true, version: 1 });
-    expect(await readFile(join(book, "chapters/0001.md"), "utf-8")).toBe(CH1);
+    expect(draftFingerprint(loose)).toBe(draftFingerprint(CH1));
+    expect(draftFingerprint(`${CH1}\n加了一句。`)).not.toBe(draftFingerprint(CH1));
   });
 
   it("预览之后前面章的账变了：旧票不定稿、说清哪章变了；重新预览照新的天数算（Astra 探针 P3）", async () => {
@@ -355,24 +341,17 @@ describe("定稿编排", () => {
       ? JSON.stringify({ time: { basis: "text", daysSincePrevious: 1, daysInChapter: 0, quote: "第二天上午" } })
       : "老张回家。";
     await commitDay(1);
-    const tickets = memoryTicketStore();
-    const stale = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: next, callModel: model, tickets }));
+    const stale = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: next, callModel: model }));
     expect(stale.time.day).toBe(2);
     await commitDay(20);
-    const refused = await confirmChapterCommit({ bookDir: book, ticket: stale.ticket, text: next, tickets });
-    expect(refused).toMatchObject({ ok: false, code: "basis_changed", reason: expect.stringContaining("第 1 章的账") });
+    const refused = await confirmNow(stale.ticket, next);
+    expect(refused).toMatchObject({ ok: false, code: "basis_changed" });
+    expect(describeBasisChanges((refused as { readonly details: { readonly changes: readonly BasisChange[] } }).details.changes)).toContain("第 1 章的账");
     expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)).toBeUndefined();
-    const fresh = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: next, callModel: model, tickets }));
+    const fresh = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: next, callModel: model }));
     expect(fresh.time.day).toBe(21);
-    expect(await confirmChapterCommit({ bookDir: book, ticket: fresh.ticket, text: next, tickets })).toMatchObject({ ok: true });
+    expect(await confirmNow(fresh.ticket, next)).toMatchObject({ ok: true });
     expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)?.day).toBe(21);
   });
 
-  it("预览票存目录：进程重启（换一个 store 实例）也能确认；乱写的票号不读盘", async () => {
-    const dir = join(book, ".cache", "tickets");
-    const preview = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets: fileTicketStore(dir) }));
-    const restarted = fileTicketStore(dir);
-    expect(await restarted.get("../../etc/passwd")).toBeUndefined();
-    expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH1, tickets: restarted })).toMatchObject({ ok: true, version: 1 });
-  });
 });

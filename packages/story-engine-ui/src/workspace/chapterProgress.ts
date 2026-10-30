@@ -25,7 +25,7 @@ export const STEP_HINTS = {
   write: "AI 照设定和前文写这一章的工作稿，要几分钟；写之前存档，能撤销。也可以直接在稿纸上自己写。",
   write_next: "AI 写下一章的工作稿，要几分钟；写之前存档，能撤销。",
   continuity: "拿这一章对一遍前文和设定，找前后对不上的地方（人名、日子、谁知道什么……）。只看不改。",
-  commit_preview: "这章写完了就定稿：先出一张清单给你过目（这章记进账本的人、事、线索），你点确认才定；能撤销。",
+  commit: "这章写完了就定稿：先出一张清单给你过目（这章记进账本的人、事、线索），你点确认才定；能撤销。",
   show_issues: "在稿纸上看划线的那几句。",
 } as const satisfies Partial<Record<ChapterButton | "show_issues", string>>;
 
@@ -228,7 +228,7 @@ export function chapterProgress(input: {
         ? { kind: "continuity", label: checkState === "stale" ? "再核一遍" : "核账" }
         : checkState === "issues"
           ? { kind: "show_issues", label: `去看那 ${open.sure.length} 处` }
-          : { kind: "commit_preview", label: "定稿" };
+          : { kind: "commit", label: "定稿" };
 
   const statusLine = stage === "empty"
     ? "这一章还没写"

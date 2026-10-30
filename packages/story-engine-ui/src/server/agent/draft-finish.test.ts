@@ -39,12 +39,12 @@ async function finish(op: OperationRecord, args: Partial<DraftFinishArgs> = {}) 
 const draftAction = (mode: string, params: Record<string, unknown>) => expect.objectContaining({ kind: "new", type: "draft.change", mode, params });
 
 describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮同一套）", () => {
-  it("写好了、写完没核账 → 一句结论；下一步「预览定稿」「核账」", async () => {
+  it("写好了、写完没核账 → 一句结论；下一步「定稿」「核账」", async () => {
     const { text, next } = await finish(record("succeeded", { body: written({ draftLength: { actualLength: 3000, lengthStatus: "within_range" } }) }));
     expect(text).toBe("第 2 章写好了，3000 字。");
     expect(next?.question).toBe("第 2 章写好了，接下来？");
     expect(next?.choices).toEqual([
-      expect.objectContaining({ label: "预览定稿", recommended: true, action: { toolName: "commit_preview", chapter: 2 } }),
+      expect.objectContaining({ label: "定稿", recommended: true, action: expect.objectContaining({ kind: "new", type: "commit.prepare", params: { chapter: 2 } }) }),
       expect.objectContaining({ label: "核账", action: expect.objectContaining({ kind: "new", type: "inspect.run", mode: "continuity", params: { chapter: 2 } }) }),
     ]);
   });
@@ -61,12 +61,12 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
     expect(next?.choices).toEqual([expect.objectContaining({ label: "接着往下写", action: draftAction("continue", { chapter: 2 }) })]);
   });
 
-  it("写完核过账、没有确定的 → 下一步「预览定稿」「AI 写下一章」", async () => {
+  it("写完核过账、没有确定的 → 下一步「定稿」「AI 写下一章」", async () => {
     const { next } = await finish(record("succeeded", { body: written({ draftLength: { actualLength: 3000 }, qualityPipeline: { continuity: { checked: true } } }) }), {
       readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [], maybe: [], failures: [] }),
     });
     expect(next?.choices).toEqual([
-      expect.objectContaining({ label: "预览定稿", recommended: true }),
+      expect.objectContaining({ label: "定稿", recommended: true }),
       expect.objectContaining({ label: "AI 写下一章", action: draftAction("write", { chapter: 3 }) }),
     ]);
   });
@@ -77,7 +77,7 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
     });
     expect(text).toBe("第 2 章写好了，3000 字。\n写完那遍核账没核全，可以点「核账」再核。");
     expect(events.some((item) => item.event === "card")).toBe(false);
-    expect(next?.choices.map((choice) => choice.label)).toEqual(["预览定稿", "核账"]);
+    expect(next?.choices.map((choice) => choice.label)).toEqual(["定稿", "核账"]);
   });
 
   it("写完那遍核账没跑成 → 如实说一句，不出核账卡", async () => {
@@ -88,7 +88,7 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
     expect(events.some((item) => item.event === "card")).toBe(false);
   });
 
-  it("作者要写完就出定稿预览 → 核账卡后接着出预览，不另给下一步；没核账的也直接出预览", async () => {
+  it("作者要写完就定稿 → 核账卡后接着出定稿清单，不另给下一步；没核账的也直接出清单", async () => {
     const previewCommit = vi.fn(async () => undefined);
     const checked = await finish(record("succeeded", { body: written({ thenPreview: true, qualityPipeline: { continuity: { checked: true } } }) }), {
       previewCommit,
@@ -112,8 +112,8 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
       body: written({ draftLength: { actualLength: 3000 }, beatFidelity: { missingBeats: ["老周认出账本", ""], postDeAiNewMisses: ["老周认出账本", "雨停"] } }),
     }));
     expect(text).toBe("第 2 章写好了，3000 字。\n这几条要点可能没写到：老周认出账本、雨停。");
-    expect(next?.choices.map((choice) => choice.label)).toEqual(["补上这几条", "预览定稿", "核账"]);
-    expect(next?.choices[1]?.recommended).toBe(false);
+    expect(next?.choices.map((choice) => choice.label)).toEqual(["补上这几条", "定稿", "核账"]);
+    expect(next?.choices[1]?.recommended).not.toBe(true);
   });
 
   it("接着往下写的：说接了多少、前面的没动；短了下一步先给「接着往下写」", async () => {
@@ -123,7 +123,7 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
       body: written({ mode: "continue", chapter: 4, continued: { kept: 900, added: 1200 }, draftLength: { actualLength: 2100, lowerBound: 2400, lengthStatus: "below_lower_bound" } }),
     }));
     expect(text).toBe("第 4 章接着写了 1200 字，前面的 900 字没动，全章 2100 字，比下限少 300 字。");
-    expect(next?.choices.map((choice) => choice.label)).toEqual(["接着往下写", "预览定稿", "核账"]);
+    expect(next?.choices.map((choice) => choice.label)).toEqual(["接着往下写", "定稿", "核账"]);
   });
 
   it("作者说了这次写多少、没写够：照实说少了多少；写够八成五不提（界面真点 2026-10-30）", async () => {
@@ -167,7 +167,7 @@ describe("没写成 / 没受理的下一步（按原因给）", () => {
 
   it("前一章没定稿 → 先定稿前一章 / 仍要先写（带 allowWriteAhead）；有稿 → 接着写 / 重写", async () => {
     expect(await draftRetryChoices(BOOK, "previous_chapter_not_committed", "write", { chapter: 5 })).toEqual([
-      expect.objectContaining({ label: "先定稿第 4 章", action: { toolName: "commit_preview", chapter: 4 } }),
+      expect.objectContaining({ label: "先定稿第 4 章", action: expect.objectContaining({ kind: "new", type: "commit.prepare", params: { chapter: 4 } }) }),
       expect.objectContaining({ label: "仍要先写第 5 章", action: draftAction("write", { chapter: 5, allowWriteAhead: true }) }),
     ]);
     expect((await draftRetryChoices(BOOK, "chapter_has_text", "write", { chapter: 5 })).map((choice) => choice.label)).toEqual(["接着往下写", "重写第 5 章"]);

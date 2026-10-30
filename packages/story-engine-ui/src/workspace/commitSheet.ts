@@ -1,12 +1,12 @@
 /**
- * 定稿清单弹窗开在哪张预览上（重构 P6，草图 ②）。
+ * 定稿清单弹窗开在哪张清单上（重构 P6，草图 ②）。
  *
- * 定稿预览结果一到就弹出清单；对话里只留一张小卡，点它再打开。
- * 预览之后稿子没再变（版本号一样、没有没存的字）时，再点「定稿」直接打开上次那份清单，不再重跑记账员。
+ * 这一轮交的定稿出了清单（或定不了的原因）就弹出来；对话里只留一张小卡，点它再打开。
+ * 清单出了之后稿子没再变（版本号一样、没有没存的字）、那次定稿还在等作者点时，再点「定稿」直接打开那份清单，不再重跑记账员。
  */
 import { create } from "zustand";
 import type { ChapterMessage } from "../type-defs/workspace.js";
-import { confirmableCommitPreviewMessageId } from "../components/v2/codex/commitConfirm.js";
+import { confirmableCommitPreviewIds } from "../components/v2/codex/commitConfirm.js";
 import { isDraftDirty, type DraftStoreState } from "../stores/draftStore.js";
 import { cardOf } from "../utils/messageCards.js";
 
@@ -31,13 +31,11 @@ export function closeCommitSheet(): void {
 
 type PaperVersion = Pick<DraftStoreState, "chapter" | "baseVersion" | "body" | "savedBody" | "title" | "savedTitle">;
 
-/** 还能直接打开的定稿清单：这一章最新那张可定稿的预览，预览后稿纸没变过。否则 null（要重新预览）。 */
+/** 还能直接打开的定稿清单：这一章还能确认的那张，清单出了之后稿纸没变过。否则 null（要重新出清单）。 */
 export function reusableCommitPreviewId(messages: readonly ChapterMessage[], paper: PaperVersion): string | null {
-  const id = confirmableCommitPreviewMessageId(messages);
-  if (!id) return null;
-  const message = messages.find((item) => item.id === id);
+  if (isDraftDirty(paper)) return null;
+  const confirmable = confirmableCommitPreviewIds(messages);
+  const message = messages.find((item) => confirmable.has(item.id) && cardOf(item, "commit-preview")?.preview.chapter === paper.chapter);
   const card = message ? cardOf(message, "commit-preview") : undefined;
-  if (!card || card.preview.chapter !== paper.chapter) return null;
-  if (typeof card.checkedVersion !== "string" || card.checkedVersion !== paper.baseVersion || isDraftDirty(paper)) return null;
-  return id;
+  return message && typeof card?.checkedVersion === "string" && card.checkedVersion === paper.baseVersion ? message.id : null;
 }

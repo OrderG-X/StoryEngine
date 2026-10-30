@@ -18,6 +18,7 @@ import { draftChangeRecipe } from "./draft-change.js";
 import { inspectRunRecipe } from "./inspect-run.js";
 import { ledgerChangeRecipe } from "./ledger-change.js";
 import { canonProposeRecipe } from "./canon-propose.js";
+import { commitPrepareRecipe } from "./commit-prepare.js";
 import { planProposeRecipe } from "./plan-propose.js";
 import { settingsChangeRecipe } from "./settings-change.js";
 
@@ -135,6 +136,15 @@ export async function migrateLegacyRereadState(bookDir: string): Promise<void> {
   }
 }
 
+/**
+ * 升级前（0.2.5 及以前）的定稿预览票存在 `ledger/.preview/`（片 4A 起票在定稿那次操作的检查点里）：开书时删掉。
+ * 没删成只记日志，下次开书再删。
+ */
+export async function removeLegacyCommitTickets(bookDir: string): Promise<void> {
+  await rm(join(bookDir, "ledger", ".preview"), { recursive: true, force: true })
+    .catch((error: unknown) => console.warn("[commit] 升级前的定稿预览票没删成（下次开书再删）", error));
+}
+
 export function registerBuiltInRecipes(): void {
   registerRecipe(backgroundBackfillRecipe);
   registerRecipe(backgroundRereadRecipe);
@@ -146,5 +156,6 @@ export function registerBuiltInRecipes(): void {
   registerRecipe(settingsChangeRecipe);
   registerRecipe(ledgerChangeRecipe);
   registerRecipe(canonProposeRecipe);
+  registerRecipe(commitPrepareRecipe);
   setReaderBackfillHandler(submitBackfill);
 }

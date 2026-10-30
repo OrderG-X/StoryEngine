@@ -47,6 +47,8 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
   if (op.state === "waiting_author" && op.pending?.kind === "revise") return <ReviseChoice op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   if (op.state === "waiting_author" && op.pending?.kind === "confirm") return <ChangeConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
   if (op.state === "waiting_author" && op.pending?.kind === "canon") return <CanonConfirm op={op} pending={op.pending} busy={busy} onAction={onAction} />;
+  // 定稿清单等作者点：清单卡（和弹窗）就是这次的样子，操作卡不另说一行。
+  if (op.state === "waiting_author" && op.pending?.kind === "commit") return null;
   const running = RUNNING.has(op.state);
   const canResume = Boolean(onAction) && op.allowed.includes("resume");
   const canCancel = Boolean(onAction) && op.allowed.includes("cancel") && !inLiveTurn;
