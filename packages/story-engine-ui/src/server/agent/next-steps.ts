@@ -13,6 +13,7 @@ import { PLAN_PROPOSE_KIND, type PlanProposeParams } from "../services/operation
 import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
 import { CANON_PROPOSE_KIND, type CanonCard, type CanonProposeInput } from "../services/operations/recipes/canon-propose.js";
 import { COMMIT_PREPARE_KIND } from "../services/operations/recipes/commit-prepare.js";
+import { HISTORY_CHANGE_KIND } from "../services/operations/recipes/history-change.js";
 import type { OperationAction, UserAction } from "./user-actions.js";
 
 export interface NextStepChoice {
@@ -68,6 +69,11 @@ export function recheckCanonAction(card: CanonCard): OperationAction {
 /** 「定稿」：出这一章的定稿清单（记账员记账，作者在清单上点「确认定稿」才定）。 */
 export function commitAction(chapter: number): OperationAction {
   return { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
+}
+
+/** 「撤回来」「撤销这次定稿」：撤那一次操作写的；不给号 = 「撤销上一步」（最近一次还没撤的）。 */
+export function undoAction(opId?: string): OperationAction {
+  return { kind: "new", type: HISTORY_CHANGE_KIND, mode: "undo", params: opId ? { opId } : {}, requestKey: randomUUID(), issuedAt: new Date().toISOString() };
 }
 
 /** 下一步里的「定稿」。 */

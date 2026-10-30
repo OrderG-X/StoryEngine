@@ -2,13 +2,9 @@
  * 用户结构化动作（2026-10-07 拆补丁塔）：界面按钮（定稿清单「确认定稿」、建议条、卡上的按钮）发来的明确指令，
  * 服务端直接执行，不经模型判断——按钮点击本身就是授权，不再用正则去猜用户原话。
  *
- * 新操作、「接着做」「不要了」、等作者点的按钮都交给执行器（写作版本 P2a）；还没迁过来的（裁剪、撤销上一步）按工具名直接跑，
- * 事件协议与 agent 回合一致（tool-call / tool-result / text-delta），收尾文本确定性生成，不调模型。
+ * 新操作、「接着做」「不要了」、等作者点的按钮都交给执行器（写作版本 P2a），事件协议与 agent 回合一致，收尾文本确定性生成，不调模型。
  */
-import type { RequestContext } from "@mastra/core/di";
-
 import { isOperationId } from "../lib/operations/store.js";
-import { markUserConfirmedTool } from "./request-context.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams, type PlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { SETTINGS_CHANGE_KIND } from "../services/operations/recipes/settings-change.js";
@@ -16,6 +12,7 @@ import { LEDGER_CHANGE_KIND, MAX_LEDGER_CHANGES } from "../services/operations/r
 import { readLedgerRequest, type LedgerChangeRequest } from "../services/ledger-change/plan.js";
 import { CANON_PROPOSE_KIND, canonInputOf, readCanonProposeParams, type CanonProposeInput } from "../services/operations/recipes/canon-propose.js";
 import { COMMIT_PREPARE_KIND, readCommitPrepareParams, type CommitPrepareParams } from "../services/operations/recipes/commit-prepare.js";
+import { HISTORY_CHANGE_KIND, readHistoryChangeParams } from "../services/operations/recipes/history-change.js";
 import {
   isCandidateDecisionKind,
   isDraftEditMode,
@@ -30,15 +27,6 @@ import {
   type DraftEditParams,
 } from "../services/draft-change/params.js";
 import { runOperationAction } from "./operation-turn.js";
-
-/** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
-export const USER_ACTION_TOOL_NAMES = [
-  "prune_snapshots",
-  "manage_snapshots",
-] as const;
-export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
-/** 不走工具、服务端直接执行的作者命令（「撤销上一步」）。 */
-const DIRECT_ACTION_NAMES = ["undo"] as const;
 
 /**
  * 按钮交给执行器的（写作版本 P2a 契约第四节）：新操作（核账、审稿……）出按钮的时候就带好请求号和 issuedAt，点几次都是这一次；
@@ -121,6 +109,24 @@ export type OperationAction =
     readonly requestKey: string;
     readonly issuedAt: string;
   }
+  /** 「撤销上一步」= 撤最近一次还没撤的改动；「撤回来」「撤销这次定稿」带着那次操作的号（片 4C）。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof HISTORY_CHANGE_KIND;
+    readonly mode: "undo";
+    readonly params: { readonly opId?: string };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
+  /** 「撤销到此」：整本恢复到那个存档（操作历史里的「恢复」走 HTTP，也是这一种）。 */
+  | {
+    readonly kind: "new";
+    readonly type: typeof HISTORY_CHANGE_KIND;
+    readonly mode: "restore";
+    readonly params: { readonly snapshot: string };
+    readonly requestKey: string;
+    readonly issuedAt: string;
+  }
   /** 「接着做」；等作者点按钮的（「换上 / 再改一版」「确认改设定」「确认改账」「确认定稿」）带上是哪个按钮、点的哪个、划掉了哪几处、填的几栏。 */
   | {
     readonly kind: "resume";
@@ -130,12 +136,7 @@ export type OperationAction =
   }
   | { readonly kind: "cancel"; readonly opId: string };
 
-/** 「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
-export type UserAction =
-  | OperationAction
-  | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
-  | { readonly toolName: "undo" };
+export type UserAction = OperationAction;
 
 /** 清单一次最多划掉多少处（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -189,7 +190,7 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     return { kind: "action", action: { kind: record.kind, opId } };
   }
   if (record.kind !== "new") return { kind: "invalid", reason: "不支持的操作。" };
-  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && record.type !== CANON_PROPOSE_KIND && record.type !== COMMIT_PREPARE_KIND && !isCandidateDecisionKind(record.type)) {
+  if (record.type !== "inspect.run" && record.type !== "draft.change" && record.type !== PLAN_PROPOSE_KIND && record.type !== SETTINGS_CHANGE_KIND && record.type !== LEDGER_CHANGE_KIND && record.type !== CANON_PROPOSE_KIND && record.type !== COMMIT_PREPARE_KIND && record.type !== HISTORY_CHANGE_KIND && !isCandidateDecisionKind(record.type)) {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
   const params = typeof record.params === "object" && record.params !== null && !Array.isArray(record.params) ? record.params as Record<string, unknown> : {};
@@ -221,6 +222,19 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
     const commit = readCommitPrepareParams("button", params);
     if ("invalid" in commit) return { kind: "invalid", reason: "缺少有效章号。" };
     return { kind: "action", action: { kind: "new", type: COMMIT_PREPARE_KIND, params: commit, ...stamp } };
+  }
+  if (record.type === HISTORY_CHANGE_KIND) {
+    // 按钮只有撤销和整本恢复（裁剪是对话里交的，停着等「确认裁剪」，点的是 resume）。
+    const mode = record.mode === "undo" || record.mode === "restore" ? record.mode : undefined;
+    const history = mode ? readHistoryChangeParams("button", params, mode) : { invalid: "不支持的操作。" };
+    if ("invalid" in history) return { kind: "invalid", reason: history.invalid };
+    if (history.mode === "undo") {
+      return { kind: "action", action: { kind: "new", type: HISTORY_CHANGE_KIND, mode: "undo", params: history.target ? { opId: history.target.opId } : {}, ...stamp } };
+    }
+    if (history.mode === "restore") {
+      return { kind: "action", action: { kind: "new", type: HISTORY_CHANGE_KIND, mode: "restore", params: { snapshot: history.snapshot }, ...stamp } };
+    }
+    return { kind: "invalid", reason: "不支持的操作。" };
   }
   const chapter = params.chapter;
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) return { kind: "invalid", reason: "缺少有效章号。" };
@@ -263,132 +277,29 @@ function parseOperationAction(record: Record<string, unknown>): ParsedUserAction
 export function parseUserAction(raw: unknown): ParsedUserAction {
   if (raw === undefined || raw === null) return { kind: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) return { kind: "invalid", reason: "动作格式不对。" };
-  const record = raw as Record<string, unknown>;
-  if (record.kind !== undefined) return parseOperationAction(record);
-  const toolName = record.toolName;
-  if (typeof toolName !== "string" || ![...USER_ACTION_TOOL_NAMES, ...DIRECT_ACTION_NAMES].includes(toolName as never)) {
-    return { kind: "invalid", reason: "不支持的操作。" };
-  }
-  if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
-  if (toolName === "manage_snapshots") return { kind: "invalid", reason: "不支持的操作。" };
-  const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
-  if (rawKeep === undefined || rawKeep === null || rawKeep === "") return { kind: "action", action: { toolName: "prune_snapshots" } };
-  if (typeof rawKeep !== "number" || !Number.isInteger(rawKeep) || rawKeep < 0) {
-    return { kind: "invalid", reason: "保留条数不对。" };
-  }
-  return { kind: "action", action: { toolName: "prune_snapshots", ...(rawKeep > 0 ? { keep: rawKeep } : {}) } };
+  return parseOperationAction(raw as Record<string, unknown>);
 }
 
-export type UserActionToolExecutor = (
-  toolName: UserActionToolName,
-  input: Record<string, unknown>,
-  requestContext: RequestContext,
-) => Promise<unknown>;
-
-/**
- * 执行一次用户结构化动作并把结果按 agent 回合同款事件推给前端。
- * 工具抛错 → tool-error + 如实文案（绝不静默）；标记只在本次执行期间存在，结束即清。
- */
+/** 执行一次用户结构化动作：交给执行器，按 agent 回合同款事件推给前端。 */
 export async function runUserAction(args: {
   readonly action: UserAction;
-  readonly requestContext: RequestContext;
-  readonly executeTool: UserActionToolExecutor;
   readonly sendEvent: (event: string, data: unknown) => void;
   readonly scrubber: { push(text: string): string; flush(): string };
-  readonly scrubError: (error: unknown) => string;
   /** 书目录（交给执行器的操作要它）。 */
   readonly projectDir?: string;
   /** 作者断开了（关页、网断）：交给执行器的操作照跑，只是不再转发。 */
   readonly signal?: AbortSignal;
 }): Promise<void> {
-  const { action } = args;
-  if ("kind" in action) {
-    if (!args.projectDir) {
-      const scrubbed = args.scrubber.push("没有打开的书，这一步没做。");
-      if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-      return;
-    }
-    await runOperationAction({
-      action,
-      projectDir: args.projectDir,
-      sendEvent: args.sendEvent,
-      scrubber: args.scrubber,
-      signal: args.signal ?? new AbortController().signal,
-    });
-    return;
-  }
-  if (action.toolName === "prune_snapshots") {
-    await runPruneAction({ ...args, action });
-    return;
-  }
-  await runUndoAction(args);
-}
-
-interface PruneLikeOutput {
-  readonly ok?: unknown;
-  readonly summary?: unknown;
-}
-
-/** 「确认裁剪」按钮：服务端直接真裁（带用户确认标记），结果按 agent 回合同款事件推给前端。 */
-async function runPruneAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
-  readonly action: Extract<UserAction, { readonly toolName: "prune_snapshots" }>;
-}): Promise<void> {
-  const { action } = args;
-  const toolCallId = `user-action-prune_snapshots-${Date.now()}`;
-  const input = { confirm: true, ...(action.keep ? { keep: action.keep } : {}) };
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
+  if (!args.projectDir) {
+    const scrubbed = args.scrubber.push("没有打开的书，这一步没做。");
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-  };
-  const flush = (): void => {
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: "prune_snapshots", args: input });
-  let output: unknown;
-  markUserConfirmedTool(args.requestContext, "prune_snapshots");
-  try {
-    output = await args.executeTool("prune_snapshots", input, args.requestContext);
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "prune_snapshots", error: message, retryable: true });
-    emitText(`裁剪操作历史没有完成：${message}。历史没有被改动，可以再点一次「确认裁剪」重试。`);
-    flush();
-    return;
-  } finally {
-    markUserConfirmedTool(args.requestContext, undefined);
-  }
-  args.sendEvent("tool-result", { toolCallId, toolName: "prune_snapshots", output });
-  const result = output as PruneLikeOutput | undefined;
-  const summary = typeof result?.summary === "string" && result.summary.trim()
-    ? result.summary.trim()
-    : result?.ok === true ? "操作历史已裁剪。" : "操作历史没有裁剪。";
-  emitText(summary);
-  flush();
-}
-
-/** 「撤销上一步」按钮：同对话里的撤销（manage_snapshots op=undo，优先整回合回退），回执照实说。 */
-async function runUndoAction(args: Omit<Parameters<typeof runUserAction>[0], "action">): Promise<void> {
-  const toolCallId = `user-action-manage_snapshots-${Date.now()}`;
-  const emitText = (text: string): void => {
-    const scrubbed = args.scrubber.push(text);
-    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    const rest = args.scrubber.flush();
-    if (rest) args.sendEvent("text-delta", { text: rest });
-  };
-  args.sendEvent("tool-call", { toolCallId, toolName: "manage_snapshots", args: { op: "undo" } });
-  let output: unknown;
-  try {
-    output = await args.executeTool("manage_snapshots", { op: "undo" }, args.requestContext);
-  } catch (error) {
-    const message = args.scrubError(error);
-    args.sendEvent("tool-error", { toolCallId, toolName: "manage_snapshots", error: message, retryable: true });
-    emitText(`没撤销成：${message}。什么都没改，可以再点一次「撤销上一步」。`);
     return;
   }
-  args.sendEvent("tool-result", { toolCallId, toolName: "manage_snapshots", output });
-  const result = output as { readonly undone?: unknown; readonly summary?: unknown } | undefined;
-  emitText(typeof result?.summary === "string" && result.summary.trim()
-    ? result.summary.trim()
-    : result?.undone === true ? "撤销好了。" : "没有可以撤销的改动。");
+  await runOperationAction({
+    action: args.action,
+    projectDir: args.projectDir,
+    sendEvent: args.sendEvent,
+    scrubber: args.scrubber,
+    signal: args.signal ?? new AbortController().signal,
+  });
 }

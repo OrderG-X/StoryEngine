@@ -149,7 +149,7 @@ export {
   type BookSnapshot,
 } from "./store/book.js";
 export { bumpRevision, revisionWrite } from "./store/revision.js";
-export { bookEpochWrite, draftStampOf, freshDraftGensWrite, readBookEpoch, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
+export { bookEpochWrite, draftStampOf, opBookEpoch, freshDraftGensWrite, readBookEpoch, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
 export {
@@ -222,9 +222,9 @@ export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResu
 export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
 export { historyApply, HistoryApplyArgs, type HistoryApplyResult } from "./history/apply.js";
-export { planRevert, readReceipts, type ImpactItem, type LaterWrite, type PlannedChange, type RevertPlan, type RevertTarget } from "./history/revert.js";
+export { HISTORY_APPLY_COMMAND, lastUndoable, planRevert, readReceipts, revertTargetOf, type ImpactItem, type LaterWrite, type PlannedChange, type RevertPlan, type RevertTarget } from "./history/revert.js";
 export { planRestore, type RestorePlan } from "./history/restore.js";
-export { HISTORY_FILE_MAX_BYTES, rangeDigestOf, readUndoableFiles, type HistoryReader } from "./history/store.js";
+export { HISTORY_FILE_MAX_BYTES, ledgerChapterOfPath, rangeDigestOf, readUndoableFiles, type HistoryReader } from "./history/store.js";
 export { refsOfDecision, refsOfEntry, type Ref, type RefWhere } from "./history/references.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
 export { bookImportText, BookImportTextArgs, TEXT_IMPORT_MAX_CHAPTERS, type BookImportTextResult } from "./import/text-import.js";

@@ -19,20 +19,17 @@
  */
 import { stepCountIs, type ModelMessage } from "ai";
 
-import { buildProjectRequestContext, parseLastTurnUndoHint, parseMessageRef } from "../agent/request-context.js";
+import { buildProjectRequestContext, parseMessageRef } from "../agent/request-context.js";
 import { endsByFlow, releaseTurnFlow } from "../agent/turn-flow.js";
 import { getStoryAgent, getStoryAgentModel, getStoryAgentToolNames, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
-import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
-import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
-import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
+import { parseUserAction, runUserAction } from "../agent/user-actions.js";
 import { finishOperationTurn, followOperation, settlesTurn } from "../agent/operation-turn.js";
 import { SUBMIT_TOOL_NAMES } from "../agent/tools/op-tools.js";
 import { reconcileOnOpen } from "../services/operations/executor.js";
 import { buildOperationSummary, operationSummaryText } from "../services/operations/summary.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
-import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import {
   assertStoryEngineProject,
@@ -576,8 +573,6 @@ async function handleAgentChat(
 
     // H3：把用户当前所在章注入 RequestContext（工具缺省回退用）+ system 上下文（引导 agent 默认作用于该章）。
     const currentChapter = readCurrentChapter(body.currentChapter);
-    // R7.2：带上「上一个有写盘回合的首个快照」（前端 turnSnapshots[0]）——undo 工具优先整回合回退。
-    const lastTurnUndoHint = parseLastTurnUndoHint(body.lastTurnUndoHint);
 
     const agent = await getStoryAgent();
     const pickedDirection = readPickedDirection(body.pickedDirection, currentChapter);
@@ -587,7 +582,6 @@ async function handleAgentChat(
       projectDir,
       currentChapter,
       [...readAuthorWords(messages), ...(pickedDirection ? [pickedDirection] : [])],
-      lastTurnUndoHint,
       pickedDirection && currentChapter !== undefined ? { chapter: currentChapter, text: pickedDirection } : undefined,
       messageRef,
     );
@@ -600,30 +594,26 @@ async function handleAgentChat(
     // 工具长调用期间 SSE 会长时间静默，靠心跳喂活客户端 90s 空闲看门狗，避免误判超时掐流。
     stopHeartbeat = startSseHeartbeat(res).stop;
 
-    // 结构化动作（作者点了按钮）：交给执行器或服务端直接做，不经模型、不过意图词表。
+    // 结构化动作（作者点了按钮）：交给执行器，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
       const actionStarted = Date.now();
-      const { usage: actionUsage, notices: actionNotices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(() => runUserAction({
+      const { usage: actionUsage, notices: actionNotices } = await withTokenMeter(() => runUserAction({
         action: parsedAction.action,
-        requestContext,
-        executeTool: executeUserActionTool,
         sendEvent,
         scrubber: createStreamingScrubber(),
-        scrubError: stringifyError,
-        // 交给执行器的操作要它。
         projectDir,
         // 按钮交的操作：作者断开了只是不再转发，操作照跑。
         signal: disconnectAbort.signal,
-      })));
+      }));
       // 按钮不经对话 AI，但定稿记账、核账这些步骤也调模型，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
       for (const notice of actionNotices) sendEvent("status", { message: notice });
       sendEvent("usage", actionUsage);
       const action = parsedAction.action;
-      const actionChapter = "kind" in action && action.kind === "new" && "chapter" in action.params ? action.params.chapter : currentChapter;
+      const actionChapter = action.kind === "new" && "chapter" in action.params ? action.params.chapter : currentChapter;
       await appendTurnMetrics(projectDir, actionChapter, {
         kind: "action",
-        label: "kind" in action ? (action.kind === "new" ? ("mode" in action ? `${action.type}:${action.mode}` : action.type) : `operation:${action.kind}`) : action.toolName,
+        label: action.kind === "new" ? ("mode" in action ? `${action.type}:${action.mode}` : action.type) : `operation:${action.kind}`,
         ms: Date.now() - actionStarted,
         usage: actionUsage,
       });
@@ -660,7 +650,7 @@ async function handleAgentChat(
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
     const endedByFlow = endsByFlow(requestContext);
-    const { result: { finishReason }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => {
+    const { result: { finishReason }, usage, notices } = await withTokenMeter(async () => {
       const turn = await runAgentTurn({
         fullStream: (
           await agent.stream([...modelMessages], {
@@ -690,7 +680,7 @@ async function handleAgentChat(
         }
       }
       return turn;
-    }));
+    });
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);
@@ -717,29 +707,6 @@ async function handleAgentChat(
     stopHeartbeat?.();
   }
 }
-
-/** 结构化动作的工具执行器：按白名单取工具、带同一 requestContext 直接 execute。 */
-const executeUserActionTool: UserActionToolExecutor = async (toolName, input, requestContext) => {
-  switch (toolName) {
-    case "manage_snapshots": {
-      const execute = manageSnapshotsTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
-    case "prune_snapshots": {
-      const execute = pruneSnapshotsTool.execute as unknown as (
-        input: Record<string, unknown>,
-        context: { readonly requestContext: typeof requestContext },
-      ) => Promise<unknown>;
-      return execute(input, { requestContext });
-    }
-    default:
-      // 白名单里加了动作却没在这接上：如实报错，绝不静默返回空（重构 P6 踩过：改这处 0 毫秒「没改成」）。
-      throw new Error(`这个操作还没接上（${toolName satisfies never}）。`);
-  }
-};
 
 function stringifyError(error: unknown): string {
   // 审计 Med：错误原文（fs errno 等）内嵌本地绝对路径，直达前端步骤卡/错误气泡——

@@ -118,7 +118,7 @@ function ReviseChoice({ op, pending, busy, onAction }: {
   );
 }
 
-const CONFIRM_LABELS = { settings: "确认改设定", ledger: "确认改账" } as const;
+const CONFIRM_LABELS = { settings: "确认改设定", ledger: "确认改账", undo: "全撤", prune: "确认裁剪" } as const;
 
 /**
  * 等作者点头的改动（片 3）：改设定碰到了作者写的、AI 提的改账（或理线索理出收了的）整批摆出来，

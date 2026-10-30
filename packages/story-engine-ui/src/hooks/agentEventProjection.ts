@@ -22,7 +22,7 @@ import type { InspectCardsData, OperationViewData, RewriteChoiceData } from "../
 import type { ChapterMessage, MessageCard, MessageSegment } from "../types.js";
 import type { BrainstormCardData, NextStepPrompt, OperationCardData } from "../type-defs/workspace.js";
 import { cardOf, hasCard, updateCard, withCard, withCards } from "../utils/messageCards.js";
-import { draftChoiceAction, pruneConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
+import { draftChoiceAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -62,8 +62,6 @@ export interface AgentToolResultOutput {
   /** suggest_next_steps 专属：agent 提议的下一步选项（agentChatClient 透传）。投影时挂到该消息→驱动「下一步」卡。 */
   readonly nextStepPrompt?: NextStepPrompt;
   readonly brainstorm?: BrainstormCardData;
-  /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
-  readonly pruneConfirmAction?: { readonly keep?: number };
   /** change_draft 专属：有稿的章 AI 不覆盖，挂「接着往下写」「重写这一章」按钮（服务端出的写稿动作）。 */
   readonly rewriteChoices?: readonly RewriteChoiceData[];
 }
@@ -137,7 +135,8 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // 改账：交一次改账 / 理线索（写作版本 P2a 片 3）；manage_ledger 是之前的工具（老会话回放仍显示原名）
   change_ledger: { stepLabel: "改账", card: null },
   manage_ledger: { stepLabel: "改账", card: null },
-  // 2026-10-12 编辑部 R3b 瘦身：manage_snapshots（撤销+裁剪）二合一入口
+  // 撤销 / 裁剪操作历史（写作版本 P2a 片 4C）；manage_snapshots 是之前的工具（老会话回放仍显示原名）
+  change_history: { stepLabel: "撤销 / 裁剪", card: null },
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "拟章纲", card: null },
@@ -276,14 +275,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       if (event.toolName === "suggest_next_steps" && event.output?.nextStepPrompt) {
         return withCard(withEffects, { type: "next-steps", prompt: event.output.nextStepPrompt });
       }
-      // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
-      if ((event.toolName === "prune_snapshots" || event.toolName === "manage_snapshots") && event.output?.pruneConfirmAction) {
-        const button = pruneConfirmAction(event.output.pruneConfirmAction);
-        return {
-          ...withEffects,
-          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
-        };
-      }
       // 有稿的章：AI 不覆盖，挂「接着往下写」（没定稿的）「重写这一章」按钮（作者档，点了才交）。
       if (event.toolName === "change_draft" && event.output?.rewriteChoices?.length) {
         const buttons = event.output.rewriteChoices.map(draftChoiceAction);
@@ -382,11 +373,12 @@ const CHANGE_TOOL_NAMES: Readonly<Record<NonNullable<OperationViewData["changed"
   settings: "change_settings",
   ledger: "change_ledger",
   canon: "propose_canon",
+  history: "change_history",
 };
 
 /**
- * 改设定、改账、定论改齐了：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」（线索板、故事地图也在设定本里）；
- * 定论还改了正文，标「正文·草稿」。同一个存档点只记一次。
+ * 改设定、改账、定论改齐了、撤了 / 恢复了：这一轮记下它打的存档点（「撤销到此」从它退），块头标「影响了设定本」（线索板、故事地图也在设定本里）；
+ * 定论、撤销 / 恢复还动了正文，标「正文·草稿」。同一个存档点只记一次。
  */
 function withChangeEffects(message: ChapterMessage, view: OperationViewData): ChapterMessage {
   const changed = view.changed;
@@ -395,7 +387,7 @@ function withChangeEffects(message: ChapterMessage, view: OperationViewData): Ch
   let next = changed.snapshotId && !known.has(changed.snapshotId)
     ? { ...message, turnSnapshots: [...(message.turnSnapshots ?? []), { toolName: CHANGE_TOOL_NAMES[changed.what], snapshotId: changed.snapshotId }] }
     : message;
-  const scope = changed.what === "canon" ? "full" : "foundation";
+  const scope = changed.what === "canon" || changed.what === "history" ? "full" : "foundation";
   const scopes = next.affectedScopes ?? [];
   if (!scopes.includes(scope)) next = { ...next, affectedScopes: [...scopes, scope] };
   return next;

@@ -49,7 +49,6 @@ function context(options: { readonly ref?: boolean } = {}): ToolExecutionContext
     1,
     ["改一下"],
     undefined,
-    undefined,
     options.ref === false ? undefined : { messageId: `msg-${seq}`, issuedAt: new Date().toISOString() },
   );
   return { requestContext } as unknown as ToolExecutionContext;

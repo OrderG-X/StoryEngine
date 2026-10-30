@@ -23,7 +23,7 @@ beforeEach(() => {
   useChatStore.getState().setMessages([{ id: "a1", role: "assistant", content: "第 9 章已定稿。" }]);
   useChatStore.getState().setChatLoading(false);
   vi.mocked(client.fetchSnapshots).mockResolvedValue([{ id: "s1", label: "定稿：第9章", timestamp: now - 60, kind: "commit" }]);
-  vi.mocked(client.restoreSnapshotApi).mockResolvedValue(undefined as never);
+  vi.mocked(client.restoreSnapshotApi).mockResolvedValue({ conclusion: "已恢复到「定稿：第9章」之前（第 9 章正文）。", changed: true });
 });
 
 afterEach(() => {
@@ -47,6 +47,13 @@ describe("操作历史里恢复后在对话里记一行（2026-10-25 桌面包�
     expect(last).toMatchObject({ role: "system", kind: "restore", content: "已恢复到「定稿：第9章」之前。" });
   });
 
+  it("书本来就是那个样子（什么都没动）→ 不记「恢复到了」，提示照服务端那句说", async () => {
+    vi.mocked(client.restoreSnapshotApi).mockResolvedValueOnce({ conclusion: "书现在就是「定稿：第9章」之前的样子，没什么要恢复的。", changed: false });
+    await restoreFirst();
+    await waitFor(() => expect(useNavigationStore.getState().toast).toContain("没什么要恢复的"));
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["a1"]);
+  });
+
   it("对话正在跑 → 不往里插（那一轮跑完自己报盘上的真相）", async () => {
     useChatStore.getState().setChatLoading(true);
     await restoreFirst();
@@ -59,7 +66,10 @@ describe("操作历史里恢复后在对话里记一行（2026-10-25 桌面包�
 describe("恢复期间占着工作区（第 6 轮复核 T10）", () => {
   it("恢复途中工作区被占着，开不了新的一轮；恢复完交还", async () => {
     let busyDuringRestore = false;
-    vi.mocked(client.restoreSnapshotApi).mockImplementationOnce(async () => { busyDuringRestore = isWorkspaceBusy(); });
+    vi.mocked(client.restoreSnapshotApi).mockImplementationOnce(async () => {
+      busyDuringRestore = isWorkspaceBusy();
+      return { conclusion: "已恢复。", changed: true };
+    });
     await restoreFirst();
     await waitFor(() => expect(chatSync.saveChatNow).toHaveBeenCalled());
     expect(busyDuringRestore).toBe(true);

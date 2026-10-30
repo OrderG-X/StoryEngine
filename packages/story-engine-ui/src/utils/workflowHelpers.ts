@@ -59,13 +59,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       requiresConfirmation: true,
       endpoint: "/api/draft/revision/apply",
     },
-    "prune-confirm": {
-      id: "prune-confirm",
-      label: "确认裁剪",
-      description: "把操作历史裁到预览里说的条数；裁前完整历史自动备份到项目目录外。",
-      permission: "destructive_write",
-      requiresConfirmation: false,
-    },
     "rewrite-confirm": {
       id: "rewrite-confirm",
       label: "重写这一章",
@@ -89,16 +82,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
     },
   };
   return actions[id] ?? actions["generate-steering"];
-}
-
-/** 「确认裁剪」按钮：点了发结构化动作、由服务端直接真裁（裁剪快照预览之后出现）。 */
-export function pruneConfirmAction(target?: { readonly keep?: number }): SuggestedAction {
-  return { ...suggestedAction("prune-confirm"), pruneTarget: { ...(target?.keep ? { keep: target.keep } : {}) } };
-}
-
-/** 把作者档按钮挂进这一轮的建议条。同一种按钮一轮只摆一个（定稿、裁剪这类）：后来的换掉先前的。 */
-export function withAuthorButton(actions: readonly SuggestedAction[] | undefined, button: SuggestedAction): SuggestedAction[] {
-  return [...(actions ?? []).filter((action) => action.id !== button.id), button];
 }
 
 /**

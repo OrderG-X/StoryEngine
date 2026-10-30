@@ -2,20 +2,16 @@
  * AI 写工作稿的唯一通道（写作版本 P1b）：出稿、接着写、去 AI 味、改这处、改稿，全走这里，再走核心的
  * draft.applyGenerated 命令（书锁 + 事务落盘，进程被杀不留半截稿）。服务端别处不再自己拼工作稿文件、不再裸写 drafts/。
  *
- * 规矩：AI 写好的一份先存成候选（draft-candidates.ts，「在写」），再试着换上；只在两样都对得上时换上——
+ * 只在操作的应用步骤里换上（写作版本 P2a 设计第三节、6.3、6.4；片 4C 删了操作外那条路）。只在两样都对得上时换上——
  *  - 工作稿还是开工时那一版（baseVersion）：模型跑着的几十秒到几分钟里作者存了稿、撤销或恢复过，就不换；
  *  - 书还是开工时那样（开工时读的真相依据和写的时候用过的材料，在书锁里、收拾完写到一半的事务之后核）：前文、设定、作者裁定改过，
  *    这版是照旧的写的，也不换。
- * 换上了删这份候选（只删这一份：别的没处理的候选不动）；没换上（上面两样对不上、写盘出错）这份标成「写好了」留着，
- * 如实告诉作者，稿纸上可以「换成 AI 这版」。白跑的几分钟不丢，作者那份也不被盖掉。
+ * 没换上（上面两样对不上、写盘出错）留稳定号的候选（作者处理过的不复活），如实告诉作者，稿纸上可以「换成 AI 这版」。
  *
- * 存档点在换上前、同一把书锁里打（真要写才打）：撤销、定稿切不进中间，没换上的不在操作历史里多出一条。
- * 调用方不要把模型调用放进书锁：作者存稿会被卡住。同一章的 AI 改稿要排队的，用 oneAiWriterPerChapter。
- *
- * 在操作的应用步骤里（写作版本 P2a 设计第三节、6.3、6.4）：不先存「在写」的候选（这版在前面步骤的检查点里）；核心命令带
- * `op`（幂等键 = opId:stepId，有回执就回放、不再写）和 precondition（书锁里先核栅栏、再核写稿用过的材料，回放之后才核）；
- * 换上了，同一次持锁里按键记改句记录、字数；没换上，留稳定号的候选（作者处理过的不复活）。栅栏不过 → 抛 OperationStopped。
+ * 核心命令带 `op`（幂等键 = opId:stepId，有回执就回放、不再写）和 precondition（书锁里先核栅栏、再核写稿用过的材料，回放之后才核）；
+ * 存档点在换上前、同一把书锁里打（真要写才打）。换上了，同一次持锁里按键记改句记录、字数。栅栏不过 → 抛 OperationStopped。
  * 换上之后的事出了意外：查回执，有就报换上了 + 警告，不改成「没成功」。
+ * 调用方不要把模型调用放进书锁：作者存稿会被卡住。同一章的 AI 改稿要排队的，用 oneAiWriterPerChapter。
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -23,15 +19,14 @@ import { draftApplyGenerated, draftPath, fail, opCommandKey, readCommandReceipt,
 import { firstMovedMaterial, type MaterialRead, type MovedMaterial } from "../book/material-reads.js";
 import { MIRROR_FILES } from "../book/mirror/build.js";
 import { MIRROR_MARKER } from "../book/mirror/sync.js";
-import { keepOperationCandidateLocked, saveDraftCandidate, settleDraftCandidate, type ApplyKeptReason, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
+import { keepOperationCandidateLocked, type ApplyKeptReason, type DraftCandidateSource, type DraftKeptReason } from "./draft-candidates.js";
 import { publishFixLogLocked, type FixRecord } from "./fix-log.js";
 import { currentOperation, OperationStopped, type OperationContext } from "./operations/context.js";
 import { checkFence } from "./operations/fence.js";
 import { FENCE_CODES } from "./operations/command.js";
 import { scrubLocalAbsolutePaths } from "./local-path-scrubber.js";
 import { runWithLazySnapshot } from "./snapshot.js";
-import { chapterWordsNow, publishChapterWordsLocked, recordChapterWords } from "./word-stats.js";
-import { TURN_ABORTED_MESSAGE, turnAborted } from "./turn-abort.js";
+import { chapterWordsNow, publishChapterWordsLocked } from "./word-stats.js";
 
 export class AiDraftWriteError extends Error {
   constructor(readonly code: string, message: string) {
@@ -61,8 +56,6 @@ export interface AiDraftInput {
   readonly source: DraftCandidateSource;
   /** 换上前打的存档点叫什么（操作历史里看的）；不给用核心的「AI 写稿：第 N 章」。 */
   readonly snapshotLabel?: string;
-  /** 开写时已经存下的那份候选（出稿流程）：就用它，不另存一份。操作里不用（候选号由操作的号定）。 */
-  readonly candidateId?: string;
   /** 操作里：这次按核账改了哪些句子（零条也给），换上时同一次持锁里记进改句记录。 */
   readonly fixes?: readonly FixRecord[];
 }
@@ -117,77 +110,11 @@ export function keptMessage(chapter: number, reason: DraftKeptReason, detail?: s
 
 const errorText = (error: unknown): string => scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
 
+/** AI 稿只在操作的应用步骤里换上（写作版本 P2a 片 4C）：不在操作里的如实挡下，不写。 */
 export async function applyAiDraft(projectDir: string, input: AiDraftInput): Promise<AiDraftOutcome> {
   const operation = currentOperation();
-  if (operation) return applyInOperation(projectDir, input, operation);
-  const title = input.title.trim();
-  const path = join(projectDir, draftPath(input.chapter));
-  const candidateOf = (status: "writing" | "ready", reason?: ApplyKeptReason, id?: string) => saveDraftCandidate(projectDir, {
-    chapter: input.chapter,
-    title,
-    body: input.body,
-    baseVersion: input.baseVersion,
-    basisDigest: input.basis.digest,
-    source: input.source,
-    status,
-    ...(reason ? { reason } : {}),
-    ...(id ? { id } : {}),
-  });
-  // 先存下（写作版本 P1b 第 3 轮复核）：换上的途中写盘出错、进程被杀，AI 这版都还在。存不下来照样试着换上，换不上再存一次。
-  let candidateId = input.candidateId;
-  try {
-    candidateId = (await candidateOf("writing", undefined, candidateId)).id;
-  } catch (error) {
-    console.warn(`[ai-draft] 第 ${input.chapter} 章 AI 这版换上前没存成候选：${errorText(error)}`);
-  }
-  const keep = async (reason: ApplyKeptReason, detail?: string): Promise<AiDraftOutcome> => {
-    let kept;
-    try {
-      kept = await candidateOf("ready", reason, candidateId);
-    } catch (error) {
-      throw new AiDraftWriteError("not_kept", `第 ${input.chapter} 章 AI 这版没换上（${whyNotApplied(reason, detail)}），也没能另外存下来：${errorText(error)}`);
-    }
-    return { applied: false, reason, candidateId: kept.id, message: keptMessage(input.chapter, reason, detail) };
-  };
-  let outcome: AiDraftOutcome | "aborted";
-  try {
-    // 先收拾写到一半的事务（老格式、新核心都收），再在同一把书锁里核材料、依据、底版（P1 第 17 轮 AE3）：
-    // 写手读材料时正赶上别的写断在半路，读到的是马上要回滚的那份；先核后收拾，回滚后的书和这版对不上也看不出来。
-    const settled = await withSettledBook(projectDir, async (): Promise<AiDraftOutcome | "aborted"> => {
-      // 作者喊停之后后到的稿不落盘，也不留候选（锁里再问一次：等锁的工夫也可能停了）。
-      if (turnAborted()) return "aborted";
-      const movedMaterial = await firstMovedMaterial(projectDir, input.materials);
-      if (movedMaterial) return keep("basis_moved", describeMovedMaterial(movedMaterial));
-      // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
-      const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
-      // 依据交给 runner 核（事务已在上面收拾过，回滚会换代次），途中读到的半截真相一律对不上。
-      const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
-        runCommand(projectDir, draftApplyGenerated, {
-          chapter: input.chapter,
-          body: input.body,
-          title,
-          baseVersion: input.baseVersion,
-        }, { caller: "ai", snapshot, basis: input.basis }), input.snapshotLabel);
-      if (!result.ok && result.code === "basis_changed") return keep("basis_moved");
-      if (!result.ok && result.code === "draft_conflict") return keep("draft_moved");
-      if (!result.ok) return keep("apply_failed", result.message);
-      // 换上了：只删这一份（别的候选作者还没处理，不动）。
-      if (candidateId) await settleDraftCandidate(projectDir, candidateId);
-      if (!result.result.unchanged) await recordChapterWords(projectDir, input.chapter, "ai", wordsBefore);
-      const content = await readFile(path, "utf-8");
-      return { applied: true, path, content, version: result.result.version, unchanged: result.result.unchanged, ...(snapshotId ? { snapshotId } : {}) };
-    });
-    outcome = settled.ok ? settled.value : await keep("apply_failed", settled.message);
-  } catch (error) {
-    if (error instanceof AiDraftWriteError) throw error;
-    // 存档点、写盘这些出了意外：工作稿没动（核心事务回滚），AI 这版留着。
-    outcome = await keep("apply_failed", errorText(error));
-  }
-  if (outcome === "aborted") {
-    if (candidateId) await settleDraftCandidate(projectDir, candidateId);
-    throw new AiDraftWriteError("turn_aborted", TURN_ABORTED_MESSAGE);
-  }
-  return outcome;
+  if (!operation) throw new AiDraftWriteError("not_in_operation", "AI 稿只在操作里换上，这次没写。");
+  return applyInOperation(projectDir, input, operation);
 }
 
 const queues = new Map<string, Promise<unknown>>();
@@ -243,7 +170,7 @@ async function applyInOperation(projectDir: string, input: AiDraftInput, operati
     return { applied: true, path, content, version, unchanged, ...(snapshotId ? { snapshotId } : {}), ...(warnings.length > 0 ? { warnings } : {}) };
   };
   try {
-    // 先收拾写到一半的事务再量字数、换上（同非操作路径，P1 第 17 轮 AE3）；收拾不了如实留成候选。
+    // 先收拾写到一半的事务再量字数、换上（P1 第 17 轮 AE3：写手读材料时正赶上别的写断在半路，先核后收拾就看不出来）；收拾不了如实留成候选。
     const settled = await withSettledBook(projectDir, async (): Promise<AiDraftOutcome> => {
       let moved: MovedMaterial | undefined;
       const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);

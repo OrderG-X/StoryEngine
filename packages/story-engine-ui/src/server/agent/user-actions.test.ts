@@ -1,12 +1,10 @@
-import { RequestContext } from "@mastra/core/di";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { isUserConfirmedTool } from "./request-context.js";
 import { humanizeToolNames, nextDraftChapterAfter, readCommittedChapterNumbers } from "./next-steps.js";
-import { parseUserAction, runUserAction, type UserActionToolExecutor } from "./user-actions.js";
+import { parseUserAction } from "./user-actions.js";
 
 describe("parseUserAction 结构化动作解析", () => {
   it("线索板 / 梗概上直接改账：只认作者直接改、每笔认得出才收；老的「确认改账」按钮（ledger_decision）不再认", () => {
@@ -187,90 +185,31 @@ describe("humanizeToolNames", () => {
   });
 });
 
-describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
-  it("parseUserAction：keep 可缺省、数字字符串宽容、0=缺省、负数/小数拒绝；不需要章号", () => {
-    expect(parseUserAction({ toolName: "prune_snapshots" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });
-    expect(parseUserAction({ toolName: "prune_snapshots", keep: "50" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots", keep: 50 } });
-    expect(parseUserAction({ toolName: "prune_snapshots", keep: 0 })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });
-    expect(parseUserAction({ toolName: "prune_snapshots", keep: -1 }).kind).toBe("invalid");
-    expect(parseUserAction({ toolName: "prune_snapshots", keep: 2.5 }).kind).toBe("invalid");
-  });
+describe("撤销 / 整本恢复按钮（history.change，片 4C）", () => {
+  const stamp = { requestKey: "undo-key-1", issuedAt: "2026-10-30T08:00:00.000Z" };
+  const OP = "op-0123456789abcdef0123";
 
-  it("runUserAction：带确认标记执行 confirm=true，结束即清；结果摘要如实转述，不出下一步卡", async () => {
-    const requestContext = new RequestContext();
-    let markedDuringExecution = false;
-    let receivedInput: Record<string, unknown> | undefined;
-    const executeTool: UserActionToolExecutor = async (toolName, input, context) => {
-      markedDuringExecution = isUserConfirmedTool({ requestContext: context } as never, toolName);
-      receivedInput = input;
-      return { ok: true, dryRun: false, summary: "已把操作历史裁到最近 50 条。" };
-    };
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "prune_snapshots", keep: 50 },
-      requestContext,
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
+  it("撤销上一步不带号；「撤回来」「撤销这次定稿」带那次操作的号，号不对的不做（当成「上一次」就撤错了）", () => {
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp })).toEqual({
+      kind: "action",
+      action: { kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp },
     });
-    expect(markedDuringExecution).toBe(true);
-    expect(isUserConfirmedTool({ requestContext } as never, "prune_snapshots")).toBe(false);
-    expect(receivedInput).toEqual({ confirm: true, keep: 50 });
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
-    expect(events[2]!.data.text).toBe("已把操作历史裁到最近 50 条。");
+    const withOp = parseUserAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: OP }, ...stamp });
+    expect(withOp).toMatchObject({ kind: "action", action: { params: { opId: OP } } });
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: "char-1" }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: 3 }, ...stamp }).kind).toBe("invalid");
   });
 
-  it("执行抛错：tool-error + 如实说没完成、历史没动、可再点", async () => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action: { toolName: "prune_snapshots" },
-      requestContext: new RequestContext(),
-      executeTool: async () => { throw new Error("磁盘满了"); },
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: (e) => (e instanceof Error ? e.message : String(e)),
+  it("整本恢复要存档号；裁剪没有按钮（对话里交，点的是「确认裁剪」= resume）；旧的按工具名的动作不再收", () => {
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "restore", params: { snapshot: "a".repeat(40) }, ...stamp })).toMatchObject({
+      kind: "action",
+      action: { mode: "restore", params: { snapshot: "a".repeat(40) } },
     });
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
-    expect(String(events[2]!.data.text)).toContain("没有完成");
-    expect(String(events[2]!.data.text)).toContain("确认裁剪");
-  });
-});
-
-describe("「撤销上一步」按钮结构化动作（重构 P4：走对话通道）", () => {
-  const run = async (action: Parameters<typeof runUserAction>[0]["action"], executeTool: UserActionToolExecutor) => {
-    const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
-      action,
-      requestContext: new RequestContext(),
-      executeTool,
-      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
-      scrubber: { push: (t: string) => t, flush: () => "" },
-      scrubError: String,
-    });
-    return events;
-  };
-
-  it("解析：undo 不要章号；manage_snapshots 不收（裁剪另有确认按钮）", () => {
-    expect(parseUserAction({ toolName: "undo" })).toEqual({ kind: "action", action: { toolName: "undo" } });
-    expect(parseUserAction({ toolName: "manage_snapshots", op: "prune" }).kind).toBe("invalid");
-  });
-
-  it("撤销上一步：调 manage_snapshots op=undo，工具卡名就是 manage_snapshots（前端据 undone 接管磁盘真值）", async () => {
-    const calls: { toolName: string; input: unknown }[] = [];
-    const events = await run({ toolName: "undo" }, async (toolName, input) => {
-      calls.push({ toolName, input });
-      return { ok: true, undone: true, summary: "撤销了上一步：写第 3 章。" };
-    });
-    expect(calls).toEqual([{ toolName: "manage_snapshots", input: { op: "undo" } }]);
-    expect(events[0]).toMatchObject({ event: "tool-call", data: { toolName: "manage_snapshots" } });
-    expect(events[1]).toMatchObject({ event: "tool-result", data: { toolName: "manage_snapshots", output: { undone: true } } });
-    expect(events.at(-1)!.data.text).toBe("撤销了上一步：写第 3 章。");
-  });
-
-  it("没东西可撤 → 如实说没有", async () => {
-    const events = await run({ toolName: "undo" }, async () => ({ ok: true, undone: false }));
-    expect(events.at(-1)!.data.text).toBe("没有可以撤销的改动。");
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "restore", params: { snapshot: "../x" }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "prune", params: { keep: 50 }, ...stamp }).kind).toBe("invalid");
+    expect(parseUserAction({ kind: "new", type: "history.change", mode: "undo", params: {} }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "undo" }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "prune_snapshots", keep: 50 }).kind).toBe("invalid");
   });
 });
 

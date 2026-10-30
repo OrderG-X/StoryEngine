@@ -18,7 +18,6 @@ import { clearWordStatsKeys } from "../../lib/word-stats.js";
 import { freezeModelChoices, frozenCompatAllowance, isFrozenModels, type FrozenModels, type ModelTaskProfileKey } from "../../lib/llm-client.js";
 import { readOperationInput } from "../../lib/operations/inputs.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
-import { outsideTurn } from "../../lib/turn-abort.js";
 import { withUsageBook } from "../../lib/usage-scope.js";
 import { listAttempts, settleAbandonedAttempt, unsettledUnknowns } from "../../lib/operations/attempts.js";
 import { inputHashOf, readCheckpoint, writeCheckpoint } from "../../lib/operations/checkpoints.js";
@@ -32,7 +31,7 @@ import {
   StopSignal,
   type OperationContext,
 } from "../../lib/operations/context.js";
-import { stoppedError, withFence } from "../../lib/operations/fence.js";
+import { epochStillOurs, stoppedError, withFence } from "../../lib/operations/fence.js";
 import { clearDraftStream, draftStreamCatchUp, emitLive, onLive, type LiveEvent } from "../../lib/operations/live.js";
 import {
   acceptOperation,
@@ -301,8 +300,8 @@ async function claimRun(bookDir: string, opId: string, options: StartOptions): P
 }
 
 function launch(bookDir: string, record: OperationRecord): void {
-  // 不跟着交它的那一轮：作者断开、喊停那一轮都不算停这次操作（停操作走 cancelOperation）。
-  track(outsideTurn(() => execute(bookDir, record)));
+  // 不跟着交它的那一轮：作者断开不算停这次操作（停操作走 cancelOperation）。
+  track(execute(bookDir, record));
 }
 
 /** 在跑的（连开跑前换状态那一下、收尾那一步）；只给单测等它们跑完。 */
@@ -447,7 +446,7 @@ async function recordApplied(operation: OperationContext, stepId: string): Promi
   });
 }
 
-/** 配方跑完：书锁里核还是这一次在跑、书的纪元没换，才记成功；纪元换了记 obsolete。书不在了读不到记录，什么都不写。 */
+/** 配方跑完：书锁里核还是这一次在跑、书的纪元没换（或是这次自己整本恢复换的），才记成功；纪元换了记 obsolete。书不在了读不到记录，什么都不写。 */
 async function finish(operation: OperationContext, result: OperationResult): Promise<void> {
   const { bookDir, opId, runEpoch } = operation;
   await withBookThenRecord(bookDir, opId, async () => {
@@ -455,7 +454,7 @@ async function finish(operation: OperationContext, result: OperationResult): Pro
     await updateOperationLocked(bookDir, opId, (current) => {
       if (current.state !== "running" || current.runEpoch !== runEpoch) return undefined;
       const { currentStep: _step, ...rest } = current;
-      if (epoch !== operation.bookEpoch) return { ...rest, state: "obsolete", failure: EPOCH_CHANGED };
+      if (!epochStillOurs(operation, epoch)) return { ...rest, state: "obsolete", failure: EPOCH_CHANGED };
       return { ...rest, state: "succeeded", result: { ...result, schema: OPERATION_RESULT_SCHEMA } };
     });
   });
@@ -742,6 +741,22 @@ export async function subscribeOperation(bookDir: string, opId: string, send: (e
   buffer = undefined;
   for (const event of pending) deliver(event);
   return unsubscribe;
+}
+
+/** 等一次操作到「结束 / 等作者 / 停着」（交了就要等结果的 HTTP 出口用，如整本恢复）。记录不在返回 undefined。 */
+export async function untilSettled(bookDir: string, opId: string): Promise<OperationRecord | undefined> {
+  let last: OperationRecord | undefined;
+  let finish!: () => void;
+  const settled = new Promise<void>((resolve) => { finish = resolve; });
+  const off = await subscribeOperation(bookDir, opId, (event) => {
+    if (event.type === "live") return;
+    last = event.record;
+    if (isTerminal(event.record.state) || event.record.state === "waiting_author" || event.record.state === "paused") finish();
+  });
+  if (!off) return undefined;
+  await settled;
+  off();
+  return last;
 }
 
 /** 测试用：清登记的配方和开书对账的记号。 */

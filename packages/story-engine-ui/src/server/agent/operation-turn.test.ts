@@ -349,7 +349,7 @@ describe("写稿按钮（draft.change）", () => {
 });
 
 function toolContext(messageId?: string): ToolExecutionContext {
-  const requestContext = buildProjectRequestContext(book, 1, ["帮我核一下第一章"], undefined, undefined, messageId ? { messageId, issuedAt: new Date().toISOString() } : undefined);
+  const requestContext = buildProjectRequestContext(book, 1, ["帮我核一下第一章"], undefined, messageId ? { messageId, issuedAt: new Date().toISOString() } : undefined);
   return { requestContext } as unknown as ToolExecutionContext;
 }
 
@@ -510,7 +510,7 @@ describe("想走法（plan.propose，片 2D）", () => {
   const usePlan = (reply: string) => registerRecipe(createPlanProposeRecipe({ plannerCallModel: planner(reply), readerCallModel: planner("{}"), modelProblem: () => undefined }));
   const planChapter = (input: Record<string, unknown>, words: readonly string[], messageId: string) =>
     (planChapterTool as unknown as { execute: (input: unknown, context: ToolExecutionContext) => Promise<SubmitReceipt> }).execute(input, {
-      requestContext: buildProjectRequestContext(book, 1, words, undefined, undefined, { messageId, issuedAt: new Date().toISOString() }),
+      requestContext: buildProjectRequestContext(book, 1, words, undefined, { messageId, issuedAt: new Date().toISOString() }),
     } as unknown as ToolExecutionContext);
 
   it("对话交：想法是作者原话才带，不是的不带、说清楚；收尾一句结论，记录里有几种走法（界面画走法卡）", async () => {

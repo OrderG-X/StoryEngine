@@ -177,8 +177,9 @@ export type SnapshotListApiResponse =
   | { readonly ok: true; readonly snapshots: readonly SnapshotEntryDto[] }
   | { readonly ok: false; readonly error: string };
 
+/** 恢复的结果：做完了的那次操作（结论、改了哪些在里面，前端按操作视图读）。 */
 export type SnapshotRestoreApiResponse =
-  | { readonly ok: true; readonly restored: SnapshotEntryDto }
+  | { readonly ok: true; readonly operation: unknown }
   | { readonly ok: false; readonly error: string };
 
 export type ModelSettingsStatus = "missing" | "loaded" | "invalid_json" | "invalid_schema";

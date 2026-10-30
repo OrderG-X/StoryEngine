@@ -21,7 +21,7 @@ import { createConfiguredWriterClient } from "../writing/writer-client.js";
 import { runFastDraft } from "../writing/fast-draft-writer.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readMaterialWorld } from "../book/material-reads.js";
-import { applyAiDraft } from "../lib/ai-draft-write.js";
+import { applyAiDraftInOperation as applyAiDraft } from "../services/operations/test-helpers.js";
 import { readDraftCandidate, readDraftRecovery } from "../lib/draft-candidates.js";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";

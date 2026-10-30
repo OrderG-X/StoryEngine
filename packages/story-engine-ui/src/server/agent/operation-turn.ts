@@ -16,12 +16,13 @@ import { LEDGER_CHANGE_KIND } from "../services/operations/recipes/ledger-change
 import { CANON_PROPOSE_KIND, canonInputOf, type CanonConfirmPreview, type CanonProposeBody, type CanonProposeParams } from "../services/operations/recipes/canon-propose.js";
 import { COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
 import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
+import { HISTORY_CHANGE_KIND, type HistoryChangeBody } from "../services/operations/recipes/history-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
 import { operationView, operationWhat } from "../services/operations/view.js";
 import type { InspectMode } from "../services/inspect-service.js";
 import { DRAFT_ADOPT_KIND, DRAFT_CHANGE_KIND, readDraftChangeParams } from "../services/draft-change/params.js";
 import { draftRetryChoices, finishDraftOperation } from "./draft-finish.js";
-import { checkChapterAction, commitChoice, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
+import { checkChapterAction, commitChoice, humanizeToolNames, newCanonAction, newOperationAction, newPlanAction, recheckCanonAction, resolveNextDraftTarget, sendNextSteps, settingsAcceptAction, undoAction, writeNextChoice, type NextStepChoice } from "./next-steps.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { receiptOf } from "./tools/op-tools.js";
 import type { OperationAction } from "./user-actions.js";
@@ -207,6 +208,11 @@ export async function finishOperationTurn(args: {
       } else if (canon && !canon.applied && (canon.card.failures.length > 0 || canon.card.missed.length > 0)) {
         sendNextSteps(args.sendEvent, "接下来？", [{ label: "重新查", intent: `重新查定论「${canon.card.canon}」`, recommended: true, action: recheckCanonAction(canon.card) }]);
       }
+      // 撤了、恢复了：给「撤回来」（撤这一次撤销 / 恢复本身）。
+      const history = record.kind === HISTORY_CHANGE_KIND ? result?.body as Partial<HistoryChangeBody> | undefined : undefined;
+      if (history && history.mode !== "prune" && (history.paths?.length ?? 0) > 0) {
+        sendNextSteps(args.sendEvent, "接下来？", [{ label: "撤回来", intent: `把刚才的${what}撤回来`, action: undoAction(record.opId) }]);
+      }
       // AI 刚写进设定本的（作者口述让 AI 记的）：给「认下」，点了算作者写的。
       const accept = record.kind === SETTINGS_CHANGE_KIND ? (result?.body as Partial<SettingsChangeBody> | undefined)?.accept : undefined;
       if (accept) sendNextSteps(args.sendEvent, "接下来？", [{ label: "认下", intent: `认下${accept.label}`, action: settingsAcceptAction(record.opId) }]);
@@ -255,6 +261,8 @@ export async function finishOperationTurn(args: {
             ? `${record.mode === "review" ? "理出来收了的" : "要改的账"}在卡上：点「确认改账」才记。`
             : record.kind === CANON_PROPOSE_KIND
               ? canonWaitingText(record)
+              : record.kind === HISTORY_CHANGE_KIND
+                ? (record.mode === "prune" ? "要裁的在卡上：点「确认裁剪」才裁。" : "这次之后又改过的几处在卡上：点「全撤」才撤。")
               : record.kind === COMMIT_PREPARE_KIND && chapter !== undefined
                 // 清单（要你看的、自动记下的、提醒）在弹窗和对话小卡里，回话只说一句（刷新后弹窗没开也说得通）。
                 ? `第 ${chapter} 章可以定稿，清单在卡上：点「确认定稿」才定。`

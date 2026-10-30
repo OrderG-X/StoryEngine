@@ -457,6 +457,33 @@ describe("streamAgentChat", () => {
     expect(readStoredOperationAction({ kind: "new", type: "ledger.change", mode: "author", params: { changes: [{ op: "resolve", id: "t1-1" }] }, ...stamp })).toBeUndefined();
   });
 
+  it("撤销 / 裁剪（片 4C）：停着等「全撤」「确认裁剪」带那几处；做完真改了盘才算「改了」（带存档点），没改、裁剪不算；撤销按钮存下来读回来", async () => {
+    const historyView = (mode: string, overrides: Record<string, unknown>) => opView(mode, null, { kind: "history.change", what: "撤销", chapter: undefined, ...overrides });
+    const body = (mode: string, paths: readonly string[], snapshotId?: string) => ({ kind: "history.change", mode, paths, ...(snapshotId ? { snapshotId } : {}) });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: historyView("undo", { state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-undo-2", kind: "undo_confirm", decisions: ["apply"], preview: { lines: ["第 1 章工作稿：这次之后别的改动又改过"], notes: ["要撤的是…"] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: historyView("prune", { state: "waiting_author", result: undefined, pendingActions: [
+        { actionId: "confirm-prune", kind: "prune_confirm", decisions: ["apply"], preview: { lines: ["更早的 30 条折成一条"], notes: [] }, decided: false },
+      ] }) }),
+      frame("operation", { type: "record", operation: historyView("undo", { result: { schema: "operation-result/1", summary: "撤好了", body: body("undo", ["chapters/0001.md"], "s-7") } }) }),
+      frame("operation", { type: "record", operation: historyView("undo", { result: { schema: "operation-result/1", summary: "没有能撤的改动了。", body: body("undo", []) } }) }),
+      frame("operation", { type: "record", operation: historyView("prune", { result: { schema: "operation-result/1", summary: "裁好了", body: body("prune", []) } }) }),
+    ]);
+    expect(views[0]?.pending).toEqual({ kind: "confirm", what: "undo", actionId: "confirm-undo-2", decisions: ["apply"], lines: ["第 1 章工作稿：这次之后别的改动又改过"], notes: ["要撤的是…"] });
+    expect(views[1]?.pending).toMatchObject({ kind: "confirm", what: "prune", actionId: "confirm-prune" });
+    expect(views[2]?.changed).toEqual({ what: "history", snapshotId: "s-7" });
+    expect(views[3]?.changed).toBeUndefined();
+    expect(views[4]?.changed).toBeUndefined();
+    const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: OP_ID }, ...stamp })).toEqual({ kind: "new", type: "history.change", mode: "undo", params: { opId: OP_ID }, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp })).toEqual({ kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp });
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "undo", params: { opId: "op-1" }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "restore", params: { snapshot: "a".repeat(40) }, ...stamp })).toBeUndefined();
+    expect(readStoredOperationAction({ kind: "new", type: "history.change", mode: "prune", params: {}, ...stamp })).toBeUndefined();
+  });
+
   it("改稿按钮、等作者点的「接着做」防御解析（和服务端同一口径）：章号、原文、决定不对的不认", () => {
     const stamp = { requestKey: "rk-1", issuedAt: "2026-10-30T00:00:00.000Z" };
     expect(readStoredOperationAction({ kind: "new", type: "draft.change", mode: "fix", params: { chapter: 4, fixes: [{ targetText: "旧。", revisionGoal: "对上前文" }] }, ...stamp }))

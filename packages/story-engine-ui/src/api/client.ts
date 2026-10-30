@@ -18,6 +18,7 @@ import type {
   StateOverviewApiResponse,
   StateOverviewRequest,
 } from "./types.js";
+import { readOperationView } from "./agentChatClient.js";
 import { fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
 
@@ -71,19 +72,31 @@ export async function fetchSnapshots(projectPath: string, signal?: AbortSignal):
   return [...payload.snapshots];
 }
 
-export async function restoreSnapshotApi(projectPath: string, id: string, signal?: AbortSignal): Promise<void> {
+/** 恢复做完的那一句，和真改了没有（书本来就是那个样子的，什么都没动）。 */
+export interface SnapshotRestoreOutcome {
+  readonly conclusion: string;
+  readonly changed: boolean;
+}
+
+/**
+ * 整本恢复到一个存档（写作版本 P2a 片 4C：服务端交一次恢复操作、等它做完）。一次调用 = 作者点一次：请求号在这里定，
+ * 断线重发还是这一次。没成如实抛服务端那句。
+ */
+export async function restoreSnapshotApi(projectPath: string, id: string, signal?: AbortSignal): Promise<SnapshotRestoreOutcome> {
   const payload = await fetchJson<SnapshotRestoreApiResponse>(
     "/api/snapshots/restore",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectPath, id }),
+      body: JSON.stringify({ projectPath, id, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() }),
     },
     signal,
   );
   if (!payload.ok) {
     throw new Error(payload.error);
   }
+  const view = readOperationView(payload.operation);
+  return { conclusion: view?.conclusion || "已恢复到这个存档。", changed: view?.changed?.what === "history" };
 }
 
 import type { BookSummary } from "../types.js";

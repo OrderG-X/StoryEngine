@@ -154,7 +154,7 @@ export async function runCommand<A, R>(
     const draftGen = randomUUID();
     let planned: Awaited<ReturnType<typeof spec.plan>>;
     try {
-      planned = await spec.plan({ bookDir, caller: options.caller, now, draftGen }, parsed.data);
+      planned = await spec.plan({ bookDir, caller: options.caller, now, draftGen, ...(options.op ? { op: options.op } : {}) }, parsed.data);
     } catch (error) {
       if (error instanceof BookFileError) return fail("book_file_invalid", error.message);
       return fail("plan_failed", "这一步出了意外，书保持原样。", error instanceof Error ? error.message : String(error));

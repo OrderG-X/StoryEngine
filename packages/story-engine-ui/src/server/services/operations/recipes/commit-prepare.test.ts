@@ -18,7 +18,8 @@ import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
 import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, readOperation, type OperationRecord } from "../../../lib/operations/store.js";
-import { listSnapshots, restoreSnapshot } from "../../../lib/snapshot.js";
+import { listSnapshots } from "../../../lib/snapshot.js";
+import { restoreForTest } from "../../../lib/history-test-helpers.js";
 import { DAY_ITEM_ID, openThreadsHintDue, type CommitPreviewView } from "../../commit-view.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
 import {
@@ -414,8 +415,9 @@ describe("作者点「确认定稿」", () => {
     expect(skipped.done?.report.ledger).toMatchObject({ facts: 1, threadsClosed: 1 });
     expect((await readChapterLedger(book, 2))?.entries.some((entry) => entry.kind === "fact" && entry.text === "钟停在四点整")).toBe(false);
 
-    expect(await restoreSnapshot(book, skipped.snapshotId ?? "")).toBeTruthy();
-    expect(await readHead(book)).toMatchObject({ version: base + 1 });
+    expect((await restoreForTest(book, skipped.snapshotId ?? "")).length).toBeGreaterThan(0);
+    // 恢复本身是一次新的写：版本号只往前走，不退回去。
+    expect((await readHead(book)).version).toBeGreaterThan(base + 2);
     expect(await exists(join(book, "chapters", "0002.md"))).toBe(false);
 
     const again = await prepare(2);

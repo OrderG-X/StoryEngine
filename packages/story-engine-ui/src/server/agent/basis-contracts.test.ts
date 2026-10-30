@@ -37,7 +37,8 @@ import { createBookBackup, restoreBookFromBackup } from "../lib/book-backup.js";
 import { moveBookToTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { writeCards } from "../lib/card-write.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
+import { createSnapshot } from "../lib/snapshot.js";
+import { restoreForTest } from "../lib/history-test-helpers.js";
 import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../services/operations/executor.js";
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
@@ -166,7 +167,7 @@ describe("依据安全契约", () => {
       ok(await resumeOperation(book, submitted.record.opId, answer));
       await __drainOperationsForTests();
       expect((await projectBook(book)).chapters).toHaveLength(2);
-      await restoreSnapshot(book, snapshot.id);
+      await restoreForTest(book, snapshot.id);
       expect((await projectBook(book)).chapters).toHaveLength(1);
       expect(await resumeOperation(book, submitted.record.opId, answer)).toMatchObject({ ok: true, replayed: true });
       await __drainOperationsForTests();
@@ -198,7 +199,7 @@ describe("依据安全契约", () => {
       bookDir: book, chapter: 2, text, callModel: async (messages) => {
         if (!messages.at(-1)?.content.includes("交这一章的账单")) return "他是李四。";
         sawB = messages.some((message) => message.content.includes("他叫李四"));
-        await restoreSnapshot(book, saved.id);
+        await restoreForTest(book, saved.id);
         return JSON.stringify({ summary: { text: "李四交了钥匙", quote: "他交了钥匙" } });
       },
     }));
@@ -320,7 +321,7 @@ describe("依据安全契约", () => {
       plannerCallModel: async (messages, options) => {
         if (!options?.json) return "笔记。";
         expect(messages.some((message) => message.content.includes("他叫李四"))).toBe(true);
-        await restoreSnapshot(book, saved.id);
+        await restoreForTest(book, saved.id);
         return JSON.stringify({ summary: "李四去交钥匙", beats: ["李四去交钥匙"], characters: ["李四"], newInformation: ["钥匙有了下落"], scene: { location: "北城" }, dayOffset: 1 });
       },
       planCheckReaderCallModel: async (_messages, options) => (options?.json ? JSON.stringify({ problems: [] }) : "笔记。"),

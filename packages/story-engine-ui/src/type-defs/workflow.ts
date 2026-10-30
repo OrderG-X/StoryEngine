@@ -31,8 +31,6 @@ export interface SuggestedAction {
   readonly requiresConfirmation: boolean;
   readonly endpoint?: string;
   readonly disabledReason?: string;
-  /** 「确认裁剪」按钮的参数（prune-confirm 专用）：保留最近多少条，缺省=引擎默认。 */
-  readonly pruneTarget?: { readonly keep?: number };
   /** 「重写这一章」「接着往下写」按钮点了交的写稿（rewrite-confirm / continue-confirm，服务端出的，请求号那时就定了）。 */
   readonly operationAction?: OperationActionData;
   /** 「重试这一步」重发的是作者哪句话（写作版本 P2a：沿用那句的消息号和发出时间）。 */

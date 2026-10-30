@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
-import { isCandidateDecisionType, isDraftEditMode, isOperationAction, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
+import { isCandidateDecisionType, isDraftEditMode, readStoredOperationAction, streamAgentChat, type AgentUserAction, type OperationViewData } from "../api/agentChatClient.js";
 import { cancelOperationRequest } from "../api/operationsClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
@@ -35,14 +35,13 @@ import {
   retargetWorkspaceOperation,
   canRetargetWorkspaceOperation,
 } from "../utils/workspaceOperation.js";
-import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
 import { editDraft, flushDraftSave, isOwnSavedVersion, openPaper, refreshPaper, UnsavedPaperError } from "../drafts/draftSync.js";
 import { claimWorkspaceForRestore } from "../workspace/claimRestore.js";
 import { saveChatNow } from "../sync/chatSync.js";
 import { flushAllSaves } from "../sync/saveAll.js";
-import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/applyOverview.js";
+import { applyOverviewToWorkspace } from "../workspace/applyOverview.js";
 import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
 import { fetchChapterPaper } from "../api/workingDraftClient.js";
 import { patchChapterFlagsFromPaper } from "../utils/bookUtils.js";
@@ -221,7 +220,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         turnStartedAt: Date.now(),
       }));
       // 接着卡上那一次（「接着做」「确认定稿」「不要了」）：这一轮一开始就挂上它，结果、回执落在这一轮。
-      if (action && isOperationAction(action) && action.kind !== "new") claimOperation(action.opId, assistantMsgId);
+      if (action && action.kind !== "new") claimOperation(action.opId, assistantMsgId);
 
       const project = (event: AgentProjectionEvent) => {
         if (!ownsCurrentWorkspace()) return;
@@ -303,7 +302,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 出稿在飞：记下发起时稿纸开着哪章、盘上那版的版本号。停止 / 出错收尾时盘上换成了别的版本、又不是这个窗口自己存的，
       // 才说「盘上其实已经写完了」（只和同一章比，第 5 轮 S4；作者自己存的字不算，第 6 轮 T4）。
       let generateAttempt: { readonly chapter: number; readonly versionBefore: string | null } | null = null;
-      // AI 真撤销了（undo / manage_snapshots op=undo）：回合收尾时剥掉旧回合挂着的过时建议条。
+      // 这一轮撤了 / 恢复了（history.change 改了盘）：回合收尾时剥掉旧回合挂着的过时建议条。
       let agentUndone = false;
 
       const streamedText = (): string => draftStream.base + streamingDraftDisplay(draftStream.text, draftStream.base);
@@ -539,16 +538,12 @@ export function useChat(params: UseChatParams): UseChatResult {
         // H3：把用户当前所在章一并发给后端，让 agent 默认作用于该章、各工具缺省回退该值（回看旧章不写错章）。
         // 「所在章」= 稿纸上开着的那章（作者眼前的）；稿纸还没开才用书的当前章（第 4 轮复核 R8）。
         const currentChapterNumber = visibleChapter(projectPath) ?? useBookStore.getState().workspace.currentChapter?.chapterNumber;
-        // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
-        // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
-        const lastTurnUndoHint = lastTurnUndoHintFromMessages(useChatStore.getState().messages);
         const pickedText = typeof currentChapterNumber === "number" ? pickedDirectionGoal(useChatStore.getState().messages, currentChapterNumber) : undefined;
         await streamAgentChat(
           {
             projectPath,
             messages: [...conversation, { role: "user", content: text }],
             ...(typeof currentChapterNumber === "number" ? { currentChapter: currentChapterNumber } : {}),
-            ...(lastTurnUndoHint ? { lastTurnUndoHint } : {}),
             ...(pickedText && typeof currentChapterNumber === "number" ? { pickedDirection: { chapter: currentChapterNumber, text: pickedText } } : {}),
             ...(action ? { action } : {}),
             ...(ref ? { messageId: ref.messageId, issuedAt: ref.issuedAt } : {}),
@@ -572,7 +567,12 @@ export function useChat(params: UseChatParams): UseChatResult {
               }
               // 改设定、改账、定论改齐了（结果不带概况）：重读一份，设定本、主角、线索、待处理跟着变。同一次只读一回。
               // 定论还可能改了这一章的正文 / 工作稿：按盘上重读稿纸（作者手上有没存的字就出提示让作者选）。
-              if (view.changed && !refreshedChanges.has(view.opId) && projectPath) {
+              if (view.changed?.what === "history" && !refreshedChanges.has(view.opId) && projectPath) {
+                // 撤了 / 恢复了：整本书可能都回去了，和操作历史里恢复同一套原地重读（稿纸、概况、这一章回到哪一步、「刚定稿」的小点）。
+                refreshedChanges.add(view.opId);
+                agentUndone = true;
+                track(syncWorkspaceAfterRestore(projectPath).catch(() => undefined));
+              } else if (view.changed && !refreshedChanges.has(view.opId) && projectPath) {
                 refreshedChanges.add(view.opId);
                 track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
                   .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
@@ -644,12 +644,6 @@ export function useChat(params: UseChatParams): UseChatResult {
                   unstickGeneratingFlow();
                   return;
                 }
-                const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
-                if (undone) {
-                  agentUndone = true;
-                  // AI 撤销了：顶栏「设定本」上「刚定稿」的小点跟着消。
-                  useNavigationStore.getState().setUnseenChangesChapter(null);
-                }
                 const flowBefore = useBookStore.getState().workspace.flowStatus;
                 const nextFlow = agentFlowStatusForTool(info.toolName, info, flowBefore);
                 if (!info.overview) {
@@ -673,15 +667,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                 } else if (info.refreshScope === "foundation") {
                   refreshWorkspaceFromOverview?.(info.overview);
                 }
-                // 工具可能改了这一章的稿子（改名、撤销……）：按盘上重读稿纸。
-                // 盘上没变什么都不发生；变了而作者手上没有没存的字就换上，有就出提示让作者选（撤销也一样）。
-                track(refreshPaper()
-                  .then(() => {
-                    // 撤销后这一章回到哪一步，按盘上那版算（可能退回到「还没写过」）。
-                    if (undone && ownsCurrentWorkspace()) {
-                      useBookStore.getState().updateWorkspace({ flowStatus: flowStatusForPaper(useDraftStore.getState()) });
-                    }
-                  }));
+                // 工具可能改了这一章的稿子（改名……）：按盘上重读稿纸。
+                // 盘上没变什么都不发生；变了而作者手上没有没存的字就换上，有就出提示让作者选。
+                track(refreshPaper());
               };
               // 稿纸正在换到 AI 写的那章：等换完（或没换成）再按那时的当前章应用（第 4 轮复核 R8）；
               // 回合收完尾还没换完就不应用了（第 5 轮 S3：工作区已交还，稿纸下次读盘自会对上）。
@@ -950,34 +938,11 @@ export function useChat(params: UseChatParams): UseChatResult {
   );
 
 
-  /* ---- handleConfirmPrune：「确认裁剪」按钮 ---- */
-
-  // 结构化动作：按钮点击即授权，服务端直接真裁操作历史（裁前自动备份），不经模型。
-  const handleConfirmPrune = useCallback(
-    async (target?: { readonly keep?: number }): Promise<void> => {
-      if (!projectPath) {
-        setChatError("请先打开真实本地项目。");
-        return;
-      }
-      const liveChat = useChatStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading) {
-        showToast("已有操作正在进行，请等它结束后再裁剪。", 4200);
-        return;
-      }
-      const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
-      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      const echo = authorMessage(text);
-      appendMessage(echo.message);
-      await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) }, echo.ref);
-    },
-    [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
-  );
-
   /* ---- handleSendUserAction：「下一步」选项的结构化动作直达（R4.7） ---- */
 
   // 服务端自己生成的确定性选项（预览定稿/再核一次/写下一章…）带 action：点击直接发 body.action，
   // 服务端执行对应工具、结果照常进对话——不再发一句意图给模型白跑一轮（一次 3～5 万输入）。
-  // 与「确认定稿」「确认裁剪」同一通道；对话里照留一句「你：…」回显（userActionChoiceText）。
+  // 与「确认定稿」同一通道；对话里照留一句「你：…」回显（userActionChoiceText）。
   const handleSendUserAction = useCallback(
     /** echo＝对话里「你：…」那句换成调用方给的（选中文字改写说清是润色还是扩写）。 */
     async (action: AgentUserAction, options: { readonly echo?: string } = {}): Promise<void> => {
@@ -991,7 +956,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
-      const draftAction = isOperationAction(action) && action.kind === "new" && action.type === "draft.change" && (action.mode === "write" || action.mode === "continue") ? action : undefined;
+      const draftAction = action.kind === "new" && action.type === "draft.change" && (action.mode === "write" || action.mode === "continue") ? action : undefined;
       const picked = draftAction ? pickedDirection(liveChat.messages, draftAction.params.chapter) : undefined;
       const goal = draftAction?.params.direction;
       const text = options.echo ?? userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
@@ -1085,10 +1050,6 @@ export function useChat(params: UseChatParams): UseChatResult {
         case "revision-preview":
           void handleSendMessage("按我的方向给这一章改一版，先出预览。");
           return;
-        case "prune-confirm":
-          consumeSuggestedAction(action);
-          void handleConfirmPrune(action.pruneTarget);
-          return;
         case "rewrite-confirm":
         case "continue-confirm": {
           // 存盘读回的按钮动作点的时候再核一遍（服务端执行前还会再核）。
@@ -1131,7 +1092,6 @@ export function useChat(params: UseChatParams): UseChatResult {
       showToast,
       handleSendMessage,
       handleChapterButton,
-      handleConfirmPrune,
       handleSendUserAction,
       appendMessage,
       consumeSuggestedAction,

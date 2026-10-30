@@ -10,7 +10,7 @@
  */
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fail, readBookEpoch, readHead, withBookLock, type CommandFailure } from "@actalk/story-core";
+import { fail, opBookEpoch, readBookEpoch, readHead, withBookLock, type CommandFailure } from "@actalk/story-core";
 import { abortExecution, currentOperation, OperationStopped, StopSignal, stopOf, type OperationContext } from "./context.js";
 import { assertNotHoldingRecordLock, changeOperation, readOperation, type OperationRecord, type PauseReason } from "./store.js";
 
@@ -22,6 +22,11 @@ async function bookDirExists(bookDir: string): Promise<boolean> {
   }
 }
 
+/** 书的纪元还是这次操作开工时的，或者是这次操作自己整本恢复换出的那个（opBookEpoch）。 */
+export function epochStillOurs(context: { readonly opId: string; readonly bookEpoch: string }, epoch: string): boolean {
+  return epoch === context.bookEpoch || epoch === opBookEpoch(context.opId);
+}
+
 /** 核栅栏（调用方拿着书锁）。不过返回失败（核心命令的 precondition 形状）。 */
 export async function checkFence(context: OperationContext): Promise<CommandFailure | undefined> {
   if (context.signal.aborted) {
@@ -29,7 +34,7 @@ export async function checkFence(context: OperationContext): Promise<CommandFail
     return fail("operation_stopped", stop?.type === "pause" ? "这次已经暂停了，没有写。" : stop?.type === "wait" ? "这次在等作者点按钮，没有写。" : "这次已经停掉了，没有写。");
   }
   if (!(await bookDirExists(context.bookDir))) return fail("book_gone", "这本书已经不在原处了，没有写。");
-  if ((await readBookEpoch(context.bookDir)) !== context.bookEpoch) {
+  if (!epochStillOurs(context, await readBookEpoch(context.bookDir))) {
     return fail("book_epoch_changed", "这本书在这期间整本恢复过（或从备份、回收站搬回过），这次停下了，没有写。");
   }
   const stored = await readOperation(context.bookDir, context.opId);

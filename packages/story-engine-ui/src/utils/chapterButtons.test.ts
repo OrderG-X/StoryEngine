@@ -32,7 +32,7 @@ describe("chapterButtonAction：按钮 → 结构化动作（不靠文案）", (
   });
 
   it("撤销上一步不要章号；其余没选章返回 undefined（调用方如实提示）", () => {
-    expect(chapterButtonAction("undo", { chapters })).toEqual({ toolName: "undo" });
+    expect(chapterButtonAction("undo", { chapters })).toMatchObject({ kind: "new", type: "history.change", mode: "undo", params: {} });
     expect(chapterButtonAction("review", { chapters })).toBeUndefined();
     expect(chapterButtonAction("write", { chapter: 0, chapters })).toBeUndefined();
   });

@@ -25,17 +25,18 @@ export function userActionChoiceText(
   /** 「写这一章」照作者挑中的走法写时，那种走法的名字（回显里写明照哪种写）。 */
   directionTitle?: string,
 ): string {
-  if ("kind" in action) return operationActionText(action, directionTitle);
-  switch (action.toolName) {
-    case "prune_snapshots":
-      return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
-    case "undo":
-      return "撤销上一步";
-  }
+  return operationActionText(action, directionTitle);
 }
 
-/** 等作者点的按钮点了哪个：先按按钮认（「确认改设定」「确认改账」「确认定稿」），再按选法认（改写的「换上 / 再改一版」）。 */
-const ACTION_TEXT: Readonly<Record<string, string>> = { "confirm-settings": "确认改设定", "confirm-ledger": "确认改账", "confirm-canon": "确认定论，改齐前文", "confirm-commit": "确认定稿" };
+/** 等作者点的按钮点了哪个：先按按钮认（「确认改设定」「确认改账」「确认定稿」「全撤」「确认裁剪」），再按选法认（改写的「换上 / 再改一版」）。 */
+const ACTION_TEXT: Readonly<Record<string, string>> = {
+  "confirm-settings": "确认改设定",
+  "confirm-ledger": "确认改账",
+  "confirm-canon": "确认定论，改齐前文",
+  "confirm-commit": "确认定稿",
+  "confirm-undo": "全撤",
+  "confirm-prune": "确认裁剪",
+};
 const DECISION_TEXT: Readonly<Record<string, string>> = { apply: "换上", again: "再改一版" };
 
 const WEIGHT_TEXT = { major: "大伏笔", normal: "普通线索", minor: "小线索" } as const;
@@ -67,11 +68,17 @@ function editActionText(params: DraftEditParamsData): string {
   return params.edits.length === 1 ? `改写第 ${chapter} 章这段：${quoted(params.edits[0]!.targetText)}` : `改写第 ${chapter} 章这 ${params.edits.length} 段`;
 }
 
+/** 点的那个按钮的字。撤销等「全撤」停第二回、第三回的按钮号带着回数（confirm-undo-2），字还是「全撤」。 */
+function resumeActionText(actionId: string): string | undefined {
+  return ACTION_TEXT[actionId] ?? (actionId.startsWith("confirm-undo-") ? ACTION_TEXT["confirm-undo"] : undefined);
+}
+
 /** 操作按钮（写作版本 P2a）的回显：写稿、新检查按种类说；「接着做」「不要了」照按钮字。 */
 function operationActionText(action: import("../api/agentChatClient.js").OperationActionData, directionTitle?: string): string {
-  if (action.kind === "resume") return action.answer ? (ACTION_TEXT[action.answer.actionId] ?? DECISION_TEXT[action.answer.decision] ?? "接着做") : "接着做";
+  if (action.kind === "resume") return action.answer ? (resumeActionText(action.answer.actionId) ?? DECISION_TEXT[action.answer.decision] ?? "接着做") : "接着做";
   if (action.kind === "cancel") return "不要了";
   if (action.type === "settings.change") return "认下 AI 刚写的设定";
+  if (action.type === "history.change") return action.mode === "restore" ? "恢复到这个存档" : action.params.opId ? "撤回来" : "撤销上一步";
   if (action.type === "ledger.change") return ledgerActionText(action.params.changes);
   if (action.type === "canon.propose") {
     if (action.mode === "statement") return `按定论查前文：「${action.params.statement}」`;

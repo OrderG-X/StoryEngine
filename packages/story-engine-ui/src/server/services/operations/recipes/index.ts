@@ -19,6 +19,7 @@ import { inspectRunRecipe } from "./inspect-run.js";
 import { ledgerChangeRecipe } from "./ledger-change.js";
 import { canonProposeRecipe } from "./canon-propose.js";
 import { commitPrepareRecipe } from "./commit-prepare.js";
+import { historyChangeRecipe } from "./history-change.js";
 import { planProposeRecipe } from "./plan-propose.js";
 import { settingsChangeRecipe } from "./settings-change.js";
 
@@ -157,5 +158,6 @@ export function registerBuiltInRecipes(): void {
   registerRecipe(ledgerChangeRecipe);
   registerRecipe(canonProposeRecipe);
   registerRecipe(commitPrepareRecipe);
+  registerRecipe(historyChangeRecipe);
   setReaderBackfillHandler(submitBackfill);
 }

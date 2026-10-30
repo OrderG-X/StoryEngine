@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createStoryProject } from "../book/project-store.js";
 import { writeCards } from "./card-write.js";
 import { makeHomeTempDir } from "./home-test-tmp.js";
-import { humanizeUndoLabel, listSnapshots, restoreSnapshot, snapshotKindOf } from "./snapshot.js";
+import { humanizeUndoLabel, listSnapshots, snapshotKindOf } from "./snapshot.js";
 
 let rootDir: string;
 let book: string;
@@ -32,7 +32,7 @@ const field = async (card: string, label: string) =>
   (await readCards(book))?.cards.find((item) => item.name === card)?.fields.find((item) => item.label === label);
 
 describe("writeCards：作者改", () => {
-  it("改前打存档点（标签带改了什么、归设定类），记成作者写的；按存档点撤销就回去", async () => {
+  it("改前打存档点（标签带改了什么、归设定类），记成作者写的（撤销在 history.change 的配方测试里）", async () => {
     const out = await asAuthor([{ op: "field.set", card: "林远", label: "身份", value: "审计员" }]);
     expect(out).toMatchObject({ ok: true, lines: ["「林远」的「身份」写上了"] });
     if (!out.ok) throw new Error(out.message);
@@ -43,9 +43,6 @@ describe("writeCards：作者改", () => {
     const snapshot = (await listSnapshots(book)).find((entry) => entry.id === out.snapshotId)!;
     expect(snapshotKindOf(snapshot.label)).toBe("bible");
     expect(humanizeUndoLabel(snapshot.label)).toBe("改设定：「林远」的「身份」写上了");
-
-    await restoreSnapshot(book, out.snapshotId!);
-    expect(await field("林远", "身份")).toBeUndefined();
   });
 
   it("什么都没变（空 ops、写的和现在一样）→ ok、没有存档点", async () => {

@@ -13,7 +13,8 @@ import { cardWrite, chapterCommit, projectBook, readCards, runCommand, type Card
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { listSnapshots, restoreSnapshot } from "../lib/snapshot.js";
+import { listSnapshots } from "../lib/snapshot.js";
+import { restoreForTest } from "../lib/history-test-helpers.js";
 
 const storyAgentMocks = vi.hoisted(() => ({ getStoryAgent: vi.fn() }));
 vi.mock("../agent/story-agent.js", () => ({ getStoryAgent: storyAgentMocks.getStoryAgent, getStoryAgentModel: () => undefined, getStoryAgentToolNames: () => undefined }));
@@ -146,7 +147,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     const stored = await readOperation(projectDir, opId);
     const snapshotId = stored.kind === "record" ? (stored.record.result as { body?: { snapshotId?: string } } | undefined)?.body?.snapshotId : undefined;
     expect((await listSnapshots(projectDir)).find((entry) => entry.id === snapshotId)?.label.startsWith("core:decision.record:")).toBe(true);
-    await restoreSnapshot(projectDir, snapshotId as string);
+    await restoreForTest(projectDir, snapshotId as string);
     const undone = await projectBook(projectDir);
     expect(undone.chapters.map((chapter) => chapter.chapter)).toEqual([1]);
     expect(undone.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("current");
@@ -212,7 +213,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
 
-    await restoreSnapshot(projectDir, snapshotId as string);
+    await restoreForTest(projectDir, snapshotId as string);
     expect(await card("顾明")).toBeDefined();
     expect((await card("林远"))?.fields.find((field) => field.label === "身份")?.value).toBe("审计员");
   });

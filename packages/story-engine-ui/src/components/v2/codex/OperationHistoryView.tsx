@@ -114,11 +114,12 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
       const flushed = await flushAllSaves();
       if (!flushed.ok) throw new Error(`${flushed.error}，先别恢复，等它存上再试`);
       const label = snapshots?.find((snapshot) => snapshot.id === id)?.label;
-      await restoreSnapshotApi(projectPath, id);
+      const restored = await restoreSnapshotApi(projectPath, id);
       setConfirmId(null);
       await syncWorkspaceAfterRestore(projectPath);
-      if (label) await noteRestoreInChat(projectPath, label);
-      useNavigationStore.getState().showToast("已恢复到这个存档。恢复前的样子也存了一份，可以再恢复回去。", 4200);
+      // 书本来就是那个样子（什么都没动）：对话里不记「恢复到了」。
+      if (label && restored.changed) await noteRestoreInChat(projectPath, label);
+      useNavigationStore.getState().showToast(restored.changed ? `${restored.conclusion}恢复前的样子也存了一份，可以再恢复回去。` : restored.conclusion, 4200);
       setSnapshots(await fetchSnapshots(projectPath));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

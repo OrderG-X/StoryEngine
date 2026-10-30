@@ -2,6 +2,7 @@
  * history.apply —— 撤销一次操作、整本恢复到一份存档（写作版本 P2a 片 4B，设计 8.1 / 8.2）：照算好的计划写回 / 删掉文件，
  * 每个都核现在还是计划时的样子（不是就不写、如实说，调用方重算）；整本恢复另核整个撤销范围的摘要。
  * 普通写命令：写前打存档（撤销一笔撤销靠它）、换写入代次、换工作稿纪元；整本恢复另换书的纪元（撤销不换）。
+ * 带了范围摘要的（整本恢复必带）另核整个撤销范围还是计划时的样子：算好之后哪里改过（多了新的引用者）就不写。
  * 回执记它实际覆盖的前像（effects），再撤它就换回那份。
  */
 import { lstat, readFile } from "node:fs/promises";
@@ -10,9 +11,10 @@ import { z } from "zod";
 import { fail } from "../commands/runner.js";
 import type { WriteCommandSpec } from "../commands/types.js";
 import type { ChangeSet } from "../schema/book.js";
-import { bookEpochWrite } from "../store/control.js";
+import { bookEpochWrite, opBookEpoch } from "../store/control.js";
 import { CARDS_PATH, chapterFromFileName, DECISIONS_PATH, draftChapterOfPath, isUndoablePath, planChapterOfPath } from "../store/paths.js";
 import { sha256Bytes, type TxWrite } from "../store/transaction.js";
+import { HISTORY_APPLY_COMMAND } from "./revert.js";
 import { ledgerChapterOfPath, rangeDigestOf, readUndoableFiles } from "./store.js";
 
 export const HistoryApplyArgs = z.object({
@@ -22,7 +24,7 @@ export const HistoryApplyArgs = z.object({
   /** 撤的是哪次 / 恢复到哪份（原样记进结果，之后认「被撤过」用）。 */
   target: z.record(z.string(), z.unknown()),
   changes: z.array(z.object({ path: z.string().min(1), expect: z.string().nullable(), content: z.string().nullable() })),
-  /** 整本恢复：计划时整个撤销范围的摘要。 */
+  /** 计划时整个撤销范围的摘要（整本恢复必须带；撤销带了也核：算好之后哪里改过都重算）。 */
   rangeDigest: z.string().min(1).optional(),
 });
 export type HistoryApplyArgs = z.infer<typeof HistoryApplyArgs>;
@@ -64,18 +66,16 @@ function changeSetOf(paths: readonly string[]): ChangeSet {
 }
 
 export const historyApply: WriteCommandSpec<HistoryApplyArgs, HistoryApplyResult> = {
-  name: "history.apply",
+  name: HISTORY_APPLY_COMMAND,
   tier: "ai-direct",
   summary: "撤销一次操作、整本恢复到一份存档：照算好的计划写回、删掉文件，每个都核现在的样子。",
   args: HistoryApplyArgs,
   snapshot: true,
   idempotent: true,
   async plan(context, args) {
-    if (args.kind === "restore") {
-      if (!args.rangeDigest) return fail("invalid_args", "整本恢复缺范围摘要，没有恢复。");
-      if (rangeDigestOf(await readUndoableFiles(context.bookDir)) !== args.rangeDigest) {
-        return fail("range_changed", "算好恢复之后书里又有地方改过，这次没恢复。重新算一次再确认。");
-      }
+    if (args.kind === "restore" && !args.rangeDigest) return fail("invalid_args", "整本恢复缺范围摘要，没有恢复。");
+    if (args.rangeDigest && rangeDigestOf(await readUndoableFiles(context.bookDir)) !== args.rangeDigest) {
+      return fail("range_changed", "算好之后书里又有地方改过，这次一处都没动。重新算一次。");
     }
     const seen = new Set<string>();
     const writes: TxWrite[] = [];
@@ -89,7 +89,8 @@ export const historyApply: WriteCommandSpec<HistoryApplyArgs, HistoryApplyResult
       writes.push(change.content === null ? { path, delete: true } : { path, content: change.content });
     }
     const paths = [...seen];
-    if (args.kind === "restore" && writes.length > 0) writes.push(bookEpochWrite(context.now));
+    // 整本恢复换书的纪元：在操作里换成这次操作认得出的那个（它自己照常收尾，别的操作对不上）。
+    if (args.kind === "restore" && writes.length > 0) writes.push(bookEpochWrite(context.now, context.op ? opBookEpoch(context.op.opId) : undefined));
     return {
       label: args.label,
       writes,

@@ -414,7 +414,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(legacy).not.toHaveProperty("intentTitle");
   });
 
-  it("老会话的定稿预览 commitPreview 读成只看的清单卡；老「确认定稿」按钮不再摆（定稿清单上点）；坏卡不要", () => {
+  it("老会话的定稿预览 commitPreview 读成只看的清单卡；老「确认定稿」「确认裁剪」按钮不再摆（清单 / 操作卡上点）；坏卡不要", () => {
     const out = readWorkspaceMessages([
       {
         id: "assistant-preview",
@@ -445,6 +445,13 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
             permission: "formal_state_write",
             requiresConfirmation: false,
           },
+          {
+            id: "quality-check",
+            label: "硬伤检查",
+            description: "查硬伤",
+            permission: "model_call",
+            requiresConfirmation: false,
+          },
         ],
       },
       { id: "assistant-bad-preview", role: "assistant", content: "坏卡", commitPreview: { chapter: 2 } },
@@ -452,25 +459,8 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     ] as any);
 
     expect(cardOf(out[0]!, "commit-preview")).toEqual({ type: "commit-preview", preview: { chapter: 2, canCommit: true, blockingReasons: ["x"], summary: "可以定稿。" } });
-    expect(out[0]!.suggestedActions?.map((action) => action.id)).toEqual(["prune-confirm"]);
+    expect(out[0]!.suggestedActions?.map((action) => action.id)).toEqual(["quality-check"]);
     expect(cardOf(out[1]!, "commit-preview")).toBeUndefined();
-  });
-
-  it("「确认裁剪」按钮的 pruneTarget 持久化（刷新后按钮仍按预览的保留条数裁）；坏 keep 丢掉但按钮还在", () => {
-    const out = readWorkspaceMessages([
-      {
-        id: "assistant-prune",
-        role: "assistant",
-        content: "预览：将裁 12 条，点确认裁剪。",
-        suggestedActions: [
-          { id: "prune-confirm", label: "确认裁剪", description: "裁剪操作历史", permission: "destructive_write", requiresConfirmation: false, pruneTarget: { keep: 20, junk: 1 } },
-          { id: "prune-confirm-bad", label: "确认裁剪", description: "裁剪操作历史", permission: "destructive_write", requiresConfirmation: false, pruneTarget: { keep: -3 } },
-        ],
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ] as any);
-    expect(out[0]!.suggestedActions?.[0]?.pruneTarget).toEqual({ keep: 20 });
-    expect(out[0]!.suggestedActions?.[1]?.pruneTarget).toEqual({});
   });
 
   it("建议动作的 disabledReason 持久化：重开书后「还不能点」的按钮仍是灰的", () => {

@@ -648,23 +648,6 @@ describe("定稿投影（写作版本 P2a 片 4A：定稿是一次操作）", ()
   });
 });
 
-describe("裁剪待确认投影（prune_snapshots 预览后挂「确认裁剪」按钮）", () => {
-  it("pruneConfirmAction → 消息挂「确认裁剪」按钮（带保留条数）", () => {
-    const message = project([
-      {
-        type: "tool-result",
-        toolCallId: "p1",
-        toolName: "prune_snapshots",
-        endedAt: 2,
-        output: { ok: true, needsConfirmation: true, pruneConfirmAction: { keep: 50 }, summary: "预览：将裁 30 条。" },
-      },
-    ]);
-    expect(message.suggestedActions).toEqual([
-      expect.objectContaining({ id: "prune-confirm", label: "确认裁剪", pruneTarget: { keep: 50 } }),
-    ]);
-  });
-});
-
 describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {
   it("change_draft 遇到有稿的章 → 照服务端给的按钮挂「接着往下写」「重写第 N 章」（点了交的写稿原样带着）；再来一遍不重复挂", () => {
     const continueAction = newDraftAction("continue", { chapter: 3 });
@@ -707,6 +690,14 @@ describe("操作投影（写作版本 P2a：检查交给执行器做）", () => 
     expect(msg.turnSnapshots).toEqual([{ toolName: "change_ledger", snapshotId: "s-1" }, { toolName: "change_settings", snapshotId: "s-2" }]);
     expect(msg.affectedScopes).toEqual(["foundation"]);
     for (const toolName of ["change_ledger", "manage_ledger"]) expect(presentationFor(toolName).stepLabel).toBe("改账");
+  });
+
+  it("撤了 / 恢复了：这一轮记下存档点（「撤销到此」从它退）、块头标整本（正文也动了）；交的那一步叫「撤销 / 裁剪」", () => {
+    const undone = view({ kind: "history.change", mode: "undo", chapter: undefined, what: "撤销", state: "succeeded", allowed: [], eventSeq: 5, changed: { what: "history", snapshotId: "s-3" } });
+    const msg = project([{ type: "operation", operation: undone }]);
+    expect(msg.turnSnapshots).toEqual([{ toolName: "change_history", snapshotId: "s-3" }]);
+    expect(msg.affectedScopes).toEqual(["full"]);
+    expect(presentationFor("change_history").stepLabel).toBe("撤销 / 裁剪");
   });
 
   it("在做 → 操作卡；进度只记给在做的那次；做完挂结果卡（带查的版本），进度清掉", () => {

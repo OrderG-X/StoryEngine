@@ -46,7 +46,6 @@ function context(options: { readonly chapter?: number; readonly words?: readonly
     book,
     options.chapter ?? 1,
     options.words ?? ["写这一章"],
-    undefined,
     options.picked,
     options.ref === false ? undefined : { messageId: `msg-${seq}`, issuedAt: new Date().toISOString() },
   );

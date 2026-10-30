@@ -9,13 +9,13 @@ import type { WriteCommandSpec } from "../commands/types.js";
 import { emptySettingCards } from "../schema/cards.js";
 import { AuthorDecision } from "../schema/decisions.js";
 import { CHAPTER_LEDGER_SCHEMA, LedgerEntry } from "../schema/ledger.js";
-import { readBookEpoch, readDraftGens } from "../store/control.js";
+import { opBookEpoch, readBookEpoch, readDraftGens } from "../store/control.js";
 import { CARDS_PATH, chapterLedgerPath, chapterTextPath, DECISIONS_PATH, draftPath } from "../store/paths.js";
 import { sha256Bytes } from "../store/transaction.js";
 import { historyApply } from "./apply.js";
 import { refsOfDecision, refsOfEntry, Resolver } from "./references.js";
 import { planRestore } from "./restore.js";
-import { planRevert, readReceipts, type RevertPlan } from "./revert.js";
+import { lastUndoable, planRevert, readReceipts, type RevertPlan } from "./revert.js";
 import { readUndoableFiles, type HistoryReader } from "./store.js";
 
 let book: string;
@@ -192,6 +192,15 @@ describe("撤销一次操作：基本", () => {
     expect(await applyRevert("A", plan)).toMatchObject({ ok: false, code: "changed_since_plan" });
     expect(await exists(chapterLedgerPath(1))).toBe(true);
   });
+
+  it("带范围摘要：算好之后别处多了一章（可能接着要撤的）也不写、如实说", async () => {
+    await write("A", chapter(1, [open(1, 1, "铜钥匙")]));
+    const plan = await revert("A");
+    await writeFile(join(book, chapterTextPath(2)), TEXT(2));
+    const args = { kind: "revert" as const, label: "撤销", target: { opId: "A" }, changes: plan.changes.map((change) => ({ ...change })), rangeDigest: plan.rangeDigest };
+    expect(await runCommand(book, historyApply, args, options("U1"))).toMatchObject({ ok: false, code: "range_changed" });
+    expect(await exists(chapterLedgerPath(1))).toBe(true);
+  });
 });
 
 describe("撤销核引用：基准按引用者自己接着的那一刻", () => {
@@ -331,6 +340,37 @@ describe("压测", () => {
   }, 120_000);
 });
 
+describe("「撤销上一步」撤哪次", () => {
+  it("最近一次写过的；撤销本身、被撤过的跳过；撤销被撤了又算；真换了东西的整本恢复之前的都不算", async () => {
+    await write("A", chapter(1, [open(1, 1, "铜钥匙")]));
+    await write("B", chapter(2, []));
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    expect(await applyRevert("B", await revert("B"), "U1")).toMatchObject({ ok: true });
+    // 撤过 B：下一次是 A（撤销 U1 本身跳过）。
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "A" });
+    // 撤回来（撤 U1）：B 又算没被撤，上一次是 B。
+    const redo = await planRevert(book, { opId: "U1" }, git);
+    if (!redo.ok) throw new Error(redo.message);
+    expect(await runCommand(book, historyApply, { kind: "revert", label: "撤销", target: { opId: "U1" }, changes: redo.changes.map((change) => ({ ...change })) }, options("U2"))).toMatchObject({ ok: true });
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+    // 整本恢复（换了东西）之后：之前的都不算。
+    const tree = await git.capture();
+    await write("C", chapter(3, []));
+    const plan = await planRestore(book, tree, git);
+    if (!plan.ok) throw new Error(plan.message);
+    expect(await runCommand(book, historyApply, { kind: "restore", label: "恢复", target: { tree }, changes: plan.changes.map((change) => ({ ...change })), rangeDigest: plan.rangeDigest }, options("R"))).toMatchObject({ ok: true });
+    expect(lastUndoable(await readReceipts(book))).toBeUndefined();
+  });
+
+  it("之前没留存档的写（建书、导入那一笔）是起点：到它就停，不当成能撤的", async () => {
+    const outcome = await runCommand(book, rawWrite, { files: chapter(1, []) }, { caller: "author", idempotencyKey: "book-create", now });
+    expect(outcome.ok).toBe(true);
+    expect(lastUndoable(await readReceipts(book))).toBeUndefined();
+    await write("A", chapter(2, []));
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "A" });
+  });
+});
+
 describe("整本恢复", () => {
   it("按树算写 / 删；冻结整个范围的摘要，计划后改过就不恢复；恢复换书的纪元", async () => {
     await write("P", [...chapter(1, [open(1, 1, "铜钥匙")]), { path: draftPath(2), content: "第二章稿" }]);
@@ -352,6 +392,8 @@ describe("整本恢复", () => {
     expect(await read(chapterLedgerPath(1))).toContain("铜钥匙");
     expect(await exists(chapterTextPath(3))).toBe(false);
     expect(await readBookEpoch(book)).not.toBe(epoch);
+    // 在操作里换的纪元由操作号定：那次操作认得出是自己换的。
+    expect(await readBookEpoch(book)).toBe(opBookEpoch("R2"));
   });
 
   it("存档树裁掉了：如实说", async () => {

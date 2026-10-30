@@ -49,6 +49,8 @@ export interface PlanContext {
    * plan 回报写完的版本号就用它算（draftVersionOf(全文, { epoch, gen: draftGen })）。
    */
   readonly draftGen: string;
+  /** 哪次操作的哪一步在写（不是操作写的没有）。 */
+  readonly op?: { readonly opId: string; readonly stepId: string };
 }
 
 export interface WriteCommandSpec<A, R> {

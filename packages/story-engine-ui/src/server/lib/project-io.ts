@@ -337,8 +337,10 @@ function readWorkspaceTokenUsage(value: unknown): { readonly input: number; read
 }
 
 
-/** 不再有的按钮（片 4A：定稿是一次操作，「确认定稿」在定稿清单上，不再是建议条按钮）：老会话读回来不摆死按钮。 */
-const RETIRED_ACTION_IDS: ReadonlySet<string> = new Set(["commit-preview", "commit-apply", "commit-short"]);
+/**
+ * 不再有的按钮：老会话读回来不摆死按钮。片 4A：定稿是一次操作，「确认定稿」在定稿清单上；片 4C：裁剪是一次操作，「确认裁剪」在操作卡上。
+ */
+const RETIRED_ACTION_IDS: ReadonlySet<string> = new Set(["commit-preview", "commit-apply", "commit-short", "prune-confirm"]);
 
 function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
@@ -350,8 +352,6 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const description = readString(item.description);
     const permission = readWorkspacePermission(item.permission);
     if (!id || !label || !description || !permission || RETIRED_ACTION_IDS.has(id)) continue;
-    // 「确认裁剪」按钮的保留条数：不进白名单的话刷新后丢失，按钮会按默认 200 条裁（与预览不一致）。
-    const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
     // 「重写这一章」「接着往下写」按钮的写稿动作（写作版本 P2a）：同理要进白名单，内容由前端点的时候、服务端执行前再校验。
     const operationAction = readWorkspaceOperationAction(item.operationAction);
     // 「重试这一步」重发的那句话的消息号和发出时间（写作版本 P2a）：不进白名单的话重开书后重试就成了一句新话。
@@ -365,7 +365,6 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       ...(readString(item.endpoint) ? { endpoint: readString(item.endpoint) } : {}),
       // 「现在还不能点」的原因：不进白名单的话重开书后禁用的按钮会变成可点。
       ...(readString(item.disabledReason) ? { disabledReason: readString(item.disabledReason) } : {}),
-      ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
       ...(operationAction ? { operationAction } : {}),
       ...(retryOf ? { retryOf } : {}),
     });

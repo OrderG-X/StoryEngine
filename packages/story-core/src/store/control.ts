@@ -102,7 +102,12 @@ export async function readBookEpoch(bookDir: string): Promise<string> {
   return `invalid-${createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 16)}`;
 }
 
-/** 换一个新纪元（整本恢复、搬回备份时和别的写放进同一个事务）。 */
-export function bookEpochWrite(now: Date): TxFileWrite {
-  return { path: BOOK_EPOCH_PATH, content: `${JSON.stringify({ schema: BOOK_EPOCH_SCHEMA, epoch: randomUUID(), at: now.toISOString() }, null, 2)}\n` };
+/**
+ * 一次操作自己换出的纪元（整本恢复那次操作）：由操作号定，这次操作认得出是自己换的、照常收尾；别的操作照样对不上。
+ */
+export const opBookEpoch = (opId: string): string => `op:${opId}`;
+
+/** 换一个新纪元（整本恢复、搬回备份时和别的写放进同一个事务）。给了 epoch 就用它（opBookEpoch），不给随机一个。 */
+export function bookEpochWrite(now: Date, epoch: string = randomUUID()): TxFileWrite {
+  return { path: BOOK_EPOCH_PATH, content: `${JSON.stringify({ schema: BOOK_EPOCH_SCHEMA, epoch, at: now.toISOString() }, null, 2)}\n` };
 }

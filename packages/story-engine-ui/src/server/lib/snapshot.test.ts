@@ -1,25 +1,21 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, readFile, symlink, unlink, writeFile, access, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, writeFile, access, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { createStoryProject } from "../book/project-store.js";
-import { recoverBookTransactions, withBookLock } from "@actalk/story-core";
-import { buildRestoreReceipt } from "./snapshot-changes.js";
+import { recoverBookTransactions } from "@actalk/story-core";
 import {
   CHAT_SESSIONS_EXCLUDE_LINE,
   SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR,
+  applyPrune,
+  clampPruneKeep,
   coreSnapshotLabel,
   createSnapshot,
   humanizeUndoLabel,
-  isPostWriteSettlementSnapshot,
   listSnapshots,
-  pruneSnapshots,
-  restoreSnapshot,
-  runWithSnapshot,
+  planPrune,
   snapshotKindOf,
-  undoLastChange,
 } from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
@@ -73,12 +69,6 @@ async function makeProject(): Promise<string> {
   return dir;
 }
 
-function deferred(): { readonly promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => { resolve = r; });
-  return { promise, resolve };
-}
-
 async function filesInCommit(projectDir: string, id: string): Promise<string[]> {
   const { stdout } = await execFileAsync("git", ["-C", projectDir, "ls-tree", "-r", "--name-only", id]);
   return stdout.trim().split("\n").filter(Boolean);
@@ -103,333 +93,8 @@ describe("snapshot library", () => {
     expect(list[0]?.label).toBe("第二次");
     expect(list[0]!.timestamp).toBeGreaterThanOrEqual(list[1]!.timestamp);
   });
-
-  it("restores modified file contents to the target snapshot", async () => {
-    const dir = await makeProject();
-    const snap = await createSnapshot(dir, "好状态");
-    await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["bad"] }), "utf-8");
-    await createSnapshot(dir, "坏状态");
-    await restoreSnapshot(dir, snap.id);
-    const content = JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8")) as { threads: string[] };
-    expect(content.threads).toEqual([]);
-  });
-
-  it("removes files created after the target snapshot", async () => {
-    const dir = await makeProject();
-    const snap = await createSnapshot(dir, "无新文件");
-    await writeFile(join(dir, "story", "extra.json"), "{}", "utf-8");
-    await createSnapshot(dir, "有新文件");
-    await restoreSnapshot(dir, snap.id);
-    await expect(access(join(dir, "story", "extra.json"))).rejects.toThrow();
-  });
-
-  it("removes the renamed file when a file was renamed after the target snapshot", async () => {
-    const dir = await makeProject();
-    const original = await readFile(join(dir, "story", "threads.json"), "utf-8");
-    const snap = await createSnapshot(dir, "改名前");
-    // 改名 = 写新删旧；内容一致会触发 git rename 侦测（R 而非 A）
-    await writeFile(join(dir, "story", "renamed.json"), original, "utf-8");
-    await unlink(join(dir, "story", "threads.json"));
-    await createSnapshot(dir, "改名后");
-    await restoreSnapshot(dir, snap.id);
-    await expect(access(join(dir, "story", "renamed.json"))).rejects.toThrow();
-    const restored = await readFile(join(dir, "story", "threads.json"), "utf-8");
-    expect(restored).toBe(original);
-  });
-
-  it("removes files with non-ASCII names created after the target snapshot", async () => {
-    const dir = await makeProject();
-    const snap = await createSnapshot(dir, "中文文件名基线");
-    await writeFile(join(dir, "story", "第12章.md"), "正文", "utf-8");
-    await createSnapshot(dir, "新增中文文件");
-    await restoreSnapshot(dir, snap.id);
-    await expect(access(join(dir, "story", "第12章.md"))).rejects.toThrow();
-  });
-
-  it("rejects an invalid snapshot id without polluting history", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "唯一快照");
-    const before = (await listSnapshots(dir)).length;
-    await expect(restoreSnapshot(dir, "not-a-real-id")).rejects.toThrow();
-    const after = (await listSnapshots(dir)).length;
-    expect(after).toBe(before);
-  });
-
-  it("rejects commit residue before restore creates its pre-restore snapshot", async () => {
-    const dir = await makeProject();
-    const target = await createSnapshot(dir, "安全目标");
-    const before = await listSnapshots(dir);
-    const txDir = join(dir, ".story-engine-tx", "commit-chapter-0001");
-    await mkdir(txDir, { recursive: true });
-    await writeFile(join(txDir, "snapshot-manifest.json"), "{truncated", "utf-8");
-
-    await expect(restoreSnapshot(dir, target.id)).rejects.toThrow(/snapshot|residue|manifest/iu);
-
-    const after = await listSnapshots(dir);
-    expect(after).toHaveLength(before.length);
-    await expect(readFile(join(txDir, "snapshot-manifest.json"), "utf-8")).resolves.toBe("{truncated");
-  });
-
-  // PR C：撤销竞态。createSnapshot 持锁原子，但旧 withSnapshot 是「createSnapshot（持锁）→ run（锁外落盘）」，
-  // 快照边界与落盘不在同一临界区 → 并发时另一操作的快照会切进 run 中间、捕获部分态（或撤销逃逸）。
-  // runWithSnapshot 把「快照 + 落盘」罩进同一 project 锁，令二者原子。
-  it("runWithSnapshot makes snapshot+write atomic: a concurrent snapshot never captures a partial multi-step write", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "基线"); // 先建库
-
-    const part1Written = deferred();
-    const gate = deferred();
-
-    // A：两步写（part1 → 等门 → part2），整体必须原子——快照边界不能切进中间。
-    const pA = runWithSnapshot(dir, "A", async () => {
-      await writeFile(join(dir, "part1.txt"), "1", "utf-8");
-      part1Written.resolve();
-      await gate.promise;
-      await writeFile(join(dir, "part2.txt"), "2", "utf-8");
-      return "A-done";
-    });
-
-    await part1Written.promise; // A 已写 part1、停在门前（持锁中）
-    const pB = createSnapshot(dir, "B-并发快照"); // 此刻并发触发一次快照
-    gate.resolve();
-    const [aResult, bSnap] = await Promise.all([pA, pB]);
-
-    expect(aResult.result).toBe("A-done");
-    expect(aResult.snapshot.id).toMatch(/^[0-9a-f]{40}$/);
-
-    // B 的快照绝不能是部分态：含 part1 必含 part2，反之亦然。
-    const files = await filesInCommit(dir, bSnap.id);
-    expect(files.includes("part1.txt")).toBe(files.includes("part2.txt"));
-  });
-
-  it.skipIf(process.platform === "win32")("shares the canonical lock between a real snapshot path and its symlink alias", async () => {
-    const dir = await makeProject();
-    const alias = `${dir}-alias`;
-    await symlink(dir, alias);
-    const entered = deferred();
-    const release = deferred();
-    const snapshotRun = runWithSnapshot(dir, "别名共锁", async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    let aliasEntered = false;
-    const aliasRun = withBookLock(alias, async () => {
-      aliasEntered = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(aliasEntered).toBe(false);
-    release.resolve();
-    await Promise.all([snapshotRun, aliasRun]);
-    expect(aliasEntered).toBe(true);
-  });
-
-  it("keeps history after restore (undo of undo is possible)", async () => {
-    const dir = await makeProject();
-    const snap = await createSnapshot(dir, "起点");
-    await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["x"] }), "utf-8");
-    await createSnapshot(dir, "改动");
-    await restoreSnapshot(dir, snap.id);
-    const list = await listSnapshots(dir);
-    const labels = list.map((s) => s.label);
-    expect(labels[0]).toContain("恢复到");
-    expect(labels).toContain("改动"); // 历史没有被抹掉
-  });
 });
 
-// C 批：对话里「撤销上一步」。恢复到最近一个『内容与当前不同、非撤销产物』的检查点
-// （每个 agent 写操作前都有检查点）。连续撤销逐步回退、跳过撤销自身产物、无可撤销时诚实 null。
-describe("undoLastChange 对话撤销", () => {
-  // 真书永远有基线文件（project.json 等），用 makeProject 而非空目录——空 commit 上 restoreSnapshot 的
-  // `git checkout <id> -- .` 会因无文件报错，那不是真实场景。
-  it("撤销最近一次未提交写入（含新增 untracked 文件），回到该写操作前", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "agent:foundation_write"); // 写操作前检查点
-    await writeFile(join(dir, "world.json"), "新资料"); // 工具写入（未提交、untracked）
-    const r = await undoLastChange(dir);
-    expect(r).not.toBeNull();
-    expect(r?.undoneLabel).toBe("改设定本");
-    await expect(access(join(dir, "world.json"))).rejects.toThrow(); // 写入被撤销
-  }, 30_000);
-
-  it("没有可撤销的改动 → 返回 null（绝不谎称已撤销）", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "agent:foundation_write"); // 检查点后无任何改动
-    expect(await undoLastChange(dir)).toBeNull();
-  }, 30_000);
-
-  it("连续撤销逐步回退，跳过撤销产物、不卡原地", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "agent:generate_draft"); // step1 前
-    await writeFile(join(dir, "a.md"), "A"); // step1 写
-    await createSnapshot(dir, "agent:commit_apply"); // step2 前（a.md 入库）
-    await writeFile(join(dir, "b.md"), "B"); // step2 写
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("定稿"); // 撤 step2
-    await expect(access(join(dir, "b.md"))).rejects.toThrow();
-    expect(await readFile(join(dir, "a.md"), "utf-8")).toBe("A"); // a.md 仍在
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 再撤 step1
-    await expect(access(join(dir, "a.md"))).rejects.toThrow();
-  }, 30_000);
-
-  it("连续撤销三步一路往回退，不在两个状态之间来回跳（恢复产物指向的存档点之下再找）", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "agent:generate_draft"); // S1：什么都没有
-    await writeFile(join(dir, "a.md"), "A");
-    await createSnapshot(dir, "agent:revise_draft"); // S2：a
-    await writeFile(join(dir, "b.md"), "B");
-    await createSnapshot(dir, "agent:commit_apply"); // S3：a b
-    await writeFile(join(dir, "c.md"), "C");
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("定稿"); // 回到 S3
-    await expect(access(join(dir, "c.md"))).rejects.toThrow();
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("修改工作稿"); // 回到 S2
-    await expect(access(join(dir, "b.md"))).rejects.toThrow();
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 回到 S1，而不是又跳回 S3
-    await expect(access(join(dir, "a.md"))).rejects.toThrow();
-    await expect(access(join(dir, "b.md"))).rejects.toThrow();
-    expect(await undoLastChange(dir)).toBeNull(); // 到头了如实说没有
-  }, 30_000);
-
-  it("老书旧前缀快照链照常识别：列表/人话化透传/落盘收尾产物/逐步撤销目标（T15 读侧兼容）", async () => {
-    // 复审探针 3c 收编：写侧早已只写新词（定稿前快照/工作稿生成前快照），老书 git 史里躺着的
-    // 旧前缀 label 必须仍是合法历史与撤销目标。
-    const dir = await makeProject();
-    await createSnapshot(dir, "入库前快照：第1章");
-    await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["a"] }), "utf-8");
-    await createSnapshot(dir, "草稿生成前快照：第2章");
-    await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["a", "b"] }), "utf-8"); // 最近一次写入（未提交）
-
-    // 旧 label 照常列出；裸旧 label 人话化原样透传（落盘 label 是历史真相，不再翻译）；
-    // 旧「落盘收尾：…」条目仍被识别为工程产物（该前缀未改名）。
-    const labels = (await listSnapshots(dir)).map((snap) => snap.label);
-    expect(labels).toContain("入库前快照：第1章");
-    expect(labels).toContain("草稿生成前快照：第2章");
-    expect(humanizeUndoLabel("入库前快照：第1章")).toBe("入库前快照：第1章");
-    expect(humanizeUndoLabel("草稿生成前快照：第2章")).toBe("草稿生成前快照：第2章");
-    expect(isPostWriteSettlementSnapshot("落盘收尾：入库前快照：第1章")).toBe(true);
-
-    // 撤销链在纯旧前缀历史上完整工作：先撤掉未提交写入、落回「草稿生成前快照：第2章」，
-    // 再撤自动跳过恢复产物、落回「入库前快照：第1章」。
-    const first = await undoLastChange(dir);
-    expect(first?.undoneLabel).toBe("草稿生成前快照：第2章");
-    expect(JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8"))).toEqual({ threads: ["a"] });
-    const second = await undoLastChange(dir);
-    expect(second?.undoneLabel).toBe("入库前快照：第1章");
-    expect(JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8"))).toEqual({ threads: [] });
-  }, 30_000);
-});
-
-// R4.2（验收 3.2）：首稿也进操作历史（存档点「出稿：第N章」由出稿适配层建，这里按生产链模拟），
-// 撤销回执必须写清实际退回了什么、哪些是这步之后写的一并退回。
-describe("R4.2 首稿可撤销 + 撤销回执写清退回内容", () => {
-  const names = new Map([["char-protag", "陆沉"]]);
-
-  async function makeRenamableProject(): Promise<string> {
-    const dir = await makeProject();
-    await mkdir(join(dir, "characters", "char-protag"), { recursive: true });
-    await writeFile(join(dir, "characters", "char-protag", "core.json"), JSON.stringify({ id: "char-protag", name: "主角" }), "utf-8");
-    return dir;
-  }
-
-  async function writeChapter5Draft(dir: string, body = "# 第 5 章\n\n阿禾拆了信。"): Promise<void> {
-    await mkdir(join(dir, "drafts", "fast"), { recursive: true });
-    await writeFile(join(dir, "drafts", "fast", "chapter-0005.md"), body, "utf-8");
-  }
-
-  it("改名 → 首稿 → 撤销：撤的是首稿（草稿删掉、改名还在）；再撤一次撤的才是改名", async () => {
-    const dir = await makeRenamableProject();
-    // ① AI 改主角卡名（foundation_write 同款链：runWithSnapshot 检查点 + 落盘收尾）。
-    await runWithSnapshot(dir, "agent:foundation_write:改名 主角→陆沉", async () => {
-      await writeFile(join(dir, "characters", "char-protag", "core.json"), JSON.stringify({ id: "char-protag", name: "陆沉" }), "utf-8");
-    });
-    // ② AI 出第 5 章首稿：适配层先建「出稿：第5章」存档点，草稿落盘（untracked）。
-    await createSnapshot(dir, "出稿：第5章");
-    await writeChapter5Draft(dir);
-
-    // ③ 撤销上一步 —— 撤的必须是这次出稿，不是更早的改名。
-    const first = await undoLastChange(dir);
-    expect(first?.undoneLabel).toBe("出稿：第5章");
-    await expect(access(join(dir, "drafts", "fast", "chapter-0005.md"))).rejects.toThrow(); // 首稿被撤掉
-    expect(JSON.parse(await readFile(join(dir, "characters", "char-protag", "core.json"), "utf-8")).name).toBe("陆沉"); // 改名还在
-    // 回执事实：退回的就是第 5 章工作稿，没有「这步之后写的」连带。
-    expect(first?.reverted).toEqual([{ status: "A", path: "drafts/fast/chapter-0005.md" }]);
-    expect(first?.revertedLater).toEqual([]);
-    const receipt = buildRestoreReceipt({
-      title: `已撤销上一步（${first?.undoneLabel}）。`,
-      reverted: first?.reverted ?? [],
-      revertedLater: [],
-      nameById: names,
-    });
-    expect(receipt).toContain("第 5 章工作稿");
-    expect(receipt).toContain("恢复前的自动存档");
-    expect(receipt).not.toContain("也一并退回");
-
-    // ④ 再撤一次 —— 这回才是改名。
-    const second = await undoLastChange(dir);
-    expect(second?.undoneLabel).toBe("改设定本：改名 主角→陆沉");
-    expect(JSON.parse(await readFile(join(dir, "characters", "char-protag", "core.json"), "utf-8")).name).toBe("主角");
-  }, 30_000);
-
-  it("恢复到更早存档点：这步之后写的首稿也一并退回，回执单独点名 + 指明找回办法", async () => {
-    const dir = await makeRenamableProject();
-    const { snapshot: renameSnap } = await runWithSnapshot(dir, "agent:foundation_write:改名 主角→陆沉", async () => {
-      await writeFile(join(dir, "characters", "char-protag", "core.json"), JSON.stringify({ id: "char-protag", name: "陆沉" }), "utf-8");
-    });
-    await createSnapshot(dir, "出稿：第5章");
-    await writeChapter5Draft(dir);
-
-    // 作者从「历史」页恢复到改名那一步之前的存档点（更早）。
-    const outcome = await restoreSnapshot(dir, renameSnap.id);
-    expect(outcome.reverted.map((file) => `${file.status} ${file.path}`).sort()).toEqual([
-      "A drafts/fast/chapter-0005.md",
-      "M characters/char-protag/core.json",
-    ]);
-    expect(outcome.revertedLater).toEqual([{ status: "A", path: "drafts/fast/chapter-0005.md" }]);
-    await expect(access(join(dir, "drafts", "fast", "chapter-0005.md"))).rejects.toThrow(); // 连带退回实锤
-    const receipt = buildRestoreReceipt({
-      title: "已恢复到「改设定本：改名 主角→陆沉」之前。",
-      reverted: outcome.reverted,
-      revertedLater: outcome.revertedLater,
-      nameById: names,
-    });
-    expect(receipt).toContain("角色卡：陆沉");
-    expect(receipt).toContain("这步之后写的第 5 章工作稿也一并退回了");
-    expect(receipt).toContain("要找回，去「历史」页点「恢复前的自动存档」");
-  }, 30_000);
-
-  // R5.4·新发现 4：真机撤销回执说「另外还有 4 个文件」——其实是出稿那步连带落盘的内部记录
-  // （工作台缓存/查错记录/诊断日志）。真 git 全链：这些文件确实进了 revert 集合，回执必须滤掉它们。
-  it("出稿连带落盘的内部记录进了 revert 集合 → 回执只报工作稿和章纲，不出现「其他文件」", async () => {
-    const dir = await makeRenamableProject();
-    await createSnapshot(dir, "出稿：第5章");
-    // 出稿那步真实会写的文件形状（复验实锤）：工作稿 + 章纲 + 四处内部记录。
-    await writeChapter5Draft(dir);
-    await mkdir(join(dir, "drafts", "plans"), { recursive: true });
-    await writeFile(join(dir, "drafts", "plans", "chapter-0005.json"), JSON.stringify({ beats: [] }), "utf-8");
-    await mkdir(join(dir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    await writeFile(join(dir, ".story-engine-ui", "chapter-workspaces", "chapter-0005.json"), "{}", "utf-8");
-    await mkdir(join(dir, ".story-engine-ui", "continuity-checks"), { recursive: true });
-    await writeFile(join(dir, ".story-engine-ui", "continuity-checks", "0005.json"), "{}", "utf-8");
-    await writeFile(join(dir, ".story-engine-ui", "uncarded-character-memo.json"), "{}", "utf-8");
-    await mkdir(join(dir, "diagnostics"), { recursive: true });
-    await writeFile(join(dir, "diagnostics", "commit-chapter-0005.json"), "{}", "utf-8");
-
-    const undone = await undoLastChange(dir);
-    expect(undone?.undoneLabel).toBe("出稿：第5章");
-    // 内部记录确实被 git 卷进了 revert 集合（修复前回执会把它们数成「其他文件 4 个」）。
-    expect(undone?.reverted.some((file) => file.path.startsWith(".story-engine-ui/"))).toBe(true);
-    expect(undone?.reverted.some((file) => file.path.startsWith("diagnostics/"))).toBe(true);
-    const receipt = buildRestoreReceipt({
-      title: `已撤销上一步（${undone?.undoneLabel}）。`,
-      reverted: undone?.reverted ?? [],
-      revertedLater: undone?.revertedLater ?? [],
-      nameById: names,
-    });
-    expect(receipt).toContain("这次退回：第 5 章工作稿、第 5 章章纲。");
-    expect(receipt).not.toContain("其他文件");
-  }, 30_000);
-});
-
-// P2（2026-10-02）对话历史不入快照：撤销只回退写作状态，用户已看到的聊天记录不随 undo 消失。
 describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", () => {
   const sessionsRel = join(".story-engine-ui", "chat-sessions");
 
@@ -438,7 +103,7 @@ describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", (
     await writeFile(join(dir, sessionsRel, name), body, "utf-8");
   }
 
-  it("新书：首个快照即写 info/exclude，会话文件不进 commit；undo 回退正文时聊天记录原地不动", async () => {
+  it("新书：首个快照即写 info/exclude，会话文件不进 commit（撤销范围本来也不含对话）", async () => {
     const dir = await makeProject();
     await writeSession(dir, "s1.json", "聊天-1");
     const first = await createSnapshot(dir, "agent:generate_draft");
@@ -451,25 +116,9 @@ describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", (
     const second = await createSnapshot(dir, "agent:commit_apply");
     expect(await filesInCommit(dir, second.id)).toContain(".story-engine-ui/commit-idempotency/r1.json");
 
-    // 写操作 + 对话继续增长 → undo：正文回退、对话不回退
-    await writeFile(join(dir, "a.md"), "A", "utf-8");
-    await writeSession(dir, "s1.json", "聊天-1 + 用户刚看到的新回合");
-    await writeSession(dir, "s2.json", "聊天-2");
-    const r = await undoLastChange(dir);
-    expect(r?.undoneLabel).toBe("定稿");
-    await expect(access(join(dir, "a.md"))).rejects.toThrow();
-    expect(await readFile(join(dir, sessionsRel, "s1.json"), "utf-8")).toBe("聊天-1 + 用户刚看到的新回合");
-    expect(await readFile(join(dir, sessionsRel, "s2.json"), "utf-8")).toBe("聊天-2");
   });
 
-  it("只有对话在变、正文没变 → 仍判「没有可撤销的改动」（对话差异不算改动）", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "agent:foundation_write");
-    await writeSession(dir, "s1.json", "新对话");
-    expect(await undoLastChange(dir)).toBeNull();
-  });
-
-  it("旧书迁移：历史快照里已跟踪的会话文件被摘出索引（磁盘不动），恢复到旧快照也不把旧聊天记录盖回来", async () => {
+  it("旧书迁移：历史快照里已跟踪的会话文件被摘出索引（磁盘不动），新快照不再带它", async () => {
     const dir = await makeProject();
     await writeSession(dir, "s1.json", "旧聊天");
     // 模拟老版本：exclude 还不存在时建的仓库，会话文件被 add -A 卷进了历史
@@ -484,14 +133,10 @@ describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", (
     const exclude = await readFile(join(dir, ".git", "info", "exclude"), "utf-8");
     expect(exclude.split(/\r?\n/u)).toContain(CHAT_SESSIONS_EXCLUDE_LINE);
 
-    // 新快照：会话文件已不在树里；对话继续增长 → 恢复到旧快照：正文回退、聊天记录保持最新
+    // 新快照：会话文件已不在树里
     await writeFile(join(dir, "project.json"), JSON.stringify({ title: "改名后" }), "utf-8");
     const migrated = await createSnapshot(dir, "agent:foundation_write");
     expect(await filesInCommit(dir, migrated.id)).not.toContain(`${SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR}/s1.json`);
-    await writeSession(dir, "s1.json", "新聊天");
-    await restoreSnapshot(dir, legacy.id);
-    expect(JSON.parse(await readFile(join(dir, "project.json"), "utf-8"))).toEqual({ title: "测试书" });
-    expect(await readFile(join(dir, sessionsRel, "s1.json"), "utf-8")).toBe("新聊天");
   });
 
   it("书目录本来就是 git 仓库、电脑上也没 git 身份：补一份本仓库身份，存档照样打得上（CI 跑手撞到）", async () => {
@@ -533,64 +178,7 @@ describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", (
   });
 });
 
-// afterfix #2：runWithSnapshot 落盘收尾——每次写操作后把产物即时收进 git，工作树保持干净，
-// 杜绝「最后一次写操作产物长期 dirty 残留」（Codex 三轮误判「入库没写盘」）。收尾 commit 标成产物、
-// undo 与操作历史都跳过它，撤销语义完全不变。
-describe("runWithSnapshot 落盘收尾·写后工作树干净（Codex afterfix #2）", () => {
-  async function gitStatusPorcelain(dir: string): Promise<string> {
-    const { stdout } = await execFileAsync("git", ["-C", dir, "status", "--porcelain"]);
-    return stdout.trim();
-  }
-
-  it("写操作后工作树干净——产物即时进 git，不再长期 dirty 残留", async () => {
-    const dir = await makeProject();
-    await runWithSnapshot(dir, "agent:commit_apply", async () => {
-      await mkdir(join(dir, "chapters"), { recursive: true });
-      await writeFile(join(dir, "chapters", "0001.md"), "第一章正文");
-      await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["新线索"] }));
-      return { ok: true };
-    });
-    expect(await gitStatusPorcelain(dir)).toBe(""); // 入库后 git 干净（不再残留 chapters/threads 等 dirty）
-  });
-
-  it("收尾后 undo 仍精确撤销该写操作、且撤销后也干净（落盘收尾 commit 被 undo 跳过）", async () => {
-    const dir = await makeProject();
-    await runWithSnapshot(dir, "agent:commit_apply", async () => {
-      await mkdir(join(dir, "chapters"), { recursive: true });
-      await writeFile(join(dir, "chapters", "0001.md"), "正文");
-      return { ok: true };
-    });
-    const r = await undoLastChange(dir);
-    expect(r?.undoneLabel).toBe("定稿");
-    await expect(access(join(dir, "chapters", "0001.md"))).rejects.toThrow(); // 入库被撤销
-    expect(await gitStatusPorcelain(dir)).toBe(""); // 撤销后也干净
-  });
-
-  // 2026-10-13 修复轮：根套件满载并行时这条 5s 默认超时偶发不够（单独重跑全绿），放宽到 20s——
-  // 它连跑两次快照+两次撤销共 4 轮真 git 操作，本就比同文件其他用例重。
-  it("连续两次 runWithSnapshot 逐步撤销：先撤入库、再撤出稿——收尾 commit 绝不被误当『重做』目标", { timeout: 20_000 }, async () => {
-    const dir = await makeProject();
-    await runWithSnapshot(dir, "agent:generate_draft", async () => {
-      await mkdir(join(dir, "drafts"), { recursive: true });
-      await writeFile(join(dir, "drafts", "a.md"), "A");
-      return { ok: true };
-    });
-    await runWithSnapshot(dir, "agent:commit_apply", async () => {
-      await mkdir(join(dir, "chapters"), { recursive: true });
-      await writeFile(join(dir, "chapters", "0001.md"), "B");
-      return { ok: true };
-    });
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("定稿"); // 撤 step2
-    await expect(access(join(dir, "chapters", "0001.md"))).rejects.toThrow();
-    expect(await readFile(join(dir, "drafts", "a.md"), "utf-8")).toBe("A"); // 出稿产物仍在（没被收尾 commit 带回）
-    expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 再撤 step1
-    await expect(access(join(dir, "drafts", "a.md"))).rejects.toThrow();
-  });
-});
-
-// 磁盘治理：pruneSnapshots 把旧史折叠成 base 提交。append-only 语义保留（base 承载被裁边界完整 tree、
-// 裁前另有 bundle 备份），但最近 keep 条撤销链逐条可用、磁盘随 gc 真正回收。
-describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
+describe("裁剪操作历史：先算好、再照算好的裁（planPrune / applyPrune，片 4C）", () => {
   async function commitCount(dir: string): Promise<number> {
     const { stdout } = await execFileAsync("git", ["-C", dir, "rev-list", "--count", "HEAD"]);
     return Number(stdout.trim());
@@ -601,156 +189,116 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
     return stdout.trim();
   }
 
-  // 批量造史：直接打 --allow-empty commit（与快照提交同构，仓库 config 已由首个 createSnapshot 备好），
-  // 比循环走 createSnapshot 快一个量级——本组测的是裁剪行为，不是建快照。
+  // 批量造史：直接打 --allow-empty commit（与快照提交同构，仓库 config 已由首个 createSnapshot 备好）。
   async function seedSnapshots(dir: string, count: number): Promise<void> {
     for (let i = 0; i < count; i += 1) {
       await execFileAsync("git", ["-C", dir, "commit", "--allow-empty", "-m", `快照 ${i + 1}`]);
     }
   }
 
-  it("250 条快照 keep=200 → 201 条（200+base）；base tree 完整检出无损；最近一条仍可撤销", async () => {
+  async function planOf(dir: string, keep?: number) {
+    const planned = await planPrune(dir, keep);
+    if (planned.kind !== "plan") throw new Error("该裁");
+    return planned.plan;
+  }
+
+  it("250 条快照 keep=200 → 201 条（200+base）；base 承载分界的整棵树；当前树、工作树分毫不差；裁前完整历史备份在书外", async () => {
     const dir = await makeProject();
     await writeFile(join(dir, "story", "marker.md"), "边界标记", "utf-8");
     await createSnapshot(dir, "agent:foundation_write:建库"); // 顺带 init 仓库（初始快照 + 本条 = 2）
     await seedSnapshots(dir, 248);
     expect(await commitCount(dir)).toBe(250);
-    // 裁后 base 应承载「第 50 条（从旧数）」的完整 tree；当前 HEAD tree 须分毫不差
     const boundaryTree = await revParse(dir, "HEAD~200^{tree}");
     const headTreeBefore = await revParse(dir, "HEAD^{tree}");
     const oldHead = await revParse(dir, "HEAD");
-    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-backup-"));
 
-    const result = await pruneSnapshots(dir, { keep: 200, dryRun: false, backupDir });
-    expect(result.dryRun).toBe(false);
-    expect(result.prunedCount).toBe(50);
-    expect(result.totalBefore).toBe(250);
-    expect(result.totalAfter).toBe(201);
-    expect(result.freedCommits).toBe(49);
+    const plan = await planOf(dir, 200);
+    expect(plan).toMatchObject({ keep: 200, prunedCount: 50, totalBefore: 250, totalAfter: 201, oldHead });
+    // 算好不动引用
+    expect(await revParse(dir, "HEAD")).toBe(oldHead);
+
+    const bundle = join(await mkdtemp(join(tmpdir(), "se-prune-backup-")), "b.bundle");
+    expect(await applyPrune(dir, plan, bundle)).toEqual({ kind: "done", warnings: [] });
+    expect(await revParse(dir, "HEAD")).toBe(plan.newHead);
     expect(await commitCount(dir)).toBe(201);
-    await access(result.backupBundlePath!); // 裁前完整历史已备份到项目目录外
-
-    // 当前完整状态不丢：HEAD tree 与工作树文件都与裁前一致
+    await access(bundle);
     expect(await revParse(dir, "HEAD^{tree}")).toBe(headTreeBefore);
     expect(await readFile(join(dir, "story", "marker.md"), "utf-8")).toBe("边界标记");
 
-    // base 提交在链尾、消息注明折叠条数，tree == 被裁边界提交的 tree（完整无损）
     const list = await listSnapshots(dir, 300);
     expect(list).toHaveLength(201);
     const base = list[list.length - 1]!;
-    expect(base.id).toBe(result.baseCommitId);
     expect(base.label).toBe("base: 已裁剪 50 条更早快照");
     expect(await revParse(dir, `${base.id}^{tree}`)).toBe(boundaryTree);
-    const baseFiles = await filesInCommit(dir, base.id);
-    expect(baseFiles).toContain("project.json");
-    expect(baseFiles).toContain("story/threads.json");
-    expect(baseFiles).toContain("story/marker.md");
     const { stdout: markerInBase } = await execFileAsync("git", ["-C", dir, "show", `${base.id}:story/marker.md`]);
     expect(markerInBase).toBe("边界标记");
-
-    // 旧链已不可逐条撤销：reflog expire + gc 后，裁前 HEAD 提交对象被回收
+    // 旧链回收了
     await expect(execFileAsync("git", ["-C", dir, "cat-file", "-e", oldHead])).rejects.toThrow();
-
-    // 最近 keep 条撤销链逐条可用：裁后新写一步，撤销仍精确回退
-    await runWithSnapshot(dir, "agent:foundation_write", async () => {
-      await writeFile(join(dir, "world.json"), "新资料", "utf-8");
-    });
-    const r = await undoLastChange(dir);
-    expect(r?.undoneLabel).toBe("改设定本");
-    await expect(access(join(dir, "world.json"))).rejects.toThrow();
   }, 120_000);
 
-  it("dry-run 只预览不落盘：不改历史、不建 base、连备份目录都不建", async () => {
+  it("同一个分界算两次得同一个新链头；照算好的裁过一次再来（崩在回收那步）只补回收，不再裁", async () => {
     const dir = await makeProject();
     await createSnapshot(dir, "起点");
     await seedSnapshots(dir, 28); // 共 30 条
-    const headBefore = await revParse(dir, "HEAD");
-    const backupDir = join(await mkdtemp(join(tmpdir(), "se-prune-dry-")), "backups");
-
-    const result = await pruneSnapshots(dir, { keep: 25, dryRun: true, backupDir });
-    expect(result.dryRun).toBe(true);
-    expect(result.prunedCount).toBe(5);
-    expect(result.totalAfter).toBe(26);
-    expect(result.freedCommits).toBe(4);
-    expect(result.baseCommitId).toBeUndefined();
-    expect(result.backupBundlePath).toBeUndefined();
-    expect(await commitCount(dir)).toBe(30);
-    expect(await revParse(dir, "HEAD")).toBe(headBefore);
-    await expect(access(backupDir)).rejects.toThrow();
+    const plan = await planOf(dir, 20);
+    expect((await planOf(dir, 20)).newHead).toBe(plan.newHead);
+    const bundle = join(await mkdtemp(join(tmpdir(), "se-prune-idem-")), "b.bundle");
+    expect((await applyPrune(dir, plan, bundle)).kind).toBe("done");
+    expect(await commitCount(dir)).toBe(21);
+    expect(await applyPrune(dir, plan, bundle)).toEqual({ kind: "done", warnings: [] });
+    expect(await commitCount(dir)).toBe(21);
+    expect(await revParse(dir, "HEAD")).toBe(plan.newHead);
   }, 60_000);
 
-  it("不足 keep 时 no-op；重复 prune 幂等（既有 base 之上的真实快照 ≤ keep 即不再裁）", async () => {
+  it("算好之后又多了存档：一处不动，回 moved", async () => {
     const dir = await makeProject();
     await createSnapshot(dir, "起点");
-    await seedSnapshots(dir, 28); // 共 30 条
-    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-idem-"));
-
-    const noop = await pruneSnapshots(dir, { keep: 40, dryRun: false, backupDir });
-    expect(noop.prunedCount).toBe(0);
-    expect(noop.backupBundlePath).toBeUndefined(); // no-op 连备份都不建
-    expect(await commitCount(dir)).toBe(30);
-
-    const first = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
-    expect(first.prunedCount).toBe(10);
-    expect(await commitCount(dir)).toBe(21);
-    const headAfterFirst = await revParse(dir, "HEAD");
-
-    const second = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
-    expect(second.prunedCount).toBe(0);
-    expect(await commitCount(dir)).toBe(21);
-    expect(await revParse(dir, "HEAD")).toBe(headAfterFirst);
-
-    const list = await listSnapshots(dir, 50);
-    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 10 条更早快照"); // 计数不被重复 prune 虚增
+    await seedSnapshots(dir, 28);
+    const plan = await planOf(dir, 20);
+    await seedSnapshots(dir, 1);
+    const head = await revParse(dir, "HEAD");
+    const bundle = join(await mkdtemp(join(tmpdir(), "se-prune-moved-")), "b.bundle");
+    expect(await applyPrune(dir, plan, bundle)).toEqual({ kind: "moved" });
+    expect(await revParse(dir, "HEAD")).toBe(head);
+    await expect(access(bundle)).rejects.toThrow();
   }, 60_000);
 
-  it("裁过再涨过 keep 二次裁：旧 base 换新，totalAfter/freedCommits 不多报/少报 1（off-by-one 回归）", async () => {
+  it("不足 keep 时不用裁；裁过不再涨就不再裁；涨过再裁：旧 base 换新、折叠条数累加、条数不多不少", async () => {
     const dir = await makeProject();
     await createSnapshot(dir, "起点");
     await seedSnapshots(dir, 28); // 共 30 条
-    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-twice-"));
-
-    const first = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
-    expect(first.prunedCount).toBe(10);
-    expect(await commitCount(dir)).toBe(21); // 20 保留 + 1 base
-
-    await seedSnapshots(dir, 10); // 涨到 31 条（1 旧 base + 30 快照），再按 keep=20 裁
-    const dry = await pruneSnapshots(dir, { keep: 20, dryRun: true, backupDir });
-    expect(dry.prunedCount).toBe(10);
-    expect(dry.totalBefore).toBe(31);
-    expect(dry.totalAfter).toBe(21); // 旧 base 也出链：21 不是 22
-    expect(dry.freedCommits).toBe(10); // 净释放 10 不是 9
-    expect(await commitCount(dir)).toBe(31); // dry-run 不落盘
-
-    const second = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
-    expect(second.totalAfter).toBe(21);
-    expect(second.freedCommits).toBe(10);
+    expect(await planPrune(dir, 40)).toEqual({ kind: "noop", keep: 40, totalBefore: 30 });
+    const backups = await mkdtemp(join(tmpdir(), "se-prune-twice-"));
+    await applyPrune(dir, await planOf(dir, 20), join(backups, "1.bundle"));
     expect(await commitCount(dir)).toBe(21);
+    expect(await planPrune(dir, 20)).toEqual({ kind: "noop", keep: 20, totalBefore: 21 });
+
+    await seedSnapshots(dir, 10); // 1 旧 base + 30 快照
+    const second = await planOf(dir, 20);
+    expect(second).toMatchObject({ prunedCount: 10, totalBefore: 31, totalAfter: 21 });
+    await applyPrune(dir, second, join(backups, "2.bundle"));
     const list = await listSnapshots(dir, 50);
     expect(list).toHaveLength(21);
-    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 20 条更早快照"); // 折叠计数累加 10+10
+    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 20 条更早快照");
   }, 60_000);
 
-  it("keep 下限夹逼到 20：传 1 按 20 裁，防误裁光", async () => {
+  it("keep 下限夹到 20、缺省 200：传 1 按 20 算", async () => {
+    expect(clampPruneKeep(1)).toBe(20);
+    expect(clampPruneKeep(0)).toBe(200);
+    expect(clampPruneKeep(undefined)).toBe(200);
     const dir = await makeProject();
     await createSnapshot(dir, "起点");
-    await seedSnapshots(dir, 28); // 共 30 条
-    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-clamp-"));
-
-    const result = await pruneSnapshots(dir, { keep: 1, dryRun: false, backupDir });
-    expect(result.keep).toBe(20);
-    expect(result.prunedCount).toBe(10);
-    expect(await commitCount(dir)).toBe(21);
+    await seedSnapshots(dir, 28);
+    expect(await planOf(dir, 1)).toMatchObject({ keep: 20, prunedCount: 10 });
   }, 60_000);
 
   // 真故障注入（非 mock）：SE_GIT_PATH 指向包装脚本，仅 gc 子命令返回 128，其余子命令原样转发真 git。
-  // 验证 P2-2 修复：update-ref 成功后的 gc 失败 → 引用不回滚、结果照返、warning 如实上报。
-  it.skipIf(process.platform === "win32")("update-ref 成功后 gc 失败：引用不回滚、裁剪结果照返并带 warning", async () => {
+  it.skipIf(process.platform === "win32")("引用移成之后 gc 失败：引用不回滚、算裁完，警告如实说空间没收回来", async () => {
     const dir = await makeProject();
     await createSnapshot(dir, "起点");
-    await seedSnapshots(dir, 28); // 共 30 条
+    await seedSnapshots(dir, 28);
     const oldHead = await revParse(dir, "HEAD");
-    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-gcfail-backup-"));
+    const plan = await planOf(dir, 20);
     const wrapperDir = await mkdtemp(join(tmpdir(), "se-prune-gcfail-git-"));
     const wrapper = join(wrapperDir, "git-gc-fail.sh");
     await writeFile(
@@ -759,96 +307,36 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
       "utf-8",
     );
     await chmod(wrapper, 0o755);
-
     const prevGitPath = process.env.SE_GIT_PATH;
     process.env.SE_GIT_PATH = wrapper;
-    let result!: Awaited<ReturnType<typeof pruneSnapshots>>;
+    let result;
     try {
-      result = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
+      result = await applyPrune(dir, plan, join(wrapperDir, "b.bundle"));
     } finally {
       if (prevGitPath === undefined) delete process.env.SE_GIT_PATH;
       else process.env.SE_GIT_PATH = prevGitPath;
     }
-
-    // gc 失败不抛错：裁剪视为完成，warning 如实说明「回收失败」而非谎称回滚
-    expect(result.prunedCount).toBe(10);
+    expect(result.kind).toBe("done");
+    if (result.kind !== "done") return;
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings?.[0]).toContain("裁剪已完成");
-    expect(result.warnings?.[0]).toContain("回收失败");
-    // 引用停在新链头、绝不回滚：裁后 21 条（若回滚到 oldHead 会是 30 条，若仓库损坏会报错）
+    expect(result.warnings[0]).toContain("裁好了");
     expect(await commitCount(dir)).toBe(21);
     expect(await revParse(dir, "HEAD")).not.toBe(oldHead);
-    const list = await listSnapshots(dir, 50);
-    expect(list).toHaveLength(21);
-    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 10 条更早快照");
-    // gc 没跑成，旧对象仍在盘上（磁盘晚点回收无妨）；仓库整体仍可用
     await execFileAsync("git", ["-C", dir, "cat-file", "-e", oldHead]);
     await execFileAsync("git", ["-C", dir, "fsck", "--no-dangling"]);
   }, 60_000);
 });
 
-// P1-6：崩溃残留的 staged 事务（新建文件无法自证为事务写入内容）不许砖住撤销线。
-// restoreSnapshot 第一道门就是收拾事务（核心 recoverTransactions，老格式先收）——修复前 recover 对这类残留
-// 永久抛错，导致快照/撤销/预览全线 500，用户只能手工删 .story-engine-tx。修复后 recover 标记
-// recovered 放行（新建文件原地保留、绝不误删用户数据），撤销照常可用。
-describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () => {
-  async function makeBookProject(): Promise<string> {
-    const rootDir = await mkdtemp(join(tmpdir(), "se-p16-undo-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "P1-6 撤销回归书",
-      genre: "xianxia",
-      logline: "崩溃残留后撤销仍可用。",
-      protagonistName: "测试主角",
-    });
-    return projectDir;
-  }
-
-  it("staged 新建文件核不了 → 先另存再删、标 recovered 放行，restoreSnapshot 不再抛错（P1 第 19 轮 AG3）", async () => {
-    const projectDir = await makeBookProject();
-    const target = await createSnapshot(projectDir, "撤销目标");
-    const relativePath = join("chapters", "0007.md");
-    const chapterPath = join(projectDir, relativePath);
-    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0007");
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(txDir, { recursive: true });
-    await writeFile(chapterPath, "崩溃残留的半章正文", "utf-8");
-    await writeFile(
-      join(txDir, "manifest.json"),
-      `${JSON.stringify({
-        version: 2,
-        chapter: 7,
-        createdAt: "2026-09-15T00:00:00.000Z",
-        files: [relativePath],
-        backups: [{ relativePath, existed: false }],
-        status: "staged",
-      }, null, 2)}\n`,
-      "utf-8",
-    );
-
-    // 修复前：这一步直接 reject（撤销线第一道门就死）。现在：核不了是不是这份写的新建文件，先原样另存、再删（不毁唯一副本），标 recovered 放行。
-    await expect(recoverBookTransactions(projectDir)).resolves.toMatchObject({ problems: [] });
-    await expect(access(chapterPath)).rejects.toThrow();
-    const saved = await readdir(join(projectDir, ".story-core-saved"));
-    expect(saved).toHaveLength(1);
-    expect(JSON.parse(await readFile(join(projectDir, ".story-core-saved", saved[0]!), "utf-8"))).toMatchObject({ path: "chapters/0007.md", content: "崩溃残留的半章正文" });
-    await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
-      .resolves.toMatch(/"status":\s*"recovered"/u);
-
-    // 撤销线恢复可用：restoreSnapshot 不再被残留事务砖住，正常落「恢复到：撤销目标」。
-    const restored = await restoreSnapshot(projectDir, target.id);
-    expect(restored.restored.label).toBe("恢复到：撤销目标");
-    await expect(access(chapterPath)).rejects.toThrow();
-  }, 60_000);
-});
-
 describe("有收拾不了的半截事务：存档类入口都停下（P1 第 22 轮 AJ3）", () => {
-  it("建存档点、存档里写、恢复、裁剪都如实失败，稿不动、事务留着", async () => {
+  it("建存档点、算裁剪、照算好的裁都如实失败，稿不动、事务留着（恢复走核心命令，先收拾事务）", async () => {
     const dir = await makeProject();
     const DRAFT = "drafts/fast/chapter-0001.md";
     await mkdir(join(dir, "drafts", "fast"), { recursive: true });
     await writeFile(join(dir, DRAFT), "# 选定 A\n\n完整的 A。\n", "utf-8");
-    const snap = await createSnapshot(dir, "完整 A");
+    await createSnapshot(dir, "完整 A");
+    for (let i = 0; i < 25; i += 1) await execFileAsync("git", ["-C", dir, "commit", "--allow-empty", "-m", `快照 ${i + 1}`]);
+    const planned = await planPrune(dir, 20);
+    if (planned.kind !== "plan") throw new Error("该裁");
     // 一份退不下去的核心事务：备份多了一个链接，安全层拒绝换回。
     const tx = join(dir, ".story-core-tx", "stuck");
     await mkdir(join(tx, "backup"), { recursive: true });
@@ -861,9 +349,8 @@ describe("有收拾不了的半截事务：存档类入口都停下（P1 第 22 
 
     const residue = { code: "TX_RESIDUE" };
     await expect(createSnapshot(dir, "不该成功")).rejects.toMatchObject(residue);
-    await expect(runWithSnapshot(dir, "不该成功", async () => "写了")).rejects.toMatchObject(residue);
-    await expect(restoreSnapshot(dir, snap.id)).rejects.toMatchObject(residue);
-    await expect(pruneSnapshots(dir, { keep: 1 })).rejects.toMatchObject(residue);
+    await expect(planPrune(dir, 20)).rejects.toMatchObject(residue);
+    await expect(applyPrune(dir, planned.plan, join(dir, "..", "bundle"))).rejects.toMatchObject(residue);
     expect(await readFile(join(dir, DRAFT), "utf-8")).toBe("# 当前 C\n\n当前的 C。\n");
     expect((await readdir(join(dir, ".story-core-tx")))).toEqual(["stuck"]);
   });

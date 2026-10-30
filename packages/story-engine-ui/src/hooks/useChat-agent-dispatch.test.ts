@@ -743,7 +743,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     useChatStore.getState().setMessages([{ id: "old-user", role: "user", content: "旧需求" }, target]);
     const restoreEntered = deferred<void>();
     const restoreDone = deferred<void>();
-    vi.mocked(restoreSnapshotApi).mockImplementationOnce(async () => { restoreEntered.resolve(); await restoreDone.promise; });
+    vi.mocked(restoreSnapshotApi).mockImplementationOnce(async () => { restoreEntered.resolve(); await restoreDone.promise; return { conclusion: "已恢复。", changed: true }; });
     const { result } = renderHook(() => useChat(buildParams({})));
     await act(async () => {
       const undo = result.current.undoToTurn(target);
@@ -1410,9 +1410,9 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   });
 });
 
-// AI 撤销（undo_last_change / manage_snapshots op=undo）：服务端已回退盘上，稿纸按盘上那版直接换上（撤销是作者要的），
-// 原地更新、不整页刷新（重构 P5）。旧字写不回去：存稿带版本号，盘上变了旧版本存不进。
-describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）", () => {
+// 撤了 / 恢复了（写作版本 P2a 片 4C：history.change 操作做完、真改了盘）：和操作历史里恢复同一套原地重读——稿纸按盘上那版
+// 直接换上（撤销是作者要的）、概况重读、流程态按盘上那版算，不整页刷新（重构 P5）。旧字写不回去：存稿带版本号，盘上变了旧版本存不进。
+describe("useChat 撤销：稿纸原地换成盘上那版（重构 P5）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
@@ -1420,7 +1420,14 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
   });
 
-  it("undone=true：盘上回退后的那版直接换上稿纸，流程态按它算，旧回合的过时建议条剥掉", async () => {
+  const undoView = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: "op-0123456789abcdef0123", kind: "history.change", mode: "undo", chapter: 3, what: "撤销", state: "succeeded", stateText: "做完了",
+    allowed: [], summary: "撤好了：第 3 章工作稿回到了这次之前。", conclusion: "撤好了：第 3 章工作稿回到了这次之前。", eventSeq: 3,
+    origin: { kind: "chat", messageId: "user-x" }, changed: { what: "history", snapshotId: "a".repeat(40) }, ...overrides,
+  });
+  const flowApplied = (): unknown => mockedApplyOverview.mock.calls.at(-1)?.[1];
+
+  it("撤了：盘上回退后的那版直接换上稿纸，概况重读、流程态按它算，旧回合的过时建议条剥掉", async () => {
     const diskAfterUndo = "盘上回退后的更早版本。";
     useBookStore.getState().updateWorkspace({ flowStatus: "draft_ready" });
     useChatStore.getState().setMessages([{
@@ -1437,13 +1444,10 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
       }],
     }]);
     scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "undo_last_change", toolCallId: "u1" });
+      handlers.onToolCall({ toolName: "change_history", toolCallId: "u1" });
+      handlers.onToolResult({ toolName: "change_history", toolCallId: "u1", ok: true, summary: "交上了。" });
       writeDisk(3, { draft: diskAfterUndo, title: "回退后的标题" });
-      handlers.onToolResult({
-        toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。",
-        refreshScope: "full", overview: makeOverview("T"),
-      });
-      handlers.onTextDelta("已撤销上一步「出稿」。");
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1451,15 +1455,15 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
 
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, title: "回退后的标题", body: diskAfterUndo, savedBody: diskAfterUndo });
-    expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
-    expect(lastAssistant()?.content).toBe("已撤销上一步「出稿」。");
+    expect(mockedFetchStateOverview).toHaveBeenCalledTimes(1);
+    expect(flowApplied()).toEqual({ flowStatus: "draft_ready" });
     expect(messages().every((m) => !m.suggestedActions?.some((a) => a.id === "confirm-write"))).toBe(true);
   });
 
-  it("undone=true 且盘上已无草稿（撤到「还没写过」）→ 稿纸清空、流程态 idle", async () => {
+  it("撤到「还没写过」（盘上已无草稿）→ 稿纸清空、流程态 idle", async () => {
     scriptAgentStream((handlers) => {
       disk.set(3, emptyPaper(3));
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1467,7 +1471,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销"); });
 
     expect(useDraftStore.getState().body).toBe("");
-    expect(useBookStore.getState().workspace.flowStatus).toBe("idle");
+    expect(flowApplied()).toEqual({ flowStatus: "idle" });
   });
 
   it("撤销请求发出后作者又打了字 → 字留着，盘上那版挂成提示（第 4 轮复核 R7）", async () => {
@@ -1476,7 +1480,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     scriptAgentStream((handlers) => {
       editDraft("撤销请求发出后作者刚打的字");
       writeDisk(3, { draft: "撤销后盘上那版" });
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1494,7 +1498,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     mockedSaveWorkingDraft.mockRejectedValue(new Error("磁盘故障"));
     scriptAgentStream((handlers) => {
       writeDisk(3, { draft: "撤销后盘上那版" });
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1504,10 +1508,9 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     expect(useDraftStore.getState().body).toBe("还没存上、只在稿纸上的字");
   });
 
-  it("undone=false（没东西可撤）→ 稿纸不动", async () => {
+  it("没东西可撤（做完了但没改盘）→ 稿纸不动、不重读", async () => {
     scriptAgentStream((handlers) => {
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: false, summary: "没有可撤销的改动。" });
-      handlers.onTextDelta("当前没有可撤销的改动。");
+      handlers.onOperation?.(undoView({ summary: "没有能撤的改动了。", conclusion: "没有能撤的改动了。", changed: undefined }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1515,12 +1518,13 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销"); });
 
     expect(useDraftStore.getState().body).toBe("第三章原有的工作稿。");
+    expect(mockedFetchStateOverview).not.toHaveBeenCalled();
   });
 
   it("读盘失败 → 稿纸原样、回合照常收尾、不冒错误气泡", async () => {
     scriptAgentStream((handlers) => {
       mockedFetchChapterPaper.mockRejectedValue(new Error("网络抖动"));
-      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。" });
+      handlers.onOperation?.(undoView());
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -1601,49 +1605,6 @@ describe("useChat AI 改稿撞上作者没存的字", () => {
     await act(async () => { await result.current.handleSendMessage("把第三章开头改紧一点"); });
 
     expect(useDraftStore.getState()).toMatchObject({ body: "AI 改好的新一版。", incoming: null });
-  });
-});
-
-// R7.2：请求带上「上一个有写盘回合的首个快照」——服务端 undo 工具优先按它整回合回退。
-describe("useChat 请求携带整回合撤销锚点 lastTurnUndoHint（R7.2）", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    window.localStorage.clear();
-    resetStore();
-    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
-    scriptAgentStream((handlers) => handlers.onDone());
-  });
-
-  it("上一回合写了两个快照 → 请求带 { snapshotId: 首个, changes: 2 }", async () => {
-    useBookStore.setState({ workspace: mockWorkspaceData });
-    useChatStore.setState({
-      messages: [{
-        id: "prev-assistant",
-        role: "assistant",
-        content: "两处都改好了。",
-        turnSnapshots: [
-          { toolName: "revise_draft", snapshotId: `${"a".repeat(40)}` },
-          { toolName: "foundation_write", snapshotId: `${"b".repeat(40)}` },
-        ],
-      }],
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
-
-    const [input] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
-    expect(input.lastTurnUndoHint).toEqual({ snapshotId: "a".repeat(40), changes: 2 });
-  });
-
-  it("纯聊天会话没有写盘快照 → 不带该字段（服务端走默认逐步回退）", async () => {
-    useBookStore.setState({ workspace: mockWorkspaceData });
-    useChatStore.setState({ messages: [{ id: "prev", role: "assistant", content: "聊聊天。" }] });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
-
-    const [input] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
-    expect(input.lastTurnUndoHint).toBeUndefined();
   });
 });
 
@@ -1745,7 +1706,7 @@ describe("handleChapterButton：写作区固定按钮直接发结构化动作（
     scriptAgentStream((handlers) => handlers.onDone());
   });
 
-  it("「内容审阅」带当前章号交一次检查（请求号、交的时间按钮出的时候给）；「撤销上一步」发 undo", async () => {
+  it("「内容审阅」带当前章号交一次检查（请求号、交的时间按钮出的时候给）；「撤销上一步」交一次撤销（不带号 = 上一次）", async () => {
     const { result } = renderHook(() => useChat(buildParams({})));
     const chapter = useBookStore.getState().workspace.currentChapter.chapterNumber;
 
@@ -1758,7 +1719,7 @@ describe("handleChapterButton：写作区固定按钮直接发结构化动作（
     await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(false));
     act(() => result.current.handleChapterButton("undo"));
     await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(2));
-    expect(mockedStreamAgentChat.mock.calls[1]![0].action).toEqual({ toolName: "undo" });
+    expect(mockedStreamAgentChat.mock.calls[1]![0].action).toMatchObject({ kind: "new", type: "history.change", mode: "undo", params: {} });
   });
 
   it("「写这一章」带方向框里的字（原样）作章纲方向", async () => {

@@ -23,9 +23,12 @@ import { CommandReceipt } from "../schema/book.js";
 import { CARDS_PATH, chapterFromFileName, chapterLedgerPath, chapterTextPath, DECISIONS_PATH } from "../store/paths.js";
 import { sha256Bytes, type TxEffect } from "../store/transaction.js";
 import { cardReferencers, decisionReferencers, digestOf, ledgerReferencers, Resolver, type Referencer, type RefWhere, type TruthView } from "./references.js";
-import { HistoryFileError, HistoryStore, isReferenceFile, ledgerChapterOfPath, readUndoableFiles, textOf, type HistoryReader, type Version } from "./store.js";
+import { HistoryFileError, HistoryStore, isReferenceFile, ledgerChapterOfPath, rangeDigestOf, readUndoableFiles, textOf, type HistoryReader, type Version } from "./store.js";
 
 export type RevertTarget = { readonly opId: string } | { readonly receiptKey: string };
+
+/** 撤销 / 整本恢复那条命令的名字（apply.ts 的 historyApply；这里不引它，免得互相引）。 */
+export const HISTORY_APPLY_COMMAND = "history.apply";
 
 /** 计划里的一处改动：现在的 sha256（null = 现在没有，应用时核），换成什么（null = 删）。 */
 export interface PlannedChange {
@@ -56,6 +59,8 @@ export interface RevertPlan {
   readonly impact: readonly ImpactItem[];
   /** 影响和那几份现在的样子的摘要：确认时重算，变了重新问。 */
   readonly impactDigest: string;
+  /** 计划时整个撤销范围的摘要：交给 history.apply 核（算好之后哪里改过就不写、重算）。 */
+  readonly rangeDigest: string;
 }
 
 const time = (receipt: CommandReceipt): number => {
@@ -84,6 +89,47 @@ export async function readReceipts(bookDir: string): Promise<CommandReceipt[]> {
     }
   }
   return receipts.sort((a, b) => time(a) - time(b) || a.version - b.version || a.key.localeCompare(b.key));
+}
+
+const targetOf = (receipt: CommandReceipt): RevertTarget => (receipt.opId ? { opId: receipt.opId } : { receiptKey: receipt.key });
+const targetId = (target: RevertTarget): string => ("opId" in target ? `op:${target.opId}` : `key:${target.receiptKey}`);
+
+/** history.apply 结果里记的那次（撤的是哪次）；认不出返回 undefined。 */
+export function revertTargetOf(value: unknown): RevertTarget | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as { readonly opId?: unknown; readonly receiptKey?: unknown };
+  if (typeof record.opId === "string" && record.opId) return { opId: record.opId };
+  if (typeof record.receiptKey === "string" && record.receiptKey) return { receiptKey: record.receiptKey };
+  return undefined;
+}
+
+/**
+ * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次写过撤销范围、还没被撤的。撤销、整本恢复本身跳过；被撤过的跳过
+ * （撤它的那次后来又被撤了，就不算被撤）；整本恢复（真换了东西的）之前的不算：恢复已经把它们换掉了。
+ * 升级之前的写（回执没有效果记录）也算一次：撤的时候如实说只能整本恢复。之前没留存档的写（建书、导入时写的那一笔）是这本书的起点，
+ * 到它就停：再往前没什么能撤。没有返回 undefined。receipts 按写的先后排好。
+ */
+export function lastUndoable(receipts: readonly CommandReceipt[]): RevertTarget | undefined {
+  const undone = new Set<string>();
+  for (let index = receipts.length - 1; index >= 0; index -= 1) {
+    const receipt = receipts[index] as CommandReceipt;
+    const id = targetId(targetOf(receipt));
+    if (undone.has(id)) continue;
+    if (receipt.command === HISTORY_APPLY_COMMAND) {
+      const result = receipt.result as { readonly kind?: unknown; readonly target?: unknown } | null | undefined;
+      if (result?.kind === "restore") {
+        if ((receipt.effects ?? []).length > 0) return undefined;
+        continue;
+      }
+      const target = revertTargetOf(result?.target);
+      if (target) undone.add(targetId(target));
+      continue;
+    }
+    if (receipt.effects !== undefined && receipt.effects.length === 0) continue;
+    if (receipt.effects !== undefined && !receipt.snapshotTree) return undefined;
+    return targetOf(receipt);
+  }
+  return undefined;
 }
 
 const chapterOfTextPath = (path: string): number | undefined =>
@@ -214,6 +260,7 @@ async function plan(bookDir: string, target: RevertTarget, store: HistoryStore):
     changes,
     impact,
     impactDigest: digestOf(impact.map((item) => ({ ...item, now: currentSha.get(item.path) ?? null }))),
+    rangeDigest: rangeDigestOf(files),
   };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newCanonPick, newCanonStatement, newCommitAction, newDraftAction, newEditAction, newInspectAction } from "../api/agentChatClient.js";
+import { newCanonPick, newCanonStatement, newCommitAction, newDraftAction, newEditAction, newInspectAction, newUndoAction } from "../api/agentChatClient.js";
 
 import {
   DIRECT_WRITE_FALLBACK_GOAL,
@@ -44,14 +44,15 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText(newInspectAction("review", 5))).toBe("审阅第 5 章的内容");
     expect(userActionChoiceText(newInspectAction("quality", 5))).toBe("对第 5 章做硬伤检查");
     expect(userActionChoiceText(newInspectAction("flavor", 5))).toBe("查第 5 章的 AI 味");
-    expect(userActionChoiceText({ toolName: "undo" })).toBe("撤销上一步");
+    expect(userActionChoiceText(newUndoAction())).toBe("撤销上一步");
+    expect(userActionChoiceText(newUndoAction("op-0123456789abcdef0123"))).toBe("撤回来");
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-undo-2", decision: "apply" } })).toBe("全撤");
     expect(userActionChoiceText(newInspectAction("continuity", 5))).toBe("核第 5 章的账");
     expect(userActionChoiceText(newInspectAction("continuity", 5, { fresh: true }))).toBe("再核一遍第 5 章的账");
     expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123" })).toBe("接着做");
     expect(userActionChoiceText({ kind: "cancel", opId: "op-0123456789abcdef0123" })).toBe("不要了");
     expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-commit", decision: "commit", values: { day: 3 } } })).toBe("确认定稿");
-    expect(userActionChoiceText({ toolName: "prune_snapshots" })).toBe("确认裁剪操作历史");
-    expect(userActionChoiceText({ toolName: "prune_snapshots", keep: 50 })).toBe("确认裁剪操作历史（保留最近 50 条）");
+    expect(userActionChoiceText({ kind: "resume", opId: "op-0123456789abcdef0123", answer: { actionId: "confirm-prune", decision: "apply" } })).toBe("确认裁剪");
     // 改稿（片 2C）：按核账改、去 AI 味、改写；引的原文太长截短。改写停着等作者点的说点的哪个。
     expect(userActionChoiceText(newEditAction({ mode: "fix", chapter: 5, fixes: [{ targetText: "他把钥匙放回柜台。", revisionGoal: "对上前文" }] }))).toBe("改第 5 章这一处：「他把钥匙放回柜台。」");
     expect(userActionChoiceText(newEditAction({ mode: "fix", chapter: 5, fixes: [{ targetText: "a", revisionGoal: "b" }, { targetText: "c", revisionGoal: "d" }] }))).toBe("改掉第 5 章这 2 处");

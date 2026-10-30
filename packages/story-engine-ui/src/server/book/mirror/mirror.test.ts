@@ -343,7 +343,8 @@ describe("开书接到新核心（ensureBookOnCore，重构 P9：先导账单、
     await writeOldBook(book);
     const snapshots: string[] = [];
 
-    const result = await ensureBookOnCore(book, { snapshot: async (_label, command) => { snapshots.push(command); } });
+    // 假的存档点不回树：核心会再要一次只取树的（mode = "tree"），那次不算存档点。
+    const result = await ensureBookOnCore(book, { snapshot: async (_label, command, mode) => { if (!mode) snapshots.push(command); } });
 
     expect(result).toMatchObject({ ok: true, imported: { counts: { chapters: 1 } }, cards: { imported: true }, mirror: { ok: true } });
     // 顺序：先导账单、再搬设定（看有没有账单，不看版本号——搬设定也会涨版本号）。

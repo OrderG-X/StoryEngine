@@ -7,9 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildProjectRequestContext,
-  parseLastTurnUndoHint,
   readCurrentChapterFromContext,
-  readLastTurnUndoHintFromContext,
   readProjectDirFromContext,
   readAuthorWordsFromContext,
   readPickedDirectionFromContext,
@@ -59,40 +57,12 @@ describe("request-context projectDir + currentChapter 注入/读取", () => {
 
 describe("request-context 作者挑中的走法", () => {
   it("只对挑的那一章读得回；没带、没字、章号不对都是 undefined", () => {
-    const c = ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, { chapter: 14, text: " 老民警：1. 去派出所 " }));
+    const c = ctx(buildProjectRequestContext("/tmp/book", 14, undefined, { chapter: 14, text: " 老民警：1. 去派出所 " }));
     expect(readPickedDirectionFromContext(c, 14)).toBe("老民警：1. 去派出所");
     expect(readPickedDirectionFromContext(c, 15)).toBeUndefined();
     expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14)), 14)).toBeUndefined();
-    expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, { chapter: 14, text: "  " })), 14)).toBeUndefined();
+    expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14, undefined, { chapter: 14, text: "  " })), 14)).toBeUndefined();
     expect(readPickedDirectionFromContext(undefined, 14)).toBeUndefined();
-  });
-});
-
-// R7.2：前端带的「上一个有写盘回合的首个快照」——undo 工具优先按它整回合回退。
-describe("request-context lastTurnUndoHint 注入/读取/容错", () => {
-  const validHint = { snapshotId: "a".repeat(40), changes: 2 };
-
-  it("buildProjectRequestContext 带 hint → 工具层原样读回", () => {
-    const c = ctx(buildProjectRequestContext("/tmp/book", 3, undefined, validHint));
-    expect(readLastTurnUndoHintFromContext(c)).toEqual(validHint);
-  });
-
-  it("不带 hint → 读回 undefined（老客户端向后兼容，undo 走默认逐步回退）", () => {
-    expect(readLastTurnUndoHintFromContext(ctx(buildProjectRequestContext("/tmp/book")))).toBeUndefined();
-    expect(readLastTurnUndoHintFromContext(undefined)).toBeUndefined();
-  });
-
-  it("parseLastTurnUndoHint 容错：非对象 / snapshotId 非 40 位 hex / changes 非正整数 → 一律 undefined", () => {
-    expect(parseLastTurnUndoHint(undefined)).toBeUndefined();
-    expect(parseLastTurnUndoHint(null)).toBeUndefined();
-    expect(parseLastTurnUndoHint("a".repeat(40))).toBeUndefined();
-    expect(parseLastTurnUndoHint({ snapshotId: "snap-1", changes: 2 })).toBeUndefined();
-    expect(parseLastTurnUndoHint({ snapshotId: "A".repeat(40), changes: 2 })).toBeUndefined(); // 大写/非 hex
-    expect(parseLastTurnUndoHint({ snapshotId: "a".repeat(40) })).toBeUndefined();
-    expect(parseLastTurnUndoHint({ snapshotId: "a".repeat(40), changes: 0 })).toBeUndefined();
-    expect(parseLastTurnUndoHint({ snapshotId: "a".repeat(40), changes: 1.5 })).toBeUndefined();
-    expect(parseLastTurnUndoHint({ snapshotId: "a".repeat(40), changes: "2" })).toBeUndefined();
-    expect(parseLastTurnUndoHint(validHint)).toEqual(validHint);
   });
 });
 

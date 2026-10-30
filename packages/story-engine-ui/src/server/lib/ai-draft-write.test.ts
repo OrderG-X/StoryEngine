@@ -1,17 +1,13 @@
 // @vitest-environment node
 //
-// AI 写工作稿的唯一通道（写作版本 P1b）：只在工作稿还是开工时那版、书还是开工时那样时换上；
-// 对不上就留成候选、如实说，作者那份一个字不动。真项目、真命令、真存档点。
-import { randomUUID } from "node:crypto";
-import { rm, stat } from "node:fs/promises";
+// AI 写工作稿的唯一通道（写作版本 P1b）：只在操作里换上（换上 / 留候选的规矩在 services/operations/ai-draft-apply.test.ts）；
+// 同一章的 AI 改稿一次一笔。真项目、真命令。
+import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { draftSave, readDraft, readTruthBasis, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
 import { applyAiDraft, oneAiWriterPerChapter } from "./ai-draft-write.js";
-import { writeCards } from "./card-write.js";
-import { pendingDraftFor, readDraftCandidate, saveDraftCandidate } from "./draft-candidates.js";
 import { makeHomeTempDir } from "./home-test-tmp.js";
-import { listSnapshots } from "./snapshot.js";
 
 let rootDir: string;
 let book: string;
@@ -37,86 +33,11 @@ async function authorSaves(chapter: number, body: string): Promise<void> {
 }
 
 describe("applyAiDraft", () => {
-  it("两样都对得上 → 换上，换前打存档点（叫调用方给的名字）", async () => {
-    const begun = await start();
-    const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "AI 写的第一章。", ...begun, source: "draft", snapshotLabel: "出稿：第1章" });
-    expect(outcome).toMatchObject({ applied: true, unchanged: false });
-    expect((await readDraft(book, 1))?.body).toBe("AI 写的第一章。");
-    expect(outcome.applied && outcome.snapshotId).toBeTruthy();
-    expect((await listSnapshots(book)).some((entry) => entry.label === "出稿：第1章")).toBe(true);
-  });
-
-  it("写的途中作者存了稿 → 不换、留成候选（draft_moved），不打存档点；稿纸提示这一份", async () => {
+  it("不在操作里：如实挡下、不写（AI 稿只在操作的应用步骤里换上，写作版本 P2a 片 4C）", async () => {
     await authorSaves(1, "作者原来的稿。");
     const begun = await start();
-    await authorSaves(1, "作者在 AI 写的时候又改了。");
-    const before = (await listSnapshots(book)).length;
-    const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "AI 写的一版。", ...begun, source: "revise" });
-    expect(outcome).toMatchObject({ applied: false, reason: "draft_moved" });
-    expect(outcome.applied ? "" : outcome.message).toContain("你那份没动");
-    expect((await readDraft(book, 1))?.body).toBe("作者在 AI 写的时候又改了。");
-    expect((await listSnapshots(book)).length).toBe(before);
-    const candidate = await readDraftCandidate(book, outcome.applied ? "" : outcome.candidateId);
-    expect(candidate).toMatchObject({ chapter: 1, body: "AI 写的一版。", status: "ready", reason: "draft_moved", source: "revise" });
-    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "candidate", reason: "draft_moved", body: "AI 写的一版。" });
-  });
-
-  it("写的途中前文或设定改过 → 不换、留成候选（basis_moved），工作稿没动", async () => {
-    await authorSaves(1, "作者原来的稿。");
-    const begun = await start();
-    expect(await writeCards(book, { ops: [{ op: "field.set", card: "林远", label: "籍贯", value: "海州" }], idempotencyKey: `card-ui:${randomUUID()}` }))
-      .toMatchObject({ ok: true });
-    const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "照旧设定写的一版。", ...begun, source: "draft" });
-    expect(outcome).toMatchObject({ applied: false, reason: "basis_moved" });
+    await expect(applyAiDraft(book, { chapter: 1, title: "", body: "AI 写的。", ...begun, source: "draft" })).rejects.toMatchObject({ code: "not_in_operation" });
     expect((await readDraft(book, 1))?.body).toBe("作者原来的稿。");
-  });
-
-  it("开写时存的那份候选：换上了只删这一份；作者还没处理的别的候选都留着（写作版本 P1b 第 3 轮复核）", async () => {
-    const begun = await start();
-    const older = await saveDraftCandidate(book, { chapter: 1, title: "", body: "更早没换上的。", baseVersion: null, basisDigest: begun.basis.digest, source: "draft", status: "ready", reason: "draft_moved" });
-    const writing = await saveDraftCandidate(book, { chapter: 1, title: "", body: "在写的。", baseVersion: null, basisDigest: begun.basis.digest, source: "draft", status: "writing" });
-    const other = await saveDraftCandidate(book, { chapter: 2, title: "", body: "别的章的。", baseVersion: null, basisDigest: begun.basis.digest, source: "draft", status: "ready", reason: "draft_moved" });
-    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "写完的。", ...begun, source: "draft", candidateId: writing.id })).toMatchObject({ applied: true });
-    expect(await readDraftCandidate(book, writing.id)).toBeUndefined();
-    expect(await readDraftCandidate(book, older.id)).toMatchObject({ body: "更早没换上的。" });
-    expect(await readDraftCandidate(book, other.id)).toBeDefined();
-    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "candidate", id: older.id });
-  });
-
-  it("没给开写时的候选：换上前也先存一份，换上了删掉，候选目录里不多东西", async () => {
-    const begun = await start();
-    expect(await applyAiDraft(book, { chapter: 1, title: "", body: "一笔小改。", ...begun, source: "unit-fix" })).toMatchObject({ applied: true });
-    expect(await pendingDraftFor(book, 1)).toBeUndefined();
-  });
-
-  it("没换上时用的就是开写时存的那份候选（同一个号，状态改成等作者选）", async () => {
-    await authorSaves(1, "作者原来的稿。");
-    const begun = await start();
-    const writing = await saveDraftCandidate(book, { chapter: 1, title: "", body: "首稿。", baseVersion: begun.baseVersion, basisDigest: begun.basis.digest, source: "draft", status: "writing" });
-    // 本进程正在写的不提示
-    expect(await pendingDraftFor(book, 1)).toBeUndefined();
-    await authorSaves(1, "作者改了。");
-    const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "核账改完的。", ...begun, source: "draft", candidateId: writing.id });
-    expect(outcome).toMatchObject({ applied: false, candidateId: writing.id });
-    expect(await readDraftCandidate(book, writing.id)).toMatchObject({ status: "ready", body: "核账改完的。" });
-  });
-
-  it("写好的那份和盘上一样 → 不写、不打存档点，算换上了", async () => {
-    await authorSaves(1, "一样的。");
-    const begun = await start();
-    const before = (await listSnapshots(book)).length;
-    const outcome = await applyAiDraft(book, { chapter: 1, title: "", body: "一样的。", ...begun, source: "unit-fix" });
-    expect(outcome).toMatchObject({ applied: true, unchanged: true });
-    expect((await listSnapshots(book)).length).toBe(before);
-  });
-
-  it("书删了（进了回收站）→ 留候选也不在原处建出目录", async () => {
-    await authorSaves(1, "作者原来的稿。");
-    const begun = await start();
-    await authorSaves(1, "改过。");
-    await rm(book, { recursive: true, force: true });
-    await expect(applyAiDraft(book, { chapter: 1, title: "", body: "AI。", ...begun, source: "draft" })).rejects.toThrow();
-    await expect(stat(book)).rejects.toThrow();
   });
 });
 

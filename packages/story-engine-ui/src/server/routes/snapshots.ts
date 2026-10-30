@@ -1,6 +1,6 @@
 /**
  * GET /api/snapshots?project=<dir> — list snapshot history newest-first.
- * POST /api/snapshots/restore — restore project to a snapshot.
+ * POST /api/snapshots/restore — 整本恢复到一个存档（写作版本 P2a 片 4C：交一次 history.change restore 操作，等它做完回结果）。
  */
 import {
   readJsonBody,
@@ -17,11 +17,15 @@ import {
   isPostWriteSettlementSnapshot,
   listSnapshots,
   readCommitFileChanges,
-  restoreSnapshot,
   snapshotKindOf,
 } from "../lib/snapshot.js";
-import { attachSnapshotChanges, buildRestoreReceipt, humanizeHistoryLabel } from "../lib/snapshot-changes.js";
+import { attachSnapshotChanges, humanizeHistoryLabel } from "../lib/snapshot-changes.js";
 import { readCharacterNameById } from "../writing/presence/entity-labels.js";
+import { parseUserAction } from "../agent/user-actions.js";
+import { receiptOf } from "../agent/tools/op-tools.js";
+import { reconcileOnOpen, submitOperation, untilSettled } from "../services/operations/executor.js";
+import { HISTORY_CHANGE_KIND } from "../services/operations/recipes/history-change.js";
+import { operationView } from "../services/operations/view.js";
 
 // ---------------------------------------------------------------------------
 // Route registrar
@@ -41,8 +45,7 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         const projectDir = requireBodyString(url.searchParams.get("project"), "项目路径不能为空。");
         if (!guardProjectPath(res, projectDir)) return;
         await assertStoryEngineProject(projectDir);
-        // 在路由边界把 label 人话化（agent:commit_apply → 入库）；不下沉到 listSnapshots——
-        // undoLastChange 依赖原始 label 做 isRestoreArtifact/^agent: 匹配，提前 humanize 会破坏它。
+        // 在路由边界把 label 人话化（agent:commit_apply → 入库），只做这一次。
         // 过滤掉「落盘收尾」工程 commit（afterfix #2）：它只为把写产物收进 git、让工作树干净，不是用户动作，
         // 不该出现在操作历史里（否则每个写操作多一条无意义条目）。
         // 老「定稿」条目补章号（新存档标签已自带）：须在过滤落盘收尾之前做，它靠紧邻的收尾提交认章。
@@ -67,23 +70,49 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         const projectDir = requireBodyString(body.projectPath, "项目路径不能为空。");
         if (!guardProjectPath(res, projectDir)) return;
         await assertStoryEngineProject(projectDir);
-        const id = requireBodyString(body.id, "快照 id 不能为空。");
-        const { restored, reverted, revertedLater } = await restoreSnapshot(projectDir, id);
-        // R4.2：恢复到更早的存档点会把那之后的所有写入一并退回，回执如实列清单 + 指明找回办法。
-        const nameById = await readCharacterNameById(projectDir).catch(() => new Map<string, string>());
-        // 不猜白名单：自家格式
-        const targetLabel = /^恢复到：(.+)$/u.exec(restored.label)?.[1] ?? restored.label;
-        const receipt = buildRestoreReceipt({
-          title: `已恢复到「${humanizeHistoryLabel(targetLabel)}」之前。`,
-          reverted,
-          revertedLater,
-          nameById,
+        // 和按钮同一套校验：存档号、请求号、issuedAt（点几次都是这一次）。
+        const parsed = parseUserAction({
+          kind: "new",
+          type: HISTORY_CHANGE_KIND,
+          mode: "restore",
+          params: { snapshot: body.id },
+          requestKey: body.requestKey,
+          issuedAt: body.issuedAt,
         });
-        writeJson(res, 200, { ok: true, restored, receipt });
+        if (parsed.kind !== "action" || parsed.action.kind !== "new") {
+          writeJson(res, 400, { ok: false, error: parsed.kind === "invalid" ? parsed.reason : "要恢复到哪个存档没说清。" });
+          return;
+        }
+        const action = parsed.action;
+        await reconcileOnOpen(projectDir);
+        const submitted = await submitOperation(projectDir, {
+          kind: HISTORY_CHANGE_KIND,
+          mode: "restore",
+          params: action.params,
+          requestKey: action.requestKey,
+          issuedAt: action.issuedAt,
+          origin: { kind: "button", messageId: action.requestKey },
+        });
+        const receipt = receiptOf(submitted, "button", { kind: HISTORY_CHANGE_KIND, mode: "restore" });
+        if (!receipt.accepted || !receipt.opId) {
+          writeJson(res, 409, { ok: false, error: receipt.summary });
+          return;
+        }
+        const record = await untilSettled(projectDir, receipt.opId);
+        if (!record) {
+          writeJson(res, 500, { ok: false, error: "这次恢复的记录找不到了，刷新操作历史看看恢复了没有。" });
+          return;
+        }
+        const view = operationView(record);
+        if (record.state !== "succeeded") {
+          writeJson(res, 409, { ok: false, error: view.conclusion || view.stateText, operation: view });
+          return;
+        }
+        writeJson(res, 200, { ok: true, operation: view });
         return;
       }
 
-      // 裁剪操作历史不再有 HTTP 入口（重构 P4）：只能由作者点「确认裁剪」按钮发结构化动作（prune_snapshots）。
+      // 裁剪操作历史没有 HTTP 入口：对话里交，作者点「确认裁剪」才裁。
       writeJson(res, 405, { ok: false, error: "Unsupported snapshots endpoint." });
     } catch (error) {
       writeJson(res, 500, {

@@ -13,12 +13,13 @@ import { isDraftDirty, useDraftStore } from "../../stores/draftStore.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { createStoryProject } from "../book/project-store.js";
-import { applyAiDraft } from "../lib/ai-draft-write.js";
+import { applyAiDraftInOperation as applyAiDraft } from "../services/operations/test-helpers.js";
 import { writeCards } from "../lib/card-write.js";
 import { draftSha, pendingDraftFor, readDraftCandidate, readDraftRecovery, readSaveMark, saveDraftCandidate } from "../lib/draft-candidates.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
-import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
+import { createSnapshot } from "../lib/snapshot.js";
+import { restoreForTest } from "../lib/history-test-helpers.js";
 import { resumeOperation } from "../services/operations/executor.js";
 import { fakeDraftDeps, runDraftEdit, settledDraftChange } from "../services/operations/recipes/draft-change-kit.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
@@ -204,7 +205,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const oldRequest = { projectPath: book, chapter: 1, body: "之前存过、后来撤销的 A。", baseVersion: base };
     expect((await call("PUT", "/api/working-draft", oldRequest)).status).toBe(200);
     expect(await applyAiDraft(book, { chapter: 1, title: "", body: "AI 后来改的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
-    await restoreSnapshot(book, before.id);
+    await restoreForTest(book, before.id);
     const restored = (await readDraft(book, 1))!;
     expect(restored.body).toBe("作者选定要恢复的底稿。");
     expect(restored.version).not.toBe(base);
@@ -218,7 +219,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const oldRequest = { projectPath: book, chapter: 1, body: "已经撤销的首稿 A。", baseVersion: null, client: "samewindow01", seq: 1 };
     expect((await call("PUT", "/api/working-draft", oldRequest)).status).toBe(200);
     expect(await applyAiDraft(book, { chapter: 1, title: "", body: "后来 AI 的 B。", ...(await begin(1)), source: "revise" })).toMatchObject({ applied: true });
-    await restoreSnapshot(book, before.id);
+    await restoreForTest(book, before.id);
     const state = await readDraftState(book, 1);
     expect(state.file).toBeUndefined();
     expect(state.version).not.toBeNull();
@@ -538,7 +539,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     // 两笔都在撤销前发出、撤销后才到。
     const queuedNoop = { projectPath: book, chapter: 1, client, seq: 2, baseVersion: original, body: "撤销回的 R。" };
     const queuedEdit = { projectPath: book, chapter: 1, client, seq: 3, baseVersion: first.payload.version, body: "撤销前发出的 B。" };
-    await restoreSnapshot(book, snapshot.id);
+    await restoreForTest(book, snapshot.id);
     expect((await call("PUT", "/api/working-draft", queuedNoop)).payload).toMatchObject({ ok: true, unchanged: true });
     expect((await readSaveMark(book, 1, client))?.seq).toBe(2);
     const late = await call("PUT", "/api/working-draft", queuedEdit);
@@ -552,7 +553,7 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     const snapshot = await createSnapshot(book, "撤销目标");
     const request = { projectPath: book, chapter: 1, client: "round8window02", baseVersion: original };
     expect((await call("PUT", "/api/working-draft", { ...request, seq: 1, body: "A。" })).status).toBe(200);
-    await restoreSnapshot(book, snapshot.id);
+    await restoreForTest(book, snapshot.id);
     expect((await call("PUT", "/api/working-draft", { ...request, seq: 2, body: "B。" })).status).toBe(409);
     expect((await readDraft(book, 1))?.body).toBe("R。");
     expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "recovery", body: "B。" });

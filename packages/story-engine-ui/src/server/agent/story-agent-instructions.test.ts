@@ -24,9 +24,9 @@ describe("story agent 工具表（写作版本 P2a：核账 / 硬伤检查 / 内
     invalidateStoryAgent();
     expect(tools).toEqual([
       "change_draft",
+      "change_history",
       "change_ledger",
       "change_settings",
-      "manage_snapshots",
       "plan_chapter",
       "prepare_commit",
       "propose_canon",
@@ -75,10 +75,10 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions.length).toBeLessThan(10_000);
   });
 
-  it("快照裁剪两步哲学：manage_snapshots op=prune 在工具清单里，默认预览、用户明确「确认裁剪」才真裁", () => {
-    expect(instructions).toContain("manage_snapshots op=prune");
-    expect(instructions).toContain("确认裁剪");
-    expect(instructions).toMatch(/manage_snapshots op=prune（先预览、用户确认才真裁）/u);
+  it("撤销 / 裁剪是交给服务端的事：change_history op=undo / op=prune，作者点「确认裁剪」才裁；整本恢复只在「历史」里点", () => {
+    expect(instructions).toContain("change_history op=undo");
+    expect(instructions).toContain("change_history op=prune（作者点「确认裁剪」才裁）");
+    expect(instructions).toContain("顶栏「历史」里挑存档恢复");
     // 如实声明撤销边界：undo 撤不到裁剪（不动工作树），别拿 undo 撤别的顶替（复审实锤的误撤风险）
     expect(instructions).toContain("不在撤销链");
   });

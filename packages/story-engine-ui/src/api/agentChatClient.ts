@@ -36,11 +36,6 @@ export interface StreamAgentChatRequest {
   readonly messages: readonly ChatHistoryMessage[];
   /** 用户当前打开/停留的章号。后端据此引导 agent 默认作用于该章、工具缺省回退该值（H3：回看旧章不写错章）。 */
   readonly currentChapter?: number;
-  /**
-   * R7.2：上一个有写盘回合的首个快照（该回合第一次写盘前）。后端 undo 工具优先按它整回合回退，
-   * 与作者说「撤销上一步」= 撤上一回合全部改动 的理解一致。
-   */
-  readonly lastTurnUndoHint?: { readonly snapshotId: string; readonly changes: number };
   /** 作者给当前章挑中的走法（稿纸上方点的「用这个」）：作者在对话里说「照这个写」时 AI 才知道是哪条。 */
   readonly pickedDirection?: { readonly chapter: number; readonly text: string };
   /** 结构化动作（作者点了按钮）：服务端直接交给执行器或直接做，不经模型。 */
@@ -150,6 +145,9 @@ export type OperationActionData =
   | { readonly kind: "new"; readonly type: "canon.propose"; readonly mode: "statement"; readonly params: CanonStatementData; readonly requestKey: string; readonly issuedAt: string }
   /** 定稿（片 4A）：「定稿」出清单；「就这么短，照样定稿」带 allowShort（只认按钮）。 */
   | { readonly kind: "new"; readonly type: "commit.prepare"; readonly params: CommitPrepareParamsData; readonly requestKey: string; readonly issuedAt: string }
+  /** 撤销（片 4C）：「撤销上一步」不带号；「撤回来」「撤销这次定稿」带那次操作的号；「撤销到此」= 整本恢复到那个存档。 */
+  | { readonly kind: "new"; readonly type: "history.change"; readonly mode: "undo"; readonly params: { readonly opId?: string }; readonly requestKey: string; readonly issuedAt: string }
+  | { readonly kind: "new"; readonly type: "history.change"; readonly mode: "restore"; readonly params: { readonly snapshot: string }; readonly requestKey: string; readonly issuedAt: string }
   | { readonly kind: "resume"; readonly opId: string; readonly answer?: AuthorAnswerData }
   | { readonly kind: "cancel"; readonly opId: string };
 
@@ -165,6 +163,11 @@ export interface AuthorAnswerData {
 export interface CommitPrepareParamsData {
   readonly chapter: number;
   readonly allowShort?: true;
+}
+
+/** 「撤销上一步」（不给号）/「撤回来」「撤销这次定稿」（给那次操作的号）：请求号这时候给。 */
+export function newUndoAction(opId?: string): OperationActionData {
+  return { kind: "new", type: "history.change", mode: "undo", params: opId ? { opId } : {}, requestKey: crypto.randomUUID(), issuedAt: new Date().toISOString() };
 }
 
 /** 一个定稿按钮（请求号这时候给）。allowShort＝这一章就这么短，不拿字数下限挡。 */
@@ -291,16 +294,8 @@ export type DraftEditActionData = Extract<OperationActionData, { readonly mode: 
 export const isDraftEditAction = (action: AgentUserAction): action is DraftEditActionData =>
   "kind" in action && action.kind === "new" && action.type === "draft.change" && isDraftEditMode(action.mode);
 
-/** 是操作按钮（不是按工具名的老按钮）。 */
-export function isOperationAction(action: AgentUserAction): action is OperationActionData {
-  return "kind" in action;
-}
-
-/** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
-export type AgentUserAction =
-  | OperationActionData
-  | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  | { readonly toolName: "undo" };
+/** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）：都交给执行器。 */
+export type AgentUserAction = OperationActionData;
 
 /** 核账结果里的一条：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文（R7.3）。 */
 export interface ContinuityCheckItem {
@@ -385,9 +380,6 @@ export interface AgentToolResult {
   readonly draftTitle?: string;
   /** 这份正文写回时的版本号（revise_draft 带，同一进程严格递增）：并行改稿的结果到达顺序不等于写入顺序，前端只套用更新的。 */
   readonly draftVersion?: number;
-  /** undo_last_change 专属：true=磁盘真的被 git 回退了。前端据此冻结 autosave、改读磁盘真值、回合收尾后整页重载——
-   *  否则内存里撤销前的旧稿会被 autosave 写回去（此前只靠 409 冲突兜底）。 */
-  readonly undone?: boolean;
   readonly overview?: StateOverview;
   readonly refreshScope?: "full" | "foundation";
   readonly snapshotId?: string;
@@ -400,8 +392,6 @@ export interface AgentToolResult {
     readonly question: string;
     readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: AgentUserAction }[];
   };
-  /** prune_snapshots 专属：模型只做了预览、有可裁内容，等用户点「确认裁剪」按钮。 */
-  readonly pruneConfirmAction?: { readonly keep?: number };
   /** change_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「接着往下写」「重写这一章」（服务端出的按钮动作）。 */
   readonly rewriteChoices?: readonly RewriteChoiceData[];
 }
@@ -464,9 +454,9 @@ export interface OperationViewData {
   readonly pending?: PendingActionData;
 }
 
-/** 改设定、改账、定论改齐了（都在设定本里：设定卡、线索板和故事地图、定论；定论还可能改了正文）：打的存档点。 */
+/** 改设定、改账、定论改齐了（都在设定本里：设定卡、线索板和故事地图、定论；定论还可能改了正文）、撤销 / 恢复了：打的存档点。 */
 export interface ChangedData {
-  readonly what: "settings" | "ledger" | "canon";
+  readonly what: "settings" | "ledger" | "canon" | "history";
   readonly snapshotId?: string;
 }
 
@@ -494,6 +484,9 @@ export interface RevisePreviewData {
   readonly brief?: string;
 }
 
+/** 确认卡是哪一种：改设定、改账、撤销（后来又改过的那几处，「全撤」）、裁剪操作历史（「确认裁剪」）。 */
+export type ConfirmWhat = "settings" | "ledger" | "undo" | "prune";
+
 /**
  * 等作者点的那个按钮：改写的「换上 / 再改一版」；改设定的「确认改设定」、改账的「确认改账」（同一张确认卡：
  * 服务端 SettingsConfirmPreview / LedgerConfirmPreview，要改的每一处只有名字、原话，notes 是附带要说的）。
@@ -502,7 +495,7 @@ export type PendingActionData =
   | { readonly kind: "revise"; readonly actionId: string; readonly decisions: readonly string[]; readonly revise: RevisePreviewData }
   /** 定论查完了等作者点「确认」（服务端 CanonConfirmPreview）：卡上每处能划掉。 */
   | { readonly kind: "canon"; readonly actionId: string; readonly decisions: readonly string[]; readonly card: SettleCardData; readonly summary: string }
-  | { readonly kind: "confirm"; readonly what: "settings" | "ledger"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] }
+  | { readonly kind: "confirm"; readonly what: ConfirmWhat; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] }
   /** 定稿清单等作者点「确认定稿」（服务端 CommitConfirmPreview）：清单上每行能划掉、天数两栏能改。 */
   | { readonly kind: "commit"; readonly actionId: string; readonly decisions: readonly string[]; readonly preview: CommitPreviewCardData };
 
@@ -552,7 +545,7 @@ function editChanges(value: unknown): readonly EditChangeData[] | undefined {
 
 /** 改写等作者点「换上」的那个按钮（服务端 REVISE_CONFIRM_KIND）、「确认改设定」（SETTINGS_CONFIRM_KIND）、「确认改账」（LEDGER_CONFIRM_KIND）；点过的、认不出的不算。 */
 const REVISE_CONFIRM_KIND = "draft.revise.confirm";
-const CONFIRM_KINDS: Readonly<Record<string, "settings" | "ledger">> = { settings_confirm: "settings", ledger_confirm: "ledger" };
+const CONFIRM_KINDS: Readonly<Record<string, ConfirmWhat>> = { settings_confirm: "settings", ledger_confirm: "ledger", undo_confirm: "undo", prune_confirm: "prune" };
 const CANON_CONFIRM_KIND = "canon_confirm";
 const COMMIT_CONFIRM_KIND = "commit_confirm";
 
@@ -705,7 +698,6 @@ export async function streamAgentChat(
         projectPath: input.projectPath,
         messages: input.messages,
         ...(typeof input.currentChapter === "number" ? { currentChapter: input.currentChapter } : {}),
-        ...(input.lastTurnUndoHint ? { lastTurnUndoHint: input.lastTurnUndoHint } : {}),
         ...(input.pickedDirection ? { pickedDirection: input.pickedDirection } : {}),
         ...(input.action ? { action: input.action } : {}),
         ...(input.messageId && input.issuedAt ? { messageId: input.messageId, issuedAt: input.issuedAt } : {}),
@@ -794,26 +786,11 @@ export async function streamAgentChat(
             ...(typeof output.draftBody === "string" ? { draftBody: output.draftBody } : {}),
             ...(typeof output.draftTitle === "string" ? { draftTitle: output.draftTitle } : {}),
             ...(typeof output.draftVersion === "number" && Number.isFinite(output.draftVersion) ? { draftVersion: output.draftVersion } : {}),
-            // 撤销标志（undo_last_change / 今并入 manage_snapshots op=undo）：只在布尔时透传，前端据此冻结 autosave、改读磁盘真值。
-            ...(typeof output.undone === "boolean" && (parsed.toolName === "undo_last_change" || parsed.toolName === "manage_snapshots")
-              ? { undone: output.undone }
-              : {}),
             // suggest_next_steps 专属：agent 提议的下一步选项（question/choices 不在轻量白名单里），透传给投影层挂到消息。
             // choice.action（R4.7）按白名单防御解析（toNextStepPrompt）：只放行下一步级的操作按钮，
             // 「确认定稿」「确认裁剪」这类授权写盘动作必须走各自的确认卡，不许藏在选项里被点击直达。
             ...(parsed.toolName === "suggest_next_steps" && isNextStepPrompt(output)
               ? { nextStepPrompt: toNextStepPrompt(output) }
-              : {}),
-            ...((parsed.toolName === "prune_snapshots" || parsed.toolName === "manage_snapshots")
-              && output.needsConfirmation === true
-              && typeof output.confirmAction === "object" && output.confirmAction !== null
-              ? {
-                  pruneConfirmAction: {
-                    ...(typeof (output.confirmAction as { keep?: unknown }).keep === "number"
-                      ? { keep: (output.confirmAction as { keep: number }).keep }
-                      : {}),
-                  },
-                }
               : {}),
             ...(parsed.toolName === "change_draft" && readRewriteChoices(output.rewriteChoices)
               ? { rewriteChoices: readRewriteChoices(output.rewriteChoices)! }
@@ -992,10 +969,14 @@ function readCommitResult(body: unknown): CommitResultData | undefined {
   return { chapter, committed: true, report, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}) };
 }
 
-/** 改设定、改账、定论改齐了：改了哪一片、打的存档点（这一轮的「撤销到此」从它退）。不是这几类、定论没改是 undefined。 */
+/**
+ * 改设定、改账、定论改齐了、撤销 / 恢复了：改了哪一片、打的存档点（这一轮的「撤销到此」从它退）。
+ * 不是这几类、定论没改、撤销 / 恢复一处没动（裁剪不动书）是 undefined。
+ */
 function readChanged(kind: unknown, body: unknown): ChangedData | undefined {
-  const what = kind === "settings.change" ? "settings" : kind === "ledger.change" ? "ledger" : kind === "canon.propose" ? "canon" : undefined;
+  const what = kind === "settings.change" ? "settings" : kind === "ledger.change" ? "ledger" : kind === "canon.propose" ? "canon" : kind === "history.change" ? "history" : undefined;
   if (!what || !isRecord(body) || body.kind !== kind || (what === "canon" && body.applied !== true)) return undefined;
+  if (what === "history" && (body.mode === "prune" || !Array.isArray(body.paths) || body.paths.length === 0)) return undefined;
   return { what, ...(typeof body.snapshotId === "string" && body.snapshotId ? { snapshotId: body.snapshotId } : {}) };
 }
 
@@ -1091,6 +1072,14 @@ function parseOperationActionData(value: Record<string, unknown>): OperationActi
   if (typeof value.requestKey !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.requestKey)) return undefined;
   if (typeof value.issuedAt !== "string" || value.issuedAt.length > 40 || !Number.isFinite(Date.parse(value.issuedAt))) return undefined;
   const stamp = { requestKey: value.requestKey, issuedAt: value.issuedAt };
+  if (value.type === "history.change") {
+    // 存进消息的只有撤销（「撤回来」「撤销这次定稿」）；整本恢复走操作历史 / 「撤销到此」，不存成按钮。
+    // 带了号却不对：不认（当成「撤销上一步」就撤错了那一次）。
+    const opId = isRecord(value.params) ? value.params.opId : undefined;
+    if (value.mode !== "undo") return undefined;
+    if (opId === undefined) return { kind: "new", type: "history.change", mode: "undo", params: {}, ...stamp };
+    return typeof opId === "string" && /^op-[0-9a-f]{20}$/u.test(opId) ? { kind: "new", type: "history.change", mode: "undo", params: { opId }, ...stamp } : undefined;
+  }
   if (value.type === "commit.prepare") {
     const params = isRecord(value.params) ? value.params : {};
     const chapter = positiveInt(params.chapter);
