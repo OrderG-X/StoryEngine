@@ -35,8 +35,8 @@ const CH2 = "第二天许棠去了邮局，把信寄给了林溪。林溪下午�
 
 async function makeBook(): Promise<string> {
   const dir = await makeHomeTempDir("planner-");
-  // 时间线（从账算）：第 1 章定稿时作者定了是故事第 2 天 → 拟第 3 章 dayOffset=1 时应归一到第 3 天；第 2 章只有正文。
-  await seedChapters(dir, [{ chapter: 1, entries: [{ kind: "summary", text: "第一章。", quote: CH1 }, { kind: "time", basis: "author", day: 2 }] }]);
+  // 时间线（从账算）：第 1 章定稿时作者定了是故事第 2 天；第 2 章只有正文、没定稿 → 拟第 3 章时上一个当下章是第 1 章。
+  await seedChapters(dir, [{ chapter: 1, entries: [{ kind: "summary", text: "第一章。", quote: CH1 }, { kind: "day", day: 2 }] }]);
   await writeFile(join(dir, "chapters", "0002.md"), `# 第2章\n\n${CH2}\n`, "utf-8");
   return dir;
 }
@@ -91,11 +91,11 @@ describe("章纲员：拟章纲", () => {
     expect(task).not.toContain("【上一章");
   });
 
-  it("拟成只在内存里（落盘由调用方定），天数照旧路归一（timeline 第 1 章=第 2 天、dayOffset 1 → 第 3 天）", async () => {
+  it("拟成只在内存里（落盘由调用方定），日子存成相对的：离上一个当下章（第 1 章）往后 1 天，不存绝对天数", async () => {
     const dir = await makeBook();
     const { callModel } = fakePlanner();
     const result = await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel });
-    expect(result.ok && result.plan.storyDay).toBe(3);
+    expect(result.ok && [result.plan.dayOffset, result.plan.after]).toEqual([1, 1]);
     expect(result.ok && result.plan.summary).toBe("许棠等林溪的回信");
     expect(await readChapterPlan(dir, 3)).toBeUndefined();
   });
@@ -178,7 +178,7 @@ const BASE_PLAN = normalizeChapterPlan({
   dayOffset: 1,
   characters: ["许棠", "林溪"],
   entities: ["回信"],
-  storyDay: 3,
+  after: 1,
   avoid: ["别再写抽屉"],
 }, { chapter: 3 })!;
 
@@ -204,7 +204,7 @@ describe("章纲员：改章纲（一轮，不循环；R7.5 只改被指出的�
     expect(result.plan.newInformation).toEqual(["林溪约好周末见面"]);
     expect(result.plan.avoid).toEqual(["别再写抽屉"]);
     expect(result.plan.scene).toEqual(BASE_PLAN.scene);
-    expect(result.plan.storyDay).toBe(3);
+    expect([result.plan.dayOffset, result.plan.after]).toEqual([1, 1]);
     expect(await readChapterPlan(dir, 3)).toBeUndefined();
     const task = calls.find((call) => call.json)!.messages.at(-1)!.content;
     expect(task).toContain("核账员审出 1 处和前文对不上");

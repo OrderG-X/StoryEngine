@@ -1,7 +1,8 @@
 /**
  * 故事地图（重构 P6，草图 ③）：取代原来的「时间线」列表。
  *
- *  - 一行一章：章号、故事第几天（星期 / 时段，估的标「估」）、这章讲了什么；隔了几天在两行之间标出来。
+ *  - 一行一章：章号、故事第几天（星期 / 时段，按旧账推的标「约」，整章回忆、梦的标出来）、这章讲了什么；
+ *    隔了几天、往回接了几天在两行之间标出来。
  *  - 一列一个人：这章出场画一个点，视角人物画空心圈；点一下回写作台那一章、滚到他出场那句（老书导入的章没记原句，只打开那章）。
  *  - 人多时先看出场最多的 8 个，点「全部 N 人」再展开。
  *  - 节奏：每章一根条（每千字推进几条线索，竖线是全书平常），可能拖 / 赶的章打个记号，上面列出原因，点了滚到那一行。
@@ -15,27 +16,16 @@ import { Avatar, PageHead, Skeleton } from "./bibleVisual.js";
 /** 先露出场最多的几个人。 */
 const CAST_VISIBLE = 8;
 const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"] as const;
-const UNSURE_BASIS: Partial<Record<StoryMapChapter["basis"], string>> = {
-  estimated: "估计的",
-  missing: "这章没记时间，按上一章 +1 天算的",
-};
 
 export function dayLabel(row: StoryMapChapter): string {
   if (row.ledgerShort === "pending") return "账待记";
-  if (row.day === undefined || row.dayEnd === undefined) return row.ledgerShort === "partial" ? "账没记全" : "不知道";
-  return row.dayEnd > row.day ? `第 ${row.day}～${row.dayEnd} 天` : `第 ${row.day} 天`;
+  if (row.presentLine === false) return "不在当下";
+  return row.days ?? (row.ledgerShort === "partial" ? "账没记全" : "不知道");
 }
 
 export function dayDetail(row: StoryMapChapter): string {
   const weekday = row.weekday === undefined ? "" : `${WEEKDAYS[row.weekday] ?? ""}${row.weekdayDerived ? "（推）" : ""}`;
-  return [weekday, row.timeOfDay ?? ""].filter(Boolean).join(" · ");
-}
-
-/** 上一章结束到这章开头过了几天（≥2 才标，隔天、同一天不标）。 */
-export function daysPassed(previous: StoryMapChapter | undefined, row: StoryMapChapter): number {
-  if (!previous || row.day === undefined || previous.dayEnd === undefined) return 0;
-  const passed = row.day - previous.dayEnd;
-  return passed >= 2 ? passed : 0;
+  return [weekday, row.timeOfDay ?? "", ...row.segments].filter(Boolean).join(" · ");
 }
 
 /** 节奏条最长画到平常的几倍。 */
@@ -132,14 +122,12 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
     );
   }
 
-  // 故事走到第几天：按最后一章天数知道的那章算（后面账待记、不知道哪天的章不往上加）。
-  const lastKnown = map.chapters.filter((row) => row.dayEnd !== undefined).at(-1);
   return (
     <section className="se-sm" aria-label="故事地图">
       <PageHead
         title="故事地图"
         sub={map.chapters.length === 0 ? "还没有定稿的章：定稿时记账员会把每章第几天、谁出场记在这里。" : "一行一章，一列一人。点圆点回到他出场那句。"}
-        stats={[{ value: map.chapters.length, label: "章" }, { value: lastKnown?.dayEnd ?? 0, label: "故事日" }, { value: map.cast.length, label: "人出场" }]}
+        stats={[{ value: map.chapters.length, label: "章" }, { value: map.lastDay ?? 0, label: "故事日" }, { value: map.cast.length, label: "人出场" }]}
       />
       {error ? <p className="se-sm-error">{error} <button type="button" className="se-sm-link" onClick={reload}>再读一次</button></p> : null}
       {map.chapters.length > 0 ? (
@@ -171,14 +159,13 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
                 </tr>
               </thead>
               <tbody>
-                {map.chapters.map((row, index) => {
-                  const passed = daysPassed(map.chapters[index - 1], row);
-                  const unsure = UNSURE_BASIS[row.basis];
+                {map.chapters.map((row) => {
+                  const { gap, unsure } = row;
                   const title = chapterTitles.get(row.chapter);
                   return [
-                    passed > 0 ? (
+                    gap ? (
                       <tr key={`gap-${row.chapter}`} className="se-sm-gap">
-                        <td colSpan={(pace ? 4 : 3) + cast.length}><span>过了 {passed} 天</span></td>
+                        <td colSpan={(pace ? 4 : 3) + cast.length}><span>{gap}</span></td>
                       </tr>
                     ) : null,
                     <tr key={row.chapter} data-chapter={row.chapter} className={flashChapter === row.chapter ? "is-flash" : undefined}>
@@ -189,7 +176,7 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
                         {title ? <span className="se-sm-title">{title}</span> : null}
                       </th>
                       <td className="se-sm-day">
-                        <span>{dayLabel(row)}{unsure ? <em className="se-sm-unsure" title={unsure}>估</em> : null}</span>
+                        <span>{dayLabel(row)}{unsure ? <em className="se-sm-unsure" title={unsure}>约</em> : null}</span>
                         {dayDetail(row) ? <small>{dayDetail(row)}</small> : null}
                       </td>
                       <td className="se-sm-what">{row.summary ? <span title={row.summary}>{row.summary}</span> : <span className="se-sm-faint">—</span>}</td>

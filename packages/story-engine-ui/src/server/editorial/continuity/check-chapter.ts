@@ -12,12 +12,11 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parseDraftFile, splitUnits } from "@actalk/story-core";
+import { chapterSource, elapsedDays, locateQuote, parseDraftFile, readChapterLedger, readChapterText, splitUnits, type BookProjection, type ChapterTime, type TimePoint } from "@actalk/story-core";
 import { canCallAgain } from "../../lib/llm-client.js";
 import { OperationStopped, StopSignal } from "../../lib/operations/context.js";
 import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js";
 import { readStoryViews } from "../../book/story-views.js";
-import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
 import { type FactEntry } from "../../book/types.js";
 import type { SettingKind } from "../foundation-digest.js";
 
@@ -356,7 +355,7 @@ export async function ledgerNumberIssues(input: {
     earlierChapter: conflict.earlierChapter,
     reason: conflict.reason,
     kind: "number" as const,
-    confidence: "sure" as const,
+    confidence: conflict.confidence,
     source: "ledger" as const,
   }));
   return { issues, failures: [] };
@@ -482,29 +481,58 @@ export function relativeDayMentions(text: string): readonly { readonly word: str
 }
 
 /**
- * 一章可靠的故事日：时间线里没有它的条目、或条目是 fallback（「上一章 +1」估的，作者还没确认，
- * R7.6 之前常估错——拿估的日子当真去删「确定」会错杀）都算换算不了。
- * 唯一例外：第 1 章的 fallback，day＝1 不是估出来的（前面没有章），引擎口径里必然是 1。
+ * 相对日子换算要的时间（写作版本 P3a T10）：各章的时间（投影），和原句在那章定稿正文里是第几句。
+ * 只认定稿后没改过的正文（句子编号和账对得上）；定位不了的按整章（开头到结尾）算。
  */
-function reliableStoryDay(timeline: StoryTimeline | undefined, chapter: number): number | undefined {
-  const entry = timeline ? timelineEntryFor(timeline, chapter) : undefined;
-  if (!entry) return undefined;
-  if (entry.source === "fallback" && !(chapter === 1 && entry.day === 1)) return undefined;
-  return entry.day;
+export interface RelativeDayContext {
+  readonly times: ReadonlyMap<number, ChapterTime>;
+  readonly unitsOf: (chapter: number, quote: string) => { readonly from: number; readonly to: number } | undefined;
+}
+
+/** 读这几章的定稿正文、核对和账是同一版，给 applyRelativeDayAlignment 用。读不了的章当定位不了（按整章算）。 */
+export async function readRelativeDayContext(projectDir: string, projection: BookProjection, chapters: readonly number[]): Promise<RelativeDayContext> {
+  const sources = new Map<number, ReturnType<typeof chapterSource>>();
+  for (const chapter of new Set(chapters)) {
+    const [text, ledger] = await Promise.all([readChapterText(projectDir, chapter).catch(() => undefined), readChapterLedger(projectDir, chapter).catch(() => undefined)]);
+    if (text === undefined || !ledger) continue;
+    const source = chapterSource(chapter, text);
+    if (source.revision === ledger.textSha256) sources.set(chapter, source);
+  }
+  return {
+    times: new Map(projection.chapters.map((view) => [view.chapter, view.time])),
+    unitsOf: (chapter, quote) => {
+      const source = sources.get(chapter);
+      return source ? locateQuote(quote, source)?.units : undefined;
+    },
+  };
 }
 
 /**
- * 相对日子换算（产品路专用，核账服务合并后过一遍）：
- * - 两句里都有固定说法、且两章都有可靠故事日 → 各自换算成绝对第几天再比：是同一天就不报
- *   （字面「明天 / 后天」不同不是错，报告 3.3）；换算出来不足第 1 天（日子在故事开始前）算换算不了。
- * - 两边只有一处说法才比：两边各有好几处说法的（把两个日子对调了那类），代码分不出谁对谁，交给模型。
- * - 换算不了（缺可靠故事日）→ 最多算「可能」，不进「确定」。
+ * 一句原句在那章的哪一刻（最早、最晚）：定位到句子就是那几句，定位不了就是整章（开头到结尾）。
+ * 不在当下线上、在回忆 / 梦的段里、段改文后对不回（stale）、定位不了而本章有段 → undefined：说的日子不一定是当下的。
+ */
+function momentsOf(context: RelativeDayContext, chapter: number, quote: string): { readonly early: TimePoint; readonly late: TimePoint } | undefined {
+  const time = context.times.get(chapter);
+  if (time?.presentLine !== true || time.segments.some((segment) => segment.stale)) return undefined;
+  const units = context.unitsOf(chapter, quote);
+  if (!units) return time.segments.length > 0 ? undefined : { early: { chapter, at: "start" }, late: { chapter, at: "end" } };
+  if (time.segments.some((segment) => units.from <= segment.units.to && segment.units.from <= units.to)) return undefined;
+  return { early: { chapter, at: units.from }, late: { chapter, at: units.to } };
+}
+
+/**
+ * 相对日子换算（产品路专用，核账服务合并后过一遍）：两句里都有固定说法时，按两句各在哪一刻、沿当下链算两句之间隔几天
+ * （写作版本 P3a T10：看两章的开头和结尾、定位得到就按句，不再只拿本章开头那天；隔几天只用两个世界都确定的）：
+ * - 两边只有一处说法：确定隔几天、说的是同一天 → 不报（字面「明天 / 后天」不同不是错，报告 3.3）；
+ *   不管隔几天都不可能是同一天 → 照报；说不准 → 最多算「可能」。
+ * - 两边各有好几处说法（把两个日子对调了那类）：代码分不出谁对谁，隔几天确定就交给模型，说不准降「可能」。
+ * - 算不了（不在当下线上、在段里、链断了、沿着旧账推定的章）→ 最多算「可能」，不进「确定」。
  * 对的是设定本的条目不适用（设定原文不锚在某一天上）。
  */
 export function applyRelativeDayAlignment(
   issues: readonly ContinuityIssueV2[],
   chapter: number,
-  timeline: StoryTimeline | undefined,
+  context: RelativeDayContext | undefined,
 ): ContinuityIssueV2[] {
   const out: ContinuityIssueV2[] = [];
   for (const issue of issues) {
@@ -518,22 +546,32 @@ export function applyRelativeDayAlignment(
       out.push(issue);
       continue;
     }
-    const dayHere = reliableStoryDay(timeline, chapter);
-    const dayThere = reliableStoryDay(timeline, issue.earlierChapter);
-    if (dayHere === undefined || dayThere === undefined) {
+    const gap = context ? daysBetweenQuotes(context, issue, chapter) : undefined;
+    if (!gap) {
       out.push({ ...issue, confidence: "maybe" });
       continue;
     }
+    const exact = gap.lo !== undefined && gap.lo === gap.hi;
     if (here.length === 1 && there.length === 1) {
-      const absHere = dayHere + here[0]!.delta;
-      const absThere = dayThere + there[0]!.delta;
-      if (absHere < 1 || absThere < 1) {
-        out.push({ ...issue, confidence: "maybe" });
-        continue;
-      }
-      if (absHere === absThere) continue; // 换算后是同一天：不报
+      // 这句那一刻 + 这句说的 = 前一句那一刻 + 前一句说的 ⇔ 隔的天数 = 前一句说的 − 这句说的。
+      const sameDayGap = there[0]!.delta - here[0]!.delta;
+      if (exact && gap.lo === sameDayGap) continue;
+      const impossible = (gap.lo !== undefined && sameDayGap < gap.lo) || (gap.hi !== undefined && sameDayGap > gap.hi);
+      out.push(exact || impossible ? issue : { ...issue, confidence: "maybe" });
+      continue;
     }
-    out.push(issue);
+    out.push(exact ? issue : { ...issue, confidence: "maybe" });
   }
   return out;
+}
+
+/** 这句那一刻比前一句那一刻晚几天（最少 = 前一句最晚到这一句最早，最多 = 前一句最早到这一句最晚）；算不了 → undefined。 */
+function daysBetweenQuotes(context: RelativeDayContext, issue: ContinuityIssueV2, chapter: number): { readonly lo?: number; readonly hi?: number } | undefined {
+  const here = momentsOf(context, issue.fixChapter ?? chapter, issue.quote);
+  const there = momentsOf(context, issue.earlierChapter, issue.earlierQuote);
+  if (!here || !there) return undefined;
+  const least = elapsedDays(context.times, there.late, here.early);
+  const most = elapsedDays(context.times, there.early, here.late);
+  if (!least?.days || !most?.days || least.presumed || most.presumed) return undefined;
+  return { ...(least.days.lo !== undefined ? { lo: least.days.lo } : {}), ...(most.days.hi !== undefined ? { hi: most.days.hi } : {}) };
 }

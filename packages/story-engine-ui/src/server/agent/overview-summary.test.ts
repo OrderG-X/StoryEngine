@@ -6,7 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { cardWrite, chapterCommit, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, chapterCommit, decisionRecord, runCommand, type CardOp } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
 import { seedChapters } from "../book/ledger-test-helpers.js";
 import { createStoryProject } from "../book/project-store.js";
@@ -71,6 +71,24 @@ describe("summarizeStateOverview（重构 P9）", () => {
     const overview = await buildStateOverview({ projectDir });
     expect(overview.ledgerShort).toEqual([{ chapter: 2, status: "pending" }]);
     expect(summarizeStateOverview(overview)).toContain("账：第 2 章正文定了、账还没记上");
+  });
+
+  it("作者定的天数和记下的对不上：概况列出来、摘要说清怎么改（写作版本 P3a）", async () => {
+    const projectDir = await fixture();
+    const outcome = await runCommand(projectDir, chapterCommit, {
+      chapter: 2,
+      text: "# 第2章\n\n第二天一早，林序上了船。",
+      entries: [{ kind: "time", review: "auto", start: { offset: { unit: "day", min: 1, max: 1 }, basis: "text", quote: "第二天一早，林序上了船" }, sameDay: true }],
+    }, { caller: "author", idempotencyKey: "c2" });
+    expect(outcome).toMatchObject({ ok: true, result: { rejected: [] } });
+    const day = (chapter: number, value: number, dayEnd?: number) =>
+      runCommand(projectDir, decisionRecord, { decisions: [{ type: "chapter.day", chapter, day: value, ...(dayEnd ? { dayEnd } : {}) }] }, { caller: "author", idempotencyKey: `d${chapter}` });
+    expect((await day(1, 1, 1)).ok).toBe(true);
+    expect((await buildStateOverview({ projectDir })).timeChecks).toBeUndefined();
+    expect((await day(2, 6)).ok).toBe(true);
+    const overview = await buildStateOverview({ projectDir });
+    expect(overview.timeChecks?.map((check) => [check.chapter, check.kind])).toEqual([[2, "conflict"]]);
+    expect(summarizeStateOverview(overview)).toContain("天数要作者看：第 2 章你定的第 6 天，和按上一章、这章开头推出来的");
   });
 
   it("开放线索把推进过、还没收的也算上（换题材长篇实跑第 26 章：14 条推进过没收，报 0 条）", async () => {

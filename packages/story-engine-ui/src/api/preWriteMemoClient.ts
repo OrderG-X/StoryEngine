@@ -1,9 +1,10 @@
 /**
  * 写前备忘（GET /api/pre-write-memo）：动笔写第 N 章前看一眼。读不到如实给原因，不装作「没什么要接的」。
  */
-import type { PreWriteMemo } from "@actalk/story-core";
+import type { PreWriteMemoView as PreWriteMemo } from "../server/routes/pre-write-memo.js";
 
-export type { PreWriteChange, PreWriteMemo, PreWritePrevious, PreWriteThread } from "@actalk/story-core";
+export type { PreWriteChange, PreWritePrevious, PreWriteThread } from "@actalk/story-core";
+export type { PreWriteMemoView as PreWriteMemo } from "../server/routes/pre-write-memo.js";
 
 export type PreWriteMemoResult = { readonly ok: true; readonly memo: PreWriteMemo } | { readonly ok: false; readonly error: string };
 

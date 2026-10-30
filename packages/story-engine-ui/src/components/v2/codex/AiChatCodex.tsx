@@ -342,6 +342,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const [inboxSaving, setInboxSaving] = useState(false);
   const runInboxTodo = (todo: InboxTodo) => {
     const projectPath = props.projectPath;
+    if (todo.userAction && props.onSendUserAction) {
+      props.onSendUserAction(todo.userAction);
+      setInboxOpen(false);
+      return;
+    }
     if (!todo.ops || !projectPath) {
       prefillComposer(todo.prefill);
       return;
@@ -506,8 +511,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
                     <button
                       type="button"
                       className="se-todo-act"
-                      disabled={todo.ops && props.projectPath ? busy || inboxSaving : !chatEnabled}
-                      title={todo.ops && props.projectPath ? "直接改设定本，可在操作历史里撤销" : `把「${todo.prefill}」放进输入框（不会自动发送）`}
+                      disabled={todo.userAction && props.onSendUserAction ? busy : todo.ops && props.projectPath ? busy || inboxSaving : !chatEnabled}
+                      title={todo.userAction && props.onSendUserAction ? "直接改账，可在操作历史里撤销" : todo.ops && props.projectPath ? "直接改设定本，可在操作历史里撤销" : `把「${todo.prefill}」放进输入框（不会自动发送）`}
                       onClick={() => runInboxTodo(todo)}
                     >
                       {todo.action}

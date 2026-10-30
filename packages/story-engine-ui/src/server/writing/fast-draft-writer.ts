@@ -332,7 +332,7 @@ async function generateBySegments(input: {
   const planSection = input.context.sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown> | undefined;
   // 一章默认在同一天里（章纲只记一个故事日）：第十四轮后半章凭空写「第二天」，正文比日历多走两天、截止日无声越过。
   // 要点里有没有写换天交给模型自己读，不用词表猜（重构 P7「不猜」）。
-  const sameDay = `本章从${input.plan.storyDay ? `故事第 ${input.plan.storyDay} 天` : "上一章结束的那天"}开始；章纲要点里没写换天，就都在同一天里，不要自己加「第二天」「次日」「几天后」这类跳天。`;
+  const sameDay = "本章从章纲写的开场那天开始（日子见章纲里的故事日历）；章纲要点里没写换天，就都在同一天里，不要自己加「第二天」「次日」「几天后」这类跳天。";
 
   // 作者没给方向时本章目标就是章纲的整章一句话——前半章看到它也会往全章结局写，前半章不给。
   const firstGoal = [

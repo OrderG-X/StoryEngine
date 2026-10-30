@@ -237,6 +237,7 @@ export { idleChaptersBetween, threadUnknownChapters } from "./projection/coverag
 export {
   addRange,
   dayAt,
+  elapsedDays,
   inRange,
   isExact,
   momentOf,
@@ -247,6 +248,7 @@ export {
   type DayChangeView,
   type DayRange,
   type SegmentView,
+  type TimePoint,
   type TimeConflictView,
   type TimeProjection,
   type TimeWorld,

@@ -1,8 +1,9 @@
 /**
  * AI 栏「待处理」（2026-10-07 改版）：不急但别忘的事，按需点「让 AI …」把一句话放进输入框（不自动发、不直连引擎）。
- * 带 ops 的（重构 P9：还没标主角）点了直接改设定本（作者档、可撤销），不经模型。
- * 全部从现有只读数据确定性推出：还没标主角 / 好几章没动的线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
+ * 带 ops 的（重构 P9：还没标主角）点了直接改设定本（作者档、可撤销），不经模型；带 userAction 的（P3a：天数待确认）点了直接改账。
+ * 全部从现有只读数据确定性推出：还没标主角 / 天数要你看的章 / 好几章没动的线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
  */
+import { newLedgerAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import type { CardOp } from "../../../api/bibleClient.js";
 import type { StateOverview } from "../../../api/types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
@@ -16,9 +17,13 @@ export interface InboxTodo {
   readonly prefill: string;
   /** 有就直接改设定本（作者点了就算数），不放进输入框。 */
   readonly ops?: readonly CardOp[];
+  /** 有就直接交这个按钮动作（作者档改账，可撤销），不放进输入框。 */
+  readonly userAction?: AgentUserAction;
 }
 
 const ARC_STALE_CHAPTERS = 8;
+/** 天数待确认的先列几处。 */
+const MAX_TIME_TODOS = 3;
 
 function chapterList(numbers: readonly number[]): string {
   const shown = numbers.slice(0, 6).join("、");
@@ -27,7 +32,7 @@ function chapterList(numbers: readonly number[]): string {
 
 export function buildInboxTodos(input: {
   readonly chapters: readonly ChapterNavItem[];
-  readonly overview: (Pick<StateOverview, "threads" | "arcGoals"> & Partial<Pick<StateOverview, "protagonistSuggestion">>) | null | undefined;
+  readonly overview: (Pick<StateOverview, "threads" | "arcGoals"> & Partial<Pick<StateOverview, "protagonistSuggestion" | "timeChecks">>) | null | undefined;
   readonly currentChapterNumber: number;
   /** 导入的书还在通读记账（P8）：后面的章还没记账，前面开的线索、主线看着「很久没推进」是假的，这两条先不提。 */
   readonly rereading?: boolean;
@@ -47,6 +52,49 @@ export function buildInboxTodos(input: {
       ops: protagonist.carded
         ? [{ op: "card.protagonist", card: protagonist.name }]
         : [{ op: "card.create", kind: "character", name: protagonist.name, protagonist: true }],
+    });
+  }
+
+  // 天数要你看的（写作版本 P3a）：导入时记成你定的待确认 → 「对，是这天」；作者定的和记下的对不上 → 「以我定的为准」；
+  // 换天规矩改了、不知道了 → 让 AI 对着正文看。最多列 3 章，多的让 AI 一起看。
+  const timeChecks = input.overview?.timeChecks ?? [];
+  for (const check of timeChecks.slice(0, MAX_TIME_TODOS)) {
+    if (check.kind === "unproven" && check.day !== undefined) {
+      todos.push({
+        key: `time-${check.chapter}-${check.kind}`,
+        title: `第 ${check.chapter} 章是第 ${check.day} 天吗`,
+        sub: check.text,
+        action: `对，是第 ${check.day} 天`,
+        prefill: `第 ${check.chapter} 章是故事第 ${check.day} 天`,
+        userAction: newLedgerAction([{ op: "day", chapter: check.chapter, day: check.day }]),
+      });
+    } else if (check.kind === "conflict") {
+      todos.push({
+        key: `time-${check.chapter}-${check.kind}`,
+        title: `第 ${check.chapter} 章的天数对不上`,
+        sub: check.text,
+        action: "以我定的为准",
+        prefill: `第 ${check.chapter} 章的天数以我定的为准`,
+        userAction: newLedgerAction([{ op: "keepDay", chapter: check.chapter }]),
+      });
+    } else {
+      todos.push({
+        key: `time-${check.chapter}-${check.kind}`,
+        title: `第 ${check.chapter} 章是哪天不知道了`,
+        sub: check.text,
+        action: "让 AI 对一下",
+        prefill: `第 ${check.chapter} 章是故事第几天不知道了，对着正文看一下，再跟我确认`,
+      });
+    }
+  }
+  if (timeChecks.length > MAX_TIME_TODOS) {
+    const rest = timeChecks.slice(MAX_TIME_TODOS).map((check) => check.chapter);
+    todos.push({
+      key: "time-more",
+      title: `还有 ${rest.length} 处天数要你看`,
+      sub: chapterList([...new Set(rest)]),
+      action: "让 AI 列给我",
+      prefill: "把天数要我确认的那几章列给我，一章一章说清楚",
     });
   }
 

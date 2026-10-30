@@ -145,7 +145,7 @@ describe("依据安全契约", () => {
       expect(read.record.state).toBe("obsolete");
       expect(read.record.failure?.message).toContain("这份改账是照改之前算的，没改");
       const view = await projectBook(book);
-      expect(view.chapters[0]?.day).toBe(20);
+      expect(view.chapters[0]?.time.start?.lo).toBe(20);
       expect(view.chapters[0]?.summary).not.toBe("第一条");
     } finally {
       __resetRecipesForTests();

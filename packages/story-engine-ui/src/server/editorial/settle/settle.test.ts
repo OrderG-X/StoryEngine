@@ -22,7 +22,7 @@ const E2: EntryInput[] = [
   { kind: "summary", review: "auto", text: "孟叔说起杜叔", quote: "杜叔走了五年了" },
   { kind: "fact", review: "auto", nature: "hard", subject: "杜长顺", attribute: "去世", value: "五年前", text: "杜长顺五年前去世", quote: "杜叔走了五年了" },
   { kind: "fact", review: "auto", nature: "state", subject: "码头", attribute: "样子", value: "雾大没人", text: "码头雾大没人", quote: "雾很大，码头上没人" },
-  { kind: "time", review: "auto", basis: "author", day: 5 },
+  { kind: "day", review: "author", day: 5, dayEnd: 5 },
 ];
 const E3: EntryInput[] = [{ kind: "summary", review: "auto", text: "许微在码头", quote: "许微数着集装箱" }];
 

@@ -5,7 +5,8 @@
  * 核账员三遍（跟读窗口，带 A 自复核 + F 时间线只进自复核）、同一份核账记忆和「不是问题」批注。
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
-import { describeTimelineForChapter, type StoryTimeline } from "../../book/story-timeline.js";
+import type { BookProjection } from "@actalk/story-core";
+import { describeTimelineForChapter } from "../../book/story-timeline.js";
 import { itOrThem, shortChapters, shortChaptersText, type ShortChapter } from "../../book/ledger-short.js";
 import { readStoryViews } from "../../book/story-views.js";
 import { type FactEntry } from "../../book/types.js";
@@ -27,6 +28,7 @@ import {
 } from "../index.js";
 import {
   applyRelativeDayAlignment,
+  readRelativeDayContext,
   issueStillPresent,
   ledgerNumberIssues,
   mergeContinuityIssues,
@@ -201,13 +203,21 @@ async function checkByReader(input: {
     draftBody: input.body,
     ...(input.ledgerFacts ? { ledgerFacts: input.ledgerFacts } : {}),
   }));
-  // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按时间线的
-  // 故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。时间线读不了当没有，只降档不删条。
-  const timeline = await readStoryViews(input.projectDir).then((views) => views.timeline).catch(() => undefined);
-  const issues = settleMirroredIssues(applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
+  // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按两句各在哪一刻
+  // 算隔几天再比——同一天不报；算不了最多「可能」。时间读不了当没有，只降档不删条。
+  const merged = mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...reader.issues], input.chapter, input.body, input.earlier));
+  const issues = settleMirroredIssues((await alignRelativeDays(input.projectDir, merged, input.chapter))
     .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const })), input.chapter)
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
+}
+
+/** 相对日子换算（applyRelativeDayAlignment）：读投影和涉及那几章的定稿正文；读不了就当算不了（只降档不删条）。 */
+async function alignRelativeDays(projectDir: string, issues: readonly ContinuityIssueV2[], chapter: number, projection?: BookProjection): Promise<ContinuityIssueV2[]> {
+  const read = projection ?? await readStoryViews(projectDir).then((views) => views.projection).catch(() => undefined);
+  const chapters = issues.flatMap((issue) => [issue.fixChapter ?? chapter, issue.earlierChapter]);
+  const context = read ? await readRelativeDayContext(projectDir, read, chapters).catch(() => undefined) : undefined;
+  return applyRelativeDayAlignment(issues, chapter, context);
 }
 
 /**
@@ -219,7 +229,8 @@ export async function readCheckInputs(projectDir: string, chapter: number): Prom
   readonly earlier: EarlierText;
   readonly ledgerFacts?: readonly FactEntry[];
   readonly foundation?: FoundationDigest;
-  readonly timeline?: StoryTimeline;
+  /** 投影（时间表从它出，相对日子换算也用它）。 */
+  readonly projection?: BookProjection;
   readonly ledgerShort: readonly ShortChapter[];
   readonly earlierHash?: string;
   /** 读材料那会儿书的依据摘要（带写入代次）：核完存记忆前再核一遍，核的途中书变了就不存。 */
@@ -234,20 +245,20 @@ export async function readCheckInputs(projectDir: string, chapter: number): Prom
       foundationRead = false;
       return undefined;
     });
-    const timeline = views?.timeline;
+    const projection = views?.projection;
     // 按账单状态取缺账的章（出口复核第 4 条：作者定过天数的待记章也是缺账）。
     const ledgerShort = views ? shortChapters(views.projection.chapters, chapter) : [];
-    return { earlier, ledgerFacts, foundationRead, foundation, timeline, ledgerShort };
+    return { earlier, ledgerFacts, foundationRead, foundation, projection, ledgerShort };
   });
-  const { earlier, ledgerFacts, foundationRead, foundation, timeline, ledgerShort } = value;
-  const earlierHash = basis && ledgerFacts && foundationRead && timeline
-    ? hashEarlier(basis, chapter, { ledger: ledgerFacts, ...(foundation ? { setting: foundation.text } : {}), timeline: describeTimelineForChapter(timeline, chapter) })
+  const { earlier, ledgerFacts, foundationRead, foundation, projection, ledgerShort } = value;
+  const earlierHash = basis && ledgerFacts && foundationRead && projection
+    ? hashEarlier(basis, chapter, { ledger: ledgerFacts, ...(foundation ? { setting: foundation.text } : {}), timeline: describeTimelineForChapter(projection, chapter) ?? "" })
     : undefined;
   return {
     earlier,
     ...(ledgerFacts ? { ledgerFacts } : {}),
     ...(foundation ? { foundation } : {}),
-    ...(timeline ? { timeline } : {}),
+    ...(projection ? { projection } : {}),
     ledgerShort,
     ...(earlierHash ? { earlierHash } : {}),
     ...(basis ? { basisDigest: basis.digest } : {}),
@@ -303,7 +314,7 @@ export async function checkChapterBody(
 ): Promise<ChapterCheckResult> {
   // 账本只读一次：数字对账用它，核账记忆的键也带上它。读不了就不传，核账那边会如实记「账本读不了」。
   // 设定本也只读一次：上次对设定本的条目按它判还在不在。
-  const { earlier, ledgerFacts, foundation, timeline, ledgerShort, earlierHash, basisDigest } = await readCheckInputs(projectDir, chapter);
+  const { earlier, ledgerFacts, foundation, projection, ledgerShort, earlierHash, basisDigest } = await readCheckInputs(projectDir, chapter);
   const readerCallModel = options.readerCallModel ?? callConfiguredBrainModel;
   const bodyHash = hashBody(body);
   // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
@@ -329,7 +340,7 @@ export async function checkChapterBody(
     // R7.3：复用上次结果也照过一遍相对日子换算（纯确定性、不调模型）——作者后来改了故事日时，
     // 旧缓存里「明天 / 后天」那类条目按新时间线重新换算，不会把该收掉的误报又端出来。
     // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
-    result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
+    result = { issues: settleMirroredIssues(await alignRelativeDays(projectDir, memory!.issues, chapter, projection), chapter), failures: [] };
   } else {
     result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel, ...(changes ? { changes } : {}), ...(options.notesReady ? { notesReady: options.notesReady } : {}) }));
     // 上一遍按核账改过的句子这遍又被报「确定」：两遍说法相反，降成「可能」（不再自动来回改）。

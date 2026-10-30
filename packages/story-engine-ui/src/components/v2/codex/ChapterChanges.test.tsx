@@ -8,8 +8,7 @@ const CHANGES: Changes = {
   chapter: 12,
   chapters: [11, 12],
   summary: "翻出汇款存根",
-  day: 13,
-  dayEnd: 13,
+  days: "故事第 13 天 · 含回忆（3 年前）",
   present: ["林舟", "林溪"],
   newCast: [{ name: "沈家侄女", quote: "是修表铺的林师傅吧" }],
   threads: [
@@ -19,6 +18,7 @@ const CHANGES: Changes = {
   facts: [
     { subject: "林溪", text: "林溪退了返程票", quote: "退票的确认弹出来", replaces: "林溪订了周日的返程票", auto: true },
     { text: "汇款每季一张", auto: false, later: "retracted" },
+    { subject: "林舟", text: "林舟成了表行老板", quote: "他梦见自己成了表行老板", auto: false, scope: "梦里" },
   ],
 };
 
@@ -36,7 +36,9 @@ describe("设定本「这章改了什么」（重构 P6 第 6 步）", () => {
     render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map([[12, "第12章 · 存根"]])} />);
     expect(await screen.findByRole("heading", { name: "第 12 章 · 存根 改了什么" })).toBeTruthy();
     expect(fetchMock.mock.calls[0]![0]).toContain("chapter=12");
-    expect(screen.getByText("故事第 13 天 · 翻出汇款存根")).toBeTruthy();
+    expect(screen.getByText("故事第 13 天 · 含回忆（3 年前） · 翻出汇款存根")).toBeTruthy();
+    // 梦里、回忆里、谁说的：记着，标出来、不改现状。
+    expect(screen.getByText("梦里").getAttribute("title")).toBe("记着，不改现状");
     expect(screen.getByText("沈家侄女")).toBeTruthy();
     expect(screen.getByText("原来：林溪订了周日的返程票")).toBeTruthy();
     expect(screen.getByText("自动记的")).toBeTruthy();

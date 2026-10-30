@@ -9,13 +9,13 @@
  *
  * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
-import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, threadOf, timeDeclarationOf, type BibleView, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
-import type { StoryTimeline, TimelineEntry, TimelineSource, UnknownDay } from "./story-timeline.js";
+import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, rightsOf, threadOf, timelineTable, type BibleView, type BookProjection, type ChapterLedger, type ThreadView, type TimelineRow } from "@actalk/story-core";
 import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
 export interface LedgerViews {
   readonly projection: BookProjection;
-  readonly timeline: StoryTimeline;
+  /** 每章是故事哪几天（核心时间表；给模型的样子见 story-timeline.ts）。 */
+  readonly timeline: readonly TimelineRow[];
   readonly facts: FactLedger;
   readonly threads: ThreadPool;
   readonly goals: ArcGoalPool;
@@ -49,14 +49,6 @@ async function readChapterTitles(projectDir: string, chapters: readonly number[]
   return titles;
 }
 
-const TIME_SOURCE: Record<Exclude<BookProjection["chapters"][number]["dayBasis"], "unknown">, TimelineSource> = {
-  author: "author",
-  text: "declared",
-  judged: "plan",
-  estimated: "fallback",
-  missing: "fallback",
-};
-
 /** 账待记的章在「各章事件」里的梗概：如实说给不出（写手、章纲、概况照读这一句，不当成「这章什么都没发生」）。 */
 export const PENDING_CHAPTER_SUMMARY = "这章的账还没记上，梗概给不出";
 /** 账没记全、梗概那条没记上。 */
@@ -78,56 +70,33 @@ function goalStatus(thread: ThreadView): ArcGoal["status"] {
 }
 
 export function storyViewsOf(projection: BookProjection, ledgers: readonly ChapterLedger[], chapterTitles: ReadonlyMap<number, string>): LedgerViews {
-  const timeEntries = new Map(ledgers.flatMap((ledger) => {
-    const time = timeDeclarationOf(ledger.entries);
-    return time ? [[ledger.chapter, time] as const] : [];
-  }));
-
-  const unknownDays = projection.chapters.flatMap((chapter): UnknownDay[] => {
-    if (chapter.day !== undefined) return [];
-    const own = chapter.ledgerStatus !== "ready" && chapter.missingKinds?.includes("time") ? chapter.ledgerStatus : undefined;
-    return [{ chapter: chapter.chapter, ...(own ? { own } : {}) }];
-  });
-  const timeline: StoryTimeline = {
-    schemaVersion: 1,
-    entries: projection.chapters.flatMap((chapter): TimelineEntry[] => {
-      if (chapter.day === undefined || chapter.dayEnd === undefined || chapter.dayBasis === "unknown") return [];
-      const time = timeEntries.get(chapter.chapter);
-      const span = chapter.dayEnd - chapter.day;
-      return [{
-        chapter: chapter.chapter,
-        day: chapter.day,
-        // 只给明写的星期，推出来的不给（读者自己按最近的锚点推）。
-        ...(chapter.weekday !== undefined && !chapter.weekdayDerived ? { weekday: chapter.weekday } : {}),
-        ...(chapter.timeOfDay ? { timeOfDay: chapter.timeOfDay } : {}),
-        ...(time?.daysSincePrevious !== undefined && chapter.dayBasis !== "author" ? { daysSincePrevious: time.daysSincePrevious } : {}),
-        ...(span > 0 ? { daysInChapter: span } : {}),
-        source: TIME_SOURCE[chapter.dayBasis],
-        ...(time?.quote ? { quote: time.quote } : {}),
-      }];
-    }),
-    ...(unknownDays.length > 0 ? { unknownDays } : {}),
-  };
+  const timeline = timelineTable(projection);
 
   const facts: FactLedger = {
     version: "v0",
     facts: projection.facts
       // 作者说「记错了」的不给：读者不认作废，给了就当真。
       .filter((fact) => fact.status !== "retracted")
-      .map((fact): FactEntry => ({
-        id: fact.id,
-        chapter: fact.chapter,
-        text: fact.text,
-        source: fact.review === "author" ? "manual" : "auto",
-        effectiveFromChapter: fact.chapter,
-        ...(fact.supersededAt !== undefined ? { supersededByChapter: fact.supersededAt } : {}),
-        ...(fact.supersededBy !== undefined ? { supersededByFactId: fact.supersededBy } : {}),
-        ...(fact.quote ? { quote: fact.quote } : {}),
-        ...(fact.subject ? { subject: fact.subject } : {}),
-        ...(fact.attribute ? { attribute: fact.attribute } : {}),
-        ...(fact.value ? { value: fact.value } : {}),
-        kind: fact.nature,
-      })),
+      .map((fact): FactEntry => {
+        const scope = scopeLabel(fact.scope);
+        const { conflict } = rightsOf(fact.scope.source, fact.scope.frame);
+        return {
+          id: fact.id,
+          chapter: fact.chapter,
+          text: scope ? `${fact.text}（${scope}）` : fact.text,
+          source: fact.review === "author" ? "manual" : "auto",
+          effectiveFromChapter: fact.chapter,
+          ...(fact.supersededAt !== undefined ? { supersededByChapter: fact.supersededAt } : {}),
+          ...(fact.supersededBy !== undefined ? { supersededByFactId: fact.supersededBy } : {}),
+          ...(fact.quote ? { quote: fact.quote } : {}),
+          ...(fact.subject ? { subject: fact.subject } : {}),
+          ...(fact.attribute ? { attribute: fact.attribute } : {}),
+          ...(fact.value ? { value: fact.value } : {}),
+          kind: fact.nature,
+          ...(scope ? { scope } : {}),
+          ...(conflict !== "sure" ? { conflict } : {}),
+        };
+      }),
   };
 
   const evidenceOf = (thread: ThreadView): string[] => unique(thread.touches.flatMap((touch) => (touch.quote ? [touch.quote] : [])));
@@ -202,6 +171,15 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
   });
 
   return { projection, timeline, facts, threads, goals, events };
+}
+
+/** 不是叙述当下说的事实，给模型的字上带一句（写作版本 P3a 第 3 节）：梦里、回忆里的不是现状；人物说的不一定是真的。 */
+function scopeLabel(scope: BookProjection["facts"][number]["scope"]): string | undefined {
+  if (scope.frame === "other") return "梦里、想象或传闻里的，不是现状";
+  if (scope.frame === "past") return "回忆里的，不是现状";
+  if (scope.frame === "unknown") return "这句在不在回忆、梦里对不上了，不一定是现状";
+  if (scope.source === "character_claim") return `${scope.speaker ?? "人物"}说的，不一定是真的`;
+  return undefined;
 }
 
 /**

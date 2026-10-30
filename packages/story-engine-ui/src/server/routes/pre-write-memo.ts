@@ -5,11 +5,17 @@
  * 该接的线索（上一章刚动过的、停太久的、大伏笔），最近几章变了的状态。全是账里记的结构，不读正文、不猜。
  * 线索编号只给界面当列表键用，界面不显示。
  */
-import { preWriteMemo, projectBook } from "@actalk/story-core";
+import { preWriteMemo, projectBook, type PreWriteMemo } from "@actalk/story-core";
+import { continueDayText } from "../book/story-timeline.js";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { ensureBookOnCore } from "../book/ensure-on-core.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
+
+/** 界面拿到的备忘：核心的结构 + 「接哪天」出好的字（全书一个口径，写作版本 P3a）。 */
+export interface PreWriteMemoView extends PreWriteMemo {
+  readonly days?: string;
+}
 
 export function registerPreWriteMemoRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {
@@ -40,7 +46,9 @@ export function registerPreWriteMemoRoutes(middlewares: MiddlewareStack): void {
         return;
       }
       const projection = await projectBook(projectDir, { upTo: rawChapter - 1 });
-      writeJson(res, 200, { ok: true, memo: preWriteMemo(projection, rawChapter) });
+      const days = continueDayText(projection, rawChapter);
+      const memo: PreWriteMemoView = { ...preWriteMemo(projection, rawChapter), ...(days ? { days } : {}) };
+      writeJson(res, 200, { ok: true, memo });
     } catch (error) {
       writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
     }

@@ -170,7 +170,7 @@ async function readPlanBasis(projectDir: string, chapter: number, direction?: st
   try {
     const read = await readWithStableBasisForWork(projectDir, async () => ({
       materials: await collectPlanMaterials(projectDir, chapter, direction || undefined),
-      timeline: (await readStoryViews(projectDir)).timeline.entries.filter((entry) => entry.chapter < chapter),
+      timeline: (await readStoryViews(projectDir)).timeline.filter((row) => row.chapter < chapter),
     }));
     if (!read.basis) return undefined;
     return { key: sha256(canonicalJson({ truth: basisDigestBefore(read.basis, chapter), ...read.value })), digest: read.basis.digest };

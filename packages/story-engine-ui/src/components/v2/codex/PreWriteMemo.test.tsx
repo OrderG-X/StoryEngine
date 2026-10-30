@@ -10,8 +10,9 @@ const memo: Memo = {
     summary: "许微夜里回屋，把记录纸塞回床底。",
     present: ["许微", "孟叔"],
     viewpoint: "许微",
-    time: { chapter: 8, day: 11, dayEnd: 11, weekdayDerived: true, weekday: 2, timeOfDay: "夜里", basis: "text" },
+    time: { chapter: 8, presentLine: true, start: { lo: 11, hi: 11 }, end: { lo: 11, hi: 11 }, weekdayDerived: true, weekday: 2, timeOfDay: "夜里", basis: "ledger", presumed: false, segments: [], afterUnknown: false },
   },
+  days: "第 11 天夜里",
   threads: [
     { id: "t-1", title: "零三号仓是谁", weight: "normal", reason: "previous", previousOp: "advance", idle: 0, last: { chapter: 8, note: "推出是零三号仓", quote: "她推出来了，零三号仓" } },
     { id: "t-2", title: "父亲怎么失踪的", weight: "major", reason: "stale", idle: 21, last: { chapter: 1, note: "开" } },
@@ -37,10 +38,9 @@ describe("写前备忘", () => {
     expect(briefLine({ ...memo, previous: crowd, threads: [] })).toBe("接第 8 章 · 第 11 天夜里 · 甲、乙、丙等 5 人");
   });
 
-  it("天数：跨天写起止，估的说是估的", () => {
-    expect(dayText({ ...memo.previous!.time, day: 3, dayEnd: 5 })).toBe("第 3～5 天");
-    expect(dayText({ ...memo.previous!.time, basis: "estimated" })).toBe("第 11 天夜里（估的）");
-    expect(dayText({ ...memo.previous!.time, basis: "missing", timeOfDay: undefined })).toBe("第 11 天（估的）");
+  it("天数照服务端出好的写；没给就说哪天不知道", () => {
+    expect(dayText({ days: "第 3 天到第 5 天" })).toBe("第 3 天到第 5 天");
+    expect(dayText({})).toBe("哪天不知道");
   });
 
   it("线索为什么提：上章埋下 / 上章推进 / 停了几章 / 大伏笔", () => {

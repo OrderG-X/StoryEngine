@@ -12,8 +12,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-store.js";
-import { chapterEndDay } from "./story-timeline.js";
-import { readStoryViews } from "./story-views.js";
+import type { PlanClock } from "./story-timeline.js";
 
 export interface ChapterPlanThreadStep {
   /** 推进的线索/目标标题（尽量逐字取自现有开着的线索）。 */
@@ -48,10 +47,15 @@ export interface ChapterPlan {
   /** 开场在哪、什么时候。 */
   readonly scene: { readonly location?: string; readonly time?: string };
   /**
-   * 故事第几天（第 1 章 = 第 1 天，按天数往后数）。十章验收：「三天前送来的表」过了一周还是三天前、星期一路算错——
-   * 写手只看得到相对说法，算不了日子。有了逐章的天数，提到过去的事就能按天数差算「几天前」。缺省 = 老章纲没有。
+   * 本章开场离第 after 章（拟纲时的上一个当下章）结尾过了几天；可负（换到另一条线、往回接）。十章验收：「三天前送来的表」
+   * 过了一周还是三天前——写手只看得到相对说法，算不了日子，所以写的时候按它把前面各章标成「昨天 / 前天 / 几天前」。
+   * 绝对第几天不存（写作版本 P3a）：前文的天数会变（作者改天数、补账），存了就过时，用的时候按投影现算。缺省 = 说不准。
    */
-  readonly storyDay?: number;
+  readonly dayOffset?: number;
+  /** dayOffset 是离哪一章结尾算的。没有 = 前面没有当下章（本章就是第 1 天）或说不准。 */
+  readonly after?: number;
+  /** 整章不在当下线上：past = 回忆、倒叙；other = 梦、想象、传闻。缺省 = 当下。 */
+  readonly frame?: "past" | "other";
   /** 出场人物名。 */
   readonly characters: readonly string[];
   /** 涉及的物件 / 地点 / 文书 / 组织名（翻旧资料的检索词）。 */
@@ -135,12 +139,11 @@ function cleanThreadSteps(value: unknown): readonly ChapterPlanThreadStep[] {
  */
 /**
  * 「故事第 N 天」只是记日子的内部编号，不该进要点和开场时间（第十八轮：章纲要点写「故事第 7 天上午」，
- * 正文照抄出「受理回执日期栏印着第十一天」「今天是第几天你自己算」）。天数只留在 storyDay 字段。
+ * 正文照抄出「受理回执日期栏印着第十一天」「今天是第几天你自己算」）。离上一章过了几天只留在 dayOffset 字段。
  */
 // 阿拉伯数字的「第2天」也是编号（第十九轮章纲写「第3天上午」）；汉字的「第二天」是正常说法，不动。
 // 不猜白名单开始：日期归一
 const STORY_DAY_NUMBERING = /[（(]?\s*(?:故事第\s*[\d一二三四五六七八九十百]+|第\s*\d+)\s*天\s*[）)]?[，,、]?\s*/gu;
-const STORY_DAY_IN_TEXT = /(?:故事)?第\s*(\d+)\s*天/u;
 // 不猜白名单结束
 
 function stripStoryDayNumbering(text: string): string {
@@ -162,9 +165,9 @@ export function normalizeChapterPlan(
   const location = cleanText(scene?.location ?? record.location, 40);
   const rawTime = cleanText(scene?.time ?? record.time, 40);
   const time = rawTime ? stripStoryDayNumbering(rawTime) || undefined : undefined;
-  // 第 1 章就是故事第 1 天（第十四轮第 1 章章纲没给天数，日历从第 2 章才有起点）。只写在开场时间里的「故事第 N 天」也认。
-  const dayInTime = rawTime ? STORY_DAY_IN_TEXT.exec(rawTime)?.[1] : undefined;
-  const storyDay = normalizeStoryDay(record.storyDay ?? scene?.storyDay ?? dayInTime) ?? (meta.chapter === 1 ? 1 : undefined);
+  const dayOffset = normalizeDayOffset(record.dayOffset);
+  const after = typeof record.after === "number" && Number.isInteger(record.after) && record.after >= 1 && record.after < meta.chapter ? record.after : undefined;
+  const frame = typeof record.frame === "string" ? FRAME_WORDS.get(record.frame.trim()) : undefined;
   const direction = cleanText(meta.direction, 400);
   return {
     version: 1,
@@ -175,8 +178,7 @@ export function normalizeChapterPlan(
     beats,
     newInformation: cleanList(record.newInformation ?? record.newInfo ?? record.reveals, 6),
     scene: { ...(location ? { location } : {}), ...(time ? { time } : {}) },
-    // 第 1 章就是故事第 1 天（第十四轮第 1 章章纲没给天数，日历从第 2 章才有起点）。
-    ...(storyDay !== undefined ? { storyDay } : {}),
+    ...(frame ? { frame } : dayOffset !== undefined ? { dayOffset, ...(after !== undefined ? { after } : {}) } : {}),
     characters: cleanNames(record.characters),
     entities: cleanNames(record.entities ?? record.objects ?? record.items),
     threadsAdvanced: cleanThreadSteps(record.threadsAdvanced ?? record.threads),
@@ -202,43 +204,13 @@ function directionChangesOf(value: unknown, direction: string | undefined): { di
   return out.length > 0 ? { directionChanges: out } : {};
 }
 
-/** 故事第几天：正整数（「第12天」「12」都收），其它一律当没给。 */
-function normalizeStoryDay(value: unknown): number | undefined {
-  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-  const match = /(\d{1,5})/u.exec(text);
-  if (!match) return undefined;
-  const day = Number(match[1]);
-  return Number.isInteger(day) && day >= 1 && day <= 100_000 ? day : undefined;
+/** 离上一章过了几天：整数（可负），太离谱的当没给。 */
+function normalizeDayOffset(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && Math.abs(value) <= 36_500 ? value : undefined;
 }
 
-export interface StoryClockEntry {
-  readonly chapter: number;
-  readonly storyDay: number;
-  /** 正文里写了章内换天时：这章结束是第几天（没写 = 同 storyDay）。 */
-  readonly endDay?: number;
-  readonly time?: string;
-  readonly summary: string;
-}
-
-/**
- * 前面各章的「故事第几天」（近的在后），最多 limit 条。
- * 读故事时间线（从投影现算）：以前只认章纲，作者自己写、没有章纲的章整段缺席，新章的天数会静默偏小。
- * 摘要优先章纲，没有就用那章的梗概。
- */
-export async function readStoryClock(projectDir: string, chapter: number, limit = 12): Promise<readonly StoryClockEntry[]> {
-  const { timeline, events } = await readStoryViews(projectDir);
-  const entries = timeline.entries.filter((entry) => entry.chapter < chapter).slice(-limit);
-  if (entries.length === 0) return [];
-  const eventSummaries = new Map(events.map((event) => [event.chapter, event.summary]));
-  const out: StoryClockEntry[] = [];
-  for (const entry of entries) {
-    const plan = await readChapterPlan(projectDir, entry.chapter).catch(() => undefined);
-    const summary = (plan?.summary ?? eventSummaries.get(entry.chapter) ?? "").slice(0, 60);
-    const time = plan?.scene.time ?? (entry.weekday !== undefined ? `${WEEKDAY_NAMES[entry.weekday]}${entry.timeOfDay ?? ""}` : entry.timeOfDay);
-    out.push({ chapter: entry.chapter, storyDay: entry.day, ...(entry.daysInChapter ? { endDay: chapterEndDay(entry) } : {}), ...(time ? { time } : {}), summary });
-  }
-  return out;
-}
+/** 整章不在当下线上的说法（模型可能给中文或英文枚举；别的一律当「当下」）。 */
+const FRAME_WORDS: ReadonlyMap<string, "past" | "other"> = new Map([["past", "past"], ["回忆", "past"], ["倒叙", "past"], ["other", "other"], ["梦", "other"], ["想象", "other"]]);
 
 export function chapterPlanPath(projectDir: string, chapter: number): string {
   return join(projectDir, "drafts", "plans", `chapter-${String(chapter).padStart(4, "0")}.json`);
@@ -316,75 +288,11 @@ export function collectPlanRetrievalTerms(plan: ChapterPlan): readonly string[] 
   return cleanTerms([plan.scene.location, ...plan.entities, ...plan.characters]);
 }
 
-const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-// 不猜白名单：日期归一
-const WEEKDAY_MENTION = /(?:周|星期|礼拜)([一二三四五六日天])/u;
+const CLOCK_RULE = "人物台词和叙述里说到过去的事，照这里标好的「昨天 / 前天 / 几天前」和星期几说，不要自己推算，也不要照抄前文当时说的「三天前」「昨天」——那是站在当时说的；没标「离今天」的，是隔了多久说不准，别替它定。回忆、梦里的日子是那段自己的。「故事第几天」只是给你对日子的内部编号，正文和台词里绝不出现「第 N 天」这种说法。";
 
-function weekdayIndex(text: string | undefined): number | undefined {
-  const match = text ? WEEKDAY_MENTION.exec(text) : null;
-  if (!match) return undefined;
-  const index = "一二三四五六日".indexOf(match[1] === "天" ? "日" : match[1]);
-  return index >= 0 ? index : undefined;
-}
-
-/** 从本章往回数的说法：台词里说「昨天 / 前天 / 几天前」照这个说。 */
-function relativeDayLabel(delta: number): string {
-  if (delta <= 0) return "今天早些时候";
-  if (delta === 1) return "昨天";
-  if (delta === 2) return "前天";
-  return `${delta} 天前`;
-}
-
-/** 星期几的推算锚：最近一个写了星期的日子。 */
-function weekdayAnchor(plan: ChapterPlan, clock: readonly StoryClockEntry[]): { readonly day: number; readonly weekday: number } | undefined {
-  return [
-    ...clock.map((entry) => ({ day: entry.storyDay, weekday: weekdayIndex(entry.time) })),
-    ...(plan.storyDay ? [{ day: plan.storyDay, weekday: weekdayIndex(plan.scene.time) }] : []),
-  ].filter((item): item is { day: number; weekday: number } => item.weekday !== undefined).at(-1);
-}
-
-function weekdayName(anchor: { readonly day: number; readonly weekday: number }, day: number): string {
-  return WEEKDAY_NAMES[(((anchor.weekday + day - anchor.day) % 7) + 7) % 7];
-}
-
-/**
- * 「本章是故事第 8 天，周二」——给记事实 / 记线索的环节用：把「明天、下周三」换成绝对的日子再入账
- * （第十七轮：「下周三」原样进了线索标题、账本和后面的章纲，过几章没人知道指哪天，评估日悄悄消失）。
- */
-export function describeStoryDay(plan: ChapterPlan | undefined, clock: readonly StoryClockEntry[] = []): string | undefined {
-  if (!plan?.storyDay) return undefined;
-  const anchor = weekdayAnchor(plan, clock);
-  return `本章是故事第 ${plan.storyDay} 天${anchor ? `，${weekdayName(anchor, plan.storyDay)}` : ""}`;
-}
-
-/**
- * 故事日历换成「从本章看是哪天」：第十五轮台词里的相对时间错了 11 处（「昨天贴的」其实是前天、「上周」其实是本周）——
- * 只给天数让写手自己减，它算不对；直接标好昨天 / 前天 / 几天前、星期几（章纲里写过星期的那天当锚）。
- */
-function buildStoryClock(plan: ChapterPlan, clock: readonly StoryClockEntry[]): Record<string, unknown> | undefined {
-  const today = plan.storyDay;
-  if (!today) return undefined;
-  const anchor = weekdayAnchor(plan, clock);
-  const withWeekday = (day: number): string => (anchor ? `，${weekdayName(anchor, day)}` : "");
-  return {
-    today: `本章是故事第 ${today} 天${withWeekday(today)}${plan.scene.time ? `（${plan.scene.time}）` : ""}`,
-    earlier: clock
-      .filter((entry) => entry.storyDay <= today)
-      .map((entry) => {
-        // 那章写跨了天：标出开头和结尾两天（「前天到昨天」），写手才知道「昨天」说的是那章后半截。
-        const end = entry.endDay !== undefined && entry.endDay > entry.storyDay && entry.endDay <= today ? entry.endDay : undefined;
-        const when = end === undefined
-          ? `${relativeDayLabel(today - entry.storyDay)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}）`
-          : `${relativeDayLabel(today - entry.storyDay)}到${relativeDayLabel(today - end)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}到第 ${end} 天${withWeekday(end)}）`;
-        return `${when}：第 ${entry.chapter} 章${entry.time ? `，${entry.time}` : ""}，${entry.summary}`;
-      }),
-    rule: "人物台词和叙述里说到过去的事，照这里标好的「昨天 / 前天 / 几天前」和星期几说，不要自己推算，也不要照抄前文当时说的「三天前」「昨天」——那是站在当时说的。「故事第几天」只是给你对日子的内部编号，正文和台词里绝不出现「第 N 天」这种说法。",
-  };
-}
-
-/** 给写手看的章纲段内容（受保护段 chapter_plan）。clock = 前面各章的故事天数（见 readStoryClock）。 */
-export function buildChapterPlanSection(plan: ChapterPlan, clock: readonly StoryClockEntry[] = []): Record<string, unknown> {
-  const storyClock = buildStoryClock(plan, clock);
+/** 给写手看的章纲段内容（受保护段 chapter_plan）。clock = 写这章时的故事日历（story-timeline 的 planClock）。 */
+export function buildChapterPlanSection(plan: ChapterPlan, clock?: PlanClock): Record<string, unknown> {
+  const storyClock = clock ? { ...clock, rule: CLOCK_RULE } : undefined;
   return {
     instruction: [
       "这是本章章纲。按要点顺序写，每个要点都要真正写到；可以自然补细节、对话和过渡，但不要另起与章纲无关的大事件。",

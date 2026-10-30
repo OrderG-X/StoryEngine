@@ -55,6 +55,11 @@ export function summarizeStateOverview(overview: StateOverview): string {
     );
   }
 
+  const checks = overview.timeChecks ?? [];
+  if (checks.length > 0) {
+    lines.push(`天数要作者看：${checks.map((check) => `第 ${check.chapter} 章${check.text}`).join("；")}（作者在 AI 栏「不急的事」里能直接点；他跟你说了是哪天就交 change_ledger 的 day，说以他定的为准就交 keepDay）。`);
+  }
+
   const lastEvent = overview.storyStatus.lastTimelineEvent;
   if (lastEvent) {
     lines.push(`最近时间线：${lastEvent}`);

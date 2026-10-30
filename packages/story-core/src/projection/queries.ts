@@ -122,28 +122,37 @@ export interface TimelineRow {
   readonly legacyDay?: number;
   /** 这章的时间没记上：pending = 账还没记上；partial = 账没记全、时间那类没记上。 */
   readonly ledgerShort?: "pending" | "partial";
+  /** 在当下线上，但和前一个当下章之间（第一个当下章：它前面）有没认出在不在当下线上的章：链断在那儿。 */
+  readonly afterUnknown: boolean;
 }
 
 /** 每章「第几天、星期几、依据」，算到 upTo（含；缺省 = 投影算到的那章）。模型照表对，不自己做日期算术。 */
 export function timelineTable(projection: BookProjection, upTo: number = projection.upTo): TimelineRow[] {
+  let lost = false;
   return projection.chapters
     .filter((chapter) => chapter.chapter <= upTo)
-    .map(({ chapter, time, ledgerStatus, missingKinds }) => ({
-      chapter,
-      presentLine: time.presentLine,
-      ...(time.start ? { start: time.start } : {}),
-      ...(time.end ? { end: time.end } : {}),
-      ...(time.sincePrevious ? { sincePrevious: time.sincePrevious } : {}),
-      ...(time.relativeText ? { relativeText: time.relativeText } : {}),
-      ...(time.weekday !== undefined ? { weekday: time.weekday } : {}),
-      weekdayDerived: time.weekdayDerived,
-      ...(time.timeOfDay !== undefined ? { timeOfDay: time.timeOfDay } : {}),
-      basis: time.basis,
-      presumed: time.absolutePresumed || time.presumed,
-      segments: time.segments.map(segmentText),
-      ...(time.legacyDay ? { legacyDay: time.legacyDay.day } : {}),
-      ...(ledgerStatus !== "ready" && missingKinds?.includes("time") ? { ledgerShort: ledgerStatus } : {}),
-    }));
+    .map(({ chapter, time, ledgerStatus, missingKinds }) => {
+      const afterUnknown = time.presentLine === true && lost;
+      if (time.presentLine === "unknown") lost = true;
+      else if (time.presentLine === true) lost = false;
+      return {
+        chapter,
+        presentLine: time.presentLine,
+        ...(time.start ? { start: time.start } : {}),
+        ...(time.end ? { end: time.end } : {}),
+        ...(time.sincePrevious ? { sincePrevious: time.sincePrevious } : {}),
+        ...(time.relativeText ? { relativeText: time.relativeText } : {}),
+        ...(time.weekday !== undefined ? { weekday: time.weekday } : {}),
+        weekdayDerived: time.weekdayDerived,
+        ...(time.timeOfDay !== undefined ? { timeOfDay: time.timeOfDay } : {}),
+        basis: time.basis,
+        presumed: time.absolutePresumed || time.presumed,
+        segments: time.segments.map(segmentText),
+        ...(time.legacyDay ? { legacyDay: time.legacyDay.day } : {}),
+        ...(ledgerStatus !== "ready" && missingKinds?.includes("time") ? { ledgerShort: ledgerStatus } : {}),
+        afterUnknown,
+      };
+    });
 }
 
 const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"] as const;
@@ -196,7 +205,7 @@ export function chapterBrief(projection: BookProjection, chapter: number): Chapt
       if (touch.chapter === chapter) threads.push({ id: thread.id, title: thread.title, op: touch.op });
     }
   }
-  const [time] = timelineTable({ ...projection, chapters: [view] }, chapter);
+  const time = timelineTable(projection, chapter).find((row) => row.chapter === chapter);
   return {
     chapter,
     ledgerStatus: view.ledgerStatus,
@@ -273,7 +282,7 @@ export function preWriteMemo(projection: BookProjection, chapter: number): PreWr
   const view = projection.chapters.filter((item) => item.chapter < chapter).at(-1);
   if (!view) return empty;
   const upTo = view.chapter;
-  const [time] = timelineTable({ ...projection, chapters: [view] }, upTo);
+  const time = timelineTable(projection, upTo).find((row) => row.chapter === upTo);
   const previous: PreWritePrevious = {
     chapter: upTo,
     ...(view.summary !== undefined ? { summary: view.summary } : {}),

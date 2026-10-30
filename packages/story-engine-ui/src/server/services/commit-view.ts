@@ -6,10 +6,8 @@
  * 去掉这行就一起去掉），默认不写、作者勾上才写的是 `o<序号>`。天数那一行不是条目，键是 `day`，改的是天数两栏。
  */
 import {
-  daysText,
   isExact,
   nameKey,
-  offsetText,
   parseDraftFile,
   project,
   readBookSnapshot,
@@ -21,7 +19,7 @@ import {
   type TimelineRow,
   type LedgerCompleteResult,
 } from "@actalk/story-core";
-import { storySpanText, WEEKDAY_NAMES } from "../book/story-timeline.js";
+import { storySpanText, timeConflictText, unknownDayWhy, WEEKDAY_NAMES } from "../book/story-timeline.js";
 import { markdownTitle } from "../book/story-views.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import { describeReaderWait } from "../editorial/reader-progress.js";
@@ -160,9 +158,7 @@ function dayReason(preview: CommitPreview): string | undefined {
       ? `记账员这次看成${other}，和上次定稿不一样；先照上次的记，不对就改天数`
       : `上次定稿记的是${other}，记时间的那句改过了，这次按新的记；不对就改天数`);
   }
-  for (const conflict of preview.time.conflicts) {
-    reasons.push(`你定的第 ${conflict.authorDay} 天，和按${conflict.kind === "time-start" ? "上一章、这章开头" : "这章里换天"}推出来的${daysText(conflict.expected)}对不上`);
-  }
+  for (const conflict of preview.time.conflicts) reasons.push(timeConflictText(conflict));
   return reasons.length > 0 ? reasons.join("；") : undefined;
 }
 
@@ -172,15 +168,7 @@ function dayLabel(preview: CommitPreview): string {
   const span = storySpanText(row);
   if (!span) {
     // 不估（写作版本 P3 删了「按上一章 +1」）：说清为什么不知道，请作者填。
-    const why = !preview.time.recorded
-      ? "正文里没认出这章的时间"
-      : row.relativeText
-        ? `这章离上一章${offsetText(row.relativeText)}，不折成天`
-        : row.presentLine === "unknown"
-          ? "没认出这章在不在当下线上"
-          : row.sincePrevious
-            ? "前面有章是哪天不知道"
-            : "这章离上一章多久说不准";
+    const why = !preview.time.recorded ? "正文里没认出这章的时间" : unknownDayWhy(row);
     return `${why}，是故事哪天不知道；知道的话填上`;
   }
   const weekday = row.weekday !== undefined ? `${row.weekdayDerived ? "推算是" : ""}${WEEKDAY_NAMES[row.weekday]}` : undefined;

@@ -15,13 +15,9 @@ const BRIEF_NAMES = 3;
 /** 作者展开过就一直展开（换章也是），收起同理：一次会话里记着。 */
 let rememberedOpen = false;
 
-/** 「第 11 天傍晚」「第 3～5 天」；天数是估的就说是估的；这章账待记 / 没记全 / 天数不知道就照说。 */
-export function dayText(time: PreWritePrevious["time"]): string {
-  if (time.ledgerShort === "pending") return "账待记";
-  if (time.ledgerShort === "partial") return "账没记全";
-  if (time.day === undefined || time.dayEnd === undefined) return "哪天不知道";
-  const days = time.dayEnd > time.day ? `第 ${time.day}～${time.dayEnd} 天` : `第 ${time.day} 天${time.timeOfDay ?? ""}`;
-  return time.basis === "estimated" || time.basis === "missing" ? `${days}（估的）` : days;
+/** 「第 11 天傍晚」「第 5 天到第 6 天」（服务端按全书一个口径出好的）；没给就是哪天不知道。 */
+export function dayText(memo: Pick<Memo, "days">): string {
+  return memo.days ?? "哪天不知道";
 }
 
 /** 收起时那一行：接第几章、停在哪天、谁在场、该接几条线索。 */
@@ -30,7 +26,7 @@ export function briefLine(memo: Memo & { readonly previous: PreWritePrevious }):
   const names = previous.present.length > BRIEF_NAMES
     ? `${previous.present.slice(0, BRIEF_NAMES).join("、")}等 ${previous.present.length} 人`
     : previous.present.join("、");
-  const parts = [`接第 ${previous.chapter} 章`, dayText(previous.time)];
+  const parts = [`接第 ${previous.chapter} 章`, dayText(memo)];
   if (names) parts.push(names);
   if (memo.threads.length > 0) parts.push(`${memo.threads.length} 条线索该接`);
   return parts.join(" · ");
@@ -104,7 +100,7 @@ export function PreWriteMemo({ projectPath, chapter, refreshKey, busy, onJump }:
           <section aria-label="上一章">
             <h4>上一章</h4>
             <p>
-              第 {previous.chapter} 章 · {dayText(previous.time)}
+              第 {previous.chapter} 章 · {dayText(memo)}
               {previous.time.weekday !== undefined ? ` · ${WEEKDAYS[previous.time.weekday]}` : ""}
             </p>
             {previous.present.length > 0 ? (

@@ -1,13 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
+import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, type ChapterPlan } from "../book/chapter-plan.js";
+import { planClock, previousPresentChapter, unknownDayWhy } from "../book/story-timeline.js";
 import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
 import { formatStaleGoalMessage, formatStaleThreadMessage } from "./stale-messages.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import { describeErrorBriefly, readProject } from "../book/project-store.js";
 import { shortChapters, shortChaptersText, type ShortChapter } from "../book/ledger-short.js";
 import { readStoryViews, type StoryViews } from "../book/story-views.js";
-import { parseDraftFile, readDraftState, selectRelevant, threadUnknownChapters } from "@actalk/story-core";
+import { daysText, parseDraftFile, readDraftState, selectRelevant, threadUnknownChapters, timelineTable, type BookProjection } from "@actalk/story-core";
 import { readChapterTitles } from "../book/chapter-titles.js";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
@@ -209,7 +210,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
   // 前面账没记全的章（写作版本 P2b 设计 3.3）：如实告诉写手账里缺那几章。
   const shortBefore = shortChapters(views?.projection.chapters ?? [], input.chapter);
   const plan = input.chapterPlan;
-  const storyClock = plan?.storyDay ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
+  const storyClock = plan && views ? planClock(views.projection, input.chapter, { ...plan, ...(plan.scene.time ? { time: plan.scene.time } : {}) }) : undefined;
   const earlierPassages = plan
     ? await findEarlierPassages({
       projectDir: input.projectDir,
@@ -265,7 +266,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       }, "dynamic")]
       : []),
     section("writing_context_pack", writingContextPack satisfies WritingContextPack, "dynamic"),
-    section("story_calendar", { currentStoryDay: currentStoryDayOf(views?.projection) }, "dynamic"),
+    section("story_calendar", { currentStoryDay: currentStoryDayOf(views?.projection, input.chapter) }, "dynamic"),
     ...(shortBefore.length > 0
       ? [section("ledger_pending", {
         chapters: shortBefore.map((item) => item.chapter),
@@ -696,9 +697,20 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
-/** 故事现在到第几天（最后定稿那章的结尾）；那章是哪天不知道（它或它前面有章账待记）就如实说不知道，不按第 1 天给。 */
-function currentStoryDayOf(projection: { readonly chapters: readonly { readonly dayEnd?: number }[] } | undefined): number | string {
-  const last = projection?.chapters.at(-1);
-  if (!last) return 1;
-  return last.dayEnd ?? "不知道（前面有章的时间没记上）";
+/**
+ * 故事现在到第几天：本章前面最近那个当下章的结尾（写作版本 P3a T6：不是全书最后一章——回头改前面的章、
+ * 前一章整章是回忆时都不对）。不知道就如实说为什么，不按第 1 天给。
+ */
+function currentStoryDayOf(projection: BookProjection | undefined, chapter: number): string {
+  if (!projection) return "不知道（账读不了）";
+  const previous = previousPresentChapter(projection, chapter);
+  if (previous === undefined) return "第 1 天（前面还没有当下线上的章）";
+  if (previous === "unknown") {
+    // 链断在最近那个没认出的章：说是哪章、为什么。
+    const lost = timelineTable(projection, chapter - 1).filter((row) => row.presentLine === "unknown").at(-1);
+    return lost ? `不知道（第 ${lost.chapter} 章：${unknownDayWhy(lost)}）` : "不知道";
+  }
+  if (previous.end) return `${daysText(previous.end)}（第 ${previous.chapter} 章结尾）`;
+  if (previous.start) return `不知道（第 ${previous.chapter} 章从${daysText(previous.start)}开始，结尾是哪天说不准）`;
+  return `不知道（第 ${previous.chapter} 章：${unknownDayWhy(previous)}）`;
 }

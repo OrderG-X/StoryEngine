@@ -492,6 +492,8 @@
   .se-bk-hero-line .se-bk-value{flex:0 1 auto;font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;
     font-size:22px;font-weight:600;line-height:1.6;letter-spacing:.02em;}
   .se-bk-hero-line .se-bk-x{position:absolute;top:-16px;right:-18px;}
+  .se-bk-dayrule{display:flex;align-items:center;gap:10px;margin:14px 0 2px;font-size:12px;color:var(--faint);letter-spacing:.06em;}
+  .se-bk-dayrule .se-seg button{height:24px;font-size:12px;}
   .se-bk-hero-chips{position:relative;display:flex;flex-wrap:wrap;align-items:stretch;gap:10px 22px;}
   .se-bk-hero-chip{position:relative;display:flex;flex-direction:column;gap:2px;min-width:0;max-width:320px;padding:2px 26px 2px 12px;border-left:2px solid var(--accent-line);}
   .se-bk-hero-chip > b{font-size:11px;font-weight:650;letter-spacing:.12em;color:var(--faint);}

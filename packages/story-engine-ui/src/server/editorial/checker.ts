@@ -651,7 +651,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
   // F（时间线只进自复核）开着时三遍不带表、只在 A 那一轮带（表照样读一次）。
   const timelineTable = variant.timeline || variant.timelineInReview
     ? await readStoryViews(input.projectDir)
-      .then((views) => describeTimelineForChapter(views.timeline, input.chapter))
+      .then((views) => describeTimelineForChapter(views.projection, input.chapter))
       .catch(() => undefined)
     : undefined;
   // 前文有看不到原文的章（折叠只剩笔记 / 冷窗口没给到）→ 先翻一轮原文贴回去，三遍和自复核共用这一段前缀。

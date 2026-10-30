@@ -7,7 +7,7 @@ import type { ChapterLedger, DayBoundary, TimeInput } from "../schema/ledger.js"
 import { ledgerOf, newLedger, storeLegacyTime, type LegacyTimeDraft } from "../ledger/entries.js";
 import { project } from "./project.js";
 import { timelineTable, timelineText } from "./queries.js";
-import { dayAt, momentOf } from "./time.js";
+import { dayAt, elapsedDays, momentOf } from "./time.js";
 import { daysText, relativeDaysText } from "./time-text.js";
 
 const STAMP = "2026-10-31T00:00:00.000Z";
@@ -133,7 +133,10 @@ describe("换天规矩：两个世界", () => {
     const v = view(ledgers());
     expect(v.timeWorlds).toEqual(["midnight", "dawn"]);
     expect(timeOf(v, 2).start).toEqual({ lo: 1, hi: 2 });
-    expect(timeOf(v, 2).byWorld).toEqual({ midnight: { start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 } }, dawn: { start: { lo: 1, hi: 1 }, end: { lo: 1, hi: 1 } } });
+    expect(timeOf(v, 2).byWorld).toEqual({
+      midnight: { start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 }, sincePrevious: { lo: 1, hi: 1 }, span: { lo: 0, hi: 0 } },
+      dawn: { start: { lo: 1, hi: 1 }, end: { lo: 1, hi: 1 }, sincePrevious: { lo: 0, hi: 0 }, span: { lo: 0, hi: 0 } },
+    });
     expect(timeOf(v, 3).start).toEqual({ lo: 2, hi: 2 });
   });
 
@@ -163,6 +166,62 @@ describe("章里换天：任一句那一刻", () => {
     expect(time.end).toEqual({ lo: 2, hi: 2 });
     expect(momentOf(time, 1)).toEqual({ lo: 0, hi: 1 });
     expect(dayAt(time, 4)).toEqual({ lo: 1, hi: 2 });
+  });
+});
+
+describe("两处之间隔几天", () => {
+  const map = (projection: ReturnType<typeof view>) => new Map(projection.chapters.map((item) => [item.chapter, item.time]));
+  const between = (projection: ReturnType<typeof view>, from: [number, "start" | "end" | number], to: [number, "start" | "end" | number]) =>
+    elapsedDays(map(projection), { chapter: from[0], at: from[1] }, { chapter: to[0], at: to[1] });
+
+  it("沿链逐章加：中间有一章「隔一到三天」，后面两章的绝对天数是区间，它们之间隔几天照样确定", () => {
+    const v = view([after(1, days(0)), after(2, days(1, 3)), after(3, days(1)), after(4, days(2))]);
+    expect(timeOf(v, 3).start).toEqual({ lo: 3, hi: 5 });
+    expect(between(v, [3, "start"], [4, "start"])).toEqual({ days: { lo: 2, hi: 2 }, presumed: false });
+    expect(between(v, [1, "end"], [3, "start"])?.days).toEqual({ lo: 2, hi: 4 });
+    // 倒过来问是负的。
+    expect(between(v, [4, "start"], [3, "start"])?.days).toEqual({ lo: -2, hi: -2 });
+  });
+
+  it("两个世界各加各的：每章两边说法不一样，加起来一样就是确定的", () => {
+    const v = view([
+      after(1, days(0)),
+      after(2, undefined, { start: { byBoundary: { midnight: days(1), dawn: days(0) }, basis: "judged", quote: "第2章开头这一句" } }),
+      after(3, undefined, { start: { byBoundary: { midnight: days(0), dawn: days(1) }, basis: "judged", quote: "第3章开头这一句" } }),
+    ]);
+    expect(between(v, [2, "end"], [3, "start"])?.days).toEqual({ lo: 0, hi: 1 });
+    expect(between(v, [1, "end"], [3, "start"])?.days).toEqual({ lo: 1, hi: 1 });
+  });
+
+  it("章里：换天定位到句子就按句算；没定位到的那次换天，句子之间可能换了也可能没换", () => {
+    const sentences = ["傍晚他到了渡口。", "夜里下起了雨。", "第二天一早雨停了。", "他又上了船。"];
+    const located = view([chapter(1, { start: { offset: days(0), basis: "text", quote: "傍晚他到了渡口" }, dayChanges: [{ offset: days(1), quote: "第二天一早雨停了" }] }, sentences)]);
+    expect(between(located, [1, 2], [1, 3])?.days).toEqual({ lo: 1, hi: 1 });
+    expect(between(located, [1, 3], [1, 4])?.days).toEqual({ lo: 0, hi: 0 });
+    expect(between(located, [1, "start"], [1, "end"])?.days).toEqual({ lo: 1, hi: 1 });
+    const loose = view([chapter(1, { start: { offset: days(0), basis: "text", quote: "傍晚他到了渡口" }, dayChanges: [{ offset: days(1) }] }, sentences)]);
+    expect(between(loose, [1, 2], [1, 3])?.days).toEqual({ lo: 0, hi: 1 });
+    expect(between(loose, [1, "start"], [1, "end"])?.days).toEqual({ lo: 1, hi: 1 });
+  });
+
+  it("链上有作者定的天数：从那天重新算，这时才拿两处的绝对天数相减", () => {
+    const v = view([after(1, days(0)), after(2, days(1, 3)), after(3, days(1)), after(4, days(1))], {
+      decisions: [decision({ type: "chapter.day", chapter: 3, day: 10, dayEnd: 10 })],
+    });
+    expect(between(v, [2, "start"], [4, "start"])?.days).toEqual({ lo: 7, hi: 9 });
+    expect(between(v, [3, "start"], [4, "start"])?.days).toEqual({ lo: 1, hi: 1 });
+  });
+
+  it("整章回忆跳过、链照接；中间有没认出的章、按月说的：断开或不知道", () => {
+    const flashback = chapter(2, { segments: [{ frame: "past", firstQuote: "第2章开头这一句", lastQuote: "第2章后面那一句" }] });
+    const v = view([after(1, days(0)), flashback, after(3, days(1))]);
+    expect(between(v, [1, "end"], [3, "start"])?.days).toEqual({ lo: 1, hi: 1 });
+    expect(between(v, [2, "start"], [3, "start"])).toBeUndefined();
+    const broken = view([after(1, days(0)), chapter(2, undefined), after(3, days(1))]);
+    expect(between(broken, [1, "end"], [3, "start"])).toBeUndefined();
+    const months = view([after(1, days(0)), after(2, days(6, 6, "month")), after(3, days(1))]);
+    expect(between(months, [1, "end"], [3, "start"])?.days).toBeUndefined();
+    expect(between(months, [2, "end"], [3, "start"])?.days).toEqual({ lo: 1, hi: 1 });
   });
 });
 
@@ -253,6 +312,9 @@ describe("旧账（P2b 及更早）只是推定", () => {
     expect(timeOf(v, 2)).toMatchObject({ presentLine: true, presumed: true, start: { lo: 2, hi: 2 }, end: { lo: 3, hi: 3 }, basis: "presumed" });
     expect(timeOf(v, 3).presentLine).toBe("unknown");
     expect(timeOf(v, 4).start).toBeUndefined();
+    // 隔几天照算，但标着是推定的（核账不凭它报「确定」）。
+    const times = new Map(v.chapters.map((item) => [item.chapter, item.time]));
+    expect(elapsedDays(times, { chapter: 1, at: "end" }, { chapter: 2, at: "end" })).toEqual({ days: { lo: 2, hi: 2 }, presumed: true });
   });
 
   it("作者把换天定成半夜：旧账里记账员判断的相对天数失效（是按天亮换日判的），正文明写的照用", () => {

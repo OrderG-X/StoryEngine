@@ -83,9 +83,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   const next = index >= 0 && index < changes.chapters.length - 1 ? changes.chapters[index + 1] : undefined;
   // 章名表里有的带「第N章 ·」前缀（工作稿刚定稿那章），只取章名。
   const title = chapterBareTitle(chapterTitles.get(changes.chapter) ?? "");
-  const day = changes.day === undefined || changes.dayEnd === undefined
-    ? "哪天不知道"
-    : changes.dayEnd > changes.day ? `故事第 ${changes.day}～${changes.dayEnd} 天` : `故事第 ${changes.day} 天`;
+  const day = changes.days ?? "哪天不知道";
   const empty = changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
   const nothing = !changes.ledgerShort && empty;
   return (
@@ -140,6 +138,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
                 <span className="se-cc-text">
                   {fact.text}
                   {fact.auto ? <em className="se-cc-tag" title="记账员定稿时自动记的，你没逐条看过">自动记的</em> : null}
+                  {fact.scope ? <em className="se-cc-tag" title="记着，不改现状">{fact.scope}</em> : null}
                   {fact.later ? <em className="se-cc-tag is-warn">{fact.later === "retracted" ? "后来撤了" : "后来改了"}</em> : null}
                 </span>
                 {fact.replaces ? <span className="se-cc-was">原来：{fact.replaces}</span> : null}

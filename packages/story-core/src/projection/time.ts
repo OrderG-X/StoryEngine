@@ -55,6 +55,10 @@ export interface SegmentView {
 export interface WorldDays {
   readonly start?: DayRange;
   readonly end?: DayRange;
+  /** 离前一个当下章结尾（这个世界）。 */
+  readonly sincePrevious?: DayRange;
+  /** 本章内跨了几天（这个世界）。 */
+  readonly span?: DayRange;
 }
 
 export interface ChapterTime {
@@ -77,6 +81,9 @@ export interface ChapterTime {
   readonly span?: DayRange;
   /** 天数从哪来：作者定的、记账员记的、旧账推定的、不知道。 */
   readonly basis: "author" | "ledger" | "presumed" | "unknown";
+  /** 作者定的开头、结尾（定了就从那天重新算，前面的不牵连）。 */
+  readonly authorStart?: number;
+  readonly authorEnd?: number;
   /** 老书里的天数判成不可信、记成了不知道：原来的值（给作者看「约第 N 天」）。 */
   readonly legacyDay?: { readonly day: number; readonly reason: LegacyTime["reason"] };
   /** 旧账里记账员按「天亮换日」判的相对天数，作者把换天规矩定成了半夜，这章的天数现在不知道（设计 2.4，要作者改天数）。 */
@@ -388,7 +395,14 @@ export function projectTime(
       if (expected && !inRange(decl.authorEnd, expected) && !dismissed.has(key)) conflicts.push({ key, kind: "time-end", chapter: decl.chapter, authorDay: decl.authorEnd, expected });
     }
     const byWorld: Partial<Record<TimeWorld, WorldDays>> = {};
-    for (const { world, row } of rows) byWorld[world] = { ...(row.start ? { start: row.start } : {}), ...(row.end ? { end: row.end } : {}) };
+    for (const { world, row } of rows) {
+      byWorld[world] = {
+        ...(row.start ? { start: row.start } : {}),
+        ...(row.end ? { end: row.end } : {}),
+        ...(row.sincePrevious ? { sincePrevious: row.sincePrevious } : {}),
+        ...(row.span ? { span: row.span } : {}),
+      };
+    }
     const dayChanges: DayChangeView[] = decl.dayChanges.map((change) => {
       const range: Partial<Record<TimeWorld, DayRange>> = {};
       for (const world of worlds) {
@@ -417,6 +431,8 @@ export function projectTime(
             : decl.presumed || rows.some(({ row }) => row.absolutePresumed)
               ? "presumed"
               : "ledger",
+      ...(decl.presentLine === true && decl.authorStart !== undefined ? { authorStart: decl.authorStart } : {}),
+      ...(decl.presentLine === true && decl.authorEnd !== undefined ? { authorEnd: decl.authorEnd } : {}),
       ...(decl.legacyDay ? { legacyDay: decl.legacyDay } : {}),
       boundaryInvalidated: decl.boundaryInvalidated,
       dayChanges,
@@ -524,4 +540,94 @@ export function dayAt(time: ChapterTime, unit: number): DayRange | undefined {
     }
     return total;
   }));
+}
+
+/** 一章里的一处：开头、结尾，或第几句那一刻。 */
+export interface TimePoint {
+  readonly chapter: number;
+  readonly at: "start" | "end" | number;
+}
+
+const positionOf = (at: TimePoint["at"]): number => (at === "start" ? 0 : at === "end" ? Number.POSITIVE_INFINITY : at);
+const before = (a: TimePoint, b: TimePoint): boolean => a.chapter < b.chapter || (a.chapter === b.chapter && positionOf(a.at) <= positionOf(b.at));
+
+/** 本章里从第 a 处到第 b 处（a ≤ b）过了几天（某个世界）：这之间的换天相加；没定位到句子的换天可能在、可能不在。 */
+function withinChapter(time: ChapterTime, world: TimeWorld, a: number, b: number): DayRange | undefined {
+  const whole = time.byWorld[world]?.span;
+  if (a === 0 && b === Number.POSITIVE_INFINITY) return whole;
+  if (a === b) return point(0);
+  if (time.dayChanges.length === 0) {
+    // 没逐次记换天：整章同一天就是 0；旧账只记了章内过了几天、不知道的，从 0 到那么多。
+    if (isExact(whole) && whole.lo === 0) return point(0);
+    return norm({ lo: 0, ...(whole?.hi !== undefined ? { hi: whole.hi } : {}) });
+  }
+  let total: DayRange | undefined = point(0);
+  for (const change of time.dayChanges) {
+    const range = change.byWorld[world];
+    if (!range) return undefined;
+    if (change.unit === undefined) total = addRange(total, { lo: 0, ...(range.hi !== undefined ? { hi: range.hi } : {}) });
+    else if (change.unit > a && change.unit <= b) total = addRange(total, range);
+  }
+  return total;
+}
+
+/** 某一处是第几天（某个世界）。 */
+function dayOfPoint(time: ChapterTime, world: TimeWorld, at: TimePoint["at"]): DayRange | undefined {
+  const days = time.byWorld[world];
+  if (at === "start") return days?.start;
+  if (at === "end") return days?.end;
+  return addRange(days?.start, withinChapter(time, world, 0, at));
+}
+
+/**
+ * 从 from 那一刻到 to 那一刻过了几天（from 在 to 后面就是负的），两个世界的并——两个世界都确定、又一样才是确定的。
+ * 沿当下链逐章加（各世界各加各的，最后取并），不拿两处的绝对天数相减：区间相减丢了前后牵连，中间有一章「几天后」，
+ * 后面每章的绝对天数都成了区间，相减就都说不准了，其实它们之间隔几天是确定的。
+ * 链上有作者定的天数，从那天重新算、前面的不牵连，这时才拿两处的绝对天数相减。
+ * presumed：链上有旧账推定的章（核账不凭它报「确定」）。不在当下线上、链断了（中间有没识别的章）→ undefined。
+ */
+export function elapsedDays(
+  chapters: ReadonlyMap<number, ChapterTime>,
+  from: TimePoint,
+  to: TimePoint,
+): { readonly days?: DayRange; readonly presumed: boolean } | undefined {
+  if (!before(from, to)) {
+    const back = elapsedDays(chapters, to, from);
+    if (!back) return undefined;
+    const days = back.days ? norm({ ...(back.days.hi !== undefined ? { lo: -back.days.hi } : {}), ...(back.days.lo !== undefined ? { hi: -back.days.lo } : {}) }) : undefined;
+    return { ...(days ? { days } : {}), presumed: back.presumed };
+  }
+  const head = chapters.get(from.chapter);
+  const tail = chapters.get(to.chapter);
+  if (head?.presentLine !== true || tail?.presentLine !== true) return undefined;
+  // 从 to 沿「前一个当下章」往回找到 from。
+  const chain: ChapterTime[] = [tail];
+  for (let chapter = to.chapter; chapter !== from.chapter;) {
+    const previous = chapters.get(chapter)?.previousPresent;
+    if (previous === undefined || previous < from.chapter) return undefined;
+    chapter = previous;
+    chain.unshift(chapters.get(chapter) as ChapterTime);
+  }
+  const a = positionOf(from.at);
+  const b = positionOf(to.at);
+  const end = Number.POSITIVE_INFINITY;
+  const same = chain.length === 1;
+  const middle = chain.slice(1, -1);
+  const reset = (head.authorEnd !== undefined && a < end && (!same || b === end))
+    || middle.some((time) => time.authorStart !== undefined || time.authorEnd !== undefined)
+    || (!same && (tail.authorStart !== undefined || (b === end && tail.authorEnd !== undefined)));
+  const worlds = Object.keys(tail.byWorld) as TimeWorld[];
+  const perWorld = worlds.map((world): DayRange | undefined => {
+    if (reset) return subRange(dayOfPoint(tail, world, to.at), dayOfPoint(head, world, from.at));
+    if (same) return withinChapter(head, world, a, b);
+    let total = withinChapter(head, world, a, end);
+    for (const time of chain.slice(1)) {
+      total = addRange(total, time.byWorld[world]?.sincePrevious);
+      total = addRange(total, withinChapter(time, world, 0, time === tail ? b : end));
+    }
+    return total;
+  });
+  const days = unionRange(perWorld);
+  const presumed = reset ? head.absolutePresumed || tail.absolutePresumed : chain.some((time) => time.presumed);
+  return { ...(days ? { days } : {}), presumed };
 }

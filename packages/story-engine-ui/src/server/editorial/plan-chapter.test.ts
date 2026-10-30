@@ -1,6 +1,6 @@
 // @vitest-environment node
 // R3 删旧拟纲路后，这里测章纲员复用的纯函数：材料收集（collectPlanMaterials / planMaterialBlocks）、
-// 天数归一（reconcileStoryDay / storyDayAtChapterEnd）、骨架章纲判定。编排（章纲员拟 → 核账员审 → 改一轮）
+// 章纲的日子（datePlan / previousPresentFor）、骨架章纲判定。编排（章纲员拟 → 核账员审 → 改一轮）
 // 见 resolveChapterPlanForDraft 的用例和 editorial/planner.test.ts。
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { cardWrite, chapterCommit, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
 import { seedChapters, seedDecisions, seedThreads } from "../book/ledger-test-helpers.js";
 import { normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
+import { planClock } from "../book/story-timeline.js";
+import { readStoryViews } from "../book/story-views.js";
 import { describe, expect, it } from "vitest";
 import type { BrainCallModel } from "./reader-window.js";
 import { collectPlanMaterials, planMaterialBlocks } from "./plan-materials.js";
@@ -80,12 +82,15 @@ describe("拟章纲材料：人物、物件来自设定本（重构 P9）", () =
 });
 
 describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写（十章验收第二轮）", () => {
-  it("带上与前文相关的旧事实、前几章章纲里的时间，并把跨章反复的描写确定性并进 avoid", async () => {
+  it("带上与前文相关的旧事实、前几章账里记的是哪天（不看章纲），并把跨章反复的描写确定性并进 avoid", async () => {
     const projectDir = await makeBook();
     const ending = "他把台灯拧暗了一格，一屋子的钟在黑暗里响着。";
+    const next = { kind: "time" as const, start: { offset: { unit: "day" as const, min: 1, max: 1 }, basis: "text" as const, quote: "" }, sameDay: true };
     await seedChapters(projectDir, [2, 3, 4].map((n) => ({
       chapter: n,
-      entries: n === 3 ? [{ kind: "fact" as const, nature: "event" as const, text: "异议书已在第3章递交并拿到回执编号。" }] : [],
+      entries: n === 2 ? [{ kind: "day" as const, day: 12, dayEnd: 12 }]
+        : n === 3 ? [{ ...next, timeOfDay: "上午" }, { kind: "fact" as const, nature: "event" as const, text: "异议书已在第3章递交并拿到回执编号。" }]
+        : [next],
     })));
     // 正文换成各章自己写的（结尾那句跨章反复）。
     for (const n of [2, 3, 4]) {
@@ -95,7 +100,12 @@ describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写�
 
     const materials = await collectPlanMaterials(projectDir, 5);
     expect(materials.facts.join("\n")).toContain("异议书已在第3章递交");
-    expect(materials.recentTimes).toEqual(["第 2 章：六月12日上午", "第 3 章：六月13日上午", "第 4 章：六月14日上午"]);
+    expect(materials.recentTimes).toEqual([
+      "第 1 章：没认出这章在不在当下线上，是哪天不知道",
+      "第 2 章：故事第 12 天",
+      "第 3 章：故事第 13 天，上午",
+      "第 4 章：故事第 14 天",
+    ]);
     expect(materials.recurringPhrases.some((phrase) => phrase.includes("一屋子的钟在黑暗里响"))).toBe(true);
     const blocks = planMaterialBlocks(5, materials).join("\n\n");
     expect(blocks).toContain("【前几章的时间】");
@@ -103,21 +113,26 @@ describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写�
   });
 });
 
-describe("reconcileStoryDay：天数由程序按上一章往后加（第十九轮模型数错第 4、7 章）", () => {
-  it("dayOffset 优先；没有就看开场时间；都没有用模型天数但不许倒退；全没有当同一天", async () => {
-    const { reconcileStoryDay, readDayOffset } = await import("./plan-materials.js");
-    const make = (time?: string, storyDay?: number) => normalizeChapterPlan({ summary: "s", beats: ["b"], ...(time ? { scene: { time } } : {}), ...(storyDay ? { storyDay } : {}) }, { chapter: 10 })!;
-    expect(reconcileStoryDay(make("上午", 9), 1, 12).storyDay).toBe(13);
-    expect(reconcileStoryDay(make("紧接第5章次日", 6), undefined, 6).storyDay).toBe(7);
-    expect(reconcileStoryDay(make("三天后傍晚"), undefined, 12).storyDay).toBe(15);
-    expect(reconcileStoryDay(make("紧接上一章结尾，傍晚", 5), undefined, 4).storyDay).toBe(4);
-    expect(reconcileStoryDay(make("清晨", 20), undefined, 12).storyDay).toBe(20);
-    expect(reconcileStoryDay(make("清晨", 3), undefined, 12).storyDay).toBe(12);
-    expect(reconcileStoryDay(make("清晨"), undefined, 12).storyDay).toBe(12);
-    expect(reconcileStoryDay(make("次日"), undefined, undefined).storyDay).toBeUndefined();
-    // 上一章是哪天不知道（有章账待记）：模型给的天数没依据，不留。
-    expect(reconcileStoryDay(make("次日", 9), 1, "unknown").storyDay).toBeUndefined();
+describe("datePlan：章纲的日子存成相对的（离上一个当下章往后几天），不存绝对天数（写作版本 P3a T9）", () => {
+  it("dayOffset 优先，没有看开场时间；可以是负的（多线往回接）；整章回忆、上一章不知道、前面没有当下章都不存", async () => {
+    const { datePlan, readDayOffset } = await import("./plan-materials.js");
+    const make = (over: Record<string, unknown> = {}) => normalizeChapterPlan({ summary: "s", beats: ["b"], ...over }, { chapter: 10 })!;
+    expect(datePlan(make(), 1, 9)).toMatchObject({ dayOffset: 1, after: 9 });
+    expect(datePlan(make({ scene: { time: "三天后傍晚" } }), undefined, 9)).toMatchObject({ dayOffset: 3, after: 9 });
+    expect(datePlan(make({ scene: { time: "紧接上一章结尾，傍晚" } }), undefined, 8)).toMatchObject({ dayOffset: 0, after: 8 });
+    expect(datePlan(make(), -2, 9)).toMatchObject({ dayOffset: -2, after: 9 });
+    // 算不出隔了几天：不存，日历照实说「哪天说不准」。
+    expect(datePlan(make({ scene: { time: "清晨" } }), undefined, 9)).not.toHaveProperty("dayOffset");
+    const flashback = datePlan(make({ frame: "回忆" }), 1, 9);
+    expect(flashback.frame).toBe("past");
+    expect(flashback).not.toHaveProperty("dayOffset");
+    expect(datePlan(make(), 1, "unknown")).not.toHaveProperty("dayOffset");
+    expect(datePlan(make(), 1, undefined)).not.toHaveProperty("dayOffset");
+    // 模型抄回来的旧 after 不留：以这次查到的上一个当下章为准。
+    expect(datePlan(make({ dayOffset: 5, after: 3 }), undefined, 9)).not.toHaveProperty("after");
     expect(readDayOffset({ dayOffset: 2 })).toBe(2);
+    expect(readDayOffset({ dayOffset: -2 })).toBe(-2);
+    expect(readDayOffset({ dayOffset: "-2" })).toBe(-2);
     expect(readDayOffset({ dayOffset: "1天" })).toBe(1);
     expect(readDayOffset({ dayOffset: "第二天" })).toBe(1);
     expect(readDayOffset({ dayOffset: "同一天" })).toBe(0);
@@ -126,9 +141,9 @@ describe("reconcileStoryDay：天数由程序按上一章往后加（第十九�
   });
 });
 
-describe("previousChapterEndDay：上一章是哪天不知道就说不知道，不拿再前一章顶（P2b 设计 3.3）", () => {
-  it("上一章账待记 → unknown；它后面接着记的章也是 unknown；作者定了天数的章之后照常算", async () => {
-    const { previousChapterEndDay } = await import("./plan-materials.js");
+describe("previousPresentFor：上一个当下章；中间有章不知道在不在当下就说不知道，不拿再前一章顶（P2b 设计 3.3）", () => {
+  it("上一章账待记 → unknown；之后记了时间的章照常；整章回忆的跳过", async () => {
+    const { previousPresentFor } = await import("./plan-materials.js");
     const rootDir = await mkdtemp(join(tmpdir(), "se-plan-unknown-"));
     const { projectDir } = await createStoryProject({ rootDir, title: "渡口" });
     const commit = async (chapter: number, text: string, entries: Parameters<typeof chapterCommit.plan>[1]["entries"], pending = false) => {
@@ -137,14 +152,16 @@ describe("previousChapterEndDay：上一章是哪天不知道就说不知道，�
       }, { caller: "author", idempotencyKey: `k${chapter}` });
       expect(outcome.ok).toBe(true);
     };
-    await commit(1, "# 第1章\n\n周三清晨，渡口起了雾。", [{ kind: "time", review: "auto", basis: "text", quote: "周三清晨" }]);
-    expect(await previousChapterEndDay(projectDir, 2)).toBe(1);
+    const day = (min: number) => ({ unit: "day" as const, min, max: min });
+    await commit(1, "# 第1章\n\n周三清晨，渡口起了雾。", [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "周三清晨" }, sameDay: true }]);
+    expect(await previousPresentFor(projectDir, 1)).toBeUndefined();
+    expect(await previousPresentFor(projectDir, 2)).toBe(1);
     await commit(2, "# 第2章\n\n雾还没散。", [], true);
-    expect(await previousChapterEndDay(projectDir, 3)).toBe("unknown");
-    await commit(3, "# 第3章\n\n第二天上午，船来了。", [{ kind: "time", review: "auto", basis: "text", quote: "第二天上午", daysSincePrevious: 1 }]);
-    expect(await previousChapterEndDay(projectDir, 4)).toBe("unknown");
-    await commit(4, "# 第4章\n\n到了第六天。", [{ kind: "time", review: "auto", basis: "author", day: 6 }]);
-    expect(await previousChapterEndDay(projectDir, 5)).toBe(6);
+    expect(await previousPresentFor(projectDir, 3)).toBe("unknown");
+    await commit(3, "# 第3章\n\n第二天上午，船来了。", [{ kind: "time", review: "auto", start: { offset: day(1), basis: "text", quote: "第二天上午" }, sameDay: true }]);
+    expect(await previousPresentFor(projectDir, 4)).toBe(3);
+    await commit(4, "# 第4章\n\n他想起那年冬天。那年很冷。", [{ kind: "time", review: "auto", segments: [{ frame: "past", firstQuote: "他想起那年冬天", lastQuote: "那年很冷" }] }]);
+    expect(await previousPresentFor(projectDir, 5)).toBe(3);
   });
 });
 
@@ -172,341 +189,15 @@ describe("骨架章纲重拟（第二十轮第 5、7 章只有要点，日历少
   });
 });
 
-describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后全书少一天）", () => {
-  it("开场那天加上要点开头写明的换天；转述里的「约好第二天」不算", async () => {
-    const { storyDayAtChapterEnd } = await import("./plan-materials.js");
-    const make = (beats: string[]) => normalizeChapterPlan({ summary: "s", beats, storyDay: 2 }, { chapter: 2 })!;
-    expect(storyDayAtChapterEnd(make(["傍晚回铺子", "第二天上午，许棠上门"]))).toBe(3);
-    expect(storyDayAtChapterEnd(make(["傍晚回铺子", "三天后，林溪来了"]))).toBe(5);
-    expect(storyDayAtChapterEnd(make(["许棠约好第二天来量铺子", "林舟关门"]))).toBe(2);
-    expect(storyDayAtChapterEnd(make(["第二天上午，林舟开门", "傍晚关门"]))).toBe(2);
-    expect(storyDayAtChapterEnd(undefined)).toBeUndefined();
-  });
-
-  it("上一章开场是第几天以时间线为准，章纲只数章内换天（2026-10-28 第 33 章章纲跟着过时的第 32 章章纲少记四天）", async () => {
-    const { previousChapterEndDay } = await import("./plan-materials.js");
+describe("上一章停在哪天以账为准，章纲里写的换天不算（2026-10-28 第 33 章章纲跟着过时的第 32 章章纲少记四天）", () => {
+  it("作者定了第 1 章是第 9 天：没说到哪天，下一章是哪天就说不准；说了到第 11 天，下一章「第二天」就是第 12 天", async () => {
     const projectDir = await makeBook();
-    // 时间线从账算：作者改第 1 章的天数（chapter.day 裁定，后记的顶掉先记的）。
     const day = (dayEnd?: number) => seedDecisions(projectDir, [{ type: "chapter.day", chapter: 1, day: 9, ...(dayEnd ? { dayEnd } : {}) }]);
-    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子", "第二天上午，许棠上门"], storyDay: 5 }, { chapter: 1 })!);
+    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子", "第二天上午，许棠上门"] }, { chapter: 1 })!);
+    const today = async () => planClock((await readStoryViews(projectDir)).projection, 2, { dayOffset: 1, after: 1 })?.today;
     await day();
-    expect(await previousChapterEndDay(projectDir, 2)).toBe(10);
+    expect(await today()).toContain("本章是哪天说不准");
     await day(11);
-    expect(await previousChapterEndDay(projectDir, 2)).toBe(11);
-    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子"] }, { chapter: 1 })!);
-    await day();
-    expect(await previousChapterEndDay(projectDir, 2)).toBe(9);
-  });
-});
-
-// ---------- 出稿前的章纲编排：章纲员拟 → 核账员审 → 改一轮（R3 后唯一一条路） ----------
-
-const READER_PLAN = JSON.stringify({
-  summary: "林澈去档案室对出缺页",
-  beats: ["一早去档案室", "管理员拦人", "对出缺页是一笔境外汇款"],
-  newInformation: ["缺页记的是一笔境外汇款"],
-  scene: { location: "档案室", time: "第二天上午" },
-  characters: ["林澈"],
-  entities: ["蓝色账册", "档案室"],
-  threadsAdvanced: [{ title: "账册第三页被谁撕掉了", how: "对出缺页内容" }],
-  avoid: [],
-});
-
-/** 假章纲员（BrainCallModel）：json:false 写笔记；json:true 按消息内容区分拟纲 / 改纲，回 planReplies 里的下一个。 */
-function fakePlannerCallModel(planReplies: (string | Error)[] = [READER_PLAN]) {
-  const calls: { readonly json: boolean; readonly task: string }[] = [];
-  let used = 0;
-  const callModel: BrainCallModel = async (messages, options) => {
-    const task = messages.at(-1)!.content;
-    calls.push({ json: options.json, task });
-    if (!options.json) return `第${/第 (\d+) 章/u.exec(task)?.[1] ?? "?"}章笔记`;
-    const reply = planReplies[Math.min(used, planReplies.length - 1)]!;
-    used += 1;
-    if (reply instanceof Error) throw reply;
-    return reply;
-  };
-  return { callModel, calls };
-}
-
-/** 假核账员审章纲：回 problems（earlierQuote 得真在第 1 章正文里才留得下）。 */
-const fakePlanCheckCallModel = (reply: string): BrainCallModel & { readonly calls: number[] } => {
-  let jsonCalls = 0;
-  const calls: number[] = [];
-  const callModel: BrainCallModel = async (messages, options) => {
-    if (!options.json) return `第${/第 (\d+) 章/u.exec(messages.at(-1)!.content)?.[1] ?? "?"}章笔记`;
-    jsonCalls += 1;
-    calls.push(jsonCalls);
-    return reply;
-  };
-  return Object.assign(callModel, { calls });
-};
-
-/** 拟纲，再照出稿操作的样子落盘（resolveChapterPlanForDraft 只算不写，落盘是出稿操作 plan-save 那一步）。 */
-async function resolveAndSave(input: Parameters<typeof import("./plan-chapter.js").resolveChapterPlanForDraft>[0]) {
-  const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
-  const result = await resolveChapterPlanForDraft(input);
-  if (result.save && result.plan) await writeChapterPlan(input.projectDir, result.plan);
-  return result;
-}
-
-describe("resolveChapterPlanForDraft：编辑部编排", () => {
-  it("只算不写：新拟的带 save、盘上还没有，落不落盘由调用方定", async () => {
-    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
-    const projectDir = await makeBook();
-    const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, plannerCallModel: fakePlannerCallModel().callModel, planCheckReaderCallModel: fakePlanCheckCallModel(JSON.stringify({ problems: [] })),
-    });
-    expect(result.save).toBe(true);
-    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
-    expect(await readChapterPlan(projectDir, 2)).toBeUndefined();
-  });
-
-  it("拟 → 核账员审 → 没问题直接用；同一方向重写沿用已有章纲，方向变了重拟", async () => {
-    const projectDir = await makeBook();
-    const planner = fakePlannerCallModel();
-    const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
-    const first = await resolveAndSave({
-      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(first.reused).toBe(false);
-    expect(first.plan?.summary).toBe("林澈去档案室对出缺页");
-    // 章纲员 1 次拟纲 + 2 次笔记；核账员 1 次审纲 + 2 次笔记。
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
-    expect(checker.calls).toEqual([1]);
-    const again = await resolveAndSave({
-      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(again.reused).toBe(true);
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
-    const redirected = await resolveAndSave({
-      projectDir, chapter: 2, direction: "改成去银行", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(redirected.reused).toBe(false);
-    expect((await readChapterPlan(projectDir, 2))?.direction).toBe("改成去银行");
-  });
-
-  it("拟纲后前文改了（改了前面那章、记了设定）→ 不沿用、按现在的重拟并说一声；作者给的章纲照旧沿用（外部审查 2026-10-28）", async () => {
-    const projectDir = await makeBook();
-    const planner = fakePlannerCallModel();
-    const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
-    const resolve = () => resolveAndSave({ projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker });
-    await resolve();
-    expect((await readChapterPlan(projectDir, 2))?.basis).toEqual(expect.any(String));
-    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈把蓝色账册交给了许棠，档案室不用去了。\n", "utf-8");
-    const stale = await resolve();
-    expect(stale.reused).toBe(false);
-    expect(stale.note).toMatch(/^前文改过，章纲按现在的重拟了。/u);
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
-    expect((await resolve()).reused).toBe(true);
-    const cards = await runCommand(projectDir, cardWrite, { ops: [{ op: "card.create", kind: "item", name: "蓝色账册" }] }, { caller: "author", idempotencyKey: "stale-card" });
-    expect(cards.ok).toBe(true);
-    expect((await resolve()).reused).toBe(false);
-    const plan = (await readChapterPlan(projectDir, 2))!;
-    await writeChapterPlan(projectDir, { ...plan, source: "author" });
-    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈烧了账册。\n", "utf-8");
-    expect((await resolve()).reused).toBe(true);
-  });
-
-  it("审出问题 → 交回章纲员改一轮（不循环），落盘的是改过的章纲", async () => {
-    const projectDir = await makeBook();
-    const fixed = JSON.stringify({ revised: [{ point: 3, beat: "对出缺页是一笔境外汇款，和第 1 章的记录对上" }] });
-    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 3, conflict: true, authorWilled: false, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
-    }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(result.plan?.beats).toHaveLength(3);
-    expect(result.plan?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
-    expect(result.note).toContain("核账员审出 1 处");
-    expect(result.note).toContain("改掉 1 处");
-    expect((await readChapterPlan(projectDir, 2))?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
-  });
-
-  it("R7.5 作者方向和前文冲突（authorWilled）→ 不自动改、不叫改纲，回执问作者以哪个为准、照原要点出稿", async () => {
-    const projectDir = await makeBook();
-    const planner = fakePlannerCallModel([READER_PLAN]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 1, conflict: true, authorWilled: true, directionQuote: "当天就去档案室", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要当天去，但账册第 1 章已锁进抽屉" }],
-    }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, direction: "当天就去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    // 没叫改纲（只有拟纲那一次 json 调用），要点原样保留。
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
-    expect(result.plan?.beats).toEqual(JSON.parse(READER_PLAN).beats);
-    expect(result.note).toContain("都来自你给的方向");
-    expect(result.note).toContain("以哪个为准");
-    expect(result.note).toContain("这次先照你的方向出稿");
-    expect(result.note).toContain("你给的方向里「当天就去档案室」");
-  });
-
-  it("P7 审纲把章纲员自己展开的细节标成作者方向、却抄不出方向原话 → 当章纲员拟错交回去改，不反问作者", async () => {
-    const projectDir = await makeBook();
-    const fixed = JSON.stringify({ revised: [{ point: 3, beat: "对出缺页是一笔境外汇款，和第 1 章的记录对上" }] });
-    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 3, conflict: true, authorWilled: true, directionQuote: "当晚把账册烧了", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
-    }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, direction: "一早去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
-    expect(result.plan?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
-    expect(result.note).toContain("改掉 1 处");
-    expect(result.note).not.toContain("你给的方向");
-  });
-
-  it("R7.5 混合：章纲员自己的错照改，作者方向的另报一条问作者", async () => {
-    const projectDir = await makeBook();
-    const fixed = JSON.stringify({ revised: [{ point: 3, beat: "对出缺页是一笔境外汇款，和第 1 章的记录对上" }] });
-    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [
-        { point: 3, conflict: true, authorWilled: false, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" },
-        { point: 1, conflict: true, authorWilled: true, directionQuote: "一早去档案室", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要一早去，第 1 章写的是明天" },
-      ],
-    }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, direction: "一早去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    // 改纲只收到非 authorWilled 的那条（point 3）；作者那条（point 1）保留原样。
-    const reviseTaskText = planner.calls.filter((call) => call.json)[1]?.task ?? "";
-    expect(reviseTaskText).toContain("第 3 条要点");
-    expect(reviseTaskText).not.toContain("第 1 条要点");
-    expect(result.plan?.beats[0]).toBe("一早去档案室");
-    expect(result.plan?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
-    expect(result.note).toContain("改掉 1 处");
-    expect(result.note).toContain("另有 1 处来自你给的方向");
-    expect(result.note).toContain("以哪个为准");
-  });
-
-  it("P7 章纲员改了作者方向要声明：原话核得上的进回执告诉作者、落盘带着；编的原话丢掉；同一方向沿用时照样说", async () => {
-    const projectDir = await makeBook();
-    const changed = JSON.stringify({
-      ...JSON.parse(READER_PLAN),
-      beats: ["一早去档案室，带上复印件", "管理员拦人", "对出缺页是一笔境外汇款"],
-      directionChanges: [
-        { said: "带上蓝色账册", changedTo: "带上账册的复印件", why: "第 1 章账册已经锁进抽屉、钥匙不在他身上" },
-        { said: "作者根本没说过这句", changedTo: "随便改的", why: "编的" },
-      ],
-    });
-    const planner = fakePlannerCallModel([changed]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, direction: "一早带上蓝色账册去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(result.plan?.directionChanges).toEqual([{ said: "带上蓝色账册", changedTo: "带上账册的复印件", why: "第 1 章账册已经锁进抽屉、钥匙不在他身上" }]);
-    expect(result.note).toContain("你给的方向里「带上蓝色账册」和前文对不上：第 1 章账册已经锁进抽屉、钥匙不在他身上。章纲改成了「带上账册的复印件」；要照你原话写就说一声。");
-    expect(result.note).not.toContain("编的");
-    expect((await readChapterPlan(projectDir, 2))?.directionChanges).toHaveLength(1);
-    const again = await resolveAndSave({
-      projectDir, chapter: 2, direction: "一早带上蓝色账册去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(again.reused).toBe(true);
-    expect(again.note).toContain("章纲改成了「带上账册的复印件」");
-  });
-
-  it("P7 章纲员已声明改掉的方向原话，审纲再报成「作者方向和前文对不上」→ 不再反问（回执只说改成了什么）", async () => {
-    const projectDir = await makeBook();
-    const changed = JSON.stringify({
-      ...JSON.parse(READER_PLAN),
-      directionChanges: [{ said: "带上蓝色账册", changedTo: "带上账册的复印件", why: "账册第 1 章已锁进抽屉。" }],
-    });
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 1, conflict: true, authorWilled: true, directionQuote: "一早带上蓝色账册", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "账册已锁进抽屉" }],
-    }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, direction: "一早带上蓝色账册去档案室", plannerCallModel: fakePlannerCallModel([changed]).callModel, planCheckReaderCallModel: checker,
-    });
-    expect(result.note).not.toContain("以哪个为准");
-    expect(result.note).not.toContain("核账员审出");
-    expect(result.note).toContain("和前文对不上：账册第 1 章已锁进抽屉。章纲改成了「带上账册的复印件」");
-  });
-
-  it("没给方向时章纲员声明的「改了方向」一条不收", async () => {
-    const projectDir = await makeBook();
-    const changed = JSON.stringify({ ...JSON.parse(READER_PLAN), directionChanges: [{ said: "一早去档案室", changedTo: "下午去", why: "上午闭馆" }] });
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, plannerCallModel: fakePlannerCallModel([changed]).callModel, planCheckReaderCallModel: fakePlanCheckCallModel(JSON.stringify({ problems: [] })),
-    });
-    expect(result.plan?.directionChanges).toBeUndefined();
-    expect(result.note).not.toContain("你给的方向");
-  });
-
-  it("作者没给方向（写下一章）→ 模型标的 authorWilled 不作数，照章纲员的错改，回执不说「来自你给的方向」", async () => {
-    const projectDir = await makeBook();
-    const fixed = JSON.stringify({ revised: [{ point: 1, beat: "第二天去档案室" }] });
-    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 1, conflict: true, authorWilled: true, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "第 1 章写的是明天去" }],
-    }));
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
-    expect(result.plan?.beats[0]).toBe("第二天去档案室");
-    expect(result.note).toContain("改掉 1 处");
-    expect(result.note).not.toContain("你给的方向");
-  });
-
-  it("章纲员要补的笔记太多 → 冷窗口照拟照审，note 如实标对照范围（不再「按没有章纲出稿」）", async () => {
-    // 12 章都没笔记、maxCatchUp 是 10 → 冷窗口（已有笔记 0 章 + 最近 8 章原文）。
-    const projectDir = await makeBook();
-    for (let n = 2; n <= 12; n += 1) {
-      await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
-    }
-    const planner = fakePlannerCallModel();
-    const checker = fakePlanCheckCallModel("{}");
-    const result = await resolveAndSave({
-      projectDir, chapter: 13, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(result.reused).toBe(false);
-    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
-    expect(result.note).toContain("章纲员还没读完全书（第 0 / 12 章）");
-    expect(result.note).toContain("这次按第 5～12 章原文拟的纲");
-    expect(result.note).toContain("核账员还没读完全书（第 0 / 12 章）");
-    expect(result.note).toContain("这次按第 5～12 章原文审的纲");
-    // 拟了纲、也审了纲（不是空手出稿）。
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
-    expect(checker.calls).toEqual([1]);
-  });
-
-  it("核账员还没读完前文 → 冷窗口照审（note 如实标），章纲照用", async () => {
-    const { rm } = await import("node:fs/promises");
-    const projectDir = await makeBook();
-    for (let n = 2; n <= 11; n += 1) {
-      await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
-    }
-    const planner = fakePlannerCallModel();
-    const checker = fakePlanCheckCallModel("{}");
-    // 第一轮（第 11 章）：两个角色当场补齐各自的 10 份笔记。
-    await resolveAndSave({ projectDir, chapter: 11, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker });
-    // 删掉核账员的全部笔记、再往书里加 1 章：下一轮章纲员只缺 2 份（缺得少仍当场补读，R5.2），
-    // 核账员缺 12 份（超过 10）→ not_ready。
-    await rm(join(projectDir, "agents", "checker", "notes"), { recursive: true, force: true });
-    await writeFile(join(projectDir, "chapters", "0012.md"), "# 第12章\n\n第12章各自推进。\n", "utf-8");
-    const result = await resolveAndSave({
-      projectDir, chapter: 13, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
-    });
-    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
-    // 章纲员只缺 2 份（当场补齐、正常拟），note 如实说等过它（R5.2 必做 2）；
-    expect(result.note).toContain("这次先等章纲员读完第 11～12 章再拟纲");
-    expect(result.note).toContain("再拟纲");
-    // 核账员缺 12 份 → 冷窗口审（已有笔记 0 章 + 第 5～12 章原文），缺口没被原文补全、老措辞照说。
-    expect(result.note).toContain("核账员还没读完全书（第 0 / 12 章）");
-    expect(result.note).toContain("这次按第 5～12 章原文审的纲");
-    expect(result.note).not.toContain("这次没审章纲");
-  });
-
-  it("章纲员拟不成 → 没有章纲 + 如实说明照常出稿", async () => {
-    const projectDir = await makeBook();
-    const planner = fakePlannerCallModel([new Error("网关挂了"), new Error("还是挂")]);
-    const result = await resolveAndSave({
-      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
-    });
-    expect(result.plan).toBeUndefined();
-    expect(result.note).toContain("这次按没有章纲出稿");
+    expect(await today()).toBe("本章是故事第 12 天");
   });
 });

@@ -198,6 +198,7 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
           })}
         </div>
       </div>
+      <DayBoundaryRow ctx={ctx} />
       <Sec title="其余几栏" count={rest.length} />
       <FieldList
         fields={rest}
@@ -209,6 +210,28 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
       />
       <CardsPage ctx={ctx} kind="lore" entries={ctx.bible.lore} nested />
     </>
+  );
+}
+
+/** 换天规矩（写作版本 P3a 2.4）：过了半夜算第二天，还是天亮才算；没定就两种都推，对不上的照实说不知道。只有作者定。 */
+const DAY_BOUNDARIES: readonly { readonly value: "midnight" | "dawn" | null; readonly label: string; readonly hint: string }[] = [
+  { value: "midnight", label: "半夜", hint: "过了半夜就算第二天" },
+  { value: "dawn", label: "天亮", hint: "天亮了才算第二天" },
+  { value: null, label: "没定", hint: "两种都算，算出来不一样的照实说不知道" },
+];
+
+function DayBoundaryRow({ ctx }: { readonly ctx: PageContext }) {
+  const current = ctx.bible.dayBoundary ?? null;
+  return (
+    <div className="se-bk-dayrule">
+      <span aria-hidden="true">换天按</span>
+      <div className="se-seg" role="group" aria-label="换天按">
+        {DAY_BOUNDARIES.map(({ value, label, hint }) => (
+          <button key={label} type="button" className={current === value ? "on" : ""} aria-pressed={current === value} title={hint} disabled={ctx.disabled}
+            onClick={() => { if (current !== value) void ctx.save([{ op: "calendar.dayBoundary", value }]); }}>{label}</button>
+        ))}
+      </div>
+    </div>
   );
 }
 

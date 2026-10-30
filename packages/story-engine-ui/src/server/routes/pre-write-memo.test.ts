@@ -26,6 +26,7 @@ async function bookWithTwoChapters(): Promise<string> {
     chapter: 1,
     text: "# 第1章\n\n许微在邮政局拆开那封信。信上只写了一个仓号。",
     entries: [
+      { kind: "time", review: "auto", start: { offset: { unit: "day", min: 0, max: 0 }, basis: "text", quote: "许微在邮政局拆开那封信" }, sameDay: true },
       { kind: "presence", review: "auto", name: "许微", nameUsed: "许微", viewpoint: true, quote: "许微在邮政局拆开那封信" },
       { kind: "thread", review: "auto", op: "open", type: "question", title: "信是谁寄的", note: "来了一封怪信", quote: "许微在邮政局拆开那封信" },
       { kind: "fact", review: "auto", nature: "state", subject: "怪信", attribute: "在哪", value: "许微手里", text: "信在许微手里", quote: "许微在邮政局拆开那封信" },
@@ -36,7 +37,7 @@ async function bookWithTwoChapters(): Promise<string> {
     chapter: 2,
     text: "# 第2章\n\n第二天傍晚，孟叔把钥匙交给许微。她把信锁进了抽屉。",
     entries: [
-      { kind: "time", review: "auto", basis: "text", daysSincePrevious: 1, timeOfDay: "傍晚", quote: "第二天傍晚，孟叔把钥匙交给许微" },
+      { kind: "time", review: "auto", start: { offset: { unit: "day", min: 1, max: 1 }, basis: "text", quote: "第二天傍晚，孟叔把钥匙交给许微" }, sameDay: true, timeOfDay: "傍晚" },
       { kind: "summary", review: "auto", text: "孟叔交出钥匙，许微锁好信。", quote: "孟叔把钥匙交给许微" },
       { kind: "presence", review: "auto", name: "许微", nameUsed: "许微", viewpoint: true, quote: "孟叔把钥匙交给许微" },
       { kind: "presence", review: "auto", name: "孟叔", nameUsed: "孟叔", quote: "孟叔把钥匙交给许微" },
@@ -53,14 +54,15 @@ describe("GET /api/pre-write-memo", () => {
     const response = await getMemo(projectDir, "3");
     expect(response.statusCode).toBe(200);
     expect(response.payload.ok).toBe(true);
-    const memo = response.payload.memo as PreWriteMemo;
+    const memo = response.payload.memo as PreWriteMemo & { readonly days?: string };
     expect(memo.previous).toMatchObject({
       chapter: 2,
       summary: "孟叔交出钥匙，许微锁好信。",
       present: ["许微", "孟叔"],
       viewpoint: "许微",
-      time: { day: 2, dayEnd: 2, timeOfDay: "傍晚", basis: "text" },
+      time: { presentLine: true, start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 }, timeOfDay: "傍晚" },
     });
+    expect(memo.days).toBe("第 2 天傍晚");
     // 「信是谁寄的」第 1 章埋、才停 1 章：不列，只计数。
     expect(memo.threads).toEqual([]);
     expect(memo.moreThreads).toBe(1);

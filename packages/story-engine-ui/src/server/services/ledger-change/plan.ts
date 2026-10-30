@@ -8,7 +8,7 @@ import { storySpanText } from "../../book/story-timeline.js";
 /** 一次最多改几条（卡上摆得下、看得清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
 
-export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "summary"] as const;
+export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "keepDay", "summary"] as const;
 export type LedgerEditOp = (typeof LEDGER_OPS)[number];
 
 export interface LedgerChangeRequest {
@@ -138,6 +138,16 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest): 
       if (thread.status === "closed") return fail("already_closed", `线索「${thread.title}」已经收了（第 ${thread.closedAt} 章）。`);
       const chapter = request.chapter ?? latest;
       return proposal([{ type: "thread.close", thread: thread.id, chapter }], [`把线索「${thread.title}」记为第 ${chapter} 章已收`]);
+    }
+    case "keepDay": {
+      // 作者定的天数和按记下的推出来的对不上：以作者定的为准（记「不是问题」裁定，以后不再提；两边的账都不动）。
+      const chapter = request.chapter ?? latest;
+      const conflicts = view.timeConflicts.filter((conflict) => conflict.chapter === chapter);
+      if (conflicts.length === 0) return fail("unchanged", `第 ${chapter} 章你定的天数和记下的没有对不上的，不用改。`);
+      return proposal(
+        conflicts.map((conflict) => ({ type: "issue.dismiss", issue: conflict.key })),
+        conflicts.map((conflict) => `第 ${chapter} 章以你定的第 ${conflict.authorDay} 天为准`),
+      );
     }
     case "day": {
       const chapter = request.chapter ?? latest;

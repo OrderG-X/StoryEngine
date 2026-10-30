@@ -605,7 +605,7 @@ function previewTimeOf(
   sinceLast: PreviewTime["sinceLast"],
   chapter: number,
 ): PreviewTime {
-  const row: TimelineRow = time?.row ?? { chapter, presentLine: "unknown", weekdayDerived: false, basis: "unknown", presumed: false, segments: [] };
+  const row: TimelineRow = time?.row ?? { chapter, presentLine: "unknown", weekdayDerived: false, basis: "unknown", presumed: false, segments: [], afterUnknown: false };
   const declared = entries.find((entry): entry is TimeInput => entry.kind === "time");
   const startBasis = declared?.start && declared.start !== "unknown" ? declared.start.basis : undefined;
   const segments = (declared?.segments ?? []).map((segment, index) => ({ text: time?.segments[index] ?? segmentText(segment), quote: segment.firstQuote }));

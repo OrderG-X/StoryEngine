@@ -46,6 +46,8 @@ function ledgerActionText(changes: readonly import("../api/agentChatClient.js").
   if (changes.length !== 1) return `改 ${changes.length} 笔账`;
   const change = changes[0]!;
   if (change.op === "summary") return `改第 ${change.chapter} 章的梗概`;
+  if (change.op === "day") return `第 ${change.chapter} 章记为故事第 ${change.day} 天`;
+  if (change.op === "keepDay") return `第 ${change.chapter} 章的天数以我定的为准`;
   const thread = change.title ? `线索「${change.title}」` : "这条线索";
   return change.op === "resolve" ? `收掉${thread}` : `${thread}定为${WEIGHT_TEXT[change.importance]}`;
 }

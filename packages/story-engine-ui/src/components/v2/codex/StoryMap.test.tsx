@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoryMap as MapData, StoryMapMember, PaceReport } from "../../../api/storyMapClient.js";
-import { StoryMap, dayDetail, daysPassed, paceBarWidth, paceCellTitle } from "./StoryMap.js";
+import { StoryMap, dayDetail, dayLabel, paceBarWidth, paceCellTitle } from "./StoryMap.js";
 
 const who = (name: string, chapters: readonly number[], over: Partial<StoryMapMember> = {}): StoryMapMember => ({
   name,
@@ -14,10 +14,11 @@ const who = (name: string, chapters: readonly number[], over: Partial<StoryMapMe
 
 const MAP: MapData = {
   upTo: 3,
+  lastDay: 7,
   chapters: [
-    { chapter: 1, day: 1, dayEnd: 1, weekday: 0, weekdayDerived: false, timeOfDay: "傍晚", basis: "text", summary: "周守义到了九号院", present: ["周守义", "老板娘"], viewpoint: "周守义" },
-    { chapter: 2, day: 2, dayEnd: 2, weekday: 1, weekdayDerived: true, basis: "estimated", present: ["周守义"] },
-    { chapter: 3, day: 6, dayEnd: 7, basis: "missing", weekdayDerived: false, present: ["周守义", "沈同志"] },
+    { chapter: 1, presentLine: true, days: "第 1 天", weekday: 0, weekdayDerived: false, timeOfDay: "傍晚", segments: [], summary: "周守义到了九号院", present: ["周守义", "老板娘"], viewpoint: "周守义" },
+    { chapter: 2, presentLine: true, days: "第 2 天", unsure: "按旧账推的，不算准", weekday: 1, weekdayDerived: true, segments: ["回忆（3 年前）"], present: ["周守义"] },
+    { chapter: 3, presentLine: true, days: "第 6 天到第 7 天", gap: "过了 4 天", weekdayDerived: false, segments: [], present: ["周守义", "沈同志"] },
   ],
   cast: [
     who("周守义", [1, 2, 3], { aliases: ["老周"], viewpointChapters: [1] }),
@@ -35,16 +36,16 @@ function mockFetch(body: unknown, status = 200) {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("故事地图（重构 P6，草图 ③）", () => {
-  it("一行一章带故事日（星期·时段、推出来的标「推」、估的标「估」）；隔了好几天标出来；章名从章节列表来", async () => {
+  it("一行一章带故事日（星期·时段·不在当下的段、推出来的星期标「推」、旧账推的天数标「约」）；隔了好几天标出来；章名从章节列表来", async () => {
     mockFetch({ ok: true, map: MAP });
     render(<StoryMap projectPath="/book" busy={false} chapterTitles={new Map([[1, "九号院"]])} />);
     expect(await screen.findByText("一行一章，一列一人。点圆点回到他出场那句。")).toBeTruthy();
     expect(screen.getByText("人出场").closest("dl")?.textContent).toBe("章3故事日7人出场3");
     expect(screen.getByText("九号院")).toBeTruthy();
     expect(screen.getByText("周一 · 傍晚")).toBeTruthy();
-    expect(screen.getByText("周二（推）")).toBeTruthy();
-    expect(screen.getByText("第 6～7 天")).toBeTruthy();
-    expect(screen.getAllByText("估")).toHaveLength(2);
+    expect(screen.getByText("周二（推） · 回忆（3 年前）")).toBeTruthy();
+    expect(screen.getByText("第 6 天到第 7 天")).toBeTruthy();
+    expect(screen.getByText("约").getAttribute("title")).toBe("按旧账推的，不算准");
     expect(screen.getByText("过了 4 天")).toBeTruthy();
     expect(screen.getByText("周守义到了九号院")).toBeTruthy();
   });
@@ -98,12 +99,13 @@ describe("故事地图（重构 P6，草图 ③）", () => {
     await waitFor(() => expect(screen.getByText("还没有定稿的章：定稿时记账员会把每章第几天、谁出场记在这里。")).toBeTruthy());
   });
 
-  it("小函数：同一天、隔天不标；星期和时段都没有就空", () => {
-    const base = MAP.chapters[1]!;
-    expect(daysPassed(undefined, base)).toBe(0);
-    expect(daysPassed(MAP.chapters[0], base)).toBe(0);
-    expect(daysPassed(base, MAP.chapters[2]!)).toBe(4);
-    expect(dayDetail(MAP.chapters[2]!)).toBe("");
+  it("小函数：账待记、整章不在当下、账没记全、不知道照实写；星期、时段、段都没有就空", () => {
+    const base = MAP.chapters[2]!;
+    expect(dayDetail(base)).toBe("");
+    expect(dayLabel({ ...base, ledgerShort: "pending", days: undefined })).toBe("账待记");
+    expect(dayLabel({ ...base, presentLine: false, days: undefined, segments: ["回忆"] })).toBe("不在当下");
+    expect(dayLabel({ ...base, ledgerShort: "partial", days: undefined })).toBe("账没记全");
+    expect(dayLabel({ ...base, presentLine: "unknown", days: undefined })).toBe("不知道");
   });
 
   it("节奏：每章一根条、可能拖 / 赶打记号；上面列原因，点了滚到那一行亮一下", async () => {

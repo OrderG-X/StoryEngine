@@ -3,7 +3,7 @@
  *
  * 拟第 N 章时，在「读完第 N-1 章」那一刻的窗口后面接上：作者给的方向（可为空）+ 章纲 JSON 要求
  * （plan-chapter 的 PLAN_REQUIREMENT_LINES / PLAN_JSON_FIELDS / planMaterialBlocks 同一份文本——改提示词必须在题库上比分）。
- * 输出宽进归一（normalizeChapterPlan）+ reconcileStoryDay 天数归一；不落盘（落盘由调用方定，出稿操作走核心 plan.save）。
+ * 输出宽进归一（normalizeChapterPlan）+ datePlan 天数归一；不落盘（落盘由调用方定，出稿操作走核心 plan.save）。
  * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
 import { normalizeChapterPlan, PLAN_BEAT_MAX, storedChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
@@ -18,9 +18,9 @@ import {
   PLAN_JSON_FIELDS,
   planRequirementLines,
   planMaterialBlocks,
-  previousChapterEndDay,
+  datePlan,
+  previousPresentFor,
   readDayOffset,
-  reconcileStoryDay,
   type PlanChapterMaterials,
 } from "./plan-materials.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -113,8 +113,7 @@ export const callConfiguredPlannerModel: BrainCallModel = async (messages, optio
  * 只在内存里：落盘由调用方定（写作版本 P2a：步骤只算不写书，出稿操作的 `plan-save` 走核心 plan.save）。
  */
 async function finalizePlan(projectDir: string, plan: ChapterPlan, dayOffset: number | undefined, materials: PlanChapterMaterials): Promise<ChapterPlan> {
-  const lastDay = await previousChapterEndDay(projectDir, plan.chapter);
-  const dated = reconcileStoryDay(plan, dayOffset, lastDay);
+  const dated = datePlan(plan, dayOffset, await previousPresentFor(projectDir, plan.chapter));
   const withAvoid = materials.recurringPhrases.length > 0
     ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
     : dated;
@@ -237,7 +236,8 @@ function planJson(plan: ChapterPlan): Record<string, unknown> {
     beats: plan.beats,
     newInformation: plan.newInformation,
     scene: plan.scene,
-    ...(plan.storyDay !== undefined ? { storyDay: plan.storyDay } : {}),
+    ...(plan.dayOffset !== undefined ? { dayOffset: plan.dayOffset } : {}),
+    ...(plan.frame ? { frame: plan.frame === "past" ? "回忆" : "梦" } : {}),
     characters: plan.characters,
     entities: plan.entities,
     threadsAdvanced: plan.threadsAdvanced,

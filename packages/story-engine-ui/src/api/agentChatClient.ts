@@ -183,7 +183,9 @@ export function newCommitAction(chapter: number, options: { readonly allowShort?
 export type LedgerChangeData =
   | { readonly op: "resolve"; readonly id: string; readonly chapter: number; readonly title?: string }
   | { readonly op: "importance"; readonly id: string; readonly importance: "major" | "normal" | "minor"; readonly title?: string }
-  | { readonly op: "summary"; readonly chapter: number; readonly text: string };
+  | { readonly op: "summary"; readonly chapter: number; readonly text: string }
+  | { readonly op: "day"; readonly chapter: number; readonly day: number; readonly dayEnd?: number }
+  | { readonly op: "keepDay"; readonly chapter: number };
 
 /** 一个直接改账的按钮（请求号这时候给：点了一次就是这一次）。 */
 export function newLedgerAction(changes: readonly LedgerChangeData[]): OperationActionData {
