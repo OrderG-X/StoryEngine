@@ -273,6 +273,7 @@ describe("撤销上一步", () => {
       expect(waiting.state).toBe("waiting_author");
       const preview = operationView(waiting).pendingActions[0]?.preview as { lines: string[]; notes: string[] };
       expect(preview.lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
+      expect(preview.notes[0]).toContain("要撤的是");
       expect(await bodyOf(9)).toBe("第九章。");
     });
   }

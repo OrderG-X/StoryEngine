@@ -309,7 +309,7 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
       const notes = ask.impacted ? UNDO_NOTES : [UNSURE_NOTE];
       const preview: HistoryConfirmPreview = {
         lines: ask.lines,
-        notes: round === 1 ? [`要撤的是「${resolved.what}」。`, ...notes] : ["算好之后书又改过，这是重新算的。", ...notes],
+        notes: [`要撤的是「${resolved.what}」。`, ...(round === 1 ? [] : ["算好之后书又改过，这是重新算的。"]), ...notes],
       };
       await ctx.waitForAuthor({ actionId: round === 1 ? UNDO_CONFIRM_ACTION : `${UNDO_CONFIRM_ACTION}-${round}`, kind: UNDO_CONFIRM_KIND, decisions: ["apply"], preview });
       confirmed = ask.digest;
