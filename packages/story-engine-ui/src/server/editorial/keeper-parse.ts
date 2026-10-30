@@ -112,6 +112,11 @@ function integer(value: unknown): number | undefined {
 }
 
 const UNITS: Record<string, TimeOffset["unit"]> = { day: "day", days: "day", d: "day", 天: "day", 日: "day", month: "month", months: "month", 月: "month", 个月: "month", year: "year", years: "year", 年: "year" };
+/** 单位比同不同：认得的按天、月、年比（「天」和 day 一样），认不出的按原样比。 */
+const unitKey = (raw: unknown): string | undefined => {
+  const text = str(raw)?.toLowerCase();
+  return text === undefined ? undefined : (UNITS[text] ?? text);
+};
 /** 相对多少的上限（和核心一样，±一百年）。 */
 const MAX_OFFSET = 36500;
 
@@ -129,7 +134,7 @@ function offsetOf(value: unknown): TimeOffset | string {
   if (value.offset !== undefined && value.min === undefined && value.max === undefined && value.value === undefined && value.days === undefined) {
     const inner = isRecord(value.offset) ? value.offset : { value: value.offset };
     if (value.unit === undefined) return offsetOf(inner);
-    if (inner.unit !== undefined && str(inner.unit)?.toLowerCase() !== str(value.unit)?.toLowerCase()) return "相对多少里外写的单位不一样";
+    if (inner.unit !== undefined && unitKey(inner.unit) !== unitKey(value.unit)) return "相对多少里外写的单位不一样";
     return offsetOf({ ...inner, unit: value.unit });
   }
   const unitText = str(value.unit)?.toLowerCase();

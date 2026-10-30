@@ -307,6 +307,28 @@ describe("撤销核引用：基准按引用者自己接着的那一刻", () => {
       expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
     });
 
+    const rulings = (...items: { chapter: number; day: number; dayEnd?: number }[]) => [{
+      path: DECISIONS_PATH,
+      content: JSON.stringify({ schema: "author-decisions/1", decisions: items.map((item, index) => ({ id: `d-${index + 1}`, at: "x", type: "chapter.day", ...item })) }),
+    }];
+
+    it("裁定改了前一章是哪天：本章、回忆里那条、后文一起挪，相对没变 → 不拦（同撤掉天数裁定不拦）", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", rulings({ chapter: 1, day: 5, dayEnd: 5 }));
+      await write("B", chapter(3, [replacing]));
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+    });
+
+    it("裁定改了本章开头那天：回忆离前一章的位置变了 → 拦；只改本章结尾那天 → 不拦", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", rulings({ chapter: 2, day: 4 }));
+      await write("B", chapter(3, [replacing]));
+      expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
+      await write("C", rulings({ chapter: 2, day: 4, dayEnd: 6 }));
+      await write("D", chapter(3, [replacing], { stamp: "stamp-3b" }));
+      expect((await planRevert(book, { opId: "C" }, git)).ok).toBe(true);
+    });
+
     it("那条事实不在有时间的段里：本章开头挪了也不拦", async () => {
       await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0, false), lost], { text: recall })]);
       await write("A", chapter(2, [arrive(2, false), lost], { text: recall, stamp: "stamp-2b" }));

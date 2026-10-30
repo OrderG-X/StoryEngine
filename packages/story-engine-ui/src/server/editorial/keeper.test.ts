@@ -202,6 +202,11 @@ describe("记账员交回的账单", () => {
     expect(time({ start: { byBoundary: { midnight: { offset: { unit: "day", min: 0, max: 0 } }, dawn: { offset: 1 } }, basis: "text", quote: "第二天一早" } })?.entries[0]).toMatchObject({
       start: { byBoundary: { midnight: { unit: "day", min: 0, max: 0 }, dawn: { unit: "day", min: 1, max: 1 } }, basis: "text" },
     });
+    // 里外写法不同、意思一样的单位（「天」和 day）照收；真不一样的不收。
+    expect(time({ start: { byBoundary: { midnight: { unit: "天", offset: { unit: "day", min: 1, max: 1 } }, dawn: { unit: "天", offset: 1 } }, basis: "text", quote: "第二天一早" } })?.entries[0]).toMatchObject({
+      start: { byBoundary: { midnight: { unit: "day", min: 1, max: 1 }, dawn: { unit: "day", min: 1, max: 1 } } },
+    });
+    expect(time({ start: { byBoundary: { midnight: { unit: "month", offset: { unit: "day", min: 1, max: 1 } }, dawn: { offset: 1 } }, basis: "text", quote: "第二天一早" } })?.entries[0]).toMatchObject({ start: "unknown" });
     // 整章是一段：只写 segments（写在 time 里也认）。
     expect(time({ segments: [{ frame: "past", firstQuote: "那年", lastQuote: "那年", when: "unknown" }] })?.entries[0]).toEqual({
       kind: "time", review: "auto", segments: [{ frame: "past", firstQuote: "那年", lastQuote: "那年", when: "unknown" }],

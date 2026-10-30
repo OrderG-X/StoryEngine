@@ -20,7 +20,7 @@
  *  | 设定卡 · 关系 | a、b | 卡 |
  *
  * 被引用那条的身份（Resolver）：事实 / 线索 = 定义它的条目的整条内容摘要 + 有效范围（P3a 设计 2.3：它在当下还是哪个段、
- * 碰到的段的范围 / frame / 段的时间，和段的时间相对的那头：本章开头或前一个当下章；来源在整条内容里）——同一条事实编号、原句都没变、只是被划进了梦段，身份也变；
+ * 碰到的段的范围 / frame / 段的时间，和段的时间那头离前一个当下章结尾隔几天；来源在整条内容里）——同一条事实编号、原句都没变、只是被划进了梦段，身份也变；
  * 章 = 那章账单的 (committedAt, origin)；名字 = 解析链（起点的键 + 每一跳的出处：哪张卡、哪章哪条出场，带内容摘要；和投影同一个 Names）；
  * 前一个当下章 = 往前到它为止每一章的身份 + 时间摘要（时间条目、段、记没记全），或「没有」；卡 = 卡的内容摘要；
  * 时间冲突（`time-start:<章>:<天>`）= 那章的时间摘要。
@@ -33,7 +33,7 @@ import { CARDS_PATH, chapterLedgerPath, DECISIONS_PATH } from "../store/paths.js
 import { sha256Bytes } from "../store/transaction.js";
 import { Names } from "../projection/names.js";
 import { scopeOf } from "../projection/scope.js";
-import { projectTime } from "../projection/time.js";
+import { projectTime, type ChapterTime } from "../projection/time.js";
 
 export type Ref =
   | { readonly kind: "fact"; readonly id: string }
@@ -172,6 +172,8 @@ export class Resolver {
   private readonly timeDigests = new Map<number, string>();
   /** 每章在不在当下线上（投影同一套：作者定的天数、旧账推定都算）。 */
   private readonly presentLine = new Map<number, boolean>();
+  /** 投影算的每章时间（段的时间那头离前一个当下章几天）。 */
+  private readonly times: ReadonlyMap<number, ChapterTime>;
 
   constructor(truth: TruthView) {
     const ledgers = [...truth.ledgers].sort((a, b) => a.chapter - b.chapter);
@@ -197,11 +199,12 @@ export class Resolver {
     }
     this.order = ledgers.map((ledger) => ledger.chapter);
     const time = projectTime(ledgers, truth.decisions, truth.cards?.calendar?.dayBoundary, new Set());
+    this.times = time.chapters;
     for (const [chapter, view] of time.chapters) this.presentLine.set(chapter, view.presentLine === true);
     for (const ledger of ledgers) {
       for (const entry of ledger.entries) {
-        if (entry.kind === "fact") add(this.facts, entry.id, `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger, truth.decisions)}`);
-        if (entry.kind === "thread" && entry.op === "open") add(this.threads, threadOf(entry), `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger, truth.decisions)}`);
+        if (entry.kind === "fact") add(this.facts, entry.id, `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger)}`);
+        if (entry.kind === "thread" && entry.op === "open") add(this.threads, threadOf(entry), `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger)}`);
       }
     }
     for (const decision of truth.decisions) if (decision.type === "fact.assert") add(this.facts, decision.id, `decision@${digestOf(decision)}`);
@@ -209,39 +212,49 @@ export class Resolver {
 
   /**
    * 一条事实 / 线索的有效范围摘要：它在当下还是哪种段，和它的原句碰到的段（范围、frame、段的时间）；定位不了就是本章全部的段。
-   * 段的时间相对谁，那头也算（出口复核 R4）：相对本章开头的 = 本章开头那几条（记账员记的、作者定的、定稿后改的天数）；
-   * 相对前一个当下章结尾的 = 往前到它为止每一章的时间摘要。本章开头挪了两天，回忆里那件事跟着挪，后文接着它的要拦。
+   * 段的时间相对谁，那头离前一个当下章结尾隔几天也算（出口复核 R4，和「前一个当下章」引用同一个口径：只认相对位置）：
+   * 相对本章开头的 = 前一个当下章是哪章 + 本章开头离它结尾几天（投影算的，两种换天规矩各一份，一样就并成一份）；
+   * 相对前一个当下章结尾的 = 那章是哪章。本章开头挪了两天，回忆里那件事跟着挪，后文接着它的要拦；
+   * 前面的章整体挪了（裁定改了第 1 章是哪天），这章和后文一起挪、相对没变，不拦（同「撤掉一条天数裁定不拦」）。
    */
-  private scopeDigest(entry: LedgerEntry, ledger: ChapterLedger, decisions: readonly AuthorDecision[]): string {
+  private scopeDigest(entry: LedgerEntry, ledger: ChapterLedger): string {
     const scope = scopeOf(entry, ledger);
     const ranges = entry.evidenceStatus === "located" ? entry.evidence.flatMap((item) => (item.units ? [item.units] : [])) : [];
     const touched = ranges.length === 0 ? ledger.scenes : ledger.scenes.filter((scene) => ranges.some((range) => range.from <= scene.units.to && range.to >= scene.units.from));
     const sceneTimes = new Set(touched.flatMap((scene) => scene.timeRefs));
     const times = ledger.entries.filter((item): item is TimeEntry => item.kind === "time" && sceneTimes.has(item.id));
     const anchors = new Set(times.flatMap((item) => (item.anchor ? [item.anchor] : [])));
-    const starts = anchors.has("chapterStart")
-      ? {
-        entries: ledger.entries.filter((item) => item.kind === "time" && (timeRoleOf(item) === "start" || timeRoleOf(item) === "authorStart")).map(entryDigest),
-        rulings: decisions.filter((decision) => decision.type === "chapter.day" && decision.chapter === ledger.chapter).map(digestOf),
-      }
-      : undefined;
     return digestOf({
       frame: scope.frame,
       scenes: touched,
       times: times.map(entryDigest),
-      ...(starts ? { starts } : {}),
-      ...(anchors.has("previousChapterEnd") ? { previous: this.timeChain(ledger.chapter) } : {}),
+      ...(anchors.size > 0 ? { anchor: this.anchorOf(ledger.chapter, anchors.has("chapterStart")) } : {}),
     });
   }
 
-  /** 往前到最近一个在当下线上的章为止，每一章的时间摘要。 */
-  private timeChain(chapter: number): string {
-    const chain: string[] = [];
+  /** 段的时间那头在哪：前一个当下章是哪章（链断了是 null）；相对本章开头的再加本章开头离它几天。 */
+  private anchorOf(chapter: number, fromStart: boolean): unknown {
+    const view = this.times.get(chapter);
+    if (view?.presentLine !== true) return { previous: this.previousPresentOf(chapter) ?? null };
+    if (!fromStart) return { previous: view.previousPresent ?? null };
+    const worlds = Object.keys(view.byWorld) as (keyof typeof view.byWorld)[];
+    const since = worlds.map((world) => view.byWorld[world]?.sincePrevious ?? null);
+    const same = since.every((range) => canonicalJson(range) === canonicalJson(since[0] ?? null));
+    return {
+      previous: view.previousPresent ?? null,
+      sincePrevious: same ? (since[0] ?? null) : Object.fromEntries(worlds.map((world, index) => [world, since[index]])),
+      presumed: view.presumed,
+    };
+  }
+
+  /** 不在当下线上的章往前找最近的当下章（中间有没识别的就断了）。 */
+  private previousPresentOf(chapter: number): number | undefined {
     for (const before of this.order.filter((item) => item < chapter).reverse()) {
-      chain.push(`${before}|${this.timeDigests.get(before)}`);
-      if (this.presentLine.get(before)) break;
+      const line = this.times.get(before)?.presentLine;
+      if (line === true) return before;
+      if (line === "unknown") return undefined;
     }
-    return chain.length === 0 ? "none" : chain.join(",");
+    return undefined;
   }
 
   private fact(id: string): string {

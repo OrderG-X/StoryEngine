@@ -116,6 +116,15 @@ describe("重记一章时编号沿用（carry）", () => {
       segments: [{ frame: "past", firstQuote: "沈青禾想起钟停那天，爷爷也这样站着。" }],
     });
   });
+  it("整章只切了一段、没有条目的账：账待记时也带上那一段", async () => {
+    const dream = "# 第1章 · 梦\n\n梦见门开了。";
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: dream, entries: [{ kind: "time", review: "auto", segments: [{ frame: "other", firstQuote: "梦见门开了", lastQuote: "梦见门开了" }] }] }, author("k1")));
+    const ready = (await readChapterLedger(book, 1))!;
+    expect(ready.entries).toEqual([]);
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${dream}\n`, entries: [], ledger: PENDING }, author("k2")));
+    expect((await readChapterLedger(book, 1))!.previous?.carry).toEqual({ entries: [], time: { timeModel: ready.timeModel, entries: [], scenes: ready.scenes } });
+  });
+
   it("中间账待记再补上：同一条声明拿回原来的编号、线索号；后文接得上", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
     const first = await readChapterLedger(book, 1);

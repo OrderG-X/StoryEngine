@@ -74,9 +74,11 @@ export function carriedTime(previous: ChapterLedger | undefined): LedgerCarryTim
 
 /** 新账单要带的 previous：上一份账单的原样哈希 + 认得的旧条目（+ 最近那套时间）。没有可带的（新章、上一份是空的待记）就不带。 */
 export function previousOf(previous: ChapterLedger | undefined, previousSha256: string | undefined): LedgerPrevious | undefined {
+  if (!previous || previousSha256 === undefined) return undefined;
   const entries = knownEntries(previous);
-  if (!previous || previousSha256 === undefined || entries.length === 0) return undefined;
   const time = carriedTime(previous);
+  // 整章只切了段、没有条目的账也要带上（段在 time 里）。
+  if (entries.length === 0 && !time) return undefined;
   return { ledgerSha256: previousSha256, carry: { entries: [...entries], ...(time ? { time } : {}) } };
 }
 

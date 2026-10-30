@@ -344,6 +344,27 @@ describe("定稿编排", () => {
     expect(same.ticket.entries.find((entry) => entry.kind === "time")).toMatchObject({ segments: [expect.objectContaining({ frame: "past" })] });
   });
 
+  // 出口复核第 2 轮 R6c：后来哪次时间没记上、作者照样改了天数，账待记之后再定稿用的是作者最近定的那天。
+  it("重定稿：中间一次时间没记上但作者改过天数，账待记之后照作者最近定的", async () => {
+    await commitChapter1();
+    const first = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: CH2,
+      callModel: fakeModel({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } }),
+    }));
+    expect(await confirmNow(first.ticket, CH2, { day: 5, dayEnd: 5 })).toMatchObject({ ok: true });
+    const partial = await runCommand(book, chapterCommit, {
+      chapter: 2, text: CH2, entries: [{ kind: "day", review: "author", day: 10, dayEnd: 11 }],
+      ledger: { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: ["time"] },
+    }, { caller: "author", idempotencyKey: "partial-2" });
+    expect(partial).toMatchObject({ ok: true });
+    expect(await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: "pending-2" })).toMatchObject({ ok: true });
+    const again = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: CH2,
+      callModel: fakeModel({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } }),
+    }));
+    expect(again.ticket.entries.find((entry) => entry.kind === "day")).toMatchObject({ day: 10, dayEnd: 11 });
+  });
+
   it("重定稿：上次定稿认过的出场人物（含泛称）不再当第一次出场问；这次新冒出来的照问", async () => {
     const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1) }));
     expect(first.review.map((item) => item.label)).toEqual(expect.arrayContaining(["出场：沈青禾，视角人物", "出场：周守义（正文叫「老周」）"]));
