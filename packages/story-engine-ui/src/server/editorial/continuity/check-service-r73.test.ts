@@ -10,18 +10,26 @@ import { describe, expect, it } from "vitest";
 import type { BrainCallModel, BrainMessage } from "../index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { checkChapterBody } from "./check-service.js";
+import { ensureBookOnCore } from "../../book/ensure-on-core.js";
+import { seedDecisions } from "../../book/ledger-test-helpers.js";
 
 const REPRO_BOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "scripts", "eval", "books", "ten-run-qingshi");
 // 复现书在 scripts/ 下（不进 git）：新克隆、另开的工作区、CI 上都没有，这两组就标跳过（输出里看得见），不报假红。
 const describeWithBook = describe.skipIf(!existsSync(REPRO_BOOK));
 
-/** 复现书副本：先复制再改 id，绝不碰原书目录。 */
-async function copyReproBook(tag: string): Promise<string> {
+/**
+ * 复现书副本：先复制再改 id，绝不碰原书目录；beforeOpen 在开书前改副本（比如删掉老时间线）。
+ * 复现书是老格式：像开书那样先接上核心（老账导进每章账单），核账读的都从账算。
+ */
+async function copyReproBook(tag: string, beforeOpen?: (dir: string) => Promise<void>): Promise<string> {
   const dir = await makeHomeTempDir(`r73-${tag}-`);
   await cp(REPRO_BOOK, dir, { recursive: true });
   const projectFile = join(dir, "project.json");
   const project = JSON.parse(await readFile(projectFile, "utf-8")) as { id: string };
   await writeFile(projectFile, JSON.stringify({ ...project, id: `story-r73-${tag}` }, null, 2), "utf-8");
+  await beforeOpen?.(dir);
+  const opened = await ensureBookOnCore(dir);
+  if (!opened.ok) throw new Error(`复现书没接上核心：${JSON.stringify(opened)}`);
   return dir;
 }
 
@@ -63,10 +71,11 @@ describeWithBook("R7.3 复现书：相对时间按故事日换算（报告 3.3�
   });
 
   it("删掉时间线和章纲（手写老书：两章都没有可靠故事日）→ 同一处误报最多进「可能」，不进「确定」", async () => {
-    const dir = await copyReproBook("no-timeline");
-    await rm(join(dir, "story", "timeline.json"));
-    await rm(join(dir, "drafts", "plans"), { recursive: true });
-    // 没有章纲可用时 deriveTimelineFromLegacy 全按 fallback 推（第 2 章不是第 1 章，不算可靠）。
+    // 开书前删掉老时间线和章纲：导进来的账里两章都没有可靠的天数（第 2 章按上一章 +1 估，不算可靠）。
+    const dir = await copyReproBook("no-timeline", async (book) => {
+      await rm(join(book, "story", "timeline.json"));
+      await rm(join(book, "drafts", "plans"), { recursive: true });
+    });
     const body = await chapterBody(dir, 2);
     const reader = readerModel([
       { quote: "“明天上午陆川来。”老周说", earlierQuote: "后天上午，陆川会来。", earlierChapter: 1, reason: "一个说后天一个说明天，日子对不上", confidence: "sure" },
@@ -74,16 +83,10 @@ describeWithBook("R7.3 复现书：相对时间按故事日换算（报告 3.3�
     const result = await checkChapterBody(dir, 2, body, { readerCallModel: reader.callModel });
     expect(result.sure).toEqual([]);
     expect(result.maybe.map((item) => item.quote)).toEqual([`“明天上午陆川来。”老周说，“你跟他把楼门的事说清楚。`]);
-    // 作者把日子定准了（第 1、2 章都可靠）→ 正文没改、复用上次结果，也要按新时间线把这条收掉，不再端出来。
-    await writeFile(join(dir, "story", "timeline.json"), JSON.stringify({
-      schemaVersion: 1,
-      entries: [
-        { chapter: 1, day: 1, source: "declared" },
-        { chapter: 2, day: 2, source: "declared" },
-      ],
-    }), "utf-8");
+    // 作者把日子定准了（第 1、2 章都可靠）：改天数是记进账的作者裁定，前文变了要重核；按新时间线这条收掉，不再端出来。
+    await seedDecisions(dir, [{ type: "chapter.day", chapter: 1, day: 1 }, { type: "chapter.day", chapter: 2, day: 2 }]);
     const again = await checkChapterBody(dir, 2, body, { readerCallModel: reader.callModel });
-    expect(again.reused).toBe(true);
+    expect(again.reused).toBe(false);
     expect([...again.sure, ...again.maybe]).toEqual([]);
   });
 });

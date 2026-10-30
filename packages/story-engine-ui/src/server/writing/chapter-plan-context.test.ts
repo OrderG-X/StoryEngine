@@ -18,6 +18,7 @@ import { makeWriterRankContext } from "./rank-writer-context.js";
 import { findEarlierPassages } from "./earlier-passages.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { createStoryProject } from "../book/project-store.js";
+import { seedChapters } from "../book/ledger-test-helpers.js";
 
 const NOW = new Date("2026-10-08T00:00:00.000Z");
 
@@ -199,19 +200,25 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(normalizeChapterPlan(base, { chapter: 1 })?.storyDay).toBe(1);
   });
 
-  it("读前面各章的天数（跳过没天数的老章纲），写手段里给出今天第几天和前文天数", async () => {
+  it("读前面各章的天数（时间线从账算，没记天数的章按上一章 +1 估），写手段里给出今天第几天和前文天数", async () => {
     const dir = await mkdtemp(join(tmpdir(), "story-engine-story-clock-"));
+    await seedChapters(dir, [
+      { chapter: 1, entries: [{ kind: "time", basis: "author", day: 1 }] },
+      { chapter: 2, entries: [{ kind: "summary", text: "铺子照常开门。" }] },
+      { chapter: 3, entries: [{ kind: "time", basis: "author", day: 4 }] },
+    ]);
+    // 摘要、开场时间优先章纲。
     await writeChapterPlan(dir, normalizeChapterPlan({ summary: "怀表送到铺子", beats: ["b"], storyDay: 1, scene: { time: "周一上午" } }, { chapter: 1, now: NOW })!);
-    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "没天数的老章纲", beats: ["b"] }, { chapter: 2, now: NOW })!);
     await writeChapterPlan(dir, normalizeChapterPlan({ summary: "去档案馆", beats: ["b"], storyDay: 4 }, { chapter: 3, now: NOW })!);
     const clock = await readStoryClock(dir, 4);
-    expect(clock.map((entry) => [entry.chapter, entry.storyDay])).toEqual([[1, 1], [3, 4]]);
+    expect(clock.map((entry) => [entry.chapter, entry.storyDay])).toEqual([[1, 1], [2, 2], [3, 4]]);
     const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 9 }, { chapter: 4, now: NOW })!;
     const section = buildChapterPlanSection(plan, clock) as { storyClock: { today: string; earlier: string[]; rule: string } };
     // 第十五轮：只给天数让写手自己减，台词里的「昨天 / 上周」错了 11 处 → 直接标好从本章看是哪天、星期几。
     expect(section.storyClock.today).toBe("本章是故事第 9 天，周二");
     expect(section.storyClock.earlier).toEqual([
       "8 天前（故事第 1 天，周一）：第 1 章，周一上午，怀表送到铺子",
+      "7 天前（故事第 2 天，周二）：第 2 章，铺子照常开门。",
       "5 天前（故事第 4 天，周四）：第 3 章，去档案馆",
     ]);
     expect(section.storyClock.rule).toContain("不要自己推算");

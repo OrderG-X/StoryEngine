@@ -18,7 +18,6 @@ export interface DraftChangeParams {
   /** write：整章目标字数；continue：这次接着写多少字。没有就按写作规则。 */
   readonly length?: number;
   readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   /** write：一次写几版（只认 2、3）；接着写只出一版。 */
@@ -60,7 +59,6 @@ export function readDraftChangeParams(mode: unknown, value: unknown): { readonly
   const mustHitBeats = texts(raw.mustHitBeats);
   const length = positiveInteger(raw.length);
   const selectedCharacters = texts(raw.selectedCharacters);
-  const selectedHookIds = texts(raw.selectedHookIds);
   const maxTimelineEvents = positiveInteger(raw.maxTimelineEvents);
   const contextTokenBudget = positiveInteger(raw.contextTokenBudget);
   const pick = writing && raw.pick === "author" ? "author" as const : undefined;
@@ -73,7 +71,6 @@ export function readDraftChangeParams(mode: unknown, value: unknown): { readonly
       ...(mustHitBeats ? { mustHitBeats } : {}),
       ...(length !== undefined ? { length } : {}),
       ...(selectedCharacters ? { selectedCharacters } : {}),
-      ...(selectedHookIds ? { selectedHookIds } : {}),
       ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
       ...(contextTokenBudget !== undefined ? { contextTokenBudget } : {}),
       ...(candidates !== undefined ? { candidates } : {}),

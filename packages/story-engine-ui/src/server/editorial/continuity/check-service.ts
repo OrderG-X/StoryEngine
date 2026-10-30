@@ -5,8 +5,8 @@
  * 核账员三遍（跟读窗口，带 A 自复核 + F 时间线只进自复核）、同一份核账记忆和「不是问题」批注。
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
-import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
-import { describeTimelineForChapter, readStoryTimeline, type StoryTimeline } from "../../book/story-timeline.js";
+import { describeTimelineForChapter, type StoryTimeline } from "../../book/story-timeline.js";
+import { readStoryViews } from "../../book/story-views.js";
 import { type FactEntry } from "../../book/types.js";
 import {
   callConfiguredBrainModel,
@@ -200,7 +200,7 @@ async function checkByReader(input: {
   }));
   // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按时间线的
   // 故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。时间线读不了当没有，只降档不删条。
-  const timeline = await readStoryTimeline(input.projectDir).then((read) => read.timeline).catch(() => undefined);
+  const timeline = await readStoryViews(input.projectDir).then((views) => views.timeline).catch(() => undefined);
   const issues = settleMirroredIssues(applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
     .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const })), input.chapter)
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
@@ -223,13 +223,14 @@ export async function readCheckInputs(projectDir: string, chapter: number): Prom
 }> {
   const { value, basis } = await readWithStableBasisForWork(projectDir, async () => {
     const earlier = await readEarlierChapters(projectDir, chapter);
-    const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
+    const views = await readStoryViews(projectDir).catch(() => undefined);
+    const ledgerFacts = views?.facts.facts;
     let foundationRead = true;
     const foundation = await readFoundationDigest(projectDir).catch(() => {
       foundationRead = false;
       return undefined;
     });
-    const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
+    const timeline = views?.timeline;
     return { earlier, ledgerFacts, foundationRead, foundation, timeline };
   });
   const { earlier, ledgerFacts, foundationRead, foundation, timeline } = value;

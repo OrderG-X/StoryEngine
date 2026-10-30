@@ -1,9 +1,10 @@
 // @vitest-environment node
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, readChapterPlan } from "../book/chapter-plan.js";
+import { seedChapters } from "../book/ledger-test-helpers.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { readReadersCatchUpStatus } from "./catch-up.js";
 import { readerWaitingHandlers } from "./reader-progress.js";
@@ -34,15 +35,9 @@ const CH2 = "第二天许棠去了邮局，把信寄给了林溪。林溪下午�
 
 async function makeBook(): Promise<string> {
   const dir = await makeHomeTempDir("planner-");
-  await mkdir(join(dir, "chapters"), { recursive: true });
-  await writeFile(join(dir, "chapters", "0001.md"), `# 第1章\n\n${CH1}\n`, "utf-8");
+  // 时间线（从账算）：第 1 章定稿时作者定了是故事第 2 天 → 拟第 3 章 dayOffset=1 时应归一到第 3 天；第 2 章只有正文。
+  await seedChapters(dir, [{ chapter: 1, entries: [{ kind: "summary", text: "第一章。", quote: CH1 }, { kind: "time", basis: "author", day: 2 }] }]);
   await writeFile(join(dir, "chapters", "0002.md"), `# 第2章\n\n${CH2}\n`, "utf-8");
-  // 时间线：第 1 章是故事第 2 天 → 拟第 3 章 dayOffset=1 时应归一到第 3 天。
-  await mkdir(join(dir, "story"), { recursive: true });
-  await writeFile(join(dir, "story", "timeline.json"), JSON.stringify({
-    schemaVersion: 1,
-    entries: [{ chapter: 1, day: 2, source: "declared", quote: "明天一早去邮局" }],
-  }), "utf-8");
   return dir;
 }
 

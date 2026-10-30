@@ -11,11 +11,10 @@
  * - 一章试满还不成：这次没成（failed，原因如实）；作者点「接着记」交一次新的，已经记上的章不再记。
  *   结果不明、额度到了：停着（paused），「接着记」就是接着做这一次。
  * - 进程没了：开书对账时没有结果不明的调用就自动接着做（autoResume）。
- * - 记完：重生成一次老格式镜像（写作上下文还读它；中途不生成，几百章每章一次太费）、交三个专员的后台补读。
+ * - 记完：交三个专员的后台补读。
  * - 最新那次的记录清理时不清（keepLatest）：停着的一直挡着核账 / 定稿（rereadBlocker）。
  */
 import { readAllLedgers, ledgerReread, readBookSnapshot, type LedgerRereadResult } from "@actalk/story-core";
-import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { callConfiguredBrainModel, runInReaderCatchUpQueue, type BrainCallModel } from "../../../editorial/index.js";
 import { awaitsReread, BASIS_RETRIES, rereadChapter, rereadFailure, rereadInputDigest, type RereadChapterOutcome } from "../../../editorial/reread.js";
 import { parseRereadStep, readRereadParams, REREAD_KIND, rereadApplyStep, rereadReadStep, type RereadParams } from "../../../editorial/reread-state.js";
@@ -135,9 +134,6 @@ export function createBackgroundRereadRecipe(deps: RereadDeps = DEFAULT_DEPS): R
       if (record.state !== "succeeded") return;
       const params = readRereadParams(record.params);
       if (!params) return;
-      // 没成只记日志，下次开书会重生成。
-      const mirror = await syncLegacyMirror(bookDir).catch((error: unknown) => ({ ok: false as const, reason: oneLine(error) }));
-      if (!mirror.ok) console.warn(`[reread] 记完了，老格式镜像没生成：${mirror.reason}`);
       // 记账员只差最后一章的笔记，核账员、章纲员从头读。
       requestReaderBackfill(bookDir, { upTo: params.total });
     },

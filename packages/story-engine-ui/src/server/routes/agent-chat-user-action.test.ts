@@ -9,6 +9,7 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createStoryProject } from "../book/project-store.js";
+import { readStoryViews } from "../book/story-views.js";
 import { cardWrite, chapterCommit, projectBook, readCards, runCommand, type CardOp, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -103,7 +104,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     await expect(access(join(projectDir, "chapters", "0001.md"))).rejects.toThrow();
   });
 
-  it("「确认改账」：AI 提的改账停着等作者 → 点了记成作者裁定、老格式账本跟着变；点两次只记一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
+  it("「确认改账」：AI 提的改账停着等作者 → 点了记成作者裁定、写手读的事实跟着变；点两次只记一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
     await commitByButtons(projectDir, 1, fakeKeeper);
 
@@ -138,8 +139,8 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     expect(snapshots[1]).toBe(snapshots[0]);
     const view = await projectBook(projectDir);
     expect(view.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("retracted");
-    const legacy = JSON.parse(await readFile(join(projectDir, "story", "fact-ledger.json"), "utf-8")) as { facts: { text: string }[] };
-    expect(legacy.facts.map((fact) => fact.text)).toEqual(["账册在林远手里"]);
+    // 写手、核账读的事实跟着变（从账现算）。
+    expect((await readStoryViews(projectDir)).facts.facts.map((fact) => fact.text)).toEqual(["账册在林远手里"]);
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
 

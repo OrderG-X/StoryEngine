@@ -34,7 +34,6 @@ import {
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { chapterWordsNow, recordChapterWords } from "../lib/word-stats.js";
 import { runWithLazySnapshot } from "../lib/snapshot.js";
-import { syncLegacyMirror } from "../book/mirror/sync.js";
 import {
   clearSavedRecoveries,
   consumeDraftRecovery,
@@ -92,11 +91,6 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         if (!result.ok) {
           writeJson(res, 409, { ok: false, code: result.code, error: result.message });
           return;
-        }
-        // 老格式镜像（时间线里的章名）跟着定稿正文走；没同步上不算没改成，下次打开书会补。
-        if (!result.result.unchanged) {
-          const mirror = await syncLegacyMirror(projectDir);
-          if (!mirror.ok) console.warn(`[chapter-title] 第 ${chapter} 章改章名后老格式镜像没同步上：${mirror.reason}`);
         }
         writeJson(res, 200, {
           ok: true,

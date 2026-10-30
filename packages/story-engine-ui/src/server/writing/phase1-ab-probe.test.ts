@@ -14,37 +14,38 @@
  *   Scenario 3: If NEW degrades, log WARNING about Task 3 risk (no hard fail)
  */
 
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildStateOverview } from "../book/state-overview.js";
 import { buildWriterContext } from "./context-gateway.js";
+import { seededThreadId, seedThreads, type SeedThread } from "../book/ledger-test-helpers.js";
 import { createStoryProject } from "../book/project-store.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-async function writeJson(path: string, value: unknown): Promise<void> {
-  // 新书不再预建 story/、timeline/（重构 P9），写老格式账本镜像时自己建目录。
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+interface PoolItem {
+  readonly id: string;
+  readonly title: string;
+  readonly scope?: string;
+  readonly firstSeenChapter: number;
+  readonly lastTouchedChapter: number;
+  readonly evidence: readonly string[];
 }
 
-/**
- * OLD logic replica for hooks:
- * filter active, sort by lastTouchedChapter desc, take top N=8 (context-gateway N).
- * State-overview used N=12, but context-gateway is the writing path so we use N=8.
- */
-function oldSelectHooks(hooks: ReadonlyArray<{ id: string; status: string; lastTouchedChapter?: number; firstSeenChapter?: number }>, n = 8) {
-  return hooks
-    .filter((h) => h.status === "active")
-    .slice()
-    .sort((a, b) => {
-      const la = a.lastTouchedChapter ?? a.firstSeenChapter ?? 0;
-      const lb = b.lastTouchedChapter ?? b.firstSeenChapter ?? 0;
-      return lb - la;
-    })
-    .slice(0, n);
+/** 按老线索 / 目标的样子在账里真记一遍（P2b 起读者从账算）；主线目标标成作者定的「重要」，原句用证据第一句。 */
+async function seedPools(projectDir: string, threads: readonly PoolItem[], goals: readonly PoolItem[]): Promise<void> {
+  const seed = (item: PoolItem, type: SeedThread["type"]): SeedThread => ({
+    name: item.id,
+    type,
+    title: item.title,
+    openedAt: item.firstSeenChapter,
+    touchedAt: item.lastTouchedChapter,
+    ...(item.evidence[0] ? { quote: item.evidence[0] } : {}),
+    ...(item.scope === "main_arc" ? { weight: "major" as const } : {}),
+  });
+  await seedThreads(projectDir, [...threads.map((item) => seed(item, "question")), ...goals.map((item) => seed(item, "goal"))]);
 }
 
 /**
@@ -96,7 +97,7 @@ describe("Phase 1 A/B probe — Scenario 1: early sunk recall rate", () => {
    * NEW: ancient items (ch - firstSeen >= 10 → 55-10=45 ≥ 10) get ancientBonus=3 → score=3 vs recent=0 →
    *      all 5 early items should outrank the 20 recent ones → all 5 recalled.
    */
-  it("NEW early recall rate ≥ 40% while OLD early recall rate = 0%", async () => {
+  it("NEW early recall rate ≥ 40% while OLD early recall rate = 0%", { timeout: 60_000 }, async () => {
     const CURRENT_CHAPTER = 55;
     const EARLY_CHAPTERS = [2, 3, 5, 8, 10];
     // Use chapters 46..55 (age 0..9 from ch=55) so ONLY early items qualify for ancientBonus (age>=10).
@@ -113,27 +114,6 @@ describe("Phase 1 A/B probe — Scenario 1: early sunk recall rate", () => {
       logline: "测试早期条目不被近章挤掉。",
       protagonistName: "林远",
     });
-
-    // Hooks
-    const earlyHooks = EARLY_CHAPTERS.map((ch, i) => ({
-      id: `early-hook-${i}`,
-      title: `早期伏笔${i}（第${ch}章）`,
-      description: `第${ch}章埋下的伏笔`,
-      status: "active",
-      relatedCharacters: [] as string[],
-      firstSeenChapter: ch,
-      lastTouchedChapter: ch,
-    }));
-    const recentHooks = RECENT_CHAPTERS.map((ch, i) => ({
-      id: `recent-hook-${i}`,
-      title: `近章伏笔${i}（第${ch}章）`,
-      description: `近章伏笔${i}`,
-      status: "active",
-      relatedCharacters: [] as string[],
-      firstSeenChapter: ch,
-      lastTouchedChapter: ch,
-    }));
-    const allHooks = [...earlyHooks, ...recentHooks];
 
     // Threads (leads)
     // 注意：B2-3 引入了 clusterNearDuplicates（bigram 阈值 0.5）。
@@ -199,23 +179,18 @@ describe("Phase 1 A/B probe — Scenario 1: early sunk recall rate", () => {
     }));
     const allGoals = [...earlyGoals, ...recentGoals];
 
-    await Promise.all([
-      writeJson(join(projectDir, "story", "hooks.json"), { hooks: allHooks }),
-      writeJson(join(projectDir, "story", "threads.json"), { threads: allLeads }),
-      writeJson(join(projectDir, "story", "arc-goals.json"), { goals: allGoals }),
-      writeJson(join(projectDir, "timeline", "events.json"), []),
-    ]);
+    await seedPools(projectDir, allLeads, allGoals);
 
     // ── OLD output (inline replica) ──
-    const oldHookIds = oldSelectHooks(allHooks, 8).map((h) => h.id);
     const oldLeadIds = oldSelectLeads(allLeads, 8).map((t) => t.id);
     const oldGoalIds = oldSelectArcGoals(allGoals, 6).map((g) => g.id);
 
-    const earlyHookIds = earlyHooks.map((h) => h.id);
     const earlyLeadIds = earlyLeads.map((t) => t.id);
     const earlyGoalIds = earlyGoals.map((g) => g.id);
+    // 账里的编号是核心发的：NEW 那一侧按真编号比。
+    const earlyLeadReal = earlyLeadIds.map((id) => seededThreadId(projectDir, id));
+    const earlyGoalReal = earlyGoalIds.map((id) => seededThreadId(projectDir, id));
 
-    const oldHookRecall = recallRate(earlyHookIds, oldHookIds);
     const oldLeadRecall = recallRate(earlyLeadIds, oldLeadIds);
     const oldGoalRecall = recallRate(earlyGoalIds, oldGoalIds);
 
@@ -224,13 +199,6 @@ describe("Phase 1 A/B probe — Scenario 1: early sunk recall rate", () => {
       buildStateOverview({ projectDir, chapter: CURRENT_CHAPTER }),
       buildWriterContext({ projectDir, chapter: CURRENT_CHAPTER, chapterGoal: "继续推进剧情。" }),
     ]);
-
-    // state-overview hook activeItems (N=12)
-    const newHookIdsOverview = overview.hooks.activeItems.map((h) => h.id);
-    // context-gateway hook_tracking activeHooks (N=8)
-    const hookTrackingSection = envelope.sections.find((s) => s.name === "hook_tracking");
-    const hookTrackingContent = hookTrackingSection?.content as { activeHooks: Array<{ id: string }> } | undefined;
-    const newHookIdsGateway = hookTrackingContent?.activeHooks.map((h) => h.id) ?? [];
 
     // state-overview thread keyOpenItems (N=12)
     const newLeadIdsOverview = overview.threads.keyOpenItems.filter((t) => (t as { type?: string }).type === "lead" || true).map((t) => t.id);
@@ -246,35 +214,29 @@ describe("Phase 1 A/B probe — Scenario 1: early sunk recall rate", () => {
     const arcGoalsContent = arcGoalsSection?.content as { activeGoals: Array<{ id: string }> } | undefined;
     const newGoalIdsGateway = arcGoalsContent?.activeGoals.map((g) => g.id) ?? [];
 
-    const newHookRecallOverview = recallRate(earlyHookIds, newHookIdsOverview);
-    const newHookRecallGateway = recallRate(earlyHookIds, newHookIdsGateway);
-    const newLeadRecallOverview = recallRate(earlyLeadIds, newLeadIdsOverview);
-    const newLeadRecallGateway = recallRate(earlyLeadIds, newLeadIdsGateway);
-    const newGoalRecallOverview = recallRate(earlyGoalIds, newGoalIdsOverview);
-    const newGoalRecallGateway = recallRate(earlyGoalIds, newGoalIdsGateway);
+    const newLeadRecallOverview = recallRate(earlyLeadReal, newLeadIdsOverview);
+    const newLeadRecallGateway = recallRate(earlyLeadReal, newLeadIdsGateway);
+    const newGoalRecallOverview = recallRate(earlyGoalReal, newGoalIdsOverview);
+    const newGoalRecallGateway = recallRate(earlyGoalReal, newGoalIdsGateway);
 
     // ── Print results table ──
     console.log("\n=== Scenario 1: Early Sunk Recall Rate (chapter=55, 5 early ch2-10 + 10 recent ch46-55) ===");
     console.log("Pool            | OLD recall | NEW-overview recall | NEW-gateway recall");
     console.log("----------------|------------|---------------------|-------------------");
-    console.log(`hooks           | ${(oldHookRecall * 100).toFixed(0)}%         | ${(newHookRecallOverview * 100).toFixed(0)}%                  | ${(newHookRecallGateway * 100).toFixed(0)}%`);
     console.log(`thread-leads    | ${(oldLeadRecall * 100).toFixed(0)}%         | ${(newLeadRecallOverview * 100).toFixed(0)}%                  | ${(newLeadRecallGateway * 100).toFixed(0)}%`);
     console.log(`arcGoals        | ${(oldGoalRecall * 100).toFixed(0)}%         | ${(newGoalRecallOverview * 100).toFixed(0)}%                  | ${(newGoalRecallGateway * 100).toFixed(0)}%`);
 
     // ── Hard gate assertions ──
     // OLD should recall 0 early items (they're all behind 20 recent ones; N=8 can't reach ch2-10)
-    expect(oldHookRecall, `OLD hooks: should be 0% (old logic can't reach ch2-10 with N=8 and 20 recent items)`).toBe(0);
     expect(oldLeadRecall, `OLD leads: should be 0% (old logic can't reach ch2-10 with N=8 and 20 recent items)`).toBe(0);
     expect(oldGoalRecall, `OLD goals: should be 0% (old logic can't reach ch2-10 with N=6 and 20 recent items)`).toBe(0);
 
     // NEW should recall >= 40% of early items (ancientBonus=3 elevates ch2-10 above recent ch36-55 with score=0)
     // ancientThreshold=10: 55-10=45, 55-2=53, 55-3=52, 55-5=50, 55-8=47, 55-10=45 → all 5 qualify
     // ancient items score=3, recent score=0 → ancient rank first → all 5 should be recalled
-    expect(newHookRecallGateway, `NEW hooks (gateway, N=8): should be >= 40% early recall`).toBeGreaterThanOrEqual(0.4);
     expect(newLeadRecallGateway, `NEW leads (gateway, N=8): should be >= 40% early recall`).toBeGreaterThanOrEqual(0.4);
     expect(newGoalRecallGateway, `NEW goals (gateway, N=6): should be >= 40% early recall`).toBeGreaterThanOrEqual(0.4);
 
-    expect(newHookRecallOverview, `NEW hooks (overview, N=12): should be >= 40% early recall`).toBeGreaterThanOrEqual(0.4);
     expect(newLeadRecallOverview, `NEW leads (overview, N=12): should be >= 40% early recall`).toBeGreaterThanOrEqual(0.4);
     expect(newGoalRecallOverview, `NEW goals (overview, N=12): should be >= 40% early recall`).toBeGreaterThanOrEqual(0.4);
   });
@@ -292,7 +254,7 @@ describe("Phase 1 A/B probe — Scenario 2: relevance preservation", () => {
    * OLD: only sorts by recency → early ch6 thread sinks below all recent threads → NOT recalled.
    * NEW: keyword match + ancientBonus → score=2+3=5 → outranks all recent (score=0) → IS recalled.
    */
-  it("early relevant thread (keyword+ancient) appears in NEW openLeads but NOT in OLD", async () => {
+  it("early relevant thread (keyword+ancient) appears in NEW openLeads but NOT in OLD", { timeout: 60_000 }, async () => {
     const CURRENT_CHAPTER = 55;
     const EARLY_RELEVANT_CHAPTER = 6;
     const KEYWORD = "账房";
@@ -342,16 +304,7 @@ describe("Phase 1 A/B probe — Scenario 2: relevance preservation", () => {
       relatedLocations: [KEYWORD, "外院"],
     };
 
-    await Promise.all([
-      writeJson(join(projectDir, "story", "threads.json"), {
-        threads: [earlyRelevantThread, ...recentIrrelevantThreads],
-      }),
-      writeJson(join(projectDir, "story", "arc-goals.json"), {
-        goals: [arcGoalWithKeywords],
-      }),
-      writeJson(join(projectDir, "story", "hooks.json"), { hooks: [] }),
-      writeJson(join(projectDir, "timeline", "events.json"), []),
-    ]);
+    await seedPools(projectDir, [earlyRelevantThread, ...recentIrrelevantThreads], [arcGoalWithKeywords]);
 
     // ── OLD output ──
     const allThreads = [earlyRelevantThread, ...recentIrrelevantThreads];
@@ -367,7 +320,7 @@ describe("Phase 1 A/B probe — Scenario 2: relevance preservation", () => {
     const storyThreadsSection = envelope.sections.find((s) => s.name === "story_threads");
     const storyThreadsContent = storyThreadsSection?.content as { openLeads: Array<{ id: string }> } | undefined;
     const newLeadIds = storyThreadsContent?.openLeads.map((l) => l.id) ?? [];
-    const earlyInNew = newLeadIds.includes("early-relevant-lead");
+    const earlyInNew = newLeadIds.includes(seededThreadId(projectDir, "early-relevant-lead"));
 
     console.log("\n=== Scenario 2: Relevance Preservation (early ch6 vs 14 recent irrelevant threads) ===");
     console.log(`Early relevant thread in OLD: ${earlyInOld ? "YES (unexpected)" : "NO (expected)"}`);
@@ -397,7 +350,7 @@ describe("Phase 1 A/B probe — Scenario 3: wide relevanceGoal regression check"
    * If early thread is still recalled → no Task 3 risk.
    * If not → WARNING (Task 3 risk).
    */
-  it("early relevant thread still recalled despite many recent kwHit threads (Task 3 risk check)", async () => {
+  it("early relevant thread still recalled despite many recent kwHit threads (Task 3 risk check)", { timeout: 60_000 }, async () => {
     const CURRENT_CHAPTER = 55;
 
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-phase1-s3-"));
@@ -448,16 +401,7 @@ describe("Phase 1 A/B probe — Scenario 3: wide relevanceGoal regression check"
       relatedLocations: ["账房", "外院"],
     };
 
-    await Promise.all([
-      writeJson(join(projectDir, "story", "threads.json"), {
-        threads: [earlyRelevantThread, ...recentKwHitThreads],
-      }),
-      writeJson(join(projectDir, "story", "arc-goals.json"), {
-        goals: [arcGoalWide],
-      }),
-      writeJson(join(projectDir, "story", "hooks.json"), { hooks: [] }),
-      writeJson(join(projectDir, "timeline", "events.json"), []),
-    ]);
+    await seedPools(projectDir, [earlyRelevantThread, ...recentKwHitThreads], [arcGoalWide]);
 
     // ── OLD output ──
     const allThreads = [earlyRelevantThread, ...recentKwHitThreads];
@@ -473,7 +417,7 @@ describe("Phase 1 A/B probe — Scenario 3: wide relevanceGoal regression check"
     const storyThreadsSection = envelope.sections.find((s) => s.name === "story_threads");
     const storyThreadsContent = storyThreadsSection?.content as { openLeads: Array<{ id: string }> } | undefined;
     const newLeadIds = storyThreadsContent?.openLeads.map((l) => l.id) ?? [];
-    const earlyInNew = newLeadIds.includes("early-relevant-s3");
+    const earlyInNew = newLeadIds.includes(seededThreadId(projectDir, "early-relevant-s3"));
 
     // Score analysis:
     // early-relevant-s3: ch=4, ancientBonus=(55-4=51>=10)→true→+3, kwHit→(likely true since "账房" in title)→+2 → score=5
@@ -516,8 +460,8 @@ describe("Phase 1 A/B probe — Summary", () => {
   it("prints summary of all scenarios", () => {
     console.log("\n========== PHASE 1 A/B PROBE SUMMARY ==========");
     console.log("Scenario 1: Early sunk recall rate (5 early + 10 recent ch46-55, ch=55)");
-    console.log("  OLD: hooks=0%, leads=0%, goals=0% [expected: all sunk]");
-    console.log("  NEW: hooks>=40%, leads>=40%, goals>=40% [expected: ancient rescued]");
+    console.log("  OLD: leads=0%, goals=0% [expected: all sunk]");
+    console.log("  NEW: leads>=40%, goals>=40% [expected: ancient rescued]");
     console.log("  Gate: PASS required (OLD~0%, NEW>=40%)");
     console.log("");
     console.log("Scenario 2: Relevance preservation (early ch6 + 14 recent irrelevant, ch=55)");

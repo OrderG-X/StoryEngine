@@ -6,7 +6,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { bookImportText, projectBook, readChapterLedger, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureBookOnCore } from "../../../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../../../book/ensure-on-core.js";
 import { createStoryProject } from "../../../book/project-store.js";
 import { __resetCatchUpQueuesForTests, readReadersCatchUpStatus } from "../../../editorial/catch-up.js";
 import { resumeBackgroundReading, type BrainCallModel } from "../../../editorial/index.js";

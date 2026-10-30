@@ -6,12 +6,7 @@ import { describe, expect, it } from "vitest";
 import { SettingCardsFile } from "@actalk/story-core";
 import {
   createStoryProject,
-  readArcGoalPool,
-  readHookPool,
   readProject,
-  readStoryCalendar,
-  readThreadPool,
-  readTimelineEvents,
   writeFileAtomic,
 } from "./project-store.js";
 
@@ -61,13 +56,6 @@ describe("StoryEngine-NG ProjectStore", () => {
     expect(cards.relations).toEqual([]);
     // 不再写默认写作规则（目标字数 1800、第三人称有限视角……）。
     expect(cards.rules).toEqual({ style: [], musts: [], bans: [], avoid: [], exemplars: [] });
-
-    // 账的读口：没有老文件就按空的读。
-    await expect(readHookPool(result.projectDir)).resolves.toEqual({ hooks: [] });
-    await expect(readThreadPool(result.projectDir)).resolves.toEqual({ threads: [] });
-    await expect(readArcGoalPool(result.projectDir)).resolves.toEqual({ goals: [] });
-    await expect(readTimelineEvents(result.projectDir)).resolves.toEqual([]);
-    await expect(readStoryCalendar(result.projectDir)).resolves.toEqual({ currentStoryDay: 1, currentTimeOfDay: "unknown" });
   });
 
   it("作者没填（或只填了空格）的不写：没有占位主角、占位前提，设定卡是空的", async () => {

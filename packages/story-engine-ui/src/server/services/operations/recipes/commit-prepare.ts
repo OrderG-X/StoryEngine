@@ -6,14 +6,13 @@
  * - `ledger`：记账员一次交账单 → 核原句 → 分流成清单。票（条目、正文指纹、依据）就是这一步的输出，不再另存。
  * - 停下等作者在定稿清单上点「确认定稿」：每行能去掉（默认不写的能勾上），天数两栏能改。
  * - `commit`：照票和作者的选择交「定稿」命令（作者档，写前存档、能撤销）；预览之后正文改过、前文 / 账 / 设定 / 裁定变过，
- *   都不定稿、说哪样变了。定完重生成老格式镜像，回执里的条数照盘上刚写好的算。
+ *   都不定稿、说哪样变了。回执里的条数照盘上刚写好的算。
  * 对话 AI 交（`prepare_commit`）和作者点「定稿」是同一次：都只出清单，定稿只能作者点「确认定稿」。
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chapterCommit, chapterTextPath, readCardsOrLegacy, receiptOnDisk, withBookLock, type BasisChange, type ChapterCommitResult, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
-import { syncLegacyMirror } from "../../../book/mirror/sync.js";
-import { describeBasisChanges, MirrorLagError, readTruthBasisForWork } from "../../../book/truth-basis.js";
+import { BookUnsettledError, describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
 import { commitEntriesOf, draftFingerprint, prepareChapterCommit, type CommitPreview } from "../../../editorial/commit-flow.js";
 import { READER_MAX_VOLUME_BUILDS } from "../../../editorial/continuity/check-service.js";
@@ -109,7 +108,7 @@ async function freeze(bookDir: string, params: CommitPrepareParams): Promise<Fro
   try {
     basis = await readTruthBasisForWork(bookDir);
   } catch (error) {
-    if (!(error instanceof MirrorLagError)) throw error;
+    if (!(error instanceof BookUnsettledError)) throw error;
     return { kind: "blocked", view: blockedView(chapter, [error.message], `第 ${chapter} 章现在还定不了：${error.message}`) };
   }
   const text = await readDraft(bookDir, chapter);
@@ -166,7 +165,7 @@ async function ledger(bookDir: string, chapter: number, frozen: Extract<Frozen, 
 
 const DRAFT_CHANGED = "清单出来之后正文又改过，这份清单是照改之前记的，没定稿；要的话再点一次「定稿」。";
 
-/** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完重生成镜像、照盘上的账算回执。 */
+/** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完照盘上的账算回执。 */
 async function commit(bookDir: string, preview: CommitPreview, choices: { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number }): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   // 定和照盘上算回执在同一把书锁里：定完到读账之间别的操作插不进来（回执卡的条数就是这次写的）。
   return withBookLock(bookDir, () => commitLocked(bookDir, preview, choices));
@@ -200,7 +199,7 @@ async function commitLocked(bookDir: string, preview: CommitPreview, choices: { 
     }
     throw coded(result.code, result.message);
   }
-  return { done: await doneOf(bookDir, chapter, text, result.result), ...(snapshotId ? { snapshotId } : {}) };
+  return { done: await commitDoneView(bookDir, chapter, text, result.result), ...(snapshotId ? { snapshotId } : {}) };
 }
 
 /**
@@ -213,16 +212,10 @@ async function committed(bookDir: string, chapter: number, receipt: CommandRecei
   return withBookLock(bookDir, async () => {
     if (await receiptOnDisk(bookDir, receipt) !== true) return { done: supersededCommitView(chapter, outcome.result) };
     const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8");
-    return { done: await doneOf(bookDir, chapter, text, outcome.result) };
+    return { done: await commitDoneView(bookDir, chapter, text, outcome.result) };
   });
 }
 
-/** 定完：老代码还在读老格式文件，按新账重生成一遍（没成不影响定稿本身，下次取依据时补，但要如实说）；照盘上的账算回执。 */
-async function doneOf(bookDir: string, chapter: number, text: string, result: ChapterCommitResult): Promise<CommitDone> {
-  const mirror = await syncLegacyMirror(bookDir).catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
-  if (!mirror.ok) console.warn(`[commit.prepare] 第 ${chapter} 章定稿后重生成老格式镜像没成：${mirror.reason}`);
-  return commitDoneView(bookDir, chapter, text, result, mirror.ok);
-}
 
 const blockedResult = (chapter: number, view: CommitPreviewView): OperationResult => {
   const body: CommitPrepareBody = { kind: COMMIT_PREPARE_KIND, chapter, committed: false, blocked: view };

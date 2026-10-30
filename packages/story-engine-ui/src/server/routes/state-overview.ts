@@ -13,7 +13,7 @@ import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { resumeBackgroundReading } from "../editorial/index.js";
 import { reconcileOnOpen } from "../services/operations/executor.js";
 import { migrateLegacyRereadState, removeLegacyCommitTickets } from "../services/operations/recipes/index.js";
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../book/ensure-on-core.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
 
 export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void {
@@ -39,7 +39,7 @@ export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void 
 
       const chapter = parseOptionalPositiveInteger(url.searchParams.get("chapter"));
       const maxTimelineEvents = parseOptionalPositiveInteger(url.searchParams.get("maxTimelineEvents"));
-      // 重构 P3：老书第一次打开时接到新核心（先存撤销点再导入老账），老格式镜像过期就重生成。
+      // 重构 P3：老书第一次打开时接到新核心（先存撤销点再导入老账）；以前生成的老格式镜像挪走（P2b）。
       // 没接上不挡开书：定稿预览会如实说原因。
       const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
       if (!onCore.ok) console.warn(`[state-overview] 书没接上新核心：${onCore.reason}`);

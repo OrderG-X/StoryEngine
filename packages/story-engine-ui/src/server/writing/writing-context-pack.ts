@@ -1,20 +1,13 @@
-import { join } from "node:path";
 import { selectEffectiveFacts } from "./fact-selection.js";
-import { selectRelevant, type BibleView, type BookProjection } from "@actalk/story-core";
-import {
-  describeErrorBriefly,
-  readArcGoalPool,
-  readFactLedger,
-  readHookPool,
-  readThreadPool,
-  readTimelineEvents,
-} from "../book/project-store.js";
-import type { ArcGoal, HookItem, NarrativeThread, TimelineEvent } from "../book/types.js";
-import { buildSettingPack, mentionedIn, readBibleTolerant, type SettingPack } from "./setting-pack.js";
+import { selectRelevant } from "@actalk/story-core";
+import { describeErrorBriefly } from "../book/project-store.js";
+import { readStoryViews, type StoryViews } from "../book/story-views.js";
+import type { ArcGoal, NarrativeThread, TimelineEvent } from "../book/types.js";
+import { buildSettingPack, EMPTY_BIBLE, mentionedIn, type SettingPack } from "./setting-pack.js";
 
 /**
  * 写这一章要的上下文（写手、审稿、改稿、质检共用）：本章任务 + 设定包（设定卡 + 账里现状，重构 P9）
- * + 接着写要扛住的线（伏笔、线索、长线目标、已确立事实）+ 本章硬约束。
+ * + 接着写要扛住的线（线索、长线目标、已确立事实）+ 本章硬约束。
  */
 export interface WritingContextPack {
   readonly chapterTask: {
@@ -25,7 +18,6 @@ export interface WritingContextPack {
   readonly setting: SettingPack;
   readonly continuityFocus: {
     readonly recentTimelineEvents: readonly string[];
-    readonly mustCarryHooks: readonly string[];
     readonly mustCarryThreads: readonly string[];
     readonly arcGoalFocus: readonly string[];
     readonly establishedFacts: readonly string[];
@@ -55,7 +47,6 @@ export interface BuildWritingContextPackInput {
   readonly plannedLocation?: string;
   /** 本章要带的人物（在场检测给的名字）；不给就只带主角。 */
   readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
   /**
    * 本包内「最近时间线事件」摘要的请求条数。**注意：本包在 ranker 是受保护段（不可裁），
    * 包内自限最多 {@link PACK_TIMELINE_EXCERPT}=3 条——传更大值不会生效**；完整时间线走
@@ -63,8 +54,11 @@ export interface BuildWritingContextPackInput {
    */
   readonly maxTimelineEvents?: number;
   readonly mustHitBeats?: readonly string[];
-  /** 已经读好的设定视图（调用方有就传，省一次读盘；读坏降级成空设定的也传，失败原因由调用方记）。 */
-  readonly bible?: { readonly projection?: BookProjection; readonly bible: BibleView };
+  /**
+   * 已经从同一份快照算好的设定视图和线索、目标、事件、事实（调用方有就传，省一次读盘）；
+   * null = 调用方读过、读坏了（原因调用方记了，这里按空设定、空账写，不再读第二遍）。
+   */
+  readonly views?: StoryViews | null;
 }
 
 export async function buildWritingContextPack(input: BuildWritingContextPackInput): Promise<WritingContextPack> {
@@ -75,16 +69,15 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     readFailures.push(`${label}读取失败（${file}，${describeErrorBriefly(error)}），已按空资料降级。`);
     return fallback;
   };
-  const [read, hookPool, threadPool, arcGoalPool, timelineEvents, factLedger] = await Promise.all([
-    input.bible ? Promise.resolve({ bible: input.bible.bible }) : readBibleTolerant(input.projectDir),
-    readHookPool(input.projectDir),
-    readThreadPool(input.projectDir),
-    readArcGoalPool(input.projectDir),
-    readTimelineEvents(input.projectDir).catch(trackReadFailure("时间线事件", join("timeline", "events.json"), [] as TimelineEvent[])),
-    readFactLedger(input.projectDir).catch(trackReadFailure("事实账本", join("story", "fact-ledger.json"), null)),
-  ]);
-  if ("failure" in read && read.failure) readFailures.push(read.failure);
-  const bible = read.bible;
+  // 设定和账同一份快照：读坏了只记一条。
+  const views = input.views !== undefined
+    ? input.views ?? undefined
+    : await readStoryViews(input.projectDir).catch(trackReadFailure("设定本和账", "ledger/", undefined));
+  const threadPool = views?.threads ?? { threads: [] };
+  const arcGoalPool = views?.goals ?? { goals: [] };
+  const timelineEvents = views?.events ?? [];
+  const factLedger = views?.facts;
+  const bible = views?.bible ?? EMPTY_BIBLE;
 
   const chapterGoal = input.currentChapterGoal ?? input.userDirection;
   const setting = buildSettingPack(bible, {
@@ -94,7 +87,6 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   });
   const relevantNames = [setting.protagonist?.name, ...setting.cast.map((brief) => brief.name)]
     .filter((name): name is string => Boolean(name && name.trim()));
-  const selectedHooks = selectHooks(hookPool.hooks, input.selectedHookIds).slice(0, 3);
   // 按"本章仍有效 + 相关性"四维召回，替代纯 lastTouchedChapter 近章截断；
   // 早期未收口线索/目标只要章号差 ≥ ancientThreshold 就获得加分，不被最近章淘汰（根治长篇早期记忆塌陷）。
   const selectedThreads = selectRelevant({
@@ -142,7 +134,6 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     setting,
     continuityFocus: {
       recentTimelineEvents: recentTimelineEvents.map(formatTimelineEvent),
-      mustCarryHooks: selectedHooks.map(formatHook),
       mustCarryThreads: selectedThreads.map(formatThread),
       arcGoalFocus: selectedGoals.map(formatArcGoal),
       establishedFacts,
@@ -158,22 +149,8 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   };
 }
 
-function selectHooks(hooks: readonly HookItem[], selectedHookIds: readonly string[] | undefined): readonly HookItem[] {
-  if (!selectedHookIds || selectedHookIds.length === 0) {
-    return hooks
-      .filter((hook) => hook.status === "seeded" || hook.status === "active")
-      .sort((a, b) => (b.lastTouchedChapter ?? 0) - (a.lastTouchedChapter ?? 0));
-  }
-  const ids = new Set(selectedHookIds);
-  return hooks.filter((hook) => ids.has(hook.id));
-}
-
 function formatTimelineEvent(event: TimelineEvent): string {
   return `第${event.chapter}章：${event.summary}`;
-}
-
-function formatHook(hook: HookItem): string {
-  return [hook.title, hook.nextActionHint, ...(hook.evidence ?? []).slice(-1)].filter(Boolean).join(" / ");
 }
 
 function formatThread(thread: NarrativeThread): string {

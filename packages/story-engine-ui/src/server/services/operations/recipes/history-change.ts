@@ -4,10 +4,10 @@
  *
  * - undo：撤一次操作（按钮带操作号；对话里、「撤销上一步」按钮撤「上一次」= 最近一次写过撤销范围、还没被撤的）。
  *   `target` 定撤哪次 → `plan`（核心 planRevert，书锁里算）→ 后来又改过的列成影响，停下等作者点「全撤」→ `apply`：书锁里重算，
- *   影响变了重新问；照算好的写回（history.apply，带整个撤销范围的摘要：算好之后哪里改过就重算），镜像和统计同一把锁里跟上。
+ *   影响变了重新问；照算好的写回（history.apply，带整个撤销范围的摘要：算好之后哪里改过就重算），字数统计同一把锁里跟上。
  *   后来的接着这次改的东西（引用拦）、升级之前的、存档裁掉了：如实说，不撤。
  * - restore：只认作者点的（操作历史里的「恢复」、对话里的「撤销到此」）：`apply` 书锁里按存档树算、冻结整个范围的摘要、
- *   写回、换书的纪元（这次操作自己认得出），镜像和统计同一把锁里跟上。
+ *   写回、换书的纪元（这次操作自己认得出），字数统计同一把锁里跟上。
  * - prune：`plan`（裁前链头、分界、确定的新链头）存检查点 → 对话里交的停下等作者点「确认裁剪」→ `apply`（只认两个号，比较交换）。
  * 撤销、恢复都是普通写命令：写前存档，再撤它就换回来。不调模型。
  */
@@ -34,7 +34,6 @@ import {
   type ImpactItem,
   type RevertTarget,
 } from "@actalk/story-core";
-import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { withGitHistoryReader } from "../../../lib/history-reader.js";
 import { replayedOutcome, runCommandInOperation } from "../../../lib/operations/command.js";
 import { OperationObsolete } from "../../../lib/operations/context.js";
@@ -247,10 +246,8 @@ async function askOf(bookDir: string, planned: Awaited<ReturnType<typeof planUnd
   };
 }
 
-/** 写回之后（同一把书锁里）：老格式镜像按新的账重生成、写作统计重数。没成只记日志（下次取依据时补）。 */
+/** 写回之后（同一把书锁里）：写作统计重数。 */
 async function followUp(bookDir: string): Promise<void> {
-  const mirror = await syncLegacyMirror(bookDir).catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
-  if (!mirror.ok) console.warn(`[history.change] 写回后重生成老格式镜像没成（下次取依据时补）：${mirror.reason}`);
   await resyncWordStats(bookDir);
 }
 

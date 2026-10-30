@@ -4,7 +4,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { historyApply, planRestore, runCommand, withBookLock } from "@actalk/story-core";
-import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { withGitHistoryReader } from "./history-reader.js";
 import { coreSnapshotFor, snapshotInfoOf } from "./snapshot.js";
 import { resyncWordStats } from "./word-stats.js";
@@ -25,7 +24,6 @@ export async function restoreForTest(projectDir: string, snapshotId: string): Pr
       rangeDigest: plan.rangeDigest,
     }, { caller: "author", snapshot: coreSnapshotFor(projectDir), idempotencyKey: `test-restore:${randomUUID()}` });
     if (!result.ok) throw new Error(result.message);
-    await syncLegacyMirror(projectDir);
     await resyncWordStats(projectDir);
     return result.result.paths;
   });

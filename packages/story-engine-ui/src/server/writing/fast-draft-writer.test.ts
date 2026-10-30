@@ -9,6 +9,7 @@ import { buildWriterContext, type ContextSection, type WriterContextEnvelope } f
 import { runFastDraft, resolveDraftMaxOutputTokens, type WriterClient } from "./fast-draft-writer.js";
 import { buildPromptFingerprint, findFirstPromptDifference, renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { createStoryProject } from "../book/project-store.js";
+import { seedChapters } from "../book/ledger-test-helpers.js";
 
 /** 引擎不写盘了（重构 P7）：拼出调用方会落进工作稿的文件文本，沿用原来按文件比对的断言。 */
 function draftFileOf(report: { readonly title?: string; readonly draftBody?: string }): string {
@@ -38,8 +39,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       "chapter_goal",
       "writing_context_pack",
       "story_calendar",
-      "hook_pool",
-      "hook_tracking",
       "story_threads",
       "arc_goals",
       "story_continuity",
@@ -852,7 +851,9 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     const failures = capturedContext?.sections.find((section) => section.name === "read_failures")?.content as
       | { failures: readonly string[] }
       | undefined;
-    expect(failures?.failures.join(" ")).toContain("设定本读取失败");
+    // 上下文里设定和账是同一份快照：一个原因一条。
+    expect(failures?.failures).toHaveLength(1);
+    expect(failures?.failures.join(" ")).toContain("设定本和账读取失败");
     expect(failures?.failures.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
   });
 
@@ -881,56 +882,37 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0002.md"))).rejects.toThrow();
   });
 
-  it("A4 缺 story/hooks.json（新书本来就没有）→ runFastDraft 正常出稿", async () => {
+  it.skipIf(process.platform === "win32")("A5 EACCES 读账 → 降级出稿，read_failures 只露 errno code，不露绝对路径", async () => {
     const projectDir = await createFixtureProject();
-    await expect(access(join(projectDir, "story", "hooks.json"))).rejects.toThrow();
+    await seedChapters(projectDir, [{ chapter: 1, entries: [{ kind: "summary", text: "Guo Xu 进了外门。" }] }]);
+    const ledgerFile = join(projectDir, "ledger", "chapters", "0001.json");
+    await chmod(ledgerFile, 0o000);
+    let capturedContext: WriterContextEnvelope | undefined;
     const writerClient: WriterClient = {
-      generateDraft: vi.fn(async () => ({ title: "老书", content: "Guo Xu 推进情节。" })),
+      generateDraft: vi.fn(async ({ context }) => {
+        capturedContext = context;
+        return { title: "降级稿", content: "Guo Xu 在账缺失下推进。" };
+      }),
     };
-
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "老书续写。", writerClient });
-    expect(report.passed).toBe(true); // ENOENT 兜底为空池，不再 reject/失败
-  });
-
-  it("A4/A5 损坏 story/hooks.json → passed:false + writer_context_unavailable，不 reject、不泄路径", async () => {
-    const projectDir = await createFixtureProject();
-    await mkdir(join(projectDir, "story"), { recursive: true });
-    await writeFile(join(projectDir, "story", "hooks.json"), "{not-json", "utf-8");
-    const writerClient: WriterClient = { generateDraft: vi.fn() };
-
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "损坏台账。", writerClient });
-
-    // 伏笔池是正式状态——损坏时诚实失败（不静默当空池盲写），但绝不 reject 砸穿调用方。
-    expect(report.passed).toBe(false);
-    expect(report.issues.join(" ")).toContain("writer_context_unavailable");
-    expect(report.issues.join(" ")).toContain("JSON 解析失败");
-    expect(report.issues.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
-    expect(writerClient.generateDraft).not.toHaveBeenCalled();
-  });
-
-  it.skipIf(process.platform === "win32")("A5 EACCES 读 hooks.json → 只露 errno code + 相对文件名，不露绝对路径", async () => {
-    const projectDir = await createFixtureProject();
-    await mkdir(join(projectDir, "story"), { recursive: true });
-    await writeFile(join(projectDir, "story", "hooks.json"), `${JSON.stringify({ hooks: [] }, null, 2)}\n`, "utf-8");
-    await chmod(join(projectDir, "story", "hooks.json"), 0o000);
-    const writerClient: WriterClient = { generateDraft: vi.fn() };
     try {
       const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "权限故障。", writerClient });
-      expect(report.passed).toBe(false);
-      expect(report.issues.join(" ")).toContain("writer_context_unavailable");
-      expect(report.issues.join(" ")).toContain("EACCES");
+      // 账属可降级资料——出稿继续，但模型知道自己在盲写（read_failures 段），文案无绝对路径。
+      expect(report.passed).toBe(true);
+      const failures = capturedContext?.sections.find((section) => section.name === "read_failures")?.content as
+        | { failures: readonly string[] }
+        | undefined;
+      expect(failures?.failures.join(" ")).toContain("EACCES");
       // mkdtemp 落在 /var/folders/...——若误拼 error.message 原文这里必中
-      expect(report.issues.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
-      expect(writerClient.generateDraft).not.toHaveBeenCalled();
+      expect(failures?.failures.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
     } finally {
-      await chmod(join(projectDir, "story", "hooks.json"), 0o644);
+      await chmod(ledgerFile, 0o644);
     }
   });
 
-  it("A5 ENOTDIR（timeline 被文件顶位）→ read_failures 只露 errno code，不露绝对路径", async () => {
+  it("A5 ENOTDIR（账目录被文件顶位）→ read_failures 只露 errno code，不露绝对路径", async () => {
     const projectDir = await createFixtureProject();
-    await rm(join(projectDir, "timeline"), { recursive: true, force: true });
-    await writeFile(join(projectDir, "timeline"), "not a directory", "utf-8");
+    await rm(join(projectDir, "ledger", "chapters"), { recursive: true, force: true });
+    await writeFile(join(projectDir, "ledger", "chapters"), "not a directory", "utf-8");
     let capturedContext: WriterContextEnvelope | undefined;
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async ({ context }) => {
@@ -941,7 +923,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "时间线降级。", writerClient });
 
-    // 时间线属可降级资料——出稿继续但 read_failures 段如实记录 ENOTDIR，文案无绝对路径。
     expect(report.passed).toBe(true);
     const failures = capturedContext?.sections.find((section) => section.name === "read_failures")?.content as
       | { failures: readonly string[] }

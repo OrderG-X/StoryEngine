@@ -8,8 +8,9 @@ import type { BrainCallModel } from "../index.js";
 import { CHECKER_ROLE, ensureReaderWindow, readerWaitingHandlers, readReadersCatchUpStatus } from "../index.js";
 import { setReaderBackfillHandler, type ReaderBackfillRequest } from "../../lib/reader-backfill.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { describeTimelineForChapter, readStoryTimeline } from "../../book/story-timeline.js";
-import { syncLegacyMirror } from "../../book/mirror/sync.js";
+import { seedChapters } from "../../book/ledger-test-helpers.js";
+import { describeTimelineForChapter } from "../../book/story-timeline.js";
+import { readStoryViews } from "../../book/story-views.js";
 import { chapterCommit, decisionRecord, readTruthBasis, runCommand } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import type { ContinuityIssueV2 } from "./check-chapter.js";
@@ -36,12 +37,12 @@ async function makeBook(chapters = 2): Promise<string> {
   return dir;
 }
 
+/** 第 2 章定稿时记了一条不会变的事实（扉页上的年份），正文照旧再多一句扉页那句。 */
 async function writeLedger(dir: string): Promise<void> {
-  await mkdir(join(dir, "story"), { recursive: true });
-  await writeFile(join(dir, "story", "fact-ledger.json"), JSON.stringify({
-    version: "v0",
-    facts: [{ id: "fact-2-6", chapter: 2, text: "扉页写着林秋，一九八七年春", source: "auto", quote: "扉页上写着两行字：林秋，一九八七年春。", subject: "城南旧事", kind: "hard" }],
-  }), "utf-8");
+  await seedChapters(dir, [{ chapter: 2, entries: [
+    { kind: "summary", text: "林舟锁好怀表。", quote: CH2 },
+    { kind: "fact", nature: "hard", subject: "城南旧事", attribute: "扉页", value: "林秋，一九八七年春", text: "扉页写着林秋，一九八七年春", quote: "扉页上写着两行字：林秋，一九八七年春。" },
+  ] }]);
 }
 
 /** 核账员假模型：记笔记回一句；三遍核账里「盯人」那遍报周婶，报了东西就再发一轮自复核（按 verdicts 表回）。 */
@@ -249,13 +250,11 @@ describe("核账服务：核账记忆", () => {
     const dir = await makeHomeTempDir("check-service-day-");
     const text = "林舟把怀表放进抽屉。周婶走到柜台。";
     expect((await runCommand(dir, chapterCommit, { chapter: 1, text, entries: [{ kind: "time", review: "auto", basis: "author", day: 1, quote: text }] }, { caller: "author", idempotencyKey: "commit-1" })).ok).toBe(true);
-    await syncLegacyMirror(dir);
     const reader = readerModel();
     await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
     expect(await canReuseCheck(dir, 2, BODY)).toBe(true);
     expect((await runCommand(dir, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, { caller: "author", idempotencyKey: "day-1" })).ok).toBe(true);
-    await syncLegacyMirror(dir);
-    expect((await readStoryTimeline(dir)).timeline.entries[0]?.day).toBe(20);
+    expect((await readStoryViews(dir)).timeline.entries[0]?.day).toBe(20);
     expect(await canReuseCheck(dir, 2, BODY)).toBe(false);
     const checksBefore = reader.calls.checks;
     const after = await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
@@ -513,7 +512,7 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
   /** 第 4 章的核账记忆和这次的正文、前文对得上 → 走复用，结果就是这两条。 */
   async function bookWithChapter4Memory(): Promise<string> {
     const dir = await makeBook(3);
-    const timeline = describeTimelineForChapter((await readStoryTimeline(dir)).timeline, 4);
+    const timeline = describeTimelineForChapter((await readStoryViews(dir)).timeline, 4);
     await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(await readTruthBasis(dir), 4, { timeline }), issues: [CURRENT, OLD] });
     return dir;
   }

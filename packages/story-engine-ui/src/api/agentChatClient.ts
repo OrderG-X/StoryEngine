@@ -59,7 +59,6 @@ export interface DraftParamsData {
   readonly mustHitBeats?: readonly string[];
   readonly length?: number;
   readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   readonly candidates?: 2 | 3;
@@ -1208,7 +1207,6 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
   const mustHitBeats = textList(value.mustHitBeats);
   const length = positiveInt(value.length);
   const selectedCharacters = textList(value.selectedCharacters);
-  const selectedHookIds = textList(value.selectedHookIds);
   const maxTimelineEvents = positiveInt(value.maxTimelineEvents);
   const contextTokenBudget = positiveInt(value.contextTokenBudget);
   const pick = writing && value.pick === "author" ? "author" as const : undefined;
@@ -1219,7 +1217,6 @@ function readDraftParams(mode: DraftModeData, value: unknown): DraftParamsData |
     ...(mustHitBeats ? { mustHitBeats } : {}),
     ...(length !== undefined ? { length } : {}),
     ...(selectedCharacters ? { selectedCharacters } : {}),
-    ...(selectedHookIds ? { selectedHookIds } : {}),
     ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
     ...(contextTokenBudget !== undefined ? { contextTokenBudget } : {}),
     ...(candidates !== undefined ? { candidates } : {}),

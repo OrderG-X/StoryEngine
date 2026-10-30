@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { cardWrite, chapterCommit, runCommand, type CardOp, type EntryInput } from "@actalk/story-core";
+import { seedChapters, seedDecisions, seededThreadId } from "./ledger-test-helpers.js";
 import { createStoryProject } from "./project-store.js";
 import { buildStateOverview } from "./state-overview.js";
 
@@ -26,7 +27,6 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     });
     expect(overview.storyStatus.currentObjective).toBe("在旧城区灾变中生存下来");
     expect(overview.storyStatus.lastTimelineEvent?.length).toBeLessThanOrEqual(160);
-    expect(overview.hooks.activeCount).toBe(1);
     expect(overview.threads).toMatchObject({
       total: 3,
       open: 1,
@@ -36,7 +36,7 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     });
     // 最久没碰的 intent-low 停了 4 章（第 1→5 章），不到 5 章不算可清理。
     expect(overview.threads.cleanupVisibleCount).toBe(0);
-    expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain("intent-low");
+    expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain(seededThreadId(projectDir, "intent-low"));
     expect(overview.arcGoals.activeCount).toBe(1);
     expect(overview.timeline.recentEvents).toHaveLength(2);
 
@@ -55,7 +55,7 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
 
     // 瘦身后不再带老设定的大块（设定本内容走设定视图 / read_foundation）。
     expect(Object.keys(overview).sort()).toEqual([
-      "arcGoals", "characters", "hooks", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
+      "arcGoals", "characters", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
     ]);
     expect(Object.keys(overview.storyStatus).sort()).toEqual(["currentObjective", "lastTimelineEvent"]);
 
@@ -124,21 +124,26 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
       logline: "测试线索计数口径。",
       protagonistName: "林澈",
     });
-    await writeLegacyJson(projectDir, "story/threads.json", {
-      threads: [
-        { id: "t-open-stale", type: "intent", title: "想了想", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
-        { id: "t-done-old", type: "intent", title: "犹豫了一下", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
-        { id: "t-touched-recent", type: "lead", title: "查清信号来源", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
-        { id: "t-open-recent", type: "intent", title: "先不管", status: "open", firstSeenChapter: 2, lastTouchedChapter: 4, evidence: [] },
+    await seedChapters(projectDir, [
+      { chapter: 1, entries: [
+        { kind: "thread", thread: "t-open-stale", op: "open", type: "intent", title: "想了想", note: "想了想" },
+        { kind: "thread", thread: "t-done-old", op: "open", type: "intent", title: "犹豫了一下", note: "犹豫了一下" },
+        { kind: "thread", thread: "t-touched-recent", op: "open", type: "question", title: "查清信号来源", note: "信号" },
         // 作者标了大伏笔：埋得再久也不劝清理。
-        { id: "t-major-old", type: "lead", title: "铁箱里是什么", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [], weight: "major" },
+        { kind: "thread", thread: "t-major-old", op: "open", type: "question", title: "铁箱里是什么", note: "铁箱" },
         // 作者标了小线索：停多久都不提醒（跟伏笔看板「停太久」一个口径）。
-        { id: "t-minor-old", type: "lead", title: "补发工钱", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [], weight: "minor" },
-      ],
-    });
-    await writeLegacyJson(projectDir, "timeline/events.json", Array.from({ length: 6 }, (_, i) => ({
-      id: `ch${String(i + 1).padStart(4, "0")}-001`, chapter: i + 1, summary: `第${i + 1}章`, participants: [],
-    })));
+        { kind: "thread", thread: "t-minor-old", op: "open", type: "question", title: "补发工钱", note: "工钱" },
+      ] },
+      { chapter: 2, entries: [{ kind: "thread", thread: "t-done-old", op: "close", note: "不犹豫了" }] },
+      { chapter: 3, entries: [{ kind: "summary", text: "第三章" }] },
+      { chapter: 4, entries: [{ kind: "thread", thread: "t-open-recent", op: "open", type: "intent", title: "先不管", note: "先不管" }] },
+      { chapter: 5, entries: [{ kind: "thread", thread: "t-touched-recent", op: "advance", note: "信号又来了" }] },
+      { chapter: 6, entries: [{ kind: "summary", text: "第六章" }] },
+    ]);
+    await seedDecisions(projectDir, [
+      { type: "thread.weight", thread: "t-major-old", weight: "major" },
+      { type: "thread.weight", thread: "t-minor-old", weight: "minor" },
+    ]);
 
     const overview = await buildStateOverview({ projectDir, chapter: 6 });
 
@@ -161,22 +166,36 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     await rm(rootDir, { recursive: true, force: true });
   });
 
-  it("degrades gracefully when optional pools are missing", async () => {
+  it("账读不出来：如实挂警告，线索、目标、时间线按空显示，概况照常出", async () => {
     const projectDir = await createOverviewFixture();
-    await rm(join(projectDir, "story", "hooks.json"));
-    await rm(join(projectDir, "story", "threads.json"));
-    await rm(join(projectDir, "story", "arc-goals.json"));
+    await writeFile(join(projectDir, "ledger", "chapters", "0003.json"), "坏了", "utf-8");
 
     const overview = await buildStateOverview({ projectDir });
 
-    expect(overview.hooks.activeCount).toBe(0);
     expect(overview.threads.total).toBe(0);
     expect(overview.arcGoals.activeCount).toBe(0);
     expect(overview.threads.cleanupItems).toEqual([]);
+    expect(overview.timeline.recentEvents).toEqual([]);
+    expect(overview.uiHints.warnings.join(" ")).toContain("账读不出来");
+    expect(overview.uiHints.warnings.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
+    // 书名照常。
+    expect(overview.project.title).toBe("状态总览测试");
+  });
+
+  it("账还没接上新核心的老书（书架上、没打开过）：章数照盘上的定稿正文算，不报成零章", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-old-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "老书", protagonistName: "林澈" });
+    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章\n\n林澈醒了。", "utf-8");
+    await writeFile(join(projectDir, "chapters", "0002.md"), "# 第2章\n\n林澈出门。", "utf-8");
+
+    const overview = await buildStateOverview({ projectDir });
+
+    expect(overview.project.currentChapter).toBe(2);
+    expect(overview.threads.total).toBe(0);
   });
 
   // Task 4: 用例 A — 早期未收口伏笔仍出现在 activeItems（不被近章挤掉）
-  it("(Task 4-A) 早期未收口条目在≥12条近章时仍出现在 hooks.activeItems 和 threads.keyOpenItems", async () => {
+  it("(Task 4-A) 早期未收口线索在≥12条近章时仍出现在 threads.keyOpenItems", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-task4-a-"));
     const { projectDir } = await createStoryProject({
       rootDir,
@@ -185,101 +204,21 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
       logline: "测试早期伏笔不被近章挤掉。",
     });
 
-    // 1条早期未收口 hook（chapter:2）+ 13条近章 hook（chapters 40-52）
-    const earlyHook = {
-      id: "early-hook-ancient",
-      title: "早期未收口伏笔线索",
-      description: "这是早期埋下的重要伏笔",
-      status: "active",
-      relatedCharacters: [],
-      firstSeenChapter: 2,
-      lastTouchedChapter: 2,
-    };
-    const recentHooks = Array.from({ length: 13 }, (_, i) => ({
-      id: `recent-hook-${i}`,
-      title: `近章伏笔${i}`,
-      description: `近章伏笔描述${i}`,
-      status: "active",
-      relatedCharacters: [],
-      firstSeenChapter: 40 + i,
-      lastTouchedChapter: 40 + i,
-    }));
-
-    // 1条早期未收口 thread（chapter:2）+ 13条近章 thread
-    const earlyThread = {
-      id: "early-thread-ancient",
-      type: "lead",
-      title: "早期线索未收口",
-      status: "open",
-      firstSeenChapter: 2,
-      lastTouchedChapter: 2,
-      evidence: ["早期发现的线索"],
-    };
-    const recentThreads = Array.from({ length: 13 }, (_, i) => ({
-      id: `recent-thread-${i}`,
-      type: "lead",
-      title: `近章线索${i}`,
-      status: "open",
-      firstSeenChapter: 40 + i,
-      lastTouchedChapter: 40 + i,
-      evidence: [`近章证据${i}`],
-    }));
-
-    await writeLegacyJson(projectDir, "story/hooks.json", { hooks: [earlyHook, ...recentHooks] });
-    await writeLegacyJson(projectDir, "story/threads.json", { threads: [earlyThread, ...recentThreads] });
+    // 1条早期未收口线索（第 2 章）+ 13条近章线索（第 40-52 章）
+    await seedChapters(projectDir, [
+      { chapter: 2, entries: [{ kind: "thread", thread: "early-thread-ancient", op: "open", type: "question", title: "早期线索未收口", note: "早期发现的线索" }] },
+      ...Array.from({ length: 13 }, (_, i) => ({
+        chapter: 40 + i,
+        entries: [{ kind: "thread" as const, thread: `recent-thread-${i}`, op: "open" as const, type: "question" as const, title: `近章线索${i}`, note: `近章证据${i}` }],
+      })),
+    ]);
 
     const overview = await buildStateOverview({ projectDir, chapter: 50 });
 
     // 早期条目在 chapter=50 时距首见章已 48 章（>ancientThreshold=10），应被古老加分救回
-    expect(overview.hooks.activeItems.map((item) => item.id)).toContain("early-hook-ancient");
-    expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain("early-thread-ancient");
+    expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain(seededThreadId(projectDir, "early-thread-ancient"));
   });
 
-  // Task 4: 用例 B — null chapter 兜底（无 input.chapter + 空 timeline）
-  it("(Task 4-B) 无 input.chapter 且 timeline 为空时，hooks/threads 仍出现在 activeItems（不被误排除）", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-task4-b-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "Null章号兜底测试",
-      genre: "scifi",
-      logline: "新书空timeline章号null测试。",
-    });
-
-    await writeLegacyJson(projectDir, "story/hooks.json", {
-      hooks: [
-        {
-          id: "hook-new",
-          title: "新书第一个伏笔",
-          description: "新书里埋下的伏笔。",
-          status: "active",
-          relatedCharacters: [],
-          firstSeenChapter: 1,
-          lastTouchedChapter: 1,
-        },
-      ],
-    });
-    await writeLegacyJson(projectDir, "story/threads.json", {
-      threads: [
-        {
-          id: "thread-new",
-          type: "lead",
-          title: "新书第一条线索",
-          status: "open",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 1,
-          evidence: ["新书线索证据"],
-        },
-      ],
-    });
-    // timeline 为空（不写 events.json，使用默认空数组）
-
-    // 不传 chapter → currentChapter=null，兜底章号应保证条目不被排除
-    const overview = await buildStateOverview({ projectDir });
-
-    expect(overview.project.currentChapter).toBeNull();
-    expect(overview.hooks.activeItems.map((item) => item.id)).toContain("hook-new");
-    expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain("thread-new");
-  });
 });
 
 // R5b 题材中立化：概况源码里不许写死任何题材专名地点。
@@ -303,7 +242,8 @@ describe("State Overview — genre-neutral (R5b)", () => {
 
 // Task 6b：timeline 分层摘要接入 state-overview
 describe("State Overview timeline 分层摘要（Task 6b）", () => {
-  it("50 章 timeline：macroSummary 含早期块、earlierSummary 含中段、recentEvents 仍是近章（不破坏）", async () => {
+  // 50 章真走定稿命令种账，磁盘 IO 重：给显式超时。
+  it("50 章 timeline：macroSummary 含早期块、earlierSummary 含中段、recentEvents 仍是近章（不破坏）", { timeout: 60_000 }, async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-6b-"));
     const { projectDir } = await createStoryProject({
       rootDir,
@@ -313,24 +253,11 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
       protagonistName: "侠客",
     });
 
-    // 构造 50 章 timeline，每章一个事件，mainEvent 包含章号方便断言
-    const events = Array.from({ length: 50 }, (_, i) => {
-      const ch = i + 1;
-      return {
-        id: `ch${String(ch).padStart(4, "0")}-001`,
-        chapter: ch,
-        summary: `第${ch}章：主角经历了事件${ch}。`,
-        participants: ["侠客"],
-        effects: {
-          semanticSummary: {
-            mainEvent: `第${ch}章核心事件mainEvent${ch}`,
-            timelineSummary: `第${ch}章时间线摘要`,
-          },
-        },
-      };
-    });
-
-    await writeLegacyJson(projectDir, "timeline/events.json", events);
+    // 构造 50 章，每章一句梗概，梗概里带章号方便断言
+    await seedChapters(projectDir, Array.from({ length: 50 }, (_, i) => ({
+      chapter: i + 1,
+      entries: [{ kind: "summary" as const, text: `第${i + 1}章核心事件mainEvent${i + 1}` }],
+    })));
 
     // currentChapter=50：L1=48-50，L2=35-47（15窗口），L3=1-35（远期宏块）
     const overview = await buildStateOverview({ projectDir, chapter: 50, maxTimelineEvents: 3 });
@@ -354,9 +281,9 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
     // macroSummary 第一块应覆盖最早的章节（fromChapter 从1开始）
     expect(overview.timeline.macroSummary[0].fromChapter).toBe(1);
 
-    // 空 timeline 不崩
-    await writeLegacyJson(projectDir, "timeline/events.json", []);
-    const emptyOverview = await buildStateOverview({ projectDir, chapter: 1 });
+    // 空书不崩
+    const empty = await createStoryProject({ rootDir, title: "空书", protagonistName: "侠客" });
+    const emptyOverview = await buildStateOverview({ projectDir: empty.projectDir, chapter: 1 });
     expect(emptyOverview.timeline.recentEvents).toHaveLength(0);
     expect(emptyOverview.timeline.earlierSummary).toHaveLength(0);
     expect(emptyOverview.timeline.macroSummary).toHaveLength(0);
@@ -364,84 +291,7 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
 });
 
 // B5-2: 引擎 overview 投影补章号字段
-describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolvedAtChapter", () => {
-  it("toHookOverview 投影：activeHook 带 firstSeenChapter，resolvedHook 带 firstSeenChapter + resolvedAtChapter", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-b5-2-hooks-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "B5-2 伏笔章号测试",
-      genre: "urban",
-      logline: "伏笔初见章号 + 回收章号透传测试。",
-    });
-
-    await writeLegacyJson(projectDir, "story/hooks.json", {
-      hooks: [
-        {
-          id: "hook-active",
-          title: "活跃伏笔",
-          description: "还未回收的伏笔。",
-          status: "active",
-          relatedCharacters: [],
-          firstSeenChapter: 3,
-          lastTouchedChapter: 5,
-        },
-        {
-          id: "hook-resolved",
-          title: "已回收伏笔",
-          description: "已回收的伏笔，有 resolvedAtChapter。",
-          status: "resolved",
-          relatedCharacters: [],
-          firstSeenChapter: 2,
-          lastTouchedChapter: 12,
-          resolvedAtChapter: 12,
-        },
-      ],
-    });
-    await writeLegacyJson(projectDir, "story/threads.json", { threads: [] });
-
-    const overview = await buildStateOverview({ projectDir, chapter: 13 });
-
-    // 活跃伏笔在 activeItems 里，带 firstSeenChapter
-    const activeItem = overview.hooks.activeItems.find((item) => item.id === "hook-active");
-    expect(activeItem, "活跃伏笔应在 activeItems").toBeDefined();
-    expect(activeItem!.firstSeenChapter).toBe(3);
-    expect(activeItem!.resolvedAtChapter).toBeUndefined();
-
-    // 确保 resolvedHook 不在 activeItems，总数包含已回收
-    expect(overview.hooks.resolvedCount).toBeGreaterThanOrEqual(1);
-  });
-
-  it("toHookOverview 投影：已回收 hook 的 resolvedAtChapter 被正确投出（通过解构批量方式验证）", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-b5-2-resolved-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "B5-2 已回收章号投影测试",
-      genre: "xianxia",
-      logline: "resolvedAtChapter 投影确认。",
-    });
-
-    await writeLegacyJson(projectDir, "story/hooks.json", {
-      hooks: [
-        {
-          id: "hook-only-active",
-          title: "唯一活跃伏笔",
-          description: "本章的活跃伏笔。",
-          status: "active",
-          relatedCharacters: [],
-          firstSeenChapter: 7,
-          lastTouchedChapter: 10,
-        },
-      ],
-    });
-    await writeLegacyJson(projectDir, "story/threads.json", { threads: [] });
-
-    const overview = await buildStateOverview({ projectDir, chapter: 10 });
-    const item = overview.hooks.activeItems.find((i) => i.id === "hook-only-active");
-    expect(item).toBeDefined();
-    // firstSeenChapter 应被正确投出
-    expect(item!.firstSeenChapter).toBe(7);
-  });
-
+describe("State Overview B5-2: threads 投影带 firstSeenChapter", () => {
   it("toThreadOverview 投影：thread 带 firstSeenChapter", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-b5-2-threads-"));
     const { projectDir } = await createStoryProject({
@@ -451,24 +301,14 @@ describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolv
       logline: "线索首现章号透传测试。",
     });
 
-    await writeLegacyJson(projectDir, "story/hooks.json", { hooks: [] });
-    await writeLegacyJson(projectDir, "story/threads.json", {
-      threads: [
-        {
-          id: "thread-lead",
-          type: "lead",
-          title: "谜案主线索",
-          status: "open",
-          firstSeenChapter: 4,
-          lastTouchedChapter: 8,
-          evidence: ["第4章发现尸体。"],
-        },
-      ],
-    });
+    await seedChapters(projectDir, [
+      { chapter: 4, entries: [{ kind: "thread", thread: "thread-lead", op: "open", type: "question", title: "谜案主线索", note: "第4章发现尸体。" }] },
+      { chapter: 8, entries: [{ kind: "thread", thread: "thread-lead", op: "advance", note: "又有发现。" }] },
+    ]);
 
     const overview = await buildStateOverview({ projectDir, chapter: 9 });
 
-    const threadItem = overview.threads.keyOpenItems.find((item) => item.id === "thread-lead");
+    const threadItem = overview.threads.keyOpenItems.find((item) => item.id === seededThreadId(projectDir, "thread-lead"));
     expect(threadItem, "线索应在 keyOpenItems").toBeDefined();
     // firstSeenChapter 应被正确投出
     expect(threadItem!.firstSeenChapter).toBe(4);
@@ -478,13 +318,6 @@ describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolv
 function __filenameDir(): string {
   // fileURLToPath 才能正确解码路径里的空格等。
   return dirname(fileURLToPath(import.meta.url));
-}
-
-/** 老格式的账文件（hooks / threads / timeline 等镜像文件）：建书不再建 story/、timeline/ 目录，要写自己建。 */
-async function writeLegacyJson(projectDir: string, relativePath: string, value: unknown): Promise<void> {
-  const target = join(projectDir, relativePath);
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
 async function writeCards(projectDir: string, ops: CardOp[]): Promise<void> {
@@ -517,109 +350,31 @@ async function createOverviewFixture(): Promise<string> {
     { op: "rules.set", field: "targetWords", value: 2400 },
     { op: "rules.set", field: "minWords", value: 2000 },
   ]);
-  await writeLegacyJson(projectDir, "story/hooks.json", {
-    hooks: [
-      {
-        id: "hook-radio",
-        title: "无线电异常信号",
-        description: "收音机里出现断续广播。",
-        status: "active",
-        relatedCharacters: ["林澈"],
-        firstSeenChapter: 2,
-        lastTouchedChapter: 5,
-        evidence: ["第5章：广播频率异常。"],
-        nextActionHint: "确认信号源。",
-      },
-      {
-        id: "hook-done",
-        title: "已解决血痕",
-        description: "血痕来源已经确认。",
-        status: "resolved",
-        relatedCharacters: [],
-        lastTouchedChapter: 3,
-      },
-    ],
-  });
-  await writeLegacyJson(projectDir, "story/threads.json", {
-    threads: [
-      {
-        id: "intent-low",
-        type: "intent",
-        title: "林澈想了想，决定先不管这个",
-        status: "open",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 1,
-        evidence: ["他想了想，决定先不管这个。"],
-      },
-      {
-        id: "lead-signal",
-        type: "lead",
-        title: "确认无线电信号来源",
-        status: "touched",
-        firstSeenChapter: 3,
-        lastTouchedChapter: 5,
-        evidence: ["收音机里出现避难所坐标。"],
-      },
-      {
-        id: "intent-done",
-        type: "intent",
-        title: "去药店找药",
-        status: "done",
-        firstSeenChapter: 2,
-        lastTouchedChapter: 4,
-        evidence: ["他已经带回绷带。"],
-      },
-    ],
-  });
-  await writeLegacyJson(projectDir, "story/arc-goals.json", {
-    goals: [
-      {
-        id: "goal-survive",
-        title: "在旧城区灾变中生存下来",
-        status: "active",
-        scope: "main_arc",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 5,
-        evidence: ["林澈继续寻找安全路线。"],
-      },
-      {
-        id: "goal-done",
-        title: "获取基础食物",
-        status: "completed",
-        scope: "mini_arc",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 3,
-        evidence: ["便利店罐头已经带回。"],
-      },
-    ],
-  });
-  await writeLegacyJson(projectDir, "timeline/events.json", [
-    {
-      id: "ch0004-001",
-      chapter: 4,
-      summary: "林澈在楼道避开感染者。",
-      participants: ["林澈"],
-      effects: {
-        semanticSummary: {
-          mainEvent: "林澈避开感染者。",
-          locations: ["楼道"],
-        },
-      },
-    },
-    {
-      id: "ch0005-001",
-      chapter: 5,
-      summary: "这是一段非常长的章节正文摘要不应该进入状态总览全文，只能保留短摘要。林澈在地下车库听见收音机断续广播。".repeat(4) + "长文本尾巴不应该出现在 overview 里",
-      participants: ["林澈"],
-      effects: {
-        semanticSummary: {
-          mainEvent: "林澈在地下车库听见断续广播。",
-          locations: ["地下车库"],
-        },
-      },
-    },
+  await seedChapters(projectDir, [
+    { chapter: 1, entries: [
+      { kind: "thread", thread: "intent-low", op: "open", type: "intent", title: "林澈想了想，决定先不管这个", note: "他想了想，决定先不管这个。" },
+      { kind: "thread", thread: "goal-survive", op: "open", type: "goal", title: "在旧城区灾变中生存下来", note: "林澈继续寻找安全路线。" },
+      { kind: "thread", thread: "goal-done", op: "open", type: "goal", title: "获取基础食物", note: "要找吃的。" },
+    ] },
+    { chapter: 2, entries: [{ kind: "thread", thread: "intent-done", op: "open", type: "intent", title: "去药店找药", note: "要去药店。" }] },
+    { chapter: 3, entries: [
+      { kind: "thread", thread: "lead-signal", op: "open", type: "question", title: "确认无线电信号来源", note: "收音机里出现避难所坐标。" },
+      { kind: "thread", thread: "goal-done", op: "close", note: "便利店罐头已经带回。" },
+    ] },
+    { chapter: 4, entries: [
+      { kind: "summary", text: "林澈在楼道避开感染者。" },
+      { kind: "thread", thread: "intent-done", op: "close", note: "他已经带回绷带。" },
+    ] },
+    { chapter: 5, entries: [
+      { kind: "summary", text: "这是一段非常长的章节正文摘要不应该进入状态总览全文，只能保留短摘要。林澈在地下车库听见收音机断续广播。".repeat(4) + "长文本尾巴不应该出现在 overview 里" },
+      { kind: "thread", thread: "lead-signal", op: "advance", note: "广播频率异常。" },
+    ] },
   ]);
+  await seedDecisions(projectDir, [{ type: "thread.weight", thread: "goal-survive", weight: "major" }]);
   return projectDir;
+}
+
+/** 书目录下全部文件  return projectDir;
 }
 
 /** 书目录下全部文件（相对路径 → 内容哈希）：读路径前后比一比，多一个文件、改一个字节都看得出来。 */

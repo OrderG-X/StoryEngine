@@ -118,7 +118,7 @@ async function planSettings(bookDir: string, ops: readonly CardOp[], notDone: re
 
 /**
  * AI 刚写进去的那几处对应的「认下」：在写完的样子上按作者身份试一遍，有变化才给。
- * 设定已经写进去了：备不成（书一时收拾不了、镜像没跟上）只是这次不给「认下」，不把这次改设定报成没做成。
+ * 设定已经写进去了：备不成（书一时收拾不了）只是这次不给「认下」，不把这次改设定报成没做成。
  */
 async function planAccept(bookDir: string, ops: readonly CardOp[], at: string): Promise<AcceptPlan | null> {
   if (ops.length === 0) return null;

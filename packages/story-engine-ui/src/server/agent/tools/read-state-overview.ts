@@ -29,7 +29,7 @@ const outputSchema = z.object({
 export const readStateOverviewTool = createTool({
   id: "read_state_overview",
   description:
-    "读取当前项目的状态总览（写到第几章、有哪些人物、设定本有几张卡、活跃伏笔与线索、时间线）。" +
+    "读取当前项目的状态总览（写到第几章、有哪些人物、设定本有几张卡、开着的线索、时间线）。" +
     "当用户询问当前进度/现状时，必须先调用本工具获取真实数据再回答，绝不凭空编造。设定本的具体内容用 read_foundation。",
   inputSchema,
   outputSchema,

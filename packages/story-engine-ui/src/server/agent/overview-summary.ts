@@ -39,7 +39,7 @@ export function summarizeStateOverview(overview: StateOverview): string {
   // 长期不动才 stale——只数 active 会在长跑里恒报 0（r8 真机：main_arc 第 100 章刚推进过，面板却报 0 条）。
   // 开放线索同理 = open + touched：推进过一次就转 touched、还没收（换题材长篇实跑第 26 章：14 条没收，报 0 条）。
   lines.push(
-    `进展跟踪：活跃伏笔 ${overview.hooks.activeCount} 条、开放线索 ${overview.threads.open + overview.threads.touched} 条、` +
+    `进展跟踪：开放线索 ${overview.threads.open + overview.threads.touched} 条、` +
       `主线目标 ${overview.arcGoals.activeCount + overview.arcGoals.touchedCount} 条。`,
   );
 

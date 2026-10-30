@@ -91,7 +91,6 @@ export interface FastDraftInput {
   readonly writerClient: WriterClient;
   /** 本章要带的人物（名字，在场检测的结果）；不给就由上下文入口自己挑。 */
   readonly selectedCharacters?: readonly string[];
-  readonly selectedHookIds?: readonly string[];
   /**
    * 时间线相关段的条数请求：可裁的 `timeline_events` 段按它取最近 N 条（默认 5）；
    * 受保护的 `writing_context_pack` 内时间线摘要另自限 ≤3 条（传更大值不会顶爆保护段）。
@@ -638,7 +637,6 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       chapter: input.chapter,
       chapterGoal,
       ...(input.selectedCharacters ? { selectedCharacters: input.selectedCharacters } : {}),
-      selectedHookIds: input.selectedHookIds,
       maxTimelineEvents: input.maxTimelineEvents,
       ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
       ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
@@ -856,7 +854,6 @@ function emptyWriterContext(chapter: number): WriterContextEnvelope {
       stableTokenEstimate: 0,
       dynamicTokenEstimate: 0,
       selectedCharacters: [],
-      selectedHooks: [],
       selectedTimelineEvents: [],
     },
   };

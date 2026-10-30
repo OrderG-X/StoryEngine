@@ -4,7 +4,7 @@
  * POST /api/books/import-preview  { files: [{ name, text }] }
  *      → 切章预览（不写盘）：{ ok, parts: [{ kind, title, chars, file }], totalChars, emptyDropped, volumeLines, suggestedTitle }
  * POST /api/books/import          { title, files, include?: boolean[] }
- *      → 建书 → 「导入已写的书」命令（每章正文 + 空账单）→ 镜像 → 交一次通读记账（执行器的 background.reread，后台跑）
+ *      → 建书 → 「导入已写的书」命令（每章正文 + 空账单）→ 交一次通读记账（执行器的 background.reread，后台跑）
  *      → { ok, projectDir, project, overview, imported: { chapters } }
  *      include 和预览的 parts 一一对应（缺省：章节都导、第一章前面的字不导）；对不上就是文件变了，要重新预览。
  * POST /api/books/reread          { projectPath } → 通读停下后「接着记」（停着的接着做、没成的重交一次）：{ ok, status }
@@ -15,7 +15,7 @@ import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { BOOK_START_KEYS, bookImportText, runCommand, serialFileStem, splitSerialText, type SerialFile, type SerialSplit } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../book/ensure-on-core.js";
 import { createStoryProject } from "../book/project-store.js";
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";

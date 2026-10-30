@@ -1,5 +1,5 @@
 /**
- * read_timeline — 只读工具：查询 timeline/events.json 里某章或某区间的事件。
+ * read_timeline — 只读工具：查询某章或某区间的事件（从账的投影现算，book/story-views）。
  *
  * 让 agent 在想了解「早期某章/某段发生了啥」时有精确的只读查询入口，
  * 而不必依赖 read_state_overview 里被截断的近章视窗。
@@ -11,7 +11,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceNumber } from "../../lib/lenient-args.js";
 
-import { readTimelineEvents } from "../../book/project-store.js";
+import { readStoryViews } from "../../book/story-views.js";
 import { readCharacterNameById, resolveEntityLabels, resolveSemanticSummaryLabels } from "../../writing/presence/entity-labels.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 
@@ -58,7 +58,7 @@ export const readTimelineTool = createTool({
     }
 
     try {
-      const allEvents = await readTimelineEvents(projectDir);
+      const allEvents = (await readStoryViews(projectDir)).events;
       // allEvents 必须是数组，防御非法返回值
       const safeEvents = Array.isArray(allEvents) ? allEvents : [];
       // 模型无关·绝不泄露裸 id：participants 是裸 char-id（char-xxxx）——解析成角色名再交给模型/用户，

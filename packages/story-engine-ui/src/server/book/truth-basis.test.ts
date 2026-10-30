@@ -1,13 +1,12 @@
 // @vitest-environment node
-// 界面服务端取真相依据只走 book/truth-basis.ts（第 7 轮复核 U3）：挂到产物上的依据，取的时候镜像必须正是这一版的。
-// 别处直接调核心的 readTruthBasis 会绕过书锁和镜像核对，照旧镜像读的材料挂上新依据。
-import { mkdtemp, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+// 界面服务端取真相依据只走 book/truth-basis.ts（第 7 轮复核 U3）：依据在书锁里、收拾过半截事务之后取。
+// 别处直接调核心的 readTruthBasis 会绕过书锁。
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { cardWrite, chapterCommit, readHead, runCommand } from "@actalk/story-core";
+import { chapterCommit, readHead, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "./project-store.js";
-import { MIRROR_MARKER, readMirrorVersion, syncLegacyMirror } from "./mirror/sync.js";
 import { readTruthBasisForWork, readWithStableBasisForWork } from "./truth-basis.js";
 
 const SERVER = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -50,29 +49,21 @@ const commit = async (book: string, text: string, key: string): Promise<void> =>
   expect(await runCommand(book, chapterCommit, { chapter: 1, text: `# 第一章\n\n${text}`, entries: [] }, { caller: "author", idempotencyKey: key })).toMatchObject({ ok: true });
 };
 
-it("新书还没有账单：不生成镜像（同开书），照常给依据", async () => {
+it("新书还没有账单：照常给依据", async () => {
   const book = await makeBook();
   expect((await readHead(book)).version).toBeGreaterThan(0);
   await readTruthBasisForWork(book);
   expect((await readWithStableBasisForWork(book, async () => 1)).basis).toBeDefined();
-  await expect(stat(join(book, MIRROR_MARKER))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it("改了设定卡（只涨版本号、不同步镜像）：开工时补上镜像再给依据", async () => {
+it("读材料的途中书上有写：照常给材料、不给依据", async () => {
   const book = await makeBook();
   await commit(book, "林远推门走了出去。", "c1");
-  expect((await syncLegacyMirror(book)).ok).toBe(true);
-  expect(await runCommand(book, cardWrite, { ops: [{ op: "story.set", label: "地点", value: "河岸" }] }, { caller: "author", idempotencyKey: "card" })).toMatchObject({ ok: true });
-  const head = (await readHead(book)).version;
-  expect(await readMirrorVersion(book)).not.toBe(head);
-  await readTruthBasisForWork(book);
-  expect(await readMirrorVersion(book)).toBe(head);
-});
-
-it("书挪走了（删进回收站也在书锁里）：镜像同步不在原处建出目录（第 8 轮起镜像同步在书锁里）", async () => {
-  const book = await makeBook();
-  await commit(book, "林远推门走了出去。", "c1");
-  await rename(book, `${book}-moved`);
-  expect(await syncLegacyMirror(book)).toMatchObject({ ok: false, code: "gone" });
-  await expect(stat(book)).rejects.toMatchObject({ code: "ENOENT" });
+  const quiet = await readWithStableBasisForWork(book, async () => "材料");
+  expect(quiet).toMatchObject({ value: "材料", basis: expect.objectContaining({ digest: expect.any(String) }) });
+  const busy = await readWithStableBasisForWork(book, async () => {
+    await commit(book, "林远推门走了出去，又回来了。", "c2");
+    return "材料";
+  });
+  expect(busy).toEqual({ value: "材料" });
 });

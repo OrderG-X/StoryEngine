@@ -182,7 +182,6 @@ function createOverview(): StateOverview {
   return {
     project: { title: "测试书", genre: "都市", logline: "", currentChapter: 1 },
     storyStatus: { currentObjective: "进入总部" },
-    hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
     threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, cleanupItems: [], keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
     timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },

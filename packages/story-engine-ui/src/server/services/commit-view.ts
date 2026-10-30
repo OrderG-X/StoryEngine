@@ -7,7 +7,7 @@
  */
 import { nameKey, parseDraftFile, project, readBookSnapshot, readCardsOrLegacy, readChapterLedger, readChapterPaper, type ChapterCommitResult } from "@actalk/story-core";
 import { WEEKDAY_NAMES } from "../book/story-timeline.js";
-import { markdownTitle } from "../book/mirror/sync.js";
+import { markdownTitle } from "../book/story-views.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import { describeReaderWait } from "../editorial/reader-progress.js";
 import type { CommitItem, CommitPreview } from "../editorial/commit-flow.js";
@@ -251,8 +251,8 @@ export function supersededCommitView(chapter: number, result: ChapterCommitResul
   return { summary: parts.join(" ") };
 }
 
-/** 定稿成了：照定稿后的账算回执（读的是盘上刚写好的）。mirrorOk = 老格式镜像跟上了没有（没跟上如实说一句）。 */
-export async function commitDoneView(projectDir: string, chapter: number, text: string, result: ChapterCommitResult, mirrorOk: boolean): Promise<CommitDone> {
+/** 定稿成了：照定稿后的账算回执（读的是盘上刚写好的）。 */
+export async function commitDoneView(projectDir: string, chapter: number, text: string, result: ChapterCommitResult): Promise<CommitDone> {
   const ledger = await readChapterLedger(projectDir, chapter);
   const entries = ledger?.entries ?? [];
   const count = (predicate: (entry: (typeof entries)[number]) => boolean): number => entries.filter(predicate).length;
@@ -291,7 +291,6 @@ export async function commitDoneView(projectDir: string, chapter: number, text: 
     ...(result.orphanedThreads.length > 0
       ? [`换账后有 ${result.orphanedThreads.length} 条线索后文还在推进、这章却不再开它：${result.orphanedThreads.slice(0, 3).map((title) => `「${title}」`).join("")}，要看一下。`]
       : []),
-    ...(mirrorOk ? [] : ["（老格式资料没同步上，下次打开书会补；账本身已经记好。）"]),
     ...(newCharacters.length > 0 ? [`这章还出现了新人物：${newCharacters.join("、")}——要给谁建卡，在设定本「还没建卡」里点一下就行。`] : []),
     ...(recurring.length > 0 ? [`${recurring.map((name) => `「${name}」`).join("、")}已经出场 ${RECURRING_UNCARDED_THRESHOLD} 章了，还没有人物卡。`] : []),
     ...(openThreadsHintDue(openBefore, openThreads) ? [`另外，开着的线索已积到 ${openThreads} 条——有讲同一件事的可以说「归并线索」。`] : []),

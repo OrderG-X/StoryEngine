@@ -41,7 +41,6 @@ vi.mock("../api/client.js", () => ({
     characters: { knownCharacters: [] },
     world: { activeLocations: [], importantFacts: [] },
     timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
-    hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
     threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
     uiHints: { warnings: [] },

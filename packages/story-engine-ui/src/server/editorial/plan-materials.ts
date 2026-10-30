@@ -16,12 +16,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findRecurringPhrases, parseDraftFile } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
-import {
-  readArcGoalPool,
-  readFactLedger,
-  readThreadPool,
-  readTimelineEvents,
-} from "../book/project-store.js";
+import { readStoryViews, type StoryViews } from "../book/story-views.js";
 import { readChapterPlan, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
 import { selectEffectiveFacts } from "../writing/fact-selection.js";
 import { foundationMessage, readFoundationDigest } from "./foundation-digest.js";
@@ -102,16 +97,17 @@ async function readRecentPlanTimes(projectDir: string, chapter: number): Promise
 
 /** 读盘收集拟章纲的材料。全部读失败即空、绝不阻断（拟不成就回落无章纲出稿）。 */
 export async function collectPlanMaterials(projectDir: string, chapter: number, direction?: string): Promise<PlanChapterMaterials> {
-  const [bible, threadPool, goalPool, timeline, previousChapter, factLedger, recentBodies, recentTimes] = await Promise.all([
+  const [bible, views, previousChapter, recentBodies, recentTimes] = await Promise.all([
     settle(readBible(projectDir).then((read): BibleView | undefined => read.bible), undefined),
-    settle(readThreadPool(projectDir), { threads: [] }),
-    settle(readArcGoalPool(projectDir), { goals: [] }),
-    settle(readTimelineEvents(projectDir), []),
+    settle(readStoryViews(projectDir).then((read): StoryViews | undefined => read), undefined),
     readPreviousChapterText(projectDir, chapter),
-    settle(readFactLedger(projectDir), null),
     readRecentChapterBodies(projectDir, chapter),
     readRecentPlanTimes(projectDir, chapter),
   ]);
+  const threadPool = views?.threads ?? { threads: [] };
+  const goalPool = views?.goals ?? { goals: [] };
+  const timeline = views?.events ?? [];
+  const factLedger = views?.facts;
   // 设定本读不了当没有（拟纲照常，只是少一份对照）；哪类资料都没有的新书也是 undefined。
   const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
   const recentBeats = await readRecentPlanBeats(projectDir, chapter);

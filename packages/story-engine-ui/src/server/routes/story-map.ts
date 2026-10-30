@@ -7,7 +7,7 @@
 import { projectBook, type BookProjection, type PaceReport } from "@actalk/story-core";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../book/ensure-on-core.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
 import { readPaceReport } from "../services/pace-report.js";
 

@@ -16,7 +16,6 @@ const cleanGreeting: readonly ChapterMessage[] = [
 const freshBookOverview = {
   project: { currentChapter: null },
   characters: { knownCharacters: [{ id: "protagonist", name: "主角" }] },
-  hooks: { activeCount: 0 },
   threads: { total: 0 },
   arcGoals: { activeCount: 1 },
 } as unknown as StateOverview;
@@ -25,7 +24,6 @@ const freshBookOverview = {
 const contentBookOverview = {
   project: { currentChapter: 3 },
   characters: { knownCharacters: [{ id: "protagonist", name: "主角" }, { id: "c2", name: "对手" }] },
-  hooks: { activeCount: 2 },
   threads: { total: 4 },
   arcGoals: { activeCount: 1 },
 } as unknown as StateOverview;

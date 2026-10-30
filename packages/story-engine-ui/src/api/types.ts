@@ -7,7 +7,6 @@ export type StateOverview = UiStateOverview;
 export type {
   StateOverviewArcGoalItem,
   StateOverviewCharacterItem,
-  StateOverviewHookItem,
   StateOverviewSetting,
   StateOverviewThreadItem,
   StateOverviewTimelineEvent,

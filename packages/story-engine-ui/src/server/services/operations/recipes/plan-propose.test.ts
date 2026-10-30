@@ -5,7 +5,7 @@ import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readTruthBasis } from "@actalk/story-core";
-import { ensureBookOnCore } from "../../../book/mirror/ensure.js";
+import { ensureBookOnCore } from "../../../book/ensure-on-core.js";
 import { createStoryProject } from "../../../book/project-store.js";
 import type { BrainCallModel } from "../../../editorial/index.js";
 import { __resetCatchUpLocksForTests } from "../../../editorial/reader-window.js";

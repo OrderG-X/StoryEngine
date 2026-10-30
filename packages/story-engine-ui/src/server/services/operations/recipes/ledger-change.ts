@@ -7,10 +7,9 @@
  *   - review（理线索）：`notes`（记账员当场最多补 10 章笔记；缺得更多交后台补读，这次按冷窗口判）→ `review`（记账员按全书判
  *     开着的线索收没收、点出收口原句，代码取原文）→ 有收了的停下等作者点「确认改账」→ `apply`。
  * - 作者在线索板 / 梗概上直接点的（author，只认按钮）：`plan` → `apply`，不再停下问。
- * 改前存档、可撤销；记完顺手重生成老格式镜像（没成下次取依据时补）。
+ * 改前存档、可撤销。
  */
 import { decisionRecord, projectBook, type BasisChange, type CommandReceipt, type DecisionInput, type TruthBasis } from "@actalk/story-core";
-import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, coldPausedNote, LEDGER_ROLE, reviewOpenThreads, type BrainCallModel, type ThreadReviewOutcome } from "../../../editorial/index.js";
 import { KEEPER_MAX_CATCH_UP } from "../../../editorial/ledger-keeper.js";
@@ -151,10 +150,6 @@ async function applyDecisions(bookDir: string, decisions: readonly DecisionInput
       throw new OperationObsolete("basis_moved", `提议之后${describeBasisChanges(changes)}改过，这份改账是照改之前算的，没改。`);
     }
     throw coded(result.code, result.message);
-  }
-  if (!result.replayed) {
-    const mirror = await syncLegacyMirror(bookDir).catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
-    if (!mirror.ok) console.warn(`[ledger.change] 改账后重生成老格式镜像没成（下次取依据时补）：${mirror.reason}`);
   }
   return { applied: decisions.length, ...(snapshotId ? { snapshotId } : {}) };
 }

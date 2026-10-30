@@ -9,8 +9,6 @@ const DEFAULT_DROP_ORDER = [
   "world_state",
   "arc_goals",
   "story_threads",
-  "hook_tracking",
-  "hook_pool",
   "story_continuity",
 ] as const;
 
@@ -99,15 +97,6 @@ const SECTION_COMPACTORS: Readonly<Record<string, (content: unknown) => unknown>
       recentlyTouchedGoals: [],
       staleGoalWarnings: [],
       arcCarryForwardInstruction: asString(c.arcCarryForwardInstruction),
-    };
-  },
-  hook_tracking: (content) => {
-    const c = (content ?? {}) as Record<string, unknown>;
-    return {
-      activeHooks: asArray(c.activeHooks).slice(0, 4),
-      recentlyTouchedHooks: [],
-      staleHookWarnings: [],
-      hookCarryForwardInstruction: asString(c.hookCarryForwardInstruction),
     };
   },
 };

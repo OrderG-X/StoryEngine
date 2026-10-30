@@ -10,8 +10,6 @@ import { cardWrite, decisionRecord, projectBook, readCards, readChapterLedger, r
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createStoryProject } from "../../../book/project-store.js";
-import { MIRROR_FILES } from "../../../book/mirror/build.js";
-import { MIRROR_BACKUP_DIR } from "../../../book/mirror/sync.js";
 import type { BrainCallModel } from "../../../editorial/reader-window.js";
 import { __resetCatchUpLocksForTests } from "../../../editorial/reader-window.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
@@ -295,7 +293,7 @@ describe("清单出来停下等作者", () => {
 });
 
 describe("作者点「确认定稿」", () => {
-  it("去掉的不记、天数照改；写正文 + 账单 + 老格式镜像；后台预热；同一个按钮再点不重复写，换了选法不算", async () => {
+  it("去掉的不记、天数照改；写正文 + 账单；后台预热；同一个按钮再点不重复写，换了选法不算", async () => {
     const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
     const record = await prepare(1);
@@ -309,7 +307,7 @@ describe("作者点「确认定稿」", () => {
     expect(summaryOf(done)).toContain("第 1 章已定稿");
     expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
     expect((await projectBook(book)).chapters[0]).toMatchObject({ day: 3, dayBasis: "author", present: ["林远"] });
-    expect(await exists(join(book, ".story-core-mirror.json"))).toBe(true);
+    expect(await exists(join(book, ".story-core-mirror.json"))).toBe(false);
     expect(warmUpReadersMock).toHaveBeenCalledWith(book, 1);
 
     expect(await resumeOperation(book, record.opId, { actionId: COMMIT_CONFIRM_ACTION, decision: "commit", excluded: [stranger!.id], values: { day: 3 } }))
@@ -578,12 +576,6 @@ describe("作者点「确认定稿」", () => {
     await writeFile(join(book, "story", "hooks.json"), JSON.stringify({ hooks: [] }), "utf-8");
     await writeFile(join(book, "timeline", "events.json"), "[]\n", "utf-8");
     const bibleBefore = await readFile(join(book, "story", "character-bible.json"), "utf-8");
-    const mirrored = new Map<string, string>();
-    for (const file of Object.values(MIRROR_FILES)) {
-      const content = await readFile(join(book, file), "utf-8").catch(() => undefined);
-      if (content !== undefined) mirrored.set(file, content);
-    }
-    expect(mirrored.size).toBeGreaterThan(0);
     await writeDraft(2, CH2);
     ledger = { ...LEDGER2, threads: [] };
     const record = await prepare(2);
@@ -593,10 +585,9 @@ describe("作者点「确认定稿」", () => {
     // 老设定搬进了设定卡（主角认出来了）；老设定文件一字不动。
     expect((await readCards(book))?.cards).toEqual([expect.objectContaining({ name: "林远", protagonist: true })]);
     expect(await readFile(join(book, "story", "character-bible.json"), "utf-8")).toBe(bibleBefore);
-    // 镜像要重生成的老文件，第一次生成前原样留了一份。
-    for (const [file, content] of mirrored) {
-      expect(await readFile(join(book, MIRROR_BACKUP_DIR, file), "utf-8")).toBe(content);
-    }
+    // 老账文件没标记（不是我们生成的）：原样留着。
+    expect(await readFile(join(book, "story", "hooks.json"), "utf-8")).toBe(JSON.stringify({ hooks: [] }));
+    expect(await readFile(join(book, "timeline", "events.json"), "utf-8")).toBe("[]\n");
   });
 });
 

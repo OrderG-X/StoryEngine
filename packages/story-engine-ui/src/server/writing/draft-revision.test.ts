@@ -81,7 +81,7 @@ function packFixture(): WritingContextPack {
   return {
     chapterTask: { chapterNumber: 1, userDirection: "申请窗口异常", currentChapterGoal: "制造悬念" },
     setting: buildSettingPack(bibleView(project({ ledgers: [], decisions: [] }), applied.file)),
-    continuityFocus: { recentTimelineEvents: [], mustCarryHooks: [], mustCarryThreads: [], arcGoalFocus: [], establishedFacts: [] },
+    continuityFocus: { recentTimelineEvents: [], mustCarryThreads: [], arcGoalFocus: [], establishedFacts: [] },
     hardConstraints: ["不要提前揭开隐藏真相"],
     readFailures: [],
   };
