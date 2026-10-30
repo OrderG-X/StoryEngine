@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { cardsImport, cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { BOOK_START_KEYS, cardsImport, cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import type {
   ArcGoalPool,
   FactLedger,
@@ -58,8 +58,8 @@ export async function createStoryProject(input: CreateStoryProjectInput): Promis
         : []),
     ];
     const outcome = ops.length > 0
-      ? await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: "book-create" })
-      : await runCommand(projectDir, cardsImport, {}, { caller: "author", idempotencyKey: "book-create" });
+      ? await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: BOOK_START_KEYS.create })
+      : await runCommand(projectDir, cardsImport, {}, { caller: "author", idempotencyKey: BOOK_START_KEYS.create });
     if (!outcome.ok) throw new Error(outcome.message);
 
     return { projectDir, project };

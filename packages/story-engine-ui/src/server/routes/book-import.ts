@@ -13,7 +13,7 @@
  */
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { bookImportText, runCommand, serialFileStem, splitSerialText, type SerialFile, type SerialSplit } from "@actalk/story-core";
+import { BOOK_START_KEYS, bookImportText, runCommand, serialFileStem, splitSerialText, type SerialFile, type SerialSplit } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { createStoryProject } from "../book/project-store.js";
@@ -117,7 +117,7 @@ async function handleImport(body: Record<string, unknown>, res: Res): Promise<vo
   try {
     const outcome = await runCommand(projectDir, bookImportText, {
       chapters: chosen.map((part) => ({ title: part.kind === "preamble" ? "" : part.title, body: part.body })),
-    }, { caller: "author", idempotencyKey: "book-import-text", snapshot: coreSnapshotFor(projectDir) });
+    }, { caller: "author", idempotencyKey: BOOK_START_KEYS.importText, snapshot: coreSnapshotFor(projectDir) });
     if (!outcome.ok) throw new Error(outcome.message);
     const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
     if (!onCore.ok) throw new Error(`这本书没接上新核心：${onCore.reason}`);

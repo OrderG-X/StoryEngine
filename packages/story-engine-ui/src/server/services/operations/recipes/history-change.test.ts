@@ -12,7 +12,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { draftSave, opBookEpoch, readBookEpoch, readDraft, readTruthBasis, runCommand } from "@actalk/story-core";
+import { cardWrite, draftSave, opBookEpoch, readBookEpoch, readDraft, readTruthBasis, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../../../book/project-store.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
 import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
@@ -99,7 +99,7 @@ describe("撤销上一步", () => {
 
     // 「撤回来」：撤刚才那次撤销 = 第一版又回来了
     const back = await undoInOperation(book, (await undoInOperationLast()).opId);
-    expect(back.summary).toContain("撤好了");
+    expect(back.summary).toBe("撤好了：「撤销」退回去了，第 1 章工作稿回到它之前的样子。");
     expect(await bodyOf(1)).toBe("第一版。");
   });
 
@@ -124,6 +124,15 @@ describe("撤销上一步", () => {
     const done = await answer(waiting);
     expect(done.state).toBe("succeeded");
     expect(await bodyOf(1)).toBeUndefined();
+  });
+
+  it("上一次是升级之前、没留存档的写：如实说撤不了、指去「历史」，不说「没有能撤的」", async () => {
+    const outcome = await runCommand(book, cardWrite, { ops: [{ op: "card.create", kind: "character", name: "沈舟" }] }, { caller: "author", idempotencyKey: "old-write" });
+    if (!outcome.ok) throw new Error(outcome.message);
+    const failed = await submit("undo", {}, "chat");
+    expect(failed.state).toBe("failed");
+    expect(failed.failure?.message).toContain("没留存档");
+    expect(failed.failure?.message).toContain("顶栏「历史」");
   });
 
   it("对话里交的撤销照样只撤「上一次」（不收号）", async () => {
@@ -163,7 +172,8 @@ describe("整本恢复", () => {
     // 恢复前打了存档点，操作历史里算「恢复」一类
     expect((await listSnapshots(book)).length).toBeGreaterThan(0);
 
-    await undoInOperation(book, restored.opId);
+    // 「撤销上一步」（不带号）撤的就是这次恢复
+    await undoInOperation(book);
     expect(await bodyOf(1)).toBe("作者改了第一章。");
     expect(await bodyOf(2)).toBe("第二章。");
   });

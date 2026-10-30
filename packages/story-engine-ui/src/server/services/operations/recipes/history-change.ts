@@ -176,6 +176,8 @@ async function impactLines(bookDir: string, impact: readonly ImpactItem[]): Prom
 interface UndoTarget {
   readonly target: RevertTarget;
   readonly what: string;
+  /** 撤的是一次撤销 / 整本恢复（结论换个说法：它退回去了，那几处回到它之前）。 */
+  readonly ofHistory: boolean;
 }
 
 async function resolveUndoTarget(bookDir: string, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<UndoTarget | undefined> {
@@ -191,7 +193,7 @@ async function resolveUndoTarget(bookDir: string, params: Extract<HistoryChangeP
       throw coded("target_active", `「${operationWhat(stored.record.kind, stored.record.mode, operationChapter(stored.record))}」还没做完，先等它做完或停掉，再撤。`);
     }
   }
-  return { target, what: await whatOf(bookDir, opId, receipt?.command ?? "") };
+  return { target, what: await whatOf(bookDir, opId, receipt?.command ?? ""), ofHistory: receipt?.command === HISTORY_APPLY_COMMAND };
 }
 
 type UndoCheck =
@@ -284,9 +286,11 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
     }
     const outcome = await ctx.apply(round === 1 ? "apply" : `apply-${round}`, { target: resolved.target, confirmed }, () => applyUndo(bookDir, resolved, confirmed, caller));
     if (outcome.kind === "done") {
-      const summary = outcome.paths.length > 0
-        ? `撤好了：「${resolved.what}」改的退回去了（${pathsText(outcome.paths)}）。`
-        : `「${resolved.what}」改的那几处现在已经是那之前的样子，没什么要撤的。`;
+      const summary = outcome.paths.length === 0
+        ? `「${resolved.what}」改的那几处现在已经是那之前的样子，没什么要撤的。`
+        : resolved.ofHistory
+          ? `撤好了：「${resolved.what}」退回去了，${pathsText(outcome.paths)}回到它之前的样子。`
+          : `撤好了：「${resolved.what}」改的退回去了（${pathsText(outcome.paths)}）。`;
       return succeeded("undo", summary, outcome.paths, outcome.snapshotId);
     }
     impact = outcome.impact;

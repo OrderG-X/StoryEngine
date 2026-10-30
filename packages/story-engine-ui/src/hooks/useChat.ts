@@ -845,9 +845,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           appendMessage({
             id: `assistant-undo-error-${Date.now()}`,
             role: "assistant",
-            content: `撤销失败：${messageText}。没有改动磁盘或对话历史。`,
+            // 原因是服务端的结论（「整本恢复没做成：…」），照原样说，不再套一层「撤销失败」。
+            content: `${messageText.endsWith("。") ? messageText : `${messageText}。`}稿子和对话都没动。`,
           });
-          setChatError(messageText);
           return;
         }
 

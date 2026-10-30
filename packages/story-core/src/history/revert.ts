@@ -104,10 +104,23 @@ export function revertTargetOf(value: unknown): RevertTarget | undefined {
 }
 
 /**
- * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次写过撤销范围、还没被撤的。撤销、整本恢复本身跳过；被撤过的跳过
- * （撤它的那次后来又被撤了，就不算被撤）；整本恢复（真换了东西的）之前的不算：恢复已经把它们换掉了。
- * 升级之前的写（回执没有效果记录）也算一次：撤的时候如实说只能整本恢复。之前没留存档的写（建书、导入时写的那一笔）是这本书的起点，
- * 到它就停：再往前没什么能撤。没有返回 undefined。receipts 按写的先后排好。
+ * 这本书起点那几笔的防重复标记（建书、开书时导入老格式书、导入已写的书）：「撤销上一步」到它们就停，再往前没什么能撤。
+ * 写它们的地方用这几个常量，不各写各的字。
+ */
+export const BOOK_START_KEYS = {
+  create: "book-create",
+  importOpen: "book-import:open",
+  cardsImportOpen: "cards-import:open",
+  importText: "book-import-text",
+} as const;
+
+const BOOK_START_KEY_SET: ReadonlySet<string> = new Set(Object.values(BOOK_START_KEYS));
+
+/**
+ * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次写过撤销范围、还没被撤的。撤销本身跳过（接着往前撤；撤销的撤销走「撤回来」
+ * 带号）；被撤过的跳过（撤它的那次后来又被撤了，就不算被撤）。整本恢复（真换了东西、还没被撤的）就是上一次：撤它 = 回到恢复之前；
+ * 被撤过的恢复跳过，接着往前。升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。
+ * 到这本书的起点（BOOK_START_KEYS）就停。没有返回 undefined。receipts 按写的先后排好。
  */
 export function lastUndoable(receipts: readonly CommandReceipt[]): RevertTarget | undefined {
   const undone = new Set<string>();
@@ -118,15 +131,15 @@ export function lastUndoable(receipts: readonly CommandReceipt[]): RevertTarget 
     if (receipt.command === HISTORY_APPLY_COMMAND) {
       const result = receipt.result as { readonly kind?: unknown; readonly target?: unknown } | null | undefined;
       if (result?.kind === "restore") {
-        if ((receipt.effects ?? []).length > 0) return undefined;
+        if ((receipt.effects ?? []).length > 0) return targetOf(receipt);
         continue;
       }
       const target = revertTargetOf(result?.target);
       if (target) undone.add(targetId(target));
       continue;
     }
+    if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
     if (receipt.effects !== undefined && receipt.effects.length === 0) continue;
-    if (receipt.effects !== undefined && !receipt.snapshotTree) return undefined;
     return targetOf(receipt);
   }
   return undefined;
@@ -158,10 +171,10 @@ async function plan(bookDir: string, target: RevertTarget, store: HistoryStore):
   const all = await readReceipts(bookDir);
   const group = all.filter((receipt) => ("opId" in target ? receipt.opId === target.opId : receipt.key === target.receiptKey));
   if (group.length === 0) return fail("nothing_to_undo", "找不到这次改动的记录，撤不了。");
-  if (group.some((receipt) => receipt.effects === undefined)) return fail("legacy_receipt", "这次改动是升级之前做的，撤不了，只能整本回到那之前的存档。");
+  if (group.some((receipt) => receipt.effects === undefined)) return fail("legacy_receipt", "这次改动是升级之前做的，撤不了。");
   const writes = group.filter((receipt) => (receipt.effects ?? []).length > 0);
   if (writes.length === 0) return fail("nothing_to_undo", "这次没改过能撤的东西。");
-  if (writes.some((receipt) => !receipt.snapshotTree)) return fail("no_tree", "这次改动之前没留存档，撤不了，只能整本恢复。");
+  if (writes.some((receipt) => !receipt.snapshotTree)) return fail("no_tree", "这次改动之前没留存档，撤不了。");
   const trees: Version[] = [];
   for (const receipt of writes) {
     const version = await store.list(receipt.snapshotTree as string);

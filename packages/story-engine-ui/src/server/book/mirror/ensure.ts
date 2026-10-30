@@ -12,7 +12,7 @@
  * 最前面先收老版本中途崩溃留下的老定稿链事务残留（`.story-engine-tx/`，没有就是一次 lstat）：
  * 读路径都不再收它（重构 P7），开书是唯一入口。
  */
-import { bookImport, cardsImport, listChapterLedgers, LegacyResidueError, listChapterTexts, readCards, recoverBookTransactions, runCommand, type BookImportResult, type CardsImportResult, type RunOptions } from "@actalk/story-core";
+import { BOOK_START_KEYS, bookImport, cardsImport, listChapterLedgers, LegacyResidueError, listChapterTexts, readCards, recoverBookTransactions, runCommand, type BookImportResult, type CardsImportResult, type RunOptions } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror, type MirrorSyncResult } from "./sync.js";
 
 export type EnsureOnCoreResult =
@@ -57,14 +57,14 @@ async function ensureNow(bookDir: string, options: EnsureOnCoreOptions): Promise
   let ledgers = (await listChapterLedgers(bookDir)).length;
   let imported: BookImportResult | undefined;
   if (ledgers === 0 && (await listChapterTexts(bookDir)).length > 0) {
-    const outcome = await runCommand(bookDir, bookImport, {}, { caller: "author", idempotencyKey: "book-import:open", ...snapshot });
+    const outcome = await runCommand(bookDir, bookImport, {}, { caller: "author", idempotencyKey: BOOK_START_KEYS.importOpen, ...snapshot });
     if (!outcome.ok && outcome.code !== "already_imported") return { ok: false, code: outcome.code, reason: outcome.message };
     if (outcome.ok) imported = outcome.result;
     ledgers = (await listChapterLedgers(bookDir)).length;
   }
   let cards: CardsImportResult | undefined;
   if (!(await readCards(bookDir))) {
-    const outcome = await runCommand(bookDir, cardsImport, {}, { caller: "author", idempotencyKey: "cards-import:open", ...snapshot });
+    const outcome = await runCommand(bookDir, cardsImport, {}, { caller: "author", idempotencyKey: BOOK_START_KEYS.cardsImportOpen, ...snapshot });
     if (!outcome.ok && outcome.code !== "already_imported") return { ok: false, code: outcome.code, reason: outcome.message };
     if (outcome.ok) cards = outcome.result;
   }

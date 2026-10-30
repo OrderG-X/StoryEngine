@@ -89,6 +89,19 @@ describe("定稿只有执行器一个入口（片 4A）", () => {
   });
 });
 
+describe("撤销 / 恢复 / 裁剪只有执行器一个入口（片 4C）", () => {
+  it("核心撤销 / 恢复的计划和写回、裁剪只在 history.change 配方里调（存档模块是裁剪的定义处；单测助手给要「恢复过」前提的测试用）", async () => {
+    expect(await filesMatching(SERVER, /\b(?:planRevert|planRestore|historyApply|lastUndoable)\b/u)).toEqual(["lib/history-test-helpers.ts", "services/operations/recipes/history-change.ts"]);
+    expect(await filesMatching(SERVER, /\b(?:planPrune|applyPrune)\s*\(/u)).toEqual(["lib/snapshot.ts", "services/operations/recipes/history-change.ts"]);
+  });
+
+  it("对话工具、按钮分发、路由里没有片 4C 前的撤销 / 裁剪入口名", async () => {
+    const legacy = /["'](?:manage_snapshots|prune_snapshots|undo_last_change|prune-confirm)["']/u;
+    expect(await filesMatching(join(SERVER, "agent"), legacy)).toEqual([]);
+    expect(await filesMatching(join(SERVER, "routes"), legacy)).toEqual([]);
+  });
+});
+
 describe("改账只有执行器一个入口（片 3B）", () => {
   it("记裁定、理线索只在 ledger.change 配方里调", async () => {
     expect(await filesMatching(SERVER, /\bdecisionRecord\b/u)).toEqual(["services/operations/recipes/ledger-change.ts"]);
