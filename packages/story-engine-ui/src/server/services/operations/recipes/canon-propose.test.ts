@@ -17,7 +17,7 @@ import { __resetExecutionsForTests } from "../../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../../lib/operations/live.js";
 import { __resetOperationStoreForTests, readOperation, type OperationRecord } from "../../../lib/operations/store.js";
 import { listSnapshots } from "../../../lib/snapshot.js";
-import { __drainOperationsForTests, __resetRecipesForTests, cancelOperation, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
+import { __drainOperationsForTests, __resetRecipesForTests, cancelOperation, reconcileOperations, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
 import {
   CANON_CONFIRM_ACTION,
   CANON_CONFIRM_KIND,
@@ -28,6 +28,20 @@ import {
   type CanonConfirmPreview,
   type CanonProposeBody,
 } from "./canon-propose.js";
+
+/** 定论改齐那条命令写完之后、配方接着往下之前（模拟进程在这儿没了，Astra 第 12 轮）。 */
+const hook = vi.hoisted(() => ({ afterSettle: undefined as undefined | (() => Promise<void>) }));
+vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
+  return {
+    ...actual,
+    runCommandInOperation: async (...args: Parameters<typeof actual.runCommandInOperation>) => {
+      const outcome = await actual.runCommandInOperation(...args);
+      if (args[1].name === "settle.apply") await hook.afterSettle?.();
+      return outcome;
+    },
+  };
+});
 
 /** 编号只给程序用，给人看的话里一个都不许出现。 */
 const RAW_ID = /c\d+-\d|t\d+-\d|F\d|"e\d"(?!:)/u;
@@ -77,6 +91,7 @@ beforeEach(async () => {
   __resetLiveForTests();
   __resetRecipesForTests();
   __resetCatchUpLocksForTests();
+  hook.afterSettle = undefined;
   root = await makeHomeTempDir("canon-propose-");
   vi.stubEnv("SE_DATA_DIR", join(root, "data"));
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "雾港", genre: "悬疑", protagonistName: "许微" }));
@@ -182,6 +197,36 @@ describe("查完停下等作者点「确认」", () => {
     expect(await draftText()).toBe(DRAFT3);
     expect(await canonTexts()).toEqual(["杜长顺十年前去世"]);
     expect((await listSnapshots(book)).length).toBeGreaterThan(snapshotsBefore);
+  });
+
+  it("改齐了、记检查点之前进程没了：接着做照回执报「改齐了」，不照改过的正文重算、不再改一遍（Astra 第 12 轮）", async () => {
+    const record = await statement();
+    const [ch2] = previewOf(record).card.edits;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const appliedOnce = new Promise<void>((resolve) => { reached = resolve; });
+    hook.afterSettle = async () => {
+      hook.afterSettle = undefined;
+      reached();
+      await held;
+    };
+    expect((await resumeOperation(book, record.opId, { actionId: CANON_CONFIRM_ACTION, decision: "apply" })).ok).toBe(true);
+    await appliedOnce;
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    await reconcileOperations(book);
+    expect(await stored(record.opId)).toMatchObject({ state: "paused" });
+    release();
+    const textAfter = await chapterText(2);
+    expect(textAfter).toContain(ch2!.to);
+    expect((await resumeOperation(book, record.opId)).ok).toBe(true);
+    await __drainOperationsForTests();
+    const done = await stored(record.opId);
+    expect(done.state).toBe("succeeded");
+    expect(summaryOf(done)).toMatch(/^改齐了。/u);
+    expect(await chapterText(2)).toBe(textAfter);
+    expect(await canonTexts()).toEqual(["杜长顺十年前去世"]);
   });
 
   it("卡上没有的那处划不掉；全划掉了（定论也记着）如实说什么都没改", async () => {

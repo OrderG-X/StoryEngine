@@ -16,7 +16,7 @@ import { rereadBlocker } from "../../../editorial/reread-state.js";
 import { isEmptySettleArgs, settleApplyArgs } from "../../../editorial/settle/apply-args.js";
 import { proposeSettle, type ChapterSide, type SettleProposal, type SettleRequest, type SettleSide } from "../../../editorial/settle/propose.js";
 import { frozenCompatAllowance, frozenModelProblem, type FrozenModels, type ModelTaskProfileKey } from "../../../lib/llm-client.js";
-import { runCommandInOperation } from "../../../lib/operations/command.js";
+import { runCommandInOperation, stepReceipt } from "../../../lib/operations/command.js";
 import { OperationObsolete, rethrowIfStopped } from "../../../lib/operations/context.js";
 import { coded } from "../../draft-change/steps.js";
 import type { OperationResult, Recipe } from "../executor.js";
@@ -232,6 +232,9 @@ async function propose(bookDir: string, request: SettleRequest, callModel: Brain
 
 /** 改齐（作者档，一个事务）：查完之后书变了是过时（说哪样变了），别的如实失败。 */
 async function applyProposal(bookDir: string, proposal: SettleProposal, excluded: readonly string[]): Promise<{ readonly summary: string; readonly snapshotId?: string }> {
+  // 上次已经改齐了（崩在改完、记检查点之前）：照回执报，不照改过的正文重算参数。
+  const receipt = await stepReceipt(bookDir, "定论改齐");
+  if (receipt) return { summary: canonAppliedSummary(receipt.result as SettleApplyResult) };
   const args = await settleApplyArgs(bookDir, proposal, new Set(excluded));
   if (isEmptySettleArgs(args)) {
     throw coded("nothing_applied", proposal.sceneOnly ? "要改的几处都划掉了，这次什么都没改。" : "这条定论已经记着，要改的几处也都划掉了，这次什么都没改。");

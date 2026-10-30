@@ -395,6 +395,32 @@ describe("「撤销上一步」撤哪次", () => {
     expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
   });
 
+  it("撤 B、全撤 A、再撤回「撤 B」：B 又在了，上一次是 B，不往前跳去撤别章（Astra 第 12 轮第 1 条）", async () => {
+    await write("X", chapter(9, []));
+    await write("A", chapter(1, []));
+    await write("B", chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" }));
+    expect(await applyRevert("B", await revert("B"), "U1")).toMatchObject({ ok: true });
+    expect(await applyRevert("A", await revert("A"), "U2")).toMatchObject({ ok: true });
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "X" });
+    expect(await applyRevert("U1", await revert("U1"), "U3")).toMatchObject({ ok: true });
+    expect(await read(chapterTextPath(1))).toBe(TEXT(1, "，第二版"));
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "B" });
+  });
+
+  it("A → B → 整本恢复到 B 之前 → 全撤 A：恢复和 B 都被退掉了，不再算上一次（Astra 第 12 轮第 1 条）", async () => {
+    await write("X", chapter(9, []));
+    await write("A", chapter(1, []));
+    const tree = await git.capture();
+    await write("B", chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" }));
+    const restore = await planRestore(book, tree, git);
+    if (!restore.ok) throw new Error(restore.message);
+    expect(await runCommand(book, historyApply, { kind: "restore", label: "恢复", target: { tree }, changes: restore.changes.map((change) => ({ ...change })), rangeDigest: restore.rangeDigest }, options("R"))).toMatchObject({ ok: true });
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "R" });
+    expect(await applyRevert("A", await revert("A"), "U1")).toMatchObject({ ok: true });
+    expect(await exists(chapterTextPath(1))).toBe(false);
+    expect(lastUndoable(await readReceipts(book))).toEqual({ opId: "X" });
+  });
+
   it("后来那次只被「全撤」退了一部分：照常算「上一次」", async () => {
     await write("A", chapter(1, []));
     await write("B", [...chapter(1, [], { text: TEXT(1, "，第二版"), stamp: "stamp-1b" }), ...chapter(2, [])]);

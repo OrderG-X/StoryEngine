@@ -21,7 +21,7 @@ import { __resetOperationStoreForTests, readOperation, type OperationRecord } fr
 import { listSnapshots } from "../../../lib/snapshot.js";
 import { restoreForTest } from "../../../lib/history-test-helpers.js";
 import { DAY_ITEM_ID, openThreadsHintDue, type CommitPreviewView } from "../../commit-view.js";
-import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
+import { __drainOperationsForTests, __resetRecipesForTests, reconcileOperations, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
 import {
   COMMIT_CONFIRM_ACTION,
   COMMIT_CONFIRM_KIND,
@@ -38,6 +38,8 @@ const hook = vi.hoisted(() => ({
   beforePrepare: undefined as undefined | (() => Promise<void>),
   /** 配方读完正文、交定稿命令之前（还没上书锁）插一次别的写（Astra 第 11 轮）。 */
   beforeCommitCommand: undefined as undefined | (() => Promise<void>),
+  /** 定稿命令写完之后、配方接着往下之前（模拟进程在这儿没了，Astra 第 12 轮）。 */
+  afterCommitCommand: undefined as undefined | (() => Promise<void>),
 }));
 vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
@@ -45,7 +47,9 @@ vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
     ...actual,
     runCommandInOperation: async (...args: Parameters<typeof actual.runCommandInOperation>) => {
       if (args[1].name === "chapter.commit") await hook.beforeCommitCommand?.();
-      return actual.runCommandInOperation(...args);
+      const outcome = await actual.runCommandInOperation(...args);
+      if (args[1].name === "chapter.commit") await hook.afterCommitCommand?.();
+      return outcome;
     },
   };
 });
@@ -117,6 +121,7 @@ beforeEach(async () => {
   warmUpReadersMock.mockClear();
   hook.beforePrepare = undefined;
   hook.beforeCommitCommand = undefined;
+  hook.afterCommitCommand = undefined;
   root = await makeHomeTempDir("commit-prepare-");
   vi.stubEnv("SE_DATA_DIR", join(root, "data"));
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "钟楼", genre: "悬疑", logline: "钟停了。", protagonistName: "林远" }));
@@ -360,6 +365,37 @@ describe("作者点「确认定稿」", () => {
     expect(done.state).toBe("obsolete");
     expect(done.failure?.message).toContain("正文又改过");
     expect(await exists(join(book, "chapters", "0001.md"))).toBe(false);
+    expect(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).toBe(edited);
+  });
+
+  it("定完、记检查点之前进程没了；作者之后又存了新稿：接着做照回执报「定了」，不说「没定稿」，新稿不动（Astra 第 12 轮）", async () => {
+    await writeDraft(1, CH1);
+    const record = await prepare(1);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const committedOnce = new Promise<void>((resolve) => { reached = resolve; });
+    hook.afterCommitCommand = async () => {
+      hook.afterCommitCommand = undefined;
+      reached();
+      await held;
+    };
+    expect(await resumeOperation(book, record.opId, { actionId: COMMIT_CONFIRM_ACTION, decision: "commit" })).toMatchObject({ ok: true });
+    await committedOnce;
+    // 进程没了：调度表、执行登记清掉，盘上还是在跑。
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    await reconcileOperations(book);
+    expect(await stored(record.opId)).toMatchObject({ state: "paused" });
+    release();
+    const edited = CH1.replace("铜钥匙", "银钥匙");
+    await writeDraft(1, edited);
+    expect(await resumeOperation(book, record.opId)).toMatchObject({ ok: true });
+    await __drainOperationsForTests();
+    const done = await stored(record.opId);
+    expect(done.state).toBe("succeeded");
+    expect(bodyOf(done)).toMatchObject({ committed: true });
+    expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toContain("铜钥匙");
     expect(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).toBe(edited);
   });
 

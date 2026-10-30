@@ -10,7 +10,8 @@
  * 对话 AI 交（`prepare_commit`）和作者点「定稿」是同一次：都只出清单，定稿只能作者点「确认定稿」。
  */
 import { readFile } from "node:fs/promises";
-import { chapterCommit, readCardsOrLegacy, type BasisChange, type TruthBasis } from "@actalk/story-core";
+import { join } from "node:path";
+import { chapterCommit, chapterTextPath, readCardsOrLegacy, type BasisChange, type ChapterCommitResult, type TruthBasis } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { describeBasisChanges, MirrorLagError, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
@@ -22,7 +23,7 @@ import type { BrainCallModel } from "../../../editorial/reader-window.js";
 import { rereadBlocker } from "../../../editorial/reread-state.js";
 import { autoBackupAfterCommit } from "../../../lib/book-backup.js";
 import { frozenCompatAllowance, frozenModelProblem, type FrozenModels, type ModelTaskProfileKey } from "../../../lib/llm-client.js";
-import { runCommandInOperation } from "../../../lib/operations/command.js";
+import { runCommandInOperation, stepReceipt } from "../../../lib/operations/command.js";
 import { OperationObsolete } from "../../../lib/operations/context.js";
 import type { OperationRecord } from "../../../lib/operations/store.js";
 import { defaultDraftPath } from "../../../lib/project-io.js";
@@ -168,13 +169,20 @@ const DRAFT_CHANGED = "清单出来之后正文又改过，这份清单是照改
 /** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完重生成镜像、照盘上的账算回执。 */
 async function commit(bookDir: string, preview: CommitPreview, choices: { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number }): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   const { ticket, chapter } = preview;
+  const what = `定稿：第 ${chapter} 章`;
+  // 上次已经定了（崩在定完、记检查点之前）：照回执报，不再核工作稿（作者之后存的新稿不算「改过」）。
+  const receipt = await stepReceipt(bookDir, what);
+  if (receipt) {
+    const committed = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8").catch(() => "");
+    return { done: await doneOf(bookDir, chapter, committed, receipt.result as ChapterCommitResult) };
+  }
   const text = await readDraft(bookDir, chapter);
   if (text === undefined) throw new OperationObsolete("draft_missing", `第 ${chapter} 章的工作稿没了，没定稿。`);
   const fingerprint = draftFingerprint(text);
   if (fingerprint !== ticket.textSha256) throw new OperationObsolete("draft_changed", DRAFT_CHANGED);
   const entries = commitEntriesOf(ticket, choices);
   const { result, snapshotId } = await runCommandInOperation(bookDir, chapterCommit, { chapter, text, entries }, {
-    what: `定稿：第 ${chapter} 章`,
+    what,
     caller: "author",
     basis: ticket.basis,
     // 作者的选择落在条目里；正文按指纹认（稿纸重新载入只收空段落，字一个没动）。
@@ -193,11 +201,14 @@ async function commit(bookDir: string, preview: CommitPreview, choices: { readon
     }
     throw coded(result.code, result.message);
   }
-  // 老代码还在读老格式文件：按新账重生成一遍。没成不影响定稿本身（下次取依据时补），但要如实说。
+  return { done: await doneOf(bookDir, chapter, text, result.result), ...(snapshotId ? { snapshotId } : {}) };
+}
+
+/** 定完：老代码还在读老格式文件，按新账重生成一遍（没成不影响定稿本身，下次取依据时补，但要如实说）；照盘上的账算回执。 */
+async function doneOf(bookDir: string, chapter: number, text: string, result: ChapterCommitResult): Promise<CommitDone> {
   const mirror = await syncLegacyMirror(bookDir).catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
   if (!mirror.ok) console.warn(`[commit.prepare] 第 ${chapter} 章定稿后重生成老格式镜像没成：${mirror.reason}`);
-  const done = await commitDoneView(bookDir, chapter, text, result.result, mirror.ok);
-  return { done, ...(snapshotId ? { snapshotId } : {}) };
+  return commitDoneView(bookDir, chapter, text, result, mirror.ok);
 }
 
 const blockedResult = (chapter: number, view: CommitPreviewView): OperationResult => {

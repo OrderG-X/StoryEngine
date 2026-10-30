@@ -18,11 +18,9 @@ import {
   historyApply,
   lastUndoable,
   ledgerChapterOfPath,
-  opCommandKey,
   planChapterOfPath,
   planRestore,
   planRevert,
-  readCommandReceipt,
   readReceipts,
   withBookLock,
   CARDS_PATH,
@@ -34,7 +32,7 @@ import {
 } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { withGitHistoryReader } from "../../../lib/history-reader.js";
-import { operationStep, runCommandInOperation } from "../../../lib/operations/command.js";
+import { runCommandInOperation, stepReceipt } from "../../../lib/operations/command.js";
 import { OperationObsolete } from "../../../lib/operations/context.js";
 import { isOperationId, isTerminal, readOperation } from "../../../lib/operations/store.js";
 import { humanizeHistoryLabel } from "../../../lib/snapshot-changes.js";
@@ -234,8 +232,7 @@ async function runApply(bookDir: string, args: HistoryApplyArgs, caller: "author
 
 /** 这一步的回执已经在了（崩在写完、记检查点之前）：照回执报，不再算、不再写。 */
 async function replayed(bookDir: string, what: string): Promise<{ readonly paths: readonly string[] } | undefined> {
-  const { operation, stepId } = operationStep(bookDir, what);
-  const receipt = await readCommandReceipt(bookDir, opCommandKey({ opId: operation.opId, stepId }));
+  const receipt = await stepReceipt(bookDir, what);
   return receipt ? { paths: (receipt.result as Partial<HistoryApplyResult> | null)?.paths ?? [] } : undefined;
 }
 
