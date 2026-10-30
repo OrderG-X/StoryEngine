@@ -48,6 +48,22 @@ describe("设定本「这章改了什么」（重构 P6 第 6 步）", () => {
     expect(screen.queryByRole("button", { name: /第 13 章/u })).toBeNull();
   });
 
+  it("账没记全 / 还没记上：如实说，不说「这章没变」；记上的照列（P2b）", async () => {
+    mockFetch({ ok: true, changes: { ...CHANGES, ledgerShort: "partial" } });
+    render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map()} />);
+    expect(await screen.findByText("这章的账没记全，下面只是记上的那些。")).toBeTruthy();
+    expect(screen.getByText("沈家侄女")).toBeTruthy();
+    cleanup();
+    mockFetch({ ok: true, changes: { chapter: 12, chapters: [12], ledgerShort: "partial", present: ["林舟"], newCast: [], threads: [], facts: [] } });
+    render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map()} />);
+    expect(await screen.findByText("这章的账没记全。")).toBeTruthy();
+    expect(screen.queryByText("这章定稿时没记下新的人、线索和事。")).toBeNull();
+    cleanup();
+    mockFetch({ ok: true, changes: { chapter: 12, chapters: [12], ledgerShort: "pending", present: [], newCast: [], threads: [], facts: [] } });
+    render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map()} />);
+    expect(await screen.findByText("这章的账还没记上。")).toBeTruthy();
+  });
+
   it("点原句回稿纸那一章那一句；翻到上一章重新读", async () => {
     const fetchMock = mockFetch({ ok: true, changes: CHANGES });
     const onJump = vi.fn();
