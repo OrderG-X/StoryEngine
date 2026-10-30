@@ -12,6 +12,7 @@ import { ChapterLedger, LedgerEntry } from "../schema/ledger.js";
 import { ledgerOf, type EntryDraft } from "../ledger/entries.js";
 import { LEDGER_V1_SCHEMA } from "../ledger/migrate-v1.js";
 import { LEDGER_MIGRATE_COMMAND, ledgerMigrate, ledgerMigrateKey, ledgersToUpgrade } from "../commands/ledger-migrate.js";
+import { project } from "../projection/project.js";
 import { readBookSnapshot } from "../store/book.js";
 import { opBookEpoch, readBookEpoch, readDraftGens } from "../store/control.js";
 import { CARDS_PATH, chapterLedgerPath, chapterTextPath, DECISIONS_PATH, draftPath } from "../store/paths.js";
@@ -317,6 +318,23 @@ describe("撤销核引用：基准按引用者自己接着的那一刻", () => {
       await write("A", rulings({ chapter: 1, day: 5, dayEnd: 5 }));
       await write("B", chapter(3, [replacing]));
       expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+    });
+
+    // 出口复核 R4b2：后文那章作者自己定了天数，前面整体挪了它不跟着挪。和当下线上的事实同一个口径（P2a 起）：
+    // 引用只核它接着的那条还是不是那条（内容、范围、段在本章里的相对位置），不核两章之间隔几天；隔的天数不对了，
+    // 时间线上那章如实报「作者定的天数和前文推的对不上」，作者在那里定。
+    it("后文那章作者自己定了天数：撤前章的天数裁定照撤，时间线上那章如实报和前文对不上", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", rulings({ chapter: 1, day: 5, dayEnd: 5 }));
+      const pinned = timeOf(3, 2, { start: { offset: days(0), basis: "text", quote: quote(3) }, sameDay: true });
+      await write("B", chapter(3, [replacing, pinned, dayOf(3, 3, 5, 5)]));
+      const conflicts = async () => {
+        const snapshot = await readBookSnapshot(book);
+        return project({ ledgers: snapshot.ledgers, decisions: snapshot.decisions }).timeConflicts.map((item) => [item.chapter, item.kind, item.authorDay]);
+      };
+      expect(await conflicts()).toEqual([]);
+      expect(await applyRevert("A", await revert("A"))).toMatchObject({ ok: true });
+      expect(await conflicts()).toEqual([[3, "time-start", 5]]);
     });
 
     it("裁定改了本章开头那天：回忆离前一章的位置变了 → 拦；只改本章结尾那天 → 不拦", async () => {

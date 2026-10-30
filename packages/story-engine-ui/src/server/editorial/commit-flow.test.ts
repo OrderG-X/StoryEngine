@@ -363,6 +363,21 @@ describe("定稿编排", () => {
       callModel: fakeModel({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } }),
     }));
     expect(again.ticket.entries.find((entry) => entry.kind === "day")).toMatchObject({ day: 10, dayEnd: 11 });
+
+    // 第 3 轮 R6c2：后来那次只定了开头，作者定的天数整套是那次的，更早那版的结尾不拼回来。
+    const onlyStart = await runCommand(book, chapterCommit, {
+      chapter: 2, text: CH2, entries: [{ kind: "day", review: "author", day: 12 }],
+      ledger: { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: ["time"] },
+    }, { caller: "author", idempotencyKey: "partial-2b" });
+    expect(onlyStart).toMatchObject({ ok: true });
+    expect(await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: "pending-2b" })).toMatchObject({ ok: true });
+    const third = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: CH2,
+      callModel: fakeModel({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } }),
+    }));
+    const day = third.ticket.entries.find((entry) => entry.kind === "day");
+    expect(day).toMatchObject({ day: 12 });
+    expect(day).not.toHaveProperty("dayEnd");
   });
 
   it("重定稿：上次定稿认过的出场人物（含泛称）不再当第一次出场问；这次新冒出来的照问", async () => {

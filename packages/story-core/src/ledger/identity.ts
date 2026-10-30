@@ -9,7 +9,7 @@
  * - 新账的 carry = 上一份账单的条目 ∪ 它的 carry：连着几次重记（中间账待记也一样）旧号都还占着。
  *   时间另带最近一份记了时间的账单那一套（条目、段、时间格式），账待记那份照它读回上次的时间（出口复核 R6）。
  */
-import { missingKindsOf, threadOf, type ChapterLedger, type EntryInput, type LedgerCarryTime, type LedgerEntry, type LedgerPrevious, type ThreadEntry } from "../schema/ledger.js";
+import { missingKindsOf, threadOf, type ChapterLedger, type EntryInput, type LedgerCarryTime, type LedgerEntry, type LedgerPrevious, type ThreadEntry, type TimeEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
 import { dayDeclarationOf, declarationOf, timeDeclarationOf, type EntryIds } from "./entries.js";
 
@@ -63,10 +63,19 @@ export function knownOpens(previous: ChapterLedger | undefined): readonly Thread
   });
 }
 
-/** 最近一份记了时间的账单那一套时间：上一份记全了时间就是它的，没记时间（账待记、时间没记全）就接着它带的。 */
+/**
+ * 最近一份记了时间的账单那一套时间：上一份记全了时间就是它的，没记时间（账待记、时间没记全）就接着它带的。
+ * 时间没记全、但那次照样记了作者定的天数（作者档、不靠记账员）：作者定的天数整套换成那次的（只定了开头就只有开头，
+ * 不把更早那版的结尾拼回来，出口复核 R6c2）；记账员的时间、段、格式照旧接着带的。账待记的那份什么都没记，原样接着带。
+ */
 export function carriedTime(previous: ChapterLedger | undefined): LedgerCarryTime | undefined {
   if (!previous) return undefined;
-  if (missingKindsOf(previous).includes("time")) return previous.previous?.carry.time;
+  if (missingKindsOf(previous).includes("time")) {
+    const older = previous.previous?.carry.time;
+    if (!older || previous.status === "pending") return older;
+    const author = previous.entries.filter((entry): entry is TimeEntry => entry.kind === "time" && entry.relation === "at");
+    return { ...older, entries: [...author, ...older.entries.filter((entry) => entry.relation !== "at")] };
+  }
   const entries = previous.entries.filter((entry) => entry.kind === "time");
   if (entries.length === 0 && previous.scenes.length === 0) return undefined;
   return { ...(previous.timeModel ? { timeModel: previous.timeModel } : {}), entries, scenes: previous.scenes };

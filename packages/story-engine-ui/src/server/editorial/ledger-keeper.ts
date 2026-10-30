@@ -32,7 +32,7 @@ import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
-import { extractJsonObject, parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
+import { extractJsonObject, parseChapterEnd, parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -65,8 +65,8 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
-/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 2;
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 3;
 
 /** 交账单的要求（通用写法，绝不写进具体书名、人名）。 */
 export const KEEPER_SPEC: readonly string[] = [
@@ -321,10 +321,12 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   input.onRawOutput?.(text);
   const parsed = parseKeeperOutput(text, context);
   if (!parsed) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
-  const repaired = await repairQuotes(parsed, input, [...window, { role: "user", content: task }, { role: "assistant", content: text }]);
+  const conversation: BrainMessage[] = [...window, { role: "user", content: task }, { role: "assistant", content: text }];
+  const repaired = await repairQuotes(parsed, input, conversation);
+  const ended = await askChapterEnd(repaired.parsed, input, conversation);
   return {
     ok: true,
-    parsed: settleTime(withOriginalQuotes(repaired.parsed, input.draft), input.draft),
+    parsed: settleTime(withOriginalQuotes(ended, input.draft), input.draft),
     omittedThreads: context.omittedThreads,
     omittedFacts: context.omittedFacts,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
@@ -507,6 +509,64 @@ async function repairQuotes(
     entries[timeIndex] = next;
   }
   return { parsed: { ...parsed, entries }, repair: { asked, fixed } };
+}
+
+/** 写了本章开头是哪天（在当下线上），却没说结尾：既没写整章同一天，也没列换天（或写坏了没记上）。开头就不知道的不问，问了也接不上。 */
+function endMissing(time: TimeInput | undefined): time is TimeInput {
+  return Boolean(time && time.start !== undefined && time.start !== "unknown" && time.sameDay !== true && (time.dayChanges ?? []).length === 0);
+}
+
+/** 追问本章结尾那条 user 消息（单测也用）。 */
+export function buildChapterEndTask(numbered: string): string {
+  return [
+    "你刚交的账单里，time 写了本章开头，但没写本章从开头到结尾是不是同一天（sameDay），也没列换天（dayChanges），本章结尾是哪天就不知道了。请只补这一件：",
+    "- 从头到尾都在同一天（从早到晚、从白天到深夜都还是同一天），交 {\"sameDay\":true}；",
+    "- 中间换了天，逐次列 dayChanges：每次点新的一天开头那句的编号 id，写隔了几天（offset 至少 1 天；要看换天规矩才定的照样用 byBoundary 各写一份，写法和本章开头一样）；",
+    "- 正文里实在看不出，交 {\"unknown\":true}。",
+    "",
+    "下面是本章正文，每句前面是编号。",
+    "",
+    "【本章正文】",
+    numbered,
+    "",
+    '只交 JSON：{"sameDay":true} 或 {"dayChanges":[{"id":12,"offset":{"unit":"day","min":1,"max":1}}]}',
+  ].join("\n");
+}
+
+/**
+ * 记账员没说本章结尾（P3a 评测：留出书上约 5% 的章漏答）：章末是哪天就断了，后面每章的绝对天数跟着不知道。
+ * 在同一段对话里只追问这一件：同一天，或逐次换天（点句子编号，代码取原句）。追问没成、交回来读不了、说看不出，
+ * 都照第一遍的交（章末不知道，清单上照实列）；交回来的换天写坏了，照第一遍同样的规矩不记、如实说。
+ */
+async function askChapterEnd(parsed: KeeperParseResult, input: KeeperInput, conversation: readonly BrainMessage[]): Promise<KeeperParseResult> {
+  const index = parsed.entries.findIndex((entry) => entry.kind === "time");
+  const time = index >= 0 ? parsed.entries[index] : undefined;
+  if (time?.kind !== "time" || !endMissing(time)) return parsed;
+  const units = splitUnits(input.draft);
+  let reply: string;
+  try {
+    reply = await withStep("记账员补记结尾", () => input.callModel([...conversation, { role: "user", content: buildChapterEndTask(numberedText(units)) }], { json: true }));
+  } catch (error) {
+    rethrowIfStopped(error);
+    return { ...parsed, adjusted: [...parsed.adjusted, { where: "time", reason: `问本章结尾是哪天没问成（${modelFailureText(error)}），按不知道记` }] };
+  }
+  input.onRawOutput?.(reply);
+  const raw = extractJsonObject(reply);
+  if (!raw) return parsed;
+  const changes = Array.isArray(raw.dayChanges)
+    ? raw.dayChanges.map((item) => {
+      if (item === null || typeof item !== "object") return item;
+      const { id, ...rest } = item as Record<string, unknown>;
+      const unit = units.find((candidate) => candidate.id === positiveIntLike(id));
+      return { ...rest, quote: unit ? input.draft.slice(unit.start, unit.end) : "" };
+    })
+    : raw.dayChanges;
+  const adjusted = [...parsed.adjusted];
+  const end = parseChapterEnd({ ...raw, dayChanges: changes }, adjusted);
+  if (end.sameDay === undefined && end.dayChanges === undefined) return { ...parsed, adjusted };
+  const entries = [...parsed.entries];
+  entries[index] = { ...time, ...end };
+  return { ...parsed, entries, adjusted };
 }
 
 /** 补摘要求里每条怎么称呼（只给记账员看，不进清单）。时间那几处另列（slotLabel）。 */

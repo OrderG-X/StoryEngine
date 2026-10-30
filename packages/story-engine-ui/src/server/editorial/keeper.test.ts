@@ -573,6 +573,66 @@ describe("记账员跑一章", () => {
     }
   });
 
+  it("写了开头没说结尾：同一段对话里只追问结尾——同一天、点换天那句的编号（代码取原句）；没问成、看不出照第一遍交；说了结尾、开头不知道的不问", async () => {
+    const book = await makeHomeTempDir("keeper-end-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。");
+      const draft = "# 第2章\n\n她在旅馆住下。夜里下起了雨。第二天早上，她七点就上了山。";
+      const startOnly = { start: { offset: 0, basis: "judged", quote: "她在旅馆住下" } };
+      const run = (time: Record<string, unknown>, end: () => Promise<string>) => {
+        const asks: BrainMessage[][] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("本章结尾是哪天就不知道了")) { asks.push([...messages]); return end(); }
+            return JSON.stringify({ time });
+          },
+        });
+        return { asks, outcome };
+      };
+      const timeOf = async (outcome: ReturnType<typeof runLedgerKeeper>) => {
+        const done = await outcome;
+        if (!done.ok) throw new Error(done.reason);
+        return { time: done.parsed.entries.find((entry) => entry.kind === "time"), adjusted: done.parsed.adjusted };
+      };
+
+      const same = run(startOnly, async () => JSON.stringify({ sameDay: true }));
+      expect((await timeOf(same.outcome)).time).toMatchObject({ kind: "time", sameDay: true });
+      expect(same.asks).toHaveLength(1);
+      // 接着第一遍那段对话问：前面是交账单的要求和它交的账单；正文按编号句子给。
+      expect(same.asks[0]?.at(-2)).toMatchObject({ role: "assistant", content: JSON.stringify({ time: startOnly }) });
+      expect(same.asks[0]?.at(-1)?.content).toContain("[3]第二天早上，她七点就上了山。");
+
+      const changed = await timeOf(run(startOnly, async () => JSON.stringify({ dayChanges: [{ id: 3, offset: { unit: "day", min: 1, max: 1 } }] })).outcome);
+      expect(changed.time).toMatchObject({ kind: "time", dayChanges: [{ offset: { unit: "day", min: 1, max: 1 }, quote: "第二天早上，她七点就上了山。" }] });
+      expect(changed.time).not.toHaveProperty("sameDay");
+      expect(checkEntries(changed.time ? [changed.time] : [], draft, sampleBook()).rejected).toEqual([]);
+
+      const failed = await timeOf(run(startOnly, async () => { throw new Error("429 太忙"); }).outcome);
+      expect(failed.time).not.toHaveProperty("sameDay");
+      expect(failed.time).not.toHaveProperty("dayChanges");
+      expect(failed.adjusted).toEqual([{ where: "time", reason: expect.stringContaining("问本章结尾是哪天没问成（") }]);
+      const unknown = await timeOf(run(startOnly, async () => JSON.stringify({ unknown: true })).outcome);
+      expect(unknown.time).not.toHaveProperty("sameDay");
+      expect(unknown.adjusted).toEqual([]);
+      // 交回来的又是同一天又换天：和第一遍同样的规矩，不记、如实说。
+      const both = await timeOf(run(startOnly, async () => JSON.stringify({ sameDay: true, dayChanges: [{ id: 3, offset: 1 }] })).outcome);
+      expect(both.time).not.toHaveProperty("sameDay");
+      expect(both.time).not.toHaveProperty("dayChanges");
+      expect(both.adjusted).toHaveLength(1);
+
+      const told = run({ ...startOnly, sameDay: true }, async () => JSON.stringify({ sameDay: true }));
+      await told.outcome;
+      const noStart = run({ start: "unknown" }, async () => JSON.stringify({ sameDay: true }));
+      await noStart.outcome;
+      expect([told.asks, noStart.asks]).toEqual([[], []]);
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
   it("时间核不上的原句怎么落：开头 → 说不出隔多久；换天 → 不附那句；段 → 不记；整章是段却对不上 → 整条时间没记上", () => {
     const draft = "她在旅馆住下。她梦见了海。第二天早上，她七点就上了山。";
     const base = { drops: [], adjusted: [] };

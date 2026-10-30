@@ -394,6 +394,44 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 /**
+ * 本章结尾：整章同一天（sameDay）或逐次换天（dayChanges）。第一遍记账、追问结尾（ledger-keeper）都走这一处。
+ * 换天有一次写坏了 → 换天全不记、章末不知道（少记一次换天，后面每章都错一天）；又说同一天又列了换天 → 两样都不记。
+ */
+export function parseChapterEnd(raw: Record<string, unknown>, adjusted: KeeperDrop[]): Pick<TimeInput, "sameDay" | "dayChanges"> {
+  const sameDay = flag(raw.sameDay);
+  const changes: Mutable<NonNullable<TimeInput["dayChanges"]>[number]>[] = [];
+  let changesBroken: string | undefined;
+  for (const [index, item] of asList(raw.dayChanges).entries()) {
+    if (!isRecord(item)) {
+      changesBroken ??= `第 ${index + 1} 次换天不是对象`;
+      continue;
+    }
+    const relative = relativeOf(item);
+    if (typeof relative === "string") {
+      changesBroken ??= `第 ${index + 1} 次换天${relative}`;
+      continue;
+    }
+    const days = "offset" in relative ? relative.offset : undefined;
+    if (days && (days.unit !== "day" || days.min === undefined || days.min < 1)) {
+      changesBroken ??= `第 ${index + 1} 次换天没写成「至少过了一天」`;
+      continue;
+    }
+    const quote = quoteText(item.quote);
+    changes.push({ ...relative, ...(quote ? { quote } : { quote: "" }) });
+  }
+  if (changesBroken) {
+    adjusted.push({ where: "time.dayChanges", reason: `${changesBroken}，换天都没记，章末是哪天不知道` });
+    return {};
+  }
+  if (sameDay === true && changes.length > 0) {
+    adjusted.push({ where: "time", reason: "又说整章同一天、又列了换天，两样都没记，章末是哪天不知道" });
+    return {};
+  }
+  if (changes.length > 0) return { dayChanges: changes };
+  return sameDay === true ? { sameDay: true } : {};
+}
+
+/**
  * 时间（设计第 4 节）：start、sameDay、dayChanges、weekday、timeOfDay 在 time 里；segments 在顶层（写进 time 里的也认）。
  * 原句没附的照样交上去（空串），等补摘；结构上自相矛盾的按能确定的那一半记、如实说：
  *  - start 的相对多少写坏了 → 本章开头按说不出（unknown）记；
@@ -454,36 +492,7 @@ function parseTime(root: Raw, drop: (where: string, reason: string) => void, adj
     time.start = "unknown";
   }
 
-  const sameDay = flag(raw.sameDay);
-  const changes: Mutable<NonNullable<TimeInput["dayChanges"]>[number]>[] = [];
-  let changesBroken: string | undefined;
-  for (const [index, item] of asList(raw.dayChanges).entries()) {
-    if (!isRecord(item)) {
-      changesBroken ??= `第 ${index + 1} 次换天不是对象`;
-      continue;
-    }
-    const relative = relativeOf(item);
-    if (typeof relative === "string") {
-      changesBroken ??= `第 ${index + 1} 次换天${relative}`;
-      continue;
-    }
-    const days = "offset" in relative ? relative.offset : undefined;
-    if (days && (days.unit !== "day" || days.min === undefined || days.min < 1)) {
-      changesBroken ??= `第 ${index + 1} 次换天没写成「至少过了一天」`;
-      continue;
-    }
-    const quote = quoteText(item.quote);
-    changes.push({ ...relative, ...(quote ? { quote } : { quote: "" }) });
-  }
-  if (changesBroken) {
-    adjusted.push({ where: "time.dayChanges", reason: `${changesBroken}，换天都没记，章末是哪天不知道` });
-  } else if (sameDay === true && changes.length > 0) {
-    adjusted.push({ where: "time", reason: "又说整章同一天、又列了换天，两样都没记，章末是哪天不知道" });
-  } else if (changes.length > 0) {
-    time.dayChanges = changes;
-  } else if (sameDay === true) {
-    time.sameDay = true;
-  }
+  Object.assign(time, parseChapterEnd(raw, adjusted));
 
   const weekdayText = str(raw.weekday);
   if (weekdayText !== undefined) {
