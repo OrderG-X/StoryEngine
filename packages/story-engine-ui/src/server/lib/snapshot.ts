@@ -194,6 +194,21 @@ async function createSnapshotUnlocked(projectDir: string, label: string): Promis
   return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
 }
 
+/** 一个提交的内容树号（回执记它，撤销从这里取前像）。 */
+async function treeOfUnlocked(projectDir: string, commit: string): Promise<string> {
+  return git(projectDir, ["rev-parse", `${commit}^{tree}`]);
+}
+
+/**
+ * 写之前那一刻的树号，不进操作历史（写作版本 P2a）：不打存档点的命令（通读记账、存稿）、一批里第二条起的命令，回执也要树号。
+ * 工作树和上一个存档一样就用它的树；不一样就打一个「落盘收尾」提交（操作历史、撤销都跳过它）留住这棵树（裁剪重建提交链照样留着）。
+ */
+async function hiddenTreeUnlocked(projectDir: string, label: string): Promise<string> {
+  await ensureRepoUnlocked(projectDir);
+  if (await hasUncommittedChanges(projectDir)) await createSnapshotUnlocked(projectDir, `${POST_WRITE_LABEL_PREFIX}${label}`);
+  return treeOfUnlocked(projectDir, "HEAD");
+}
+
 /**
  * 存档类入口（建存档点、存档里写、恢复、裁剪）先收拾上次写到一半的事务；有收拾不了的就停下、不动稿、不报成功
  * （P1 第 22 轮 AJ3：恢复接口不看收拾结果，作者刚选的那版之后又被那份没退完的事务退掉）。老格式收拾不了照样抛。
@@ -247,15 +262,19 @@ export async function runWithSnapshot<T>(
   });
 }
 
+/** 交给核心 runCommand 的存档回调：返回写之前那一刻的树号；`"tree"` = 只要树号、不打存档点（核心 RunOptions.snapshot）。 */
+export type CoreSnapshot = (label: string, command: string, mode?: "tree") => Promise<string>;
+
 /**
  * 「真要写盘才打存档点」（重构 P9）：fn 拿到一个存档回调交给核心 runCommand——核心在书锁里、算出确实要写之后才调它，
  * 指错了、没变化、按钮点第二次（回执重放）都不打，操作历史里不会多出什么都没改的一条。
  * 一批里多条命令只打第一次（一批改动撤销一步）；有 fixedLabel 就用它，没有就用核心给的命令名 + 人话。
+ * 每次都返回写之前那一刻的树号（第二条起、只要树号的打不进操作历史的存档，hiddenTreeUnlocked）。
  * 整段在同一把书锁里，写完照 runWithSnapshot 落盘收尾，撤销不会插进中间。
  */
 export async function runWithLazySnapshot<T>(
   projectDir: string,
-  fn: (snapshot: (label: string, command: string) => Promise<void>) => Promise<T>,
+  fn: (snapshot: CoreSnapshot) => Promise<T>,
   fixedLabel?: string,
 ): Promise<{ readonly snapshotId?: string; readonly result: T }> {
   return withProjectLock(projectDir, async () => {
@@ -263,10 +282,11 @@ export async function runWithLazySnapshot<T>(
     // 留到要打存档点才收拾，核心已经照没收拾的半截真相核过依据了（第 4 轮复核 R9）。
     await settleOrStop(projectDir);
     let taken: SnapshotEntry | undefined;
-    const result = await fn(async (label, command) => {
-      if (taken) return;
+    const result = await fn(async (label, command, mode) => {
+      if (taken || mode === "tree") return hiddenTreeUnlocked(projectDir, coreSnapshotLabel(command, label));
       await ensureRepoUnlocked(projectDir);
       taken = await createSnapshotUnlocked(projectDir, fixedLabel ?? coreSnapshotLabel(command, label));
+      return treeOfUnlocked(projectDir, taken.id);
     });
     if (taken && (await hasUncommittedChanges(projectDir))) {
       await createSnapshotUnlocked(projectDir, `${POST_WRITE_LABEL_PREFIX}${taken.label}`);
@@ -647,9 +667,16 @@ export function coreSnapshotLabel(command: string, label: string): string {
   return `${CORE_LABEL_PREFIX}${command}:${label}`;
 }
 
-/** 交给核心 runCommand / ensureBookOnCore 的存档回调（标签带上命令名）。 */
-export function coreSnapshotFor(projectDir: string): (label: string, command: string) => Promise<void> {
-  return (label, command) => createSnapshot(projectDir, coreSnapshotLabel(command, label)).then(() => undefined);
+/** 交给核心 runCommand / ensureBookOnCore 的存档回调（标签带上命令名），返回写之前那一刻的树号。 */
+export function coreSnapshotFor(projectDir: string): CoreSnapshot {
+  return (label, command, mode) => withProjectLock(projectDir, async () => {
+    if (mode === "tree") {
+      await settleOrStop(projectDir);
+      return hiddenTreeUnlocked(projectDir, coreSnapshotLabel(command, label));
+    }
+    const entry = await createSnapshot(projectDir, coreSnapshotLabel(command, label));
+    return treeOfUnlocked(projectDir, entry.id);
+  });
 }
 
 function splitHead(rest: string): readonly [string, string] {

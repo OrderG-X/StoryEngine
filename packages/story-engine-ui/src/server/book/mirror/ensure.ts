@@ -12,7 +12,7 @@
  * 最前面先收老版本中途崩溃留下的老定稿链事务残留（`.story-engine-tx/`，没有就是一次 lstat）：
  * 读路径都不再收它（重构 P7），开书是唯一入口。
  */
-import { bookImport, cardsImport, listChapterLedgers, LegacyResidueError, listChapterTexts, readCards, recoverBookTransactions, runCommand, type BookImportResult, type CardsImportResult } from "@actalk/story-core";
+import { bookImport, cardsImport, listChapterLedgers, LegacyResidueError, listChapterTexts, readCards, recoverBookTransactions, runCommand, type BookImportResult, type CardsImportResult, type RunOptions } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror, type MirrorSyncResult } from "./sync.js";
 
 export type EnsureOnCoreResult =
@@ -28,8 +28,8 @@ export type EnsureOnCoreResult =
   | { readonly ok: false; readonly code: string; readonly reason: string };
 
 export interface EnsureOnCoreOptions {
-  /** 导入前存撤销点（失败就不导入）。第二个参数是命令名。 */
-  readonly snapshot?: (label: string, command: string) => Promise<void>;
+  /** 导入前存撤销点（失败就不导入）。第二个参数是命令名；返回树号记进回执（核心 RunOptions.snapshot）。 */
+  readonly snapshot?: RunOptions["snapshot"];
 }
 
 const pending = new Map<string, Promise<EnsureOnCoreResult>>();

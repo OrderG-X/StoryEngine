@@ -6,6 +6,8 @@
  *  2. 写清单 manifest.json（status = prepared）——清单落盘之前，书里一个字节都没动；
  *  3. 逐个 rename 新文件到位（单个 rename 是原子的）；
  *  4. 清单改成 applied，删掉事务目录。
+ * 要删的文件（清单 v2，写作版本 P2a：撤销 / 恢复把首次定稿的正文、账单删掉）：同样先备份原件；换的时候挪进留证区（书里的文件不 unlink，
+ * safe-fs 文件头「摘名字」），挪之前核它还是备份时那份。没有删除成员的事务照旧写 v1 清单，v1 清单照 v1 收拾。
  * 中途断电或进程被杀：下次写之前 `recoverTransactions` 把 prepared 的事务回滚（已换上的文件换回备份、
  * 新建的删掉），applied 的只清目录。调用方把版本号文件放在最后一个写，读的一方据此判断有没有读到一半。
  * 恢复的三条规矩（P1 第 19 轮复核）：
@@ -45,11 +47,21 @@ import { saveCopyBeforeRestore } from "./saved-copies.js";
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
 export const KEPT_REPORT_THRESHOLD = 20;
 
-export interface TxWrite {
+export interface TxFileWrite {
   /** 相对书目录的路径。 */
   readonly path: string;
   readonly content: string;
 }
+
+/** 删掉一个文件：要删的得在；代次文件不许删。 */
+export interface TxDelete {
+  readonly path: string;
+  readonly delete: true;
+}
+
+export type TxWrite = TxFileWrite | TxDelete;
+
+export const isTxDelete = (write: TxWrite): write is TxDelete => "delete" in write && write.delete === true;
 
 /** 一个文件换之前、换之后的内容哈希（sha256，按字节）；null = 不存在。命令回执记它（写作版本 P2a 撤销取前像用）。 */
 export interface TxEffect {
@@ -62,6 +74,8 @@ export const sha256Bytes = (content: string | Uint8Array): string => createHash(
 
 interface ManifestFile {
   readonly path: string;
+  /** 删（清单 v2）：没有暂存，备份是原件，had 必有。不写 = 写。 */
+  readonly kind?: "delete";
   readonly existed: boolean;
   readonly slot: string;
   /** 这次写的内容的 sha256（P1 第 19 轮）：回滚时盘上的还是它，就是这次写到一半的，换回不用另存。老清单没有。 */
@@ -74,8 +88,11 @@ interface ManifestFile {
   readonly had?: string;
 }
 
+const TX_SCHEMA_V1 = "story-core-tx/1";
+const TX_SCHEMA_V2 = "story-core-tx/2";
+
 interface Manifest {
-  readonly schema: "story-core-tx/1";
+  readonly schema: typeof TX_SCHEMA_V1 | typeof TX_SCHEMA_V2;
   readonly id: string;
   readonly createdAt: string;
   readonly status: "prepared" | "applied";
@@ -292,7 +309,8 @@ async function settleInterrupted(bookDir: string, txDir: string, manifest: Manif
     const aside = join(txDir, "aside", file.slot);
     const left = await settleInterruptedPlace(bookDir, join(bookDir, path), { label: "rollback target", aside });
     if (left === undefined) continue;
-    if (digest(left) !== file.wrote) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: left });
+    // 写的：aside 里是回滚时挪开的（这次写的那份不用另存）；删的：是删的时候挪开的原件（备份里有）。
+    if (digest(left) !== (file.kind === "delete" ? file.had : file.wrote)) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: left });
     await discardAside(bookDir, aside, { label: "rollback target", expectSha: digest(left) });
   }
 }
@@ -314,6 +332,12 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
   let gensTouched = false;
   const draftChapters = new Set<number>();
   for (const file of manifest.files) {
+    if (file.kind === "delete") {
+      const undone = await undoDelete(bookDir, txDir, manifest, file, readBackup);
+      if (undone.changed) changed = true;
+      if (undone.draftChapter !== undefined) draftChapters.add(undone.draftChapter);
+      continue;
+    }
     const staged = await stagedState(bookDir, join(txDir, "staged", file.slot), file);
     if (staged === "intact") continue;
     // 换上过（包括上次回滚到一半已经换回去的）：书被这次写动过。暂存被动过的，下面核正式那份：还是原来的样子就没动过。
@@ -351,7 +375,34 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest, inPr
   return { changed, draftChapters: [...draftChapters], gensTouched };
 }
 
-async function writeControl(bookDir: string, write: TxWrite): Promise<void> {
+/**
+ * 退一个删除成员（清单 v2）：原件在、还是原来那份 = 没删（或换回过了）；不在 = 删了，从备份放回；
+ * 删了以后原处又有了别的一份：先另存（「不毁唯一副本」）再换回。
+ */
+async function undoDelete(
+  bookDir: string,
+  txDir: string,
+  manifest: Manifest,
+  file: ManifestFile,
+  readBackup: ReadBackup,
+): Promise<{ readonly changed: boolean; readonly draftChapter?: number }> {
+  const path = assertInsideBook(file.path);
+  await assertPlainDirs(bookDir, dirname(path));
+  const target = join(bookDir, path);
+  const current = await readFileInBook(bookDir, target, "rollback target");
+  const now = current === undefined ? undefined : digest(current);
+  if (file.had === undefined) throw new Error(`清单没记删掉的是哪一份，说不清删没删：${path}`);
+  if (now === file.had) return { changed: false };
+  if (current !== undefined) await saveCopyBeforeRestore(bookDir, { from: coreInstance(manifest), path, content: current });
+  const content = await readBackup(join(txDir, "backup", file.slot));
+  if (content === undefined || digest(content) !== file.had) throw new Error(`备份不在或和原来那份对不上，放不回：${path}`);
+  const aside = join(txDir, "aside", file.slot);
+  await restoreFileInBook(bookDir, target, content, { label: "rollback target", createMode: 0o666, ...(now === undefined ? { expectTarget: null } : { expectTarget: now, aside }) });
+  const chapter = draftChapterOfPath(path);
+  return { changed: true, ...(chapter !== undefined ? { draftChapter: chapter } : {}) };
+}
+
+async function writeControl(bookDir: string, write: TxFileWrite): Promise<void> {
   const path = assertInsideBook(write.path);
   await assertPlainDirs(bookDir, dirname(path));
   await mkdir(dirname(join(bookDir, path)), { recursive: true });
@@ -391,6 +442,13 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
       const existed = await checkTarget(bookDir, path);
       const original = existed ? await readFileInBook(bookDir, target, "transaction target") : undefined;
       if (existed && original === undefined) throw new Error(`要覆盖的文件刚才还在、现在不在了：${path}`);
+      if (isTxDelete(write)) {
+        if (isControlPath(path)) throw new Error(`代次文件不许删：${path}`);
+        if (original === undefined) throw new Error(`要删的文件不在：${path}`);
+        await createDurable(join(txDir, "backup", slot), original);
+        files.push({ path, kind: "delete", existed: true, slot, had: digest(original) });
+        continue;
+      }
       if (original !== undefined) await createDurable(join(txDir, "backup", slot), original);
       await createDurable(join(txDir, "staged", slot), write.content);
       files.push({ path, existed, slot, wrote: digest(write.content), ...(original !== undefined ? { had: digest(original) } : {}) });
@@ -400,12 +458,19 @@ export async function commitFiles(givenBookDir: string, writes: readonly TxWrite
     await rm(txDir, { recursive: true, force: true });
     throw error;
   }
-  const manifest: Manifest = { schema: "story-core-tx/1", id, createdAt: new Date().toISOString(), status: "prepared", files };
+  const schema = files.some((file) => file.kind === "delete") ? TX_SCHEMA_V2 : TX_SCHEMA_V1;
+  const manifest: Manifest = { schema, id, createdAt: new Date().toISOString(), status: "prepared", files };
   await writeManifest(bookDir, txDir, manifest);
   try {
     for (const file of files) {
       const target = join(bookDir, file.path);
       await assertPlainDirs(bookDir, dirname(file.path));
+      if (file.kind === "delete") {
+        // 删 = 先挪到 aside 核过还是备份时那份，再挪进留证区（不 unlink）。挪之前被别处改过就不删，整份退回。
+        await mkdir(join(txDir, "aside"), { recursive: true });
+        await removeFileInBook(bookDir, target, { label: "transaction target", expectSha: file.had!, aside: join(txDir, "aside", file.slot) });
+        continue;
+      }
       await mkdir(dirname(target), { recursive: true });
       // 盖掉的得还是备份时那份、新建的得还不在（rename 前核，safe-fs 文件头）。写的途中被别处改过、别处先建了就不盖，整份退回。
       const staged = join(txDir, "staged", file.slot);
@@ -458,12 +523,14 @@ async function inspect(txDir: string): Promise<TxState> {
   }
   try {
     const manifest = JSON.parse(raw) as Manifest;
+    const v2 = manifest.schema === TX_SCHEMA_V2;
     const valid =
-      manifest.schema === "story-core-tx/1" &&
+      (manifest.schema === TX_SCHEMA_V1 || v2) &&
       (manifest.status === "prepared" || manifest.status === "applied") &&
       Array.isArray(manifest.files) &&
       manifest.files.every((file) => typeof file?.path === "string" && typeof file.slot === "string" && typeof file.existed === "boolean"
-        && (file.wrote === undefined || typeof file.wrote === "string") && (file.had === undefined || typeof file.had === "string"));
+        && (file.wrote === undefined || typeof file.wrote === "string") && (file.had === undefined || typeof file.had === "string")
+        && (file.kind === undefined || (v2 && file.kind === "delete" && file.existed && typeof file.had === "string" && file.wrote === undefined)));
     return valid ? { kind: "manifest", manifest } : { kind: "broken" };
   } catch {
     return { kind: "broken" };
@@ -548,6 +615,13 @@ async function scanCoreTransactions(bookDir: string): Promise<CoreScan> {
       try {
         path = assertInsideBook(file.path);
       } catch {
+        continue;
+      }
+      if (file.kind === "delete") {
+        // 原件还是原来那份 = 还没删，不算；删了的换回原来那份（只读：读不了也当删了，回滚时如实失败）。
+        const current = await readFileInBook(bookDir, join(bookDir, path), "transaction scan").catch(() => undefined);
+        if (current !== undefined && digest(current) === file.had) continue;
+        restores.set(path, file.had!);
         continue;
       }
       if (await notPlaced(join(txDir, "staged", file.slot))) continue;

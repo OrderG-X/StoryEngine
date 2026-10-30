@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
+import { DISPLACED_DIR, KEPT_TX_DIR, REVISION_PATH, SAVED_COPIES_DIR, TX_DIR } from "./paths.js";
 import { commitFiles, hasPendingTransactions, KEPT_REPORT_THRESHOLD, recoverTransactions, setAsideBrokenTransactions } from "./transaction.js";
 
 let book: string;
@@ -177,5 +178,89 @@ describe("多文件事务", () => {
     const report = await recoverTransactions(book);
     expect(report).toMatchObject({ problems: [], kept: KEPT_REPORT_THRESHOLD + 2, keptOverLimit: true });
     expect(await hasPendingTransactions(book)).toBe(false);
+  });
+});
+
+const sha = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex");
+
+/** 手工摆出一份带删除成员的 v2 事务（prepared）：deleted = 原件已经挪走了；aside = 挪到 aside 还没挪进留证区就断了。 */
+async function strandedDelete(path: string, old: string, state: "kept" | "deleted" | "aside" | "replaced") {
+  const txDir = join(book, TX_DIR, "t2");
+  await mkdir(join(txDir, "backup"), { recursive: true });
+  await mkdir(join(txDir, "aside"), { recursive: true });
+  await mkdir(join(book, path, ".."), { recursive: true });
+  await writeFile(join(txDir, "backup", "0"), old);
+  if (state === "kept") await writeFile(join(book, path), old);
+  if (state === "aside") await writeFile(join(txDir, "aside", "0"), old);
+  if (state === "replaced") await writeFile(join(book, path), "删了以后别处放上的");
+  const manifest = {
+    schema: "story-core-tx/2",
+    id: "t2",
+    createdAt: "2026-10-30T00:00:00.000Z",
+    status: "prepared",
+    files: [{ path, kind: "delete", existed: true, slot: "0", had: sha(old) }],
+  };
+  await writeFile(join(txDir, "manifest.json"), JSON.stringify(manifest));
+}
+
+describe("事务删文件（清单 v2）", () => {
+  it("删掉的文件挪进留证区（不 unlink），和写的同一个事务", async () => {
+    await mkdir(join(book, "ledger/chapters"), { recursive: true });
+    await writeFile(join(book, "ledger/chapters/0001.json"), "首次定稿的账");
+    await commitFiles(book, [{ path: "ledger/chapters/0001.json", delete: true }, { path: "ledger/head.json", content: "新版本" }]);
+    await expect(read("ledger/chapters/0001.json")).rejects.toThrow();
+    expect(await read("ledger/head.json")).toBe("新版本");
+    const displaced = await readdir(join(book, DISPLACED_DIR));
+    expect(await Promise.all(displaced.map((name) => readFile(join(book, DISPLACED_DIR, name), "utf-8")))).toEqual(["首次定稿的账"]);
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("要删的不在、删代次文件：拒绝，书不动", async () => {
+    await expect(commitFiles(book, [{ path: "chapters/0001.md", delete: true }])).rejects.toThrow("要删的文件不在");
+    await mkdir(join(book, "store-control"), { recursive: true });
+    await writeFile(join(book, REVISION_PATH), "代次");
+    await expect(commitFiles(book, [{ path: REVISION_PATH, delete: true }])).rejects.toThrow("代次文件不许删");
+    expect(await read(REVISION_PATH)).toBe("代次");
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("删到一半断了：删了的从备份放回，换一个新代次", async () => {
+    await strandedDelete("chapters/0001.md", "原来的正文", "deleted");
+    expect((await recoverTransactions(book)).rolledBack).toEqual(["t2"]);
+    expect(await read("chapters/0001.md")).toBe("原来的正文");
+    expect(JSON.parse(await read(REVISION_PATH))).toMatchObject({ schema: "store-revision/1" });
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("还没删就断了：原件不动、代次不动", async () => {
+    await strandedDelete("chapters/0001.md", "原来的正文", "kept");
+    await recoverTransactions(book);
+    expect(await read("chapters/0001.md")).toBe("原来的正文");
+    await expect(read(REVISION_PATH)).rejects.toThrow();
+  });
+
+  it("挪到 aside 还没挪进留证区就断了：放回原处", async () => {
+    await strandedDelete("chapters/0001.md", "原来的正文", "aside");
+    await recoverTransactions(book);
+    expect(await read("chapters/0001.md")).toBe("原来的正文");
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("删了以后原处又有了别的一份：先另存再换回原件", async () => {
+    await strandedDelete("chapters/0001.md", "原来的正文", "replaced");
+    await recoverTransactions(book);
+    expect(await read("chapters/0001.md")).toBe("原来的正文");
+    const names = await readdir(join(book, SAVED_COPIES_DIR));
+    const saved = await Promise.all(names.map((name) => readFile(join(book, SAVED_COPIES_DIR, name), "utf-8")));
+    expect(saved.join("")).toContain("删了以后别处放上的");
+  });
+
+  it("v1 清单里出现删除成员算坏的：原样留着", async () => {
+    await strandedDelete("chapters/0001.md", "原来的正文", "deleted");
+    const manifestPath = join(book, TX_DIR, "t2", "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+    manifest.schema = "story-core-tx/1";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    expect((await recoverTransactions(book)).problems).toEqual(["t2"]);
   });
 });

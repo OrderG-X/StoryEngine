@@ -73,6 +73,22 @@ describe("回执 v3", () => {
     expect(fenced).toBe(0);
   });
 
+  it("有撤销范围效果的都带树号：不打存档点的命令、存档回调没给树号的，单要一个（\"tree\"）", async () => {
+    const calls: string[] = [];
+    const snapshot = async (_label: string, command: string, mode?: "tree") => {
+      calls.push(`${command}:${mode ?? "snapshot"}`);
+      return mode === "tree" ? `tree-of-${command}` : undefined;
+    };
+    // draft.save 不打存档点（snapshot: false）。
+    await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "作者稿", baseVersion: null }, { caller: "author", op: { opId: "op-7", stepId: "a" }, snapshot });
+    // chapter.commit 打存档点，回调没给树号（一批里第二条）。
+    await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { caller: "author", op: { opId: "op-7", stepId: "b" }, snapshot });
+    expect(calls).toEqual(["draft.save:tree", "chapter.commit:snapshot", "chapter.commit:tree"]);
+    const byStep = new Map((await receipts()).map((receipt) => [receipt.stepId, receipt]));
+    expect(byStep.get("a")?.snapshotTree).toBe("tree-of-draft.save");
+    expect(byStep.get("b")?.snapshotTree).toBe("tree-of-chapter.commit");
+  });
+
   it("什么都不用改的也留回执，effects 是空的", async () => {
     await runCommand(book, draftSave, { chapter: 1, title: "第一章", body: "一样的", baseVersion: null }, { caller: "author", op: { opId: "op-4", stepId: "a" } });
     const { readDraftState } = await import("../draft/draft.js");

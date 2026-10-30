@@ -96,8 +96,10 @@ export interface RunOptions {
   /**
    * 写前打快照（git 快照在服务端，核心只管在对的时机调它）。第二个参数是命令名，服务端据此给操作历史分类。
    * 返回那份存档的树号就记进回执（撤销取前像用）。
+   * 第三个参数 `"tree"`：不打存档点的命令（snapshot: false）、或存档回调没给树号的（一批里第二条起），有撤销范围的效果时
+   * 只要写之前那一刻的树号——服务端打一份不进操作历史的存档、返回它的树。
    */
-  readonly snapshot?: (label: string, command: string) => Promise<string | void>;
+  readonly snapshot?: (label: string, command: string, mode?: "tree") => Promise<string | void>;
   /**
    * 哪次操作的哪一步（写作版本 P2a）：没给幂等键时，键就是 `op:<opId>:<stepId>`（同一步只应用一次，再来回放回执）；回执记下这两个号。
    */

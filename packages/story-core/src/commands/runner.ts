@@ -4,7 +4,7 @@
  * 顺序固定：查权限 → 校参数 → 加书锁 → 收拾上次没写完的事务 → 有回执就回放（同键换参数就拒绝）→ 栅栏（precondition）→
  * 核依据 → plan → 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 写入代次 + 版本号，版本号最后写；工作稿不动版本号和写入代次，
  * 写了哪章工作稿就在同一个事务里换那章的工作稿代次）→ 推事件。
- * 回执记下撤销范围里每个文件换之前、换之后的哈希（effects）和写之前那份存档的树号（写作版本 P2a）。
+ * 回执记下撤销范围里每个文件换之前、换之后的哈希（effects）和写之前那份存档的树号（写作版本 P2a；有效果的都要，没打存档点的单要树号）。
  * 什么都不用改的也留回执（带了防重复标记的话）：不然这次请求迟到重发，会把这之间别人改的盖回去。
  * 任何一步不成都如实返回失败，书保持原样。
  */
@@ -18,7 +18,7 @@ import { bookKey, withBookLock } from "../store/lock.js";
 import { draftGensWrite, readDraftGens, revisionWrite } from "../store/control.js";
 import { assertInsideBook, draftChapterOfPath, HEAD_PATH, isUndoablePath, receiptPath } from "../store/paths.js";
 import { LegacyResidueError } from "../store/legacy-transaction.js";
-import { commitFiles, recoverTransactions, sha256Bytes, type RecoveryReport, type TxEffect, type TxWrite } from "../store/transaction.js";
+import { commitFiles, isTxDelete, recoverTransactions, sha256Bytes, type RecoveryReport, type TxEffect, type TxWrite } from "../store/transaction.js";
 import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec, WritePlan } from "./types.js";
 
 export function fail(code: string, message: string, details?: unknown): CommandFailure {
@@ -49,7 +49,7 @@ async function undoableEffects(bookDir: string, writes: readonly TxWrite[]): Pro
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    effects.push({ path: path.split(sep).join("/"), before, after: sha256Bytes(write.content) });
+    effects.push({ path: path.split(sep).join("/"), before, after: isTxDelete(write) ? null : sha256Bytes(write.content) });
   }
   return effects;
 }
@@ -215,6 +215,14 @@ export async function runCommand<A, R>(
         effects = await undoableEffects(bookDir, planned.writes);
       } catch (error) {
         return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
+      }
+      // 有撤销范围效果的写都要写之前那一刻的树号（撤销取前像）：没打存档点的单要一个。
+      if (effects.length > 0 && !snapshotTree && options.snapshot) {
+        try {
+          snapshotTree = (await options.snapshot(planned.label, spec.name, "tree")) || undefined;
+        } catch (error) {
+          return fail("snapshot_failed", "没能先存撤销点，这次没有写。", error instanceof Error ? error.message : String(error));
+        }
       }
       writes.push(receiptOf(version, planned.changed, effects, snapshotTree));
     }
