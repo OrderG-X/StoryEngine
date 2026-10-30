@@ -163,15 +163,15 @@ async function ledger(bookDir: string, chapter: number, frozen: Extract<Frozen, 
   }
 }
 
+const DRAFT_CHANGED = "清单出来之后正文又改过，这份清单是照改之前记的，没定稿；要的话再点一次「定稿」。";
+
 /** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完重生成镜像、照盘上的账算回执。 */
 async function commit(bookDir: string, preview: CommitPreview, choices: { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number }): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   const { ticket, chapter } = preview;
   const text = await readDraft(bookDir, chapter);
   if (text === undefined) throw new OperationObsolete("draft_missing", `第 ${chapter} 章的工作稿没了，没定稿。`);
   const fingerprint = draftFingerprint(text);
-  if (fingerprint !== ticket.textSha256) {
-    throw new OperationObsolete("draft_changed", "清单出来之后正文又改过，这份清单是照改之前记的，没定稿；要的话再点一次「定稿」。");
-  }
+  if (fingerprint !== ticket.textSha256) throw new OperationObsolete("draft_changed", DRAFT_CHANGED);
   const entries = commitEntriesOf(ticket, choices);
   const { result, snapshotId } = await runCommandInOperation(bookDir, chapterCommit, { chapter, text, entries }, {
     what: `定稿：第 ${chapter} 章`,
@@ -179,8 +179,14 @@ async function commit(bookDir: string, preview: CommitPreview, choices: { readon
     basis: ticket.basis,
     // 作者的选择落在条目里；正文按指纹认（稿纸重新载入只收空段落，字一个没动）。
     intent: { text: fingerprint, entries },
+    // 上面读稿在书锁外：书锁里再读一遍，读完到上锁之间作者存过稿就不定（Astra 第 11 轮：会把旧稿定上）。
+    precondition: async () => {
+      const now = await readDraft(bookDir, chapter);
+      return now !== undefined && draftFingerprint(now) === fingerprint ? undefined : { ok: false, code: "draft_changed", message: DRAFT_CHANGED };
+    },
   });
   if (!result.ok) {
+    if (result.code === "draft_changed") throw new OperationObsolete("draft_changed", DRAFT_CHANGED);
     if (result.code === "basis_changed") {
       const changes = (result.details as { readonly changes?: readonly BasisChange[] } | undefined)?.changes ?? [];
       throw new OperationObsolete("basis_moved", `清单出来之后${describeBasisChanges(changes)}改过，这份清单是照改之前记的，没定稿；要的话再点一次「定稿」。`);

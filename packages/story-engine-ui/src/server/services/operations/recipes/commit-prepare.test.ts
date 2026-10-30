@@ -34,7 +34,21 @@ import {
 
 const warmUpReadersMock = vi.hoisted(() => vi.fn(() => undefined));
 /** 在记账员动手之前插一次别的写（时序屏障，第 8 轮复核 V4）。 */
-const hook = vi.hoisted(() => ({ beforePrepare: undefined as undefined | (() => Promise<void>) }));
+const hook = vi.hoisted(() => ({
+  beforePrepare: undefined as undefined | (() => Promise<void>),
+  /** 配方读完正文、交定稿命令之前（还没上书锁）插一次别的写（Astra 第 11 轮）。 */
+  beforeCommitCommand: undefined as undefined | (() => Promise<void>),
+}));
+vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
+  return {
+    ...actual,
+    runCommandInOperation: async (...args: Parameters<typeof actual.runCommandInOperation>) => {
+      if (args[1].name === "chapter.commit") await hook.beforeCommitCommand?.();
+      return actual.runCommandInOperation(...args);
+    },
+  };
+});
 vi.mock("../../../editorial/commit-flow.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../editorial/commit-flow.js")>();
   return {
@@ -102,6 +116,7 @@ beforeEach(async () => {
   __resetCatchUpLocksForTests();
   warmUpReadersMock.mockClear();
   hook.beforePrepare = undefined;
+  hook.beforeCommitCommand = undefined;
   root = await makeHomeTempDir("commit-prepare-");
   vi.stubEnv("SE_DATA_DIR", join(root, "data"));
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "钟楼", genre: "悬疑", logline: "钟停了。", protagonistName: "林远" }));
@@ -331,6 +346,21 @@ describe("作者点「确认定稿」", () => {
     expect(done.state).toBe("obsolete");
     expect(done.failure?.message).toContain("正文又改过");
     expect(await exists(join(book, "chapters", "0002.md"))).toBe(false);
+  });
+
+  it("读完正文到上书锁之间作者又存了稿：不定稿（不拿读到的旧稿定），稿子是作者新存的那版", async () => {
+    await writeDraft(1, CH1);
+    const record = await prepare(1);
+    const edited = CH1.replace("铜钥匙", "银钥匙");
+    hook.beforeCommitCommand = async () => {
+      hook.beforeCommitCommand = undefined;
+      await writeDraft(1, edited);
+    };
+    const done = await confirm(record);
+    expect(done.state).toBe("obsolete");
+    expect(done.failure?.message).toContain("正文又改过");
+    expect(await exists(join(book, "chapters", "0001.md"))).toBe(false);
+    expect(await readFile(join(book, "drafts", "fast", "chapter-0001.md"), "utf-8")).toBe(edited);
   });
 
   it("清单出来之后前文的账改过：不定稿、说哪样变了", async () => {

@@ -120,10 +120,27 @@ const BOOK_START_KEY_SET: ReadonlySet<string> = new Set(Object.values(BOOK_START
  * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次写过撤销范围、还没被撤的。撤销本身跳过（接着往前撤；撤销的撤销走「撤回来」
  * 带号）；被撤过的跳过（撤它的那次后来又被撤了，就不算被撤）。整本恢复（真换了东西、还没被撤的）就是上一次：撤它 = 回到恢复之前；
  * 被撤过的恢复跳过，接着往前。升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。
+ * 被别的撤销「全撤」顺带整个退掉的也跳过（Astra 第 11 轮第 3 条：撤 A 时确认全撤、把 A 之后的 B 一起退回去——撤 A 把每个文件
+ * 换回 A 第一次写它之前；B 改过的每个文件都被之后一次还没被撤的撤销换回到 B 写它之前 → B 已经不在了，再撤它会把 A 那版放回来）；
+ * 只退了一部分的照常算，撤它服从整组规则。
  * 到这本书的起点（BOOK_START_KEYS）就停。没有返回 undefined。receipts 按写的先后排好。
  */
 export function lastUndoable(receipts: readonly CommandReceipt[]): RevertTarget | undefined {
+  // 每次（按号）改过的文件 → 它第一次写那个文件的回执排第几。
+  const firstWrite = new Map<string, Map<string, number>>();
+  receipts.forEach((receipt, index) => {
+    const id = targetId(targetOf(receipt));
+    const paths = firstWrite.get(id) ?? new Map<string, number>();
+    for (const effect of receipt.effects ?? []) if (!paths.has(effect.path)) paths.set(effect.path, index);
+    firstWrite.set(id, paths);
+  });
   const undone = new Set<string>();
+  // 往回走时已经过的、还没被撤的撤销：每个文件被换回到第几张回执之前（撤 T 把它换回 T 第一次写它之前）。
+  const revertedBefore = new Map<string, number>();
+  const swept = (id: string): boolean => {
+    const paths = firstWrite.get(id);
+    return paths !== undefined && paths.size > 0 && [...paths].every(([path, index]) => (revertedBefore.get(path) ?? Infinity) < index);
+  };
   for (let index = receipts.length - 1; index >= 0; index -= 1) {
     const receipt = receipts[index] as CommandReceipt;
     const id = targetId(targetOf(receipt));
@@ -135,11 +152,21 @@ export function lastUndoable(receipts: readonly CommandReceipt[]): RevertTarget 
         continue;
       }
       const target = revertTargetOf(result?.target);
-      if (target) undone.add(targetId(target));
+      if (!target) continue;
+      undone.add(targetId(target));
+      const targetWrites = firstWrite.get(targetId(target));
+      for (const effect of receipt.effects ?? []) {
+        const at = targetWrites?.get(effect.path);
+        if (at !== undefined) revertedBefore.set(effect.path, Math.min(revertedBefore.get(effect.path) ?? Infinity, at));
+      }
       continue;
     }
     if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
     if (receipt.effects !== undefined && receipt.effects.length === 0) continue;
+    if (swept(id)) {
+      undone.add(id);
+      continue;
+    }
     return targetOf(receipt);
   }
   return undefined;
