@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, chapterTextPath, readCardsOrLegacy, receiptOnDisk, type BasisChange, type ChapterCommitResult, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
+import { chapterCommit, chapterTextPath, readCardsOrLegacy, receiptOnDisk, withBookLock, type BasisChange, type ChapterCommitResult, type CommandReceipt, type TruthBasis } from "@actalk/story-core";
 import { syncLegacyMirror } from "../../../book/mirror/sync.js";
 import { describeBasisChanges, MirrorLagError, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
@@ -168,6 +168,11 @@ const DRAFT_CHANGED = "清单出来之后正文又改过，这份清单是照改
 
 /** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完重生成镜像、照盘上的账算回执。 */
 async function commit(bookDir: string, preview: CommitPreview, choices: { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number }): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
+  // 定和照盘上算回执在同一把书锁里：定完到读账之间别的操作插不进来（回执卡的条数就是这次写的）。
+  return withBookLock(bookDir, () => commitLocked(bookDir, preview, choices));
+}
+
+async function commitLocked(bookDir: string, preview: CommitPreview, choices: { readonly excluded: readonly number[]; readonly optedIn: readonly number[]; readonly day?: number; readonly dayEnd?: number }): Promise<{ readonly done: CommitDone; readonly snapshotId?: string }> {
   const { ticket, chapter } = preview;
   const what = `定稿：第 ${chapter} 章`;
   const text = await readDraft(bookDir, chapter);
@@ -181,7 +186,7 @@ async function commit(bookDir: string, preview: CommitPreview, choices: { readon
     basis: ticket.basis,
     // 作者的选择落在条目里；正文按指纹认（稿纸重新载入只收空段落，字一个没动）。
     intent: { text: fingerprint, entries },
-    // 上面读稿在书锁外：书锁里再读一遍，读完到上锁之间作者存过稿就不定（Astra 第 11 轮：会把旧稿定上）。
+    // 整段在书锁里，走命令的存稿插不进来；不走锁的（在别处直接改了文件）还可能：命令里再读一遍，变了就不定（Astra 第 11 轮：会把旧稿定上）。
     precondition: async () => {
       const now = await readDraft(bookDir, chapter);
       return now !== undefined && draftFingerprint(now) === fingerprint ? undefined : { ok: false, code: "draft_changed", message: DRAFT_CHANGED };
@@ -204,9 +209,12 @@ async function commit(bookDir: string, preview: CommitPreview, choices: { readon
  */
 async function committed(bookDir: string, chapter: number, receipt: CommandReceipt): Promise<{ readonly done: CommitDone }> {
   const outcome = replayedOutcome<ChapterCommitResult>(receipt, chapterCommit);
-  if (await receiptOnDisk(bookDir, receipt) !== true) return { done: supersededCommitView(chapter, outcome.result) };
-  const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8");
-  return { done: await doneOf(bookDir, chapter, text, outcome.result) };
+  // 核和读在同一把书锁里：核完到读之间别的操作（撤销、重定稿）插不进来（Astra 第 15 轮第 2 条）。
+  return withBookLock(bookDir, async () => {
+    if (await receiptOnDisk(bookDir, receipt) !== true) return { done: supersededCommitView(chapter, outcome.result) };
+    const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8");
+    return { done: await doneOf(bookDir, chapter, text, outcome.result) };
+  });
 }
 
 /** 定完：老代码还在读老格式文件，按新账重生成一遍（没成不影响定稿本身，下次取依据时补，但要如实说）；照盘上的账算回执。 */

@@ -28,7 +28,21 @@ import { HISTORY_CHANGE_KIND, historyChangeRecipe, PRUNE_CONFIRM_ACTION, PRUNE_C
 
 const execFileAsync = promisify(execFile);
 
-const hook = vi.hoisted(() => ({ afterHistoryApply: undefined as undefined | (() => Promise<void>) }));
+const hook = vi.hoisted(() => ({
+  afterHistoryApply: undefined as undefined | (() => Promise<void>),
+  /** 撤销算计划之前（记了「撤哪次」之后）。 */
+  beforePlan: undefined as undefined | (() => Promise<void>),
+}));
+vi.mock("../../../lib/history-reader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/history-reader.js")>();
+  return {
+    ...actual,
+    withGitHistoryReader: async (...args: Parameters<typeof actual.withGitHistoryReader>) => {
+      await hook.beforePlan?.();
+      return actual.withGitHistoryReader(...args);
+    },
+  };
+});
 vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
   return {
@@ -50,6 +64,7 @@ beforeEach(async () => {
   __resetLiveForTests();
   __resetRecipesForTests();
   hook.afterHistoryApply = undefined;
+  hook.beforePlan = undefined;
   root = await makeHomeTempDir("history-change-");
   vi.stubEnv("SE_DATA_DIR", join(root, "data"));
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "撤回", genre: "悬疑", protagonistName: "林远" }));
@@ -186,7 +201,8 @@ describe("撤销上一步", () => {
     expect(await bodyOf(1)).toBe("作者自己从头写的。");
   });
 
-  it("一次操作改了两章、它之前那次被全撤顺带退掉一章，作者又原样存回：靠另一章还在找到它，也停下给作者看（Astra 第 14 轮第 1 条）", async () => {
+  /** A 写第 1 章；B 一次操作改第 1、2 章；全撤 A（第 1 章没了、第 2 章还是 B 的）。 */
+  async function partlySwept(): Promise<void> {
     await aiWrites(1, "A 写的。");
     registerRecipe(twoDraftsRecipe);
     const first = await aiInput(1, "B 写的第一章。");
@@ -198,16 +214,41 @@ describe("撤销上一步", () => {
     await undoInOperation(book, a?.opId);
     expect(await bodyOf(1)).toBeUndefined();
     expect(await bodyOf(2)).toBe("B 写的第二章。");
+  }
+
+  /** 作者照盘上现在的版本把第 1 章原样存回 B 那版（不留回执）。 */
+  async function authorPutsBack(): Promise<void> {
     const saved = await runCommand(book, draftSave, { chapter: 1, title: "", body: "B 写的第一章。", baseVersion: (await readDraftState(book, 1)).version }, { caller: "author" });
     expect(saved.ok).toBe(true);
+  }
+
+  it("一次操作改了两章、它之前那次被全撤顺带退掉一章，作者又原样存回：靠另一章还在找到它，也停下给作者看（Astra 第 14 轮第 1 条）", async () => {
+    await partlySwept();
+    await authorPutsBack();
     const waiting = await submit("undo", {}, "button");
     expect(waiting.state).toBe("waiting_author");
     const preview = operationView(waiting).pendingActions[0]?.preview as { lines: string[]; notes: string[] };
-    // 撤它的计划看不出第 1 章有事（内容就是它写的那份），只靠「接不上」停下。
-    expect(preview.lines).toEqual(["第 1 章工作稿：在操作之外改过，跟操作记录接不上"]);
+    // 内容就是它写的那份，谱系里却没有它：撤它的计划照样列成后来改过。
+    expect(preview.lines).toHaveLength(1);
+    expect(preview.lines[0]).toMatch(/^第 1 章工作稿：这次之后.*又改过$/u);
     expect(await bodyOf(1)).toBe("B 写的第一章。");
     expect(await answer(waiting)).toMatchObject({ state: "succeeded" });
     expect(await bodyOf(2)).toBeUndefined();
+  });
+
+  it("记了撤哪次、算计划之前断了，作者这时原样存回：接着做照现在的样子重算，照样停下给作者看（Astra 第 15 轮第 1 条）", async () => {
+    await partlySwept();
+    hook.beforePlan = async () => {
+      hook.beforePlan = undefined;
+      throw new OperationStopped("operation_stopped", "记了撤哪次、算计划之前断了");
+    };
+    const paused = await submit("undo", {}, "button");
+    expect(paused.state).toBe("paused");
+    await authorPutsBack();
+    expect(await resumeOperation(book, paused.opId)).toMatchObject({ ok: true });
+    const waiting = await untilOperation(book, paused.opId, (record) => record.eventSeq > paused.eventSeq && (SETTLED_STATES.includes(record.state) || record.state === "waiting_author"));
+    expect(waiting.state).toBe("waiting_author");
+    expect(await bodyOf(1)).toBe("B 写的第一章。");
   });
 
   it("上一次是升级之前、没留存档的写：如实说撤不了、指去「历史」，不说「没有能撤的」", async () => {

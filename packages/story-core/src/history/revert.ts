@@ -129,30 +129,30 @@ interface FileVersion {
   readonly outside?: number;
 }
 
-/** 「撤销上一步」撤哪次；unsure = 在回执之外又改过、跟记录接不上的文件（跳过的那几次、找到的这次自己写过的），撤之前要作者点。 */
+/** 「撤销上一步」撤哪次；unsure = 往前找的时候跳过了在回执之外又改过的文件上的那几次（在不在说不准），撤之前要作者点。 */
 export interface UndoChoice {
   readonly target: RevertTarget;
   readonly unsure?: readonly string[];
 }
 
+/** 各个文件现在这份的谱系：每次改动现在还在哪几个文件里（presentIn：文件 → 那几次的号）、每个文件最后一次回执之外的写是在第几张回执之前发现的。 */
+interface Lineage {
+  readonly ids: readonly string[];
+  readonly presentIn: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly present: ReadonlySet<string>;
+  readonly lastOutside: ReadonlyMap<string, number>;
+}
+
 /**
- * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次**现在还在**的改动——书里某个文件现在这份内容的谱系里有它写的那份。
  * 谱系按回执排：普通的写照着那个文件写之前那份来；撤销 T 照着 T 第一次写那个文件之前那份来（撤掉的那几份不在谱系里）；
- * 整本恢复照着它换回去的那份来（按内容哈希认最近那份）。所以：被撤过的、被别的撤销「全撤」顺带整个退掉的不在了，跳过；
- * 撤销被撤回来，被它撤掉的又在了；整本恢复还在就是上一次（撤它 = 回到恢复之前），被撤过、被全撤退掉了就跳过
- * （Astra 第 11 轮第 3 条、第 12 轮第 1 条：只看「谁撤了谁」会把被撤回来的撤销、被全撤退掉的恢复算错）。
- * 只退了一部分的还在，照常算，撤它服从整组规则。撤销本身不算（撤销的撤销走「撤回来」带号）。
+ * 整本恢复照着它换回去的那份来（按内容哈希认最近那份）。某次改动现在还在 = 某个文件现在这份的谱系里有它写的那份。
+ * 被撤过的、被别的撤销「全撤」顺带整个退掉的不在了；撤销被撤回来，被它撤掉的又在了（Astra 第 11 轮第 3 条、第 12 轮第 1 条）。
  *
  * 回执之外的写（作者存稿不留回执、在别处改了文件）：回执记的写前跟谱系上前一份对不上就是中间有过，当成照当时盘上那份改的
  * （作者存稿核过版本，确实是）；撤销 / 恢复换回去的内容对不上任何一份记过的，再往前接不上。current（撤销范围里现在每个文件
- * 的哈希）给了就把最后一张回执之后的也这样认出来。被跳过的那次写过的文件之后有过回执之外的写（比如原样放回了它那份），
- * 它在不在就说不准：照样往前找，找到的带上 unsure，撤之前停下给作者看、点了才撤，不自动去撤别章（Astra 第 13 轮第 1 条）。
- * 找到的这次自己写过的文件也一样：谱系里已经没有它、之后又有回执之外的写的，一起进 unsure（第 14 轮第 1 条）。
- *
- * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS）就停。
- * 没有返回 undefined。receipts 按写的先后排好。
+ * 的哈希）给了就把最后一张回执之后的也这样认出来（Astra 第 13 轮第 1 条）。
  */
-export function lastUndoable(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): UndoChoice | undefined {
+function lineageOf(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): Lineage {
   const ids = receipts.map((receipt) => targetId(targetOf(receipt)));
   const versions = new Map<string, FileVersion[]>();
   // 每次（按号）第一次写每个文件写出来的那份。
@@ -193,50 +193,51 @@ export function lastUndoable(receipts: readonly CommandReceipt[], current?: Read
     firstWrite.set(ids[index] as string, mine);
   });
   const present = new Set<string>();
-  // 文件 → 现在这份的谱系里有哪几次。
   const presentIn = new Map<string, Set<string>>();
+  const lastOutside = new Map<string, number>();
   for (const [path, list] of versions) {
     if (current) onDisk(list, current.get(path) ?? null, receipts.length);
     const here = new Set<string>();
     for (let version = list.at(-1); version; version = version.from) if (version.writer !== undefined) here.add(ids[version.writer] as string);
     presentIn.set(path, here);
     for (const id of here) present.add(id);
-  }
-  // 文件 → 最后一次回执之外的写是在第几张回执之前发现的。
-  const lastOutside = new Map<string, number>();
-  for (const [path, list] of versions) {
     for (const version of list) if (version.outside !== undefined) lastOutside.set(path, Math.max(lastOutside.get(path) ?? -1, version.outside));
   }
+  return { ids, presentIn, present, lastOutside };
+}
+
+/**
+ * 「撤销上一步」撤哪次（写作版本 P2a 片 4C）：最近一次**现在还在**的改动（谱系见 lineageOf）。被撤过的、被全撤退掉的跳过；
+ * 整本恢复还在就是上一次（撤它 = 回到恢复之前）。只退了一部分的还在，照常算，撤它服从整组规则（它自己写过的文件现在
+ * 怎么样、要不要作者点，planRevert 在书锁里照现在的谱系算）。撤销本身不算（撤销的撤销走「撤回来」带号）。
+ *
+ * 被跳过的那次写过的文件之后有过回执之外的写（比如原样放回了它那份），它在不在就说不准：照样往前找，找到的带上 unsure，
+ * 撤之前停下给作者看、点了才撤，不自动去撤别章（Astra 第 13 轮第 1 条）。
+ *
+ * 升级之前的写（回执没有效果记录、没留存档）也算一次：撤的时候如实说只能整本恢复。到这本书的起点（BOOK_START_KEYS）就停。
+ * 没有返回 undefined。receipts 按写的先后排好。
+ */
+export function lastUndoable(receipts: readonly CommandReceipt[], current?: ReadonlyMap<string, string>): UndoChoice | undefined {
+  const { ids, present, lastOutside } = lineageOf(receipts, current);
   const unsure = new Set<string>();
   const skip = (receipt: CommandReceipt, index: number): void => {
     for (const effect of receipt.effects ?? []) if (index < (lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
   };
-  // 找到的这次自己写过、现在的谱系里已经没有它的文件，之后有过回执之外的写（比如作者原样存回了它那份）：撤它会不会动到作者的，
-  // 也说不准（Astra 第 14 轮第 1 条：整组靠别的文件还在被选中，这个文件撤了内容对得上就不问了）。
-  const choose = (receipt: CommandReceipt, index: number): UndoChoice => {
-    const id = ids[index] as string;
-    receipts.forEach((mine, at) => {
-      if (at > index || ids[at] !== id) return;
-      for (const effect of mine.effects ?? []) {
-        if (!presentIn.get(effect.path)?.has(id) && at < (lastOutside.get(effect.path) ?? -1)) unsure.add(effect.path);
-      }
-    });
-    return { target: targetOf(receipt), ...(unsure.size > 0 ? { unsure: [...unsure].sort() } : {}) };
-  };
+  const choose = (receipt: CommandReceipt): UndoChoice => ({ target: targetOf(receipt), ...(unsure.size > 0 ? { unsure: [...unsure].sort() } : {}) });
   for (let index = receipts.length - 1; index >= 0; index -= 1) {
     const receipt = receipts[index] as CommandReceipt;
     const id = ids[index] as string;
     if (receipt.command === HISTORY_APPLY_COMMAND) {
       const result = receipt.result as { readonly kind?: unknown } | null | undefined;
       if (result?.kind !== "restore" || (receipt.effects ?? []).length === 0) continue;
-      if (present.has(id)) return choose(receipt, index);
+      if (present.has(id)) return choose(receipt);
       skip(receipt, index);
       continue;
     }
     if (BOOK_START_KEY_SET.has(receipt.key)) return undefined;
-    if (receipt.effects === undefined) return choose(receipt, index);
+    if (receipt.effects === undefined) return choose(receipt);
     if (receipt.effects.length === 0) continue;
-    if (present.has(id)) return choose(receipt, index);
+    if (present.has(id)) return choose(receipt);
     skip(receipt, index);
   }
   return undefined;
@@ -312,10 +313,13 @@ async function plan(bookDir: string, target: RevertTarget, store: HistoryStore):
     }
   });
   const impact: ImpactItem[] = [];
+  // 现在这份的谱系里还有没有这次：内容对得上、谱系里却没有它（被撤掉过、又在回执之外原样放回）也算后来改过，要作者点（Astra 第 14 轮第 1 条、第 15 轮第 1 条）。
+  const lineage = lineageOf(all, currentSha);
+  const self = targetId(target);
   for (const [path, chain] of chains) {
     const now = currentSha.get(path) ?? null;
     const linked = chain.every((effect, index) => index === 0 || effect.before === chain[index - 1]?.after);
-    if (linked && now === chain.at(-1)?.after) continue;
+    if (linked && now === chain.at(-1)?.after && lineage.presentIn.get(path)?.has(self)) continue;
     const start = rank.get((writes[(first.get(path) as number) - 1] as CommandReceipt).key) as number;
     const touching = all.filter((receipt, index) => index >= start && receipt.effects?.some((effect) => effect.path === path));
     const later = touching.filter((receipt) => !groupKeys.has(receipt.key));

@@ -21,7 +21,8 @@ import { __resetOperationStoreForTests, readOperation, type OperationRecord } fr
 import { listSnapshots } from "../../../lib/snapshot.js";
 import { restoreForTest } from "../../../lib/history-test-helpers.js";
 import { DAY_ITEM_ID, openThreadsHintDue, type CommitPreviewView } from "../../commit-view.js";
-import { __drainOperationsForTests, __resetRecipesForTests, reconcileOperations, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
+import { undoInOperation } from "../test-helpers.js";
+import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resumeOperation, submitOperation } from "../executor.js";
 import {
   COMMIT_CONFIRM_ACTION,
   COMMIT_CONFIRM_KIND,
@@ -40,7 +41,20 @@ const hook = vi.hoisted(() => ({
   beforeCommitCommand: undefined as undefined | (() => Promise<void>),
   /** 定稿命令写完之后、配方接着往下之前（模拟进程在这儿没了，Astra 第 12 轮）。 */
   afterCommitCommand: undefined as undefined | (() => Promise<void>),
+  /** 回放核完「盘上还是这次写成的」之后、读正文和账之前（Astra 第 15 轮）。 */
+  afterReceiptCheck: undefined as undefined | (() => Promise<void>),
 }));
+vi.mock("@actalk/story-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@actalk/story-core")>();
+  return {
+    ...actual,
+    receiptOnDisk: async (...args: Parameters<typeof actual.receiptOnDisk>) => {
+      const onDisk = await actual.receiptOnDisk(...args);
+      await hook.afterReceiptCheck?.();
+      return onDisk;
+    },
+  };
+});
 vi.mock("../../../lib/operations/command.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/operations/command.js")>();
   return {
@@ -122,6 +136,7 @@ beforeEach(async () => {
   hook.beforePrepare = undefined;
   hook.beforeCommitCommand = undefined;
   hook.afterCommitCommand = undefined;
+  hook.afterReceiptCheck = undefined;
   root = await makeHomeTempDir("commit-prepare-");
   vi.stubEnv("SE_DATA_DIR", join(root, "data"));
   ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "钟楼", genre: "悬疑", logline: "钟停了。", protagonistName: "林远" }));
@@ -371,23 +386,11 @@ describe("作者点「确认定稿」", () => {
   it("定完、记检查点之前进程没了；作者之后又存了新稿：接着做照回执报「定了」，不说「没定稿」，新稿不动（Astra 第 12 轮）", async () => {
     await writeDraft(1, CH1);
     const record = await prepare(1);
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let reached!: () => void;
-    const committedOnce = new Promise<void>((resolve) => { reached = resolve; });
     hook.afterCommitCommand = async () => {
       hook.afterCommitCommand = undefined;
-      reached();
-      await held;
+      throw new OperationStopped("operation_stopped", "定完、记检查点之前断了");
     };
-    expect(await resumeOperation(book, record.opId, { actionId: COMMIT_CONFIRM_ACTION, decision: "commit" })).toMatchObject({ ok: true });
-    await committedOnce;
-    // 进程没了：调度表、执行登记清掉，盘上还是在跑。
-    __resetOperationStoreForTests();
-    __resetExecutionsForTests();
-    await reconcileOperations(book);
-    expect(await stored(record.opId)).toMatchObject({ state: "paused" });
-    release();
+    expect(await confirm(record)).toMatchObject({ state: "paused" });
     const edited = CH1.replace("铜钥匙", "银钥匙");
     await writeDraft(1, edited);
     expect(await resumeOperation(book, record.opId)).toMatchObject({ ok: true });
@@ -422,6 +425,47 @@ describe("作者点「确认定稿」", () => {
     expect(bodyOf(done).done?.draftBody).toBeUndefined();
     expect(summaryOf(done)).toContain(`记了 ${first.length} 条`);
     expect(summaryOf(done)).toContain("之后又改过");
+  });
+
+  it("回放核完盘上还是这次写成的、读之前另一次撤销插进来：撤销等回放读完再写，回执卡是这次的（Astra 第 15 轮第 2 条）", async () => {
+    await commit(1, CH1.replaceAll("铜钥匙", "银钥匙"), { summary: { text: "林远找到银钥匙", quote: "银钥匙" } });
+    const middle = await commit(1, CH1.replaceAll("铜钥匙", "金钥匙"), { summary: { text: "林远找到金钥匙", quote: "金钥匙" } });
+    await writeDraft(1, CH1);
+    ledger = LEDGER1;
+    const record = await prepare(1);
+    hook.afterCommitCommand = async () => {
+      hook.afterCommitCommand = undefined;
+      throw new OperationStopped("operation_stopped", "定完、记检查点之前断了");
+    };
+    expect(await confirm(record)).toMatchObject({ state: "paused" });
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    hook.afterReceiptCheck = async () => {
+      hook.afterReceiptCheck = undefined;
+      enter();
+      await released;
+    };
+    expect(await resumeOperation(book, record.opId)).toMatchObject({ ok: true });
+    await entered;
+    // 另一路：撤掉金钥匙那次（连带退回银钥匙那版）。回放拿着书锁，它写不进来。
+    const undoing = undoInOperation(book, middle.opId);
+    try {
+      const until = Date.now() + 1500;
+      while (Date.now() < until && !(await readFile(join(book, "chapters", "0001.md"), "utf-8")).includes("银钥匙")) await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toContain("铜钥匙");
+    } finally {
+      release();
+    }
+    await __drainOperationsForTests();
+    const done = await stored(record.opId);
+    expect(done.state).toBe("succeeded");
+    expect(bodyOf(done).done?.report?.ledger.facts).toBe(2);
+    expect(bodyOf(done).done?.draftBody).toContain("铜钥匙");
+    expect(JSON.stringify(done.result)).not.toContain("银钥匙");
+    await undoing;
+    expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toContain("银钥匙");
   });
 
   it("清单出来之后前文的账改过：不定稿、说哪样变了", async () => {

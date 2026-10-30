@@ -177,7 +177,7 @@ interface UndoTarget {
   readonly what: string;
   /** 撤的是一次撤销 / 整本恢复（结论换个说法：它退回去了，那几处回到它之前）。 */
   readonly ofHistory: boolean;
-  /** 在操作之外又改过、跟操作记录接不上的这几个文件（往前找跳过的那几次、找到的这次写过的）：撤之前停下给作者看。 */
+  /** 往前找「上一步」时跳过了在操作之外又改过的这几个文件上的那几次：撤之前停下给作者看。 */
   readonly unsure?: readonly string[];
 }
 
@@ -266,7 +266,7 @@ async function applyUndo(bookDir: string, undo: UndoTarget, confirmed: string | 
 }
 
 const UNDO_NOTES = ["全撤会把这几处一起退回这次之前的样子：之后那几次在这几处的改动也跟着没了。"];
-const UNSURE_NOTE = "这几处现在的样子跟操作记录接不上，撤了会不会动到之后改的说不准，你看过再撤。";
+const UNSURE_NOTE = "往前找「上一步」时这几处跟操作记录接不上，说不准该撤的是不是这一次，你看过再撤。";
 
 async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<HistoryChangeParams, { mode: "undo" }>): Promise<OperationResult> {
   const { bookDir } = ctx;
@@ -282,7 +282,8 @@ async function runUndo(ctx: RecipeContext<HistoryChangeParams>, params: Extract<
   let confirmed: string | null = null;
   let impact: readonly string[] = first.impact;
   let digest = first.impactDigest;
-  // 在操作之外改过、跟操作记录接不上的文件：撤得对不对说不准，第一回就停下给作者看（Astra 第 13 轮第 1 条、第 14 轮第 1 条）。
+  // 往前找的时候跳过了在操作之外又改过的文件上的那几次：找到的这次对不对说不准，第一回就停下给作者看（Astra 第 13 轮第 1 条）。
+  // 这次自己写过的文件现在怎么样（后来改过、被撤掉又原样放回）归影响，每回在书锁里照现在的谱系重算（第 15 轮第 1 条）。
   const unsure = first.unsure.map((path) => `${pathLabel(path)}：在操作之外改过，跟操作记录接不上`);
   for (let round = 1; round <= MAX_UNDO_ROUNDS; round += 1) {
     if (impact.length > 0 || (round === 1 && unsure.length > 0)) {
