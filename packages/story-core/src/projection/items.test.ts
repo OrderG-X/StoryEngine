@@ -128,28 +128,36 @@ describe("去向按 seq 走", () => {
     expect(item(ruled, "i1-1").now).toMatchObject({ kind: "known", place: { name: "丙" }, entry: "d-1" });
   });
 
-  it("挪动写了从哪来、和前一刻接不上：拿不准 + 去处接不上；地方和地方不比；搁在某处、从哪来写人算拿起来的", () => {
-    const ch1 = chapter(1, "表在乙手里。钥匙在柜台上。伞在乙手里。灯在柜台上。", [
+  it("挪动写了从哪来、和前一刻接不上：拿不准 + 去处接不上；只比同一种有编号的（人和人、里面和里面），地方和地方、种类不同都不比", () => {
+    const ch1 = chapter(1, "表在乙手里。钥匙在柜台上。伞在乙手里。灯在柜台上。盒在桌上。箱在桌上。针在盒里。", [
       appear("N1", "表", "表在乙手里"),
       appear("N2", "钥匙", "钥匙在柜台上"),
       appear("N3", "伞", "伞在乙手里"),
       appear("N4", "灯", "灯在柜台上"),
+      appear("N5", "盒", "盒在桌上"),
+      appear("N6", "箱", "箱在桌上"),
+      appear("N7", "针", "针在盒里"),
       at(1, N("N1"), person("乙"), "表在乙手里"),
       at(2, N("N2"), place("柜台上"), "钥匙在柜台上"),
       at(3, N("N3"), person("乙"), "伞在乙手里"),
       at(4, N("N4"), place("柜台上"), "灯在柜台上"),
+      at(5, N("N5"), place("桌上"), "盒在桌上"),
+      at(6, N("N6"), place("桌上"), "箱在桌上"),
+      at(7, N("N7"), inside(N("N5")), "针在盒里"),
     ]);
-    const ch2 = chapter(2, "丁把表从口袋里掏出来递给戊。他把钥匙从柜台拿起来。丁把伞从门后拿出来。丁把灯放进柜里。", [
+    const ch2 = chapter(2, "丁把表从口袋里掏出来递给戊。他把钥匙从柜台拿起来。丁把伞从门后拿出来。丁把灯放进柜里。丁把针从箱里拿出来。", [
       move(1, I("i1-1"), person("戊"), "丁把表从口袋里掏出来递给戊", { from: person("丁") }),
       move(2, I("i1-2"), person("他"), "他把钥匙从柜台拿起来", { from: place("柜台") }),
       move(3, I("i1-3"), person("丁"), "丁把伞从门后拿出来", { from: place("门后") }),
       move(4, I("i1-4"), place("柜里"), "丁把灯放进柜里", { from: person("丁") }),
+      move(5, I("i1-7"), person("丁"), "丁把针从箱里拿出来", { from: inside(I("i1-6")) }),
     ]);
     const view = viewOf([ch1, ch2]);
     expect(item(view, "i1-1").now).toMatchObject({ kind: "uncertain", reason: "from" });
     expect(item(view, "i1-2").now).toMatchObject({ kind: "known", place: { name: "他" } });
-    expect(item(view, "i1-3").now).toMatchObject({ kind: "uncertain", reason: "from" });
+    expect(item(view, "i1-3").now).toMatchObject({ kind: "known", place: { name: "丁" } });
     expect(item(view, "i1-4").now).toMatchObject({ kind: "known", place: { text: "柜里" } });
+    expect(item(view, "i1-7").now).toMatchObject({ kind: "uncertain", reason: "from" });
     expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["from", "from"]);
   });
 
@@ -210,6 +218,21 @@ describe("清点", () => {
     const view = viewOf([box(), ch2]);
     expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["not-in-census"]);
     expect(item(view, "i1-1").census).toMatchObject({ status: "conflict" });
+  });
+
+  it("完整清点「什么也没有」，后来写他从盒里拿出表看完又放回去（前一刻表在他手里）：拿出来就反证了清点，放回去也不算完整", () => {
+    const ch1 = chapter(1, "表在他手里。盒子是空的。", [
+      appear("N1", "表", "表在他手里"),
+      appear("N2", "盒子", "盒子是空的"),
+      at(1, N("N1"), person("他"), "表在他手里"),
+      census(2, N("N2"), [], true, "盒子是空的"),
+    ]);
+    const ch2 = chapter(2, "他从盒里取出表，看完又放回盒里。", [
+      move(1, I("i1-1"), inside(I("i1-2")), "他从盒里取出表，看完又放回盒里", { from: inside(I("i1-2")) }),
+    ]);
+    const view = viewOf([ch1, ch2]);
+    expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["not-in-census"]);
+    expect(item(view, "i1-2").census).toMatchObject({ status: "conflict" });
   });
 
   it("6.5 没列全的清点（盒里有信），后来从盒里拿出表：不报", () => {

@@ -296,9 +296,12 @@ export function projectItems(
     // 地方是原样的字、不发编号：比不了（字不一样不等于不是一处）。
     return undefined;
   };
-  /** 从哪来和前一刻接不接得上（false = 接不上）。前一刻搁在某处、从哪来写的是人：当那人从那儿拿起来的（拿起常不单写一句）。 */
+  /**
+   * 从哪来和前一刻接不接得上（false = 接不上）。只有同一种、又都有编号的才比得出接不上：人和人、东西里面和东西里面。
+   * 种类不同不比：人拿着的后来写从桌上拿起、搁着的后来写从谁手里接过，中间那一步正文常不单写。
+   */
   const fromConnects = (previous: ItemPlaceView, from: ItemPlaceView): boolean | undefined =>
-    from.kind === "person" && previous.kind !== "person" ? true : samePlace(previous, from);
+    previous.kind === from.kind ? samePlace(previous, from) : undefined;
   const markUnverified = (item: MutableItem, chapter: number, by: "chapter" | "entry"): void => {
     item.unverifiedSince = chapter;
     item.unverifiedBy = by;
@@ -409,13 +412,13 @@ export function projectItems(
         return;
       }
     }
-    // 从里面拿出了有效完整清点里没有的：清点被反证，改记对不上（几处一起核完再改）。
+    // 从里面拿出了有效完整清点里没有的：清点被反证，改记对不上（几处一起核完再改）。拿出来又放回同一个里面也算：它早就在里面、清点却没列它。
     const entering = insideOf(settled.kind === "known" ? settled : undefined);
     const refuted = new Map<MutableItem, string[]>();
     for (const placement of list) {
       const leaving = !placement.member && placement.move.from?.kind === "inside" ? placement.move.from.item : insideOf(previous);
       const container = leaving !== undefined ? items.get(leaving) : undefined;
-      if (checkable(container) && !container.census.members.has(id) && entering !== leaving) refuted.set(container, [...(refuted.get(container) ?? []), placement.move.entry]);
+      if (checkable(container) && !container.census.members.has(id)) refuted.set(container, [...(refuted.get(container) ?? []), placement.move.entry]);
     }
     for (const [container, entries] of refuted) {
       for (const entry of entries) issue("not-in-census", id, chapter, [container.census?.entry ?? "", entry]);
