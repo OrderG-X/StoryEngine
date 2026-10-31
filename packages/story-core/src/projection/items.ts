@@ -320,8 +320,9 @@ export function projectItems(
     item.lastWrite = chapter;
     delete item.unverifiedSince;
     delete item.unverifiedBy;
-    // 容器毁了：里面的还在不在说不准，它的清点不再当完整用。
-    if (now.kind === "gone" && now.gone === "destroyed") unverify(item, chapter);
+    // 容器毁了（或拿不准里有一种是毁了）：里面的还在不在说不准，它的清点不再当完整用。
+    const destroyed = (state: ItemNow): boolean => state.kind === "gone" && state.gone === "destroyed";
+    if (destroyed(now) || (now.kind === "uncertain" && now.options.some(destroyed))) unverify(item, chapter);
     if (before === after) return;
     if (before !== undefined) {
       const container = items.get(before);
