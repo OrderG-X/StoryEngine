@@ -261,6 +261,8 @@ describe("记账员交回的账单", () => {
         { nature: "hard", subject: "甲", attribute: "年纪", value: "八十", text: "甲说八十", quote: "我八十了", speaker: "老甲" },
         { nature: "hard", subject: "甲", attribute: "籍贯", value: "北方", text: "甲是北方人", quote: "甲是北方人", source: "narration" },
         { nature: "event", text: "甲来过", quote: "甲来过", source: "character" },
+        // 说话人那栏填的是「叙述」（真生成里见过）：照叙述记。
+        { nature: "event", text: "乙走了", quote: "乙走了", speaker: "narration" },
       ],
       threads: [{ op: "close", thread: "T1", note: "他说钟是他停的", quote: "钟是我停的", speaker: "老甲" }],
     }), handles);
@@ -269,6 +271,7 @@ describe("记账员交回的账单", () => {
       { kind: "narration" },
       // 明说是人物说的、没写是谁：照人物说的记（不改现状、不收线索），说话人空着。
       { kind: "character_claim" },
+      { kind: "narration" },
       { kind: "character_claim", speaker: "老甲" },
     ]);
     expect(parsed?.adjusted).toEqual([]);

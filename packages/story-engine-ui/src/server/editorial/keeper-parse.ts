@@ -175,6 +175,8 @@ const CLAIM_WORDS = new Set(["claim", "character", "character_claim", "speech", 
 function sourceOf(item: Raw): DeclaredSource | undefined {
   const speaker = str(item.speaker);
   const kind = str(item.source)?.toLowerCase();
+  // 说话人那栏写的是「叙述」这个格式词（模型把来源填错了栏）：照叙述记，不当成一个叫「叙述」的人说的。
+  if (speaker && NARRATION_WORDS.has(speaker.toLowerCase())) return { kind: "narration" };
   if (speaker) return { kind: "character_claim", speaker };
   if (kind && NARRATION_WORDS.has(kind)) return { kind: "narration" };
   // 明说是人物说的、没写是谁：照人物说的记（不改现状、不收线索），说话人空着。
