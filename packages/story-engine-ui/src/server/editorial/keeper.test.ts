@@ -363,6 +363,16 @@ describe("记账员交回的账单", () => {
       expect(parsed?.entries.find((entry) => entry.kind === "item" && entry.op === "gone")).not.toHaveProperty("to");
     });
 
+    it("「装在哪样里面」写成一段字：按地方原样的字记、说一声；写了号的照旧", () => {
+      const parsed = parse([
+        { seq: 1, item: "I1", op: "move", to: { inside: "八仙桌的抽屉" }, by: "narration", quote: "放进抽屉" },
+        { seq: 2, item: "I2", op: "move", to: { inside: "I1" }, by: "narration", quote: "放进盒子" },
+      ]);
+      expect(parsed?.drops).toEqual([]);
+      expect(parsed?.entries.map((entry) => (entry.kind === "item" ? entry.to : undefined))).toEqual([{ kind: "place", text: "八仙桌的抽屉" }, { kind: "inside", item: { id: "i1-1" } }]);
+      expect(parsed?.adjusted.map((item) => item.where)).toEqual(["items 第 1 条.to"]);
+    });
+
     it("丢掉的条目带上它说到的那几样；说不出指哪样的整章算", () => {
       const parsed = parse([
         { seq: 1, item: "I1", op: "move", to: { inside: "I2", person: "乙" }, by: "narration", quote: "x" },

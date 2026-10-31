@@ -508,8 +508,9 @@ const insideField = (raw: unknown): unknown => {
 /**
  * 去处：{person} / {place} / {inside} / "unknown"（也认 {kind, name|text|item} 的写法）。认不出 → 字符串（原因）。
  * self：这条说的那样——「装在它自己里面」不成立，当没写（多塞的退化字段）。
+ * 「装在哪样里面」写的是一段字、不是东西的号（{"inside":"八仙桌的抽屉"}）、又没写别的去处：那不是账里的东西，按地方原样的字记，adjust 记一笔。
  */
-function placeOf(raw: unknown, handles: KeeperHandles, self?: ItemRefInput): ItemPlaceInput | string {
+function placeOf(raw: unknown, handles: KeeperHandles, self?: ItemRefInput, adjust?: (reason: string) => void): ItemPlaceInput | string {
   const text = str(raw)?.toLowerCase();
   if (text === "unknown" || text === "不知道") return { kind: "unknown" };
   if (!isRecord(raw)) return "去处写得认不出";
@@ -519,6 +520,11 @@ function placeOf(raw: unknown, handles: KeeperHandles, self?: ItemRefInput): Ite
   const insideRaw = insideField(raw);
   const insideRef = insideRaw === undefined || insideRaw === null || insideRaw === "" ? undefined : itemRefOf(insideRaw, undefined, handles);
   const inside = insideRef && self && sameRef(insideRef, self) ? undefined : insideRaw;
+  const insideText = typeof inside === "string" && !insideRef ? inside.trim() : undefined;
+  if (insideText && !person && !place && !(flag(raw.unknown) === true || kind === "unknown")) {
+    adjust?.("装在哪样里面写的是一段字、不是东西的号，按地方记");
+    return { kind: "place", text: insideText };
+  }
   const unknown = flag(raw.unknown) === true || kind === "unknown";
   const given = [person, place, inside, unknown || undefined].filter((value) => value !== undefined && value !== null && value !== "");
   if (given.length !== 1) return given.length === 0 ? "去处没写" : "去处写了好几种";
@@ -533,7 +539,9 @@ function placeOf(raw: unknown, handles: KeeperHandles, self?: ItemRefInput): Ite
  */
 function rawItemRefs(raw: Raw, item: ItemRefInput, handles: KeeperHandles): ItemRefInput[] | undefined {
   const out: ItemRefInput[] = [item];
-  const fields = [insideField(raw.to), insideField(raw.from), ...asList(raw.members)];
+  // 「装在哪样里面」写的是一段字（不是号）：那是地方，不是账里的东西。
+  const insides = [insideField(raw.to), insideField(raw.from)].filter((field) => !(typeof field === "string" && !itemHandle(field)));
+  const fields = [...insides, ...asList(raw.members)];
   for (const field of fields) {
     if (field === undefined || field === null || field === "") continue;
     const ref = itemRefOf(field, undefined, handles);
@@ -605,7 +613,7 @@ function parseItems(
     let broken: string | undefined;
     for (const key of ["to", "from"] as const) {
       if (raw[key] === undefined || raw[key] === null || raw[key] === "") continue;
-      const place = placeOf(raw[key], handles, item);
+      const place = placeOf(raw[key], handles, item, (reason) => adjusted.push({ where: `${where}.${key}`, reason }));
       if (typeof place === "string") broken ??= `${key === "to" ? "去处" : "从哪来"}：${place}`;
       // 丢了 / 毁了再写「去处不知道」是多塞的（丢了本来就不知道在哪）：不当去处。
       else if (!(op === "gone" && key === "to" && place.kind === "unknown")) entry[key] = place;
