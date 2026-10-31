@@ -6,7 +6,7 @@
  * 「昨天 / N 天前」只用两个世界都确定、沿当下链算出来的相对天数（核心 elapsedDays），说不准的只给第几天；
  * 不知道的章照实说为什么不知道，不替它们定日子。星期是核心投影算的（只沿确定的相对天数推），这里不再推。
  */
-import { daysText, elapsedDays, isExact, offsetText, timelineTable, type BookProjection, type ChapterTime, type DayRange, type TimeConflictView, type TimelineRow, type TimePoint } from "@actalk/story-core";
+import { daysText, elapsedDays, isExact, offsetText, timelineTable, type BookProjection, type ChapterTime, type DayRange, type TimeConflictView, type TimelineRow, type TimePoint, type WeekdayConflictView } from "@actalk/story-core";
 
 export const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"] as const;
 
@@ -190,11 +190,16 @@ export function timeConflictText(conflict: Pick<TimeConflictView, "kind" | "auth
   return `你定的第 ${conflict.authorDay} 天，和按${conflict.kind === "time-start" ? "上一章、这章开头" : "这章里换天"}推出来的${daysText(conflict.expected)}对不上`;
 }
 
+/** 两处写明的星期按天数算不拢（只说两样不能同时成立，不判谁对）。 */
+export function weekdayConflictText(conflict: Pick<WeekdayConflictView, "weekday" | "from" | "expected">): string {
+  return `写的${WEEKDAY_NAMES[conflict.weekday]}，和按第 ${conflict.from} 章写的星期、中间的天数推出来的${WEEKDAY_NAMES[conflict.expected]}对不上`;
+}
+
 /** 天数要作者看一下的一章（写作版本 P3a 2.4～2.6）。 */
 export interface TimeCheck {
   readonly chapter: number;
-  /** unproven = 导入时记成作者定的、证明不了；boundary = 换天规矩改了、按天亮判的不算了；conflict = 作者定的和记下的对不上。 */
-  readonly kind: "unproven" | "boundary" | "conflict";
+  /** unproven = 导入时记成作者定的、证明不了；boundary = 换天规矩改了、按天亮判的不算了；conflict = 作者定的和记下的对不上；weekday = 两处写明的星期算不拢。 */
+  readonly kind: "unproven" | "boundary" | "conflict" | "weekday";
   /** 给作者看的一句（不带章号）。 */
   readonly text: string;
   /** unproven：导入时记的那天（作者点「对，是这天」就记它）。 */
@@ -202,7 +207,7 @@ export interface TimeCheck {
 }
 
 /** 全书天数要作者看的：概况和 AI 栏「不急的事」列，作者定了（记了天数、点了以我定的为准）就不再列。 */
-export function timeChecksOf(projection: Pick<BookProjection, "chapters" | "timeConflicts">): TimeCheck[] {
+export function timeChecksOf(projection: Pick<BookProjection, "chapters" | "timeConflicts" | "weekdayConflicts">): TimeCheck[] {
   const checks: TimeCheck[] = [];
   for (const { chapter, time } of projection.chapters) {
     if (time.authorStart === undefined && time.legacyDay?.reason === "unproven") {
@@ -212,5 +217,6 @@ export function timeChecksOf(projection: Pick<BookProjection, "chapters" | "time
     }
   }
   for (const conflict of projection.timeConflicts) checks.push({ chapter: conflict.chapter, kind: "conflict", text: timeConflictText(conflict) });
+  for (const conflict of projection.weekdayConflicts) checks.push({ chapter: conflict.chapter, kind: "weekday", text: weekdayConflictText(conflict) });
   return checks.sort((a, b) => a.chapter - b.chapter);
 }

@@ -56,7 +56,7 @@ export function buildInboxTodos(input: {
   }
 
   // 天数要你看的（写作版本 P3a）：导入时记成你定的待确认 → 「对，是这天」；作者定的和记下的对不上 → 「以我定的为准」；
-  // 换天规矩改了、不知道了 → 让 AI 对着正文看。最多列 3 章，多的让 AI 一起看。
+  // 两处写明的星期算不拢、换天规矩改了不知道了 → 让 AI 对着正文看。最多列 3 章，多的让 AI 一起看。
   const timeChecks = input.overview?.timeChecks ?? [];
   for (const check of timeChecks.slice(0, MAX_TIME_TODOS)) {
     if (check.kind === "unproven" && check.day !== undefined) {
@@ -67,6 +67,14 @@ export function buildInboxTodos(input: {
         action: `对，是第 ${check.day} 天`,
         prefill: `第 ${check.chapter} 章是故事第 ${check.day} 天`,
         userAction: newLedgerAction([{ op: "day", chapter: check.chapter, day: check.day }]),
+      });
+    } else if (check.kind === "weekday") {
+      todos.push({
+        key: `time-${check.chapter}-${check.kind}`,
+        title: `第 ${check.chapter} 章的星期对不上`,
+        sub: check.text,
+        action: "让 AI 对一下",
+        prefill: `第 ${check.chapter} 章写的星期和前面推的对不上，对着正文看一下是星期写错了还是天数记错了，再跟我确认`,
       });
     } else if (check.kind === "conflict") {
       todos.push({

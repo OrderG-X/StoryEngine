@@ -476,6 +476,7 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
     cast: buildCast(ledgers, names),
     conflicts: facts.conflicts,
     timeConflicts: time.conflicts,
+    weekdayConflicts: time.weekdayConflicts,
     timeWorlds: time.worlds,
     dangling: [...facts.dangling, ...threads.dangling],
     dismissedIssues: [...dismissed],

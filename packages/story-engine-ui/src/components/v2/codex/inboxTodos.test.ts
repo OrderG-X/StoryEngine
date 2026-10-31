@@ -54,6 +54,14 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
     expect(buildInboxTodos({ chapters: [ch(1, "死信")], overview: suggest(true), currentChapterNumber: 8, rereading: true })).toEqual([]);
   });
 
+  it("两处写明的星期算不拢：让 AI 对着正文看是星期写错了还是天数记错了", () => {
+    const checks = [{ chapter: 7, kind: "weekday", text: "写的周一，和按第 1 章写的星期、中间的天数推出来的周三对不上" }];
+    const [todo] = buildInboxTodos({ chapters: [ch(8, "雾港")], overview: overview({ timeChecks: checks }), currentChapterNumber: 8 });
+    expect(todo).toMatchObject({ title: "第 7 章的星期对不上", action: "让 AI 对一下", sub: checks[0]!.text });
+    expect(todo?.userAction).toBeUndefined();
+    expect(todo?.prefill).toContain("第 7 章写的星期");
+  });
+
   it("别的待办不带 ops：照旧只把一句话放进输入框", () => {
     const todos = buildInboxTodos({ chapters: [ch(49, "待补")], overview: overview({ cleanup: 3 }), currentChapterNumber: 49 });
     expect(todos.every((todo) => todo.ops === undefined)).toBe(true);

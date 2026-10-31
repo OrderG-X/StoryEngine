@@ -4,7 +4,7 @@
  */
 import type { EntryKind, FactNature, LedgerStatus, ReviewMark, ThreadType } from "../schema/ledger.js";
 import type { EntryFrame } from "./scope.js";
-import type { ChapterTime, TimeConflictView, TimeWorld } from "./time.js";
+import type { ChapterTime, TimeConflictView, TimeWorld, WeekdayConflictView } from "./time.js";
 
 export interface ChapterView {
   readonly chapter: number;
@@ -149,6 +149,8 @@ export interface BookProjection {
   readonly conflicts: readonly ConflictView[];
   /** 作者定的天数和记账员记的对不上（设计 2.5）。 */
   readonly timeConflicts: readonly TimeConflictView[];
+  /** 两处正文写明的星期按天数算不拢。 */
+  readonly weekdayConflicts: readonly WeekdayConflictView[];
   /** 时间推了哪几个世界（作者定了换天规矩就只有那一个）。 */
   readonly timeWorlds: readonly TimeWorld[];
   readonly dangling: readonly DanglingView[];

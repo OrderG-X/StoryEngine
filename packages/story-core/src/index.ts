@@ -251,6 +251,7 @@ export {
   type SegmentView,
   type TimePoint,
   type TimeConflictView,
+  type WeekdayConflictView,
   type TimeProjection,
   type TimeWorld,
   type WorldDays,

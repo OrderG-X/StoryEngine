@@ -158,4 +158,10 @@ describe("天数要作者看的", () => {
       { chapter: 2, kind: "conflict", text: "你定的第 7 天，和按这章里换天推出来的第 5 天对不上" },
     ]);
   });
+
+  it("两处写明的星期按天数算不拢：后一处列一条，说和哪章推的对不上（改早章之后常见）", () => {
+    const ledgers = [chapter(1, days(0), { weekday: 2 }), chapter(2, days(3), { weekday: 3 })];
+    expect(timeChecksOf(view(ledgers))).toEqual([{ chapter: 2, kind: "weekday", text: "写的周四，和按第 1 章写的星期、中间的天数推出来的周六对不上" }]);
+    expect(timeChecksOf(view([chapter(1, days(0), { weekday: 2 }), chapter(2, days(1), { weekday: 3 })]))).toEqual([]);
+  });
 });

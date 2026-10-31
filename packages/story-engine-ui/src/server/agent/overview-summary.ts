@@ -57,7 +57,7 @@ export function summarizeStateOverview(overview: StateOverview): string {
 
   const checks = overview.timeChecks ?? [];
   if (checks.length > 0) {
-    lines.push(`天数要作者看：${checks.map((check) => `第 ${check.chapter} 章${check.text}`).join("；")}（作者在 AI 栏「不急的事」里能直接点；他跟你说了是哪天就交 change_ledger 的 day，说以他定的为准就交 keepDay）。`);
+    lines.push(`天数要作者看：${checks.map((check) => `第 ${check.chapter} 章${check.text}`).join("；")}（作者在 AI 栏「不急的事」里能直接点；他跟你说了是哪天就交 change_ledger 的 day，说以他定的为准、星期就照写的留着就交 keepDay；星期写错了是正文的事，请他改正文）。`);
   }
 
   const lastEvent = overview.storyStatus.lastTimelineEvent;

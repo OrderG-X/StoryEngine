@@ -249,6 +249,18 @@ describe("对话 AI 提的改账：停下等作者点「确认改账」", () => 
     expect((await settled("author", { changes: [{ op: "keepDay", chapter: 2 }] })).failure?.message).toContain("不用改");
   });
 
+  it("两处写明的星期算不拢：作者说照留就记「不是问题」，以后不再提（账、正文都不动）", async () => {
+    const day = (offset: number, quote: string, weekday: number) => ({ kind: "time" as const, review: "auto" as const, start: { offset: { unit: "day" as const, min: offset, max: offset }, basis: "text" as const, quote }, sameDay: true, weekday });
+    for (const [chapter, text, entry] of [[1, CH1, day(0, "周二傍晚", 1)], [2, CH2, day(1, "第二天，钟楼的门锁上了", 4)]] as const) {
+      const committed = await runCommand(book, chapterCommit, { chapter, text, entries: [entry] }, author(`w${chapter}`));
+      expect(committed).toMatchObject({ ok: true, result: { rejected: [] } });
+    }
+    expect((await projectBook(book)).weekdayConflicts).toMatchObject([{ chapter: 2, weekday: 4, from: 1, expected: 2 }]);
+    const kept = await settled("author", { changes: [{ op: "keepDay", chapter: 2 }] });
+    expect(summaryOf(kept)).toBe("账改好了：第 2 章写的周五照留，不再提（可撤销）。");
+    expect((await projectBook(book)).weekdayConflicts).toEqual([]);
+  });
+
   it("提议之后账变了：作者点了也不记，说哪样变了", async () => {
     await commitTwo();
     const record = await edit({ op: "resolve", query: "钟为什么停" });

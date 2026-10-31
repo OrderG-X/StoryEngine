@@ -290,6 +290,25 @@ describe("星期", () => {
       [2, true],
     ]);
   });
+
+  it("两处写明的星期按确定的天数算不拢：后一处记一条（只和前一处比）；隔着区间的不比；作者说照留就不再提", () => {
+    const ledgers = [
+      after(1, days(0), { weekday: 2 }),
+      after(2, days(1), { weekday: 3 }),
+      // 改早章那种：前面多了两天，这章写的周一和按第 2 章推的对不上。
+      after(3, days(3), { weekday: 0 }),
+      after(4, days(1), { weekday: 2 }),
+      after(5, days(1, 2), { weekday: 5 }),
+    ];
+    const v = view(ledgers);
+    expect(v.weekdayConflicts).toEqual([
+      { key: "weekday:3:0:2:6", chapter: 3, weekday: 0, from: 2, expected: 6 },
+      { key: "weekday:4:2:3:1", chapter: 4, weekday: 2, from: 3, expected: 1 },
+    ]);
+    const settled = view(ledgers, { decisions: [decision({ type: "issue.dismiss", issue: "weekday:3:0:2:6" })] });
+    expect(settled.weekdayConflicts.map((conflict) => conflict.chapter)).toEqual([4]);
+    expect(view([after(1, days(0), { weekday: 2 }), after(2, days(1), { weekday: 3 })]).weekdayConflicts).toEqual([]);
+  });
 });
 
 describe("旧账（P2b 及更早）只是推定", () => {

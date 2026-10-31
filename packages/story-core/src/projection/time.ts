@@ -110,6 +110,18 @@ export interface TimeConflictView {
   readonly expected: DayRange;
 }
 
+/** 两处正文写明的星期，按两个世界都确定的天数连得上、却算不拢（改了前面的天数之后常见）：只说两样不能同时成立，不判谁对。 */
+export interface WeekdayConflictView {
+  /** 确定性的问题键，作者说照留时记进裁定（issue.dismiss）。 */
+  readonly key: string;
+  /** 后一处：这章开头写的是星期几（0 = 周一）。 */
+  readonly chapter: number;
+  readonly weekday: number;
+  /** 前一处写明星期的章，和按它推到这章开头该是星期几。 */
+  readonly from: number;
+  readonly expected: number;
+}
+
 // —— 区间算术 ——
 
 const isEmpty = (range: DayRange): boolean => range.lo === undefined && range.hi === undefined;
@@ -359,6 +371,7 @@ function walkWorld(decls: readonly ChapterDecl[], world: TimeWorld): Map<number,
 export interface TimeProjection {
   readonly chapters: ReadonlyMap<number, ChapterTime>;
   readonly conflicts: readonly TimeConflictView[];
+  readonly weekdayConflicts: readonly WeekdayConflictView[];
   /** 这次推了哪几个世界（作者定了换天规矩就只有那一个）。 */
   readonly worlds: readonly TimeWorld[];
 }
@@ -448,14 +461,19 @@ export function projectTime(
       ...(decl.timeOfDay ? { timeOfDay: decl.timeOfDay } : {}),
     });
   }
-  return { chapters: withWeekdays(ledgers.map((ledger) => ledger.chapter), chapters), conflicts, worlds };
+  const weekdays = withWeekdays(ledgers.map((ledger) => ledger.chapter), chapters, dismissed);
+  return { chapters: weekdays.chapters, conflicts, weekdayConflicts: weekdays.conflicts, worlds };
 }
 
 /**
  * 星期（设计 2.3，全书一处算）：章的开头按「两个世界都确定」的相对天数连成几串（绝对天数确定的章另连成一串），
  * 串里有明写星期的就推给同一串里没写的（取天数最近的那个）。连不上的不推。
  */
-function withWeekdays(order: readonly number[], chapters: Map<number, ChapterTime>): Map<number, ChapterTime> {
+function withWeekdays(
+  order: readonly number[],
+  chapters: Map<number, ChapterTime>,
+  dismissed: ReadonlySet<string>,
+): { readonly chapters: Map<number, ChapterTime>; readonly conflicts: readonly WeekdayConflictView[] } {
   const parent = new Map<string, string>();
   const offset = new Map<string, number>(); // 相对父节点差几天
   const find = (node: string): { root: string; diff: number } => {
@@ -494,7 +512,18 @@ function withWeekdays(order: readonly number[], chapters: Map<number, ChapterTim
     const time = chapters.get(chapter);
     return time?.presentLine === true && time.weekday !== undefined ? [{ chapter, weekday: time.weekday, ...find(`c${chapter}`) }] : [];
   });
-  if (anchors.length === 0) return chapters;
+  if (anchors.length === 0) return { chapters, conflicts: [] };
+  // 同一串里相邻两处写明的星期算不拢：后一处记一条（只和前一处比，免得一处写错牵出一串）。
+  const conflicts: WeekdayConflictView[] = [];
+  const lastInChain = new Map<string, (typeof anchors)[number]>();
+  for (const anchor of anchors) {
+    const before = lastInChain.get(anchor.root);
+    lastInChain.set(anchor.root, anchor);
+    if (!before) continue;
+    const expected = mod7(before.weekday + anchor.diff - before.diff);
+    const key = `weekday:${anchor.chapter}:${anchor.weekday}:${before.chapter}:${expected}`;
+    if (expected !== anchor.weekday && !dismissed.has(key)) conflicts.push({ key, chapter: anchor.chapter, weekday: anchor.weekday, from: before.chapter, expected });
+  }
   const out = new Map(chapters);
   for (const chapter of order) {
     const time = chapters.get(chapter);
@@ -507,7 +536,7 @@ function withWeekdays(order: readonly number[], chapters: Map<number, ChapterTim
     }
     if (best) out.set(chapter, { ...time, weekday: mod7(best.weekday + here.diff - best.diff), weekdayDerived: true });
   }
-  return out;
+  return { chapters: out, conflicts };
 }
 
 /**
