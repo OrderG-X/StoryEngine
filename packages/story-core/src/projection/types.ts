@@ -4,6 +4,7 @@
  */
 import type { EntryKind, FactNature, LedgerStatus, ReviewMark, ThreadType } from "../schema/ledger.js";
 import type { EntryFrame } from "./scope.js";
+import type { ItemIssueView, ItemView } from "./items.js";
 import type { ChapterTime, TimeConflictView, TimeWorld, WeekdayConflictView } from "./time.js";
 
 export interface ChapterView {
@@ -17,6 +18,8 @@ export interface ChapterView {
   readonly missingKinds?: readonly EntryKind[];
   /** 故事时间（P3a，projection/time.ts）：当下线、开头 / 结尾区间、段、星期。 */
   readonly time: ChapterTime;
+  /** 这章东西是旧记法（P3b 之前记的：东西在哪写在事实里，没有编号）。 */
+  readonly itemsLegacy?: true;
   /** 出场人物（已确立名字）。 */
   readonly present: readonly string[];
   readonly viewpoint?: string;
@@ -42,6 +45,8 @@ export interface FactView {
   /** 主体的已确立名字（别名已归并）。没有主体的旧事件没有这两项。 */
   readonly subject?: string;
   readonly subjectKey?: string;
+  /** 主体是一样东西（P3b 起记的）：投影里的东西编号（归并、拆开之后）。 */
+  readonly item?: string;
   readonly attribute?: string;
   readonly attributeKey?: string;
   readonly value?: string;
@@ -53,6 +58,11 @@ export interface FactView {
   readonly scope: StatementScope;
   readonly supersededAt?: number;
   readonly supersededBy?: string;
+  /**
+   * 旧记法里一句说了好几样东西、其中这几样（投影里的东西编号）已经用新记法写了去向（P3b 设计 2.6 overlaps）：
+   * 这条照旧留着别的东西的信息，但不再当这几样的现状——读的人放进「旧记法、没逐样对齐」，写明它们以「东西在哪」为准。
+   */
+  readonly unaligned?: readonly string[];
 }
 
 /** 某个主体（人、物、地方）某方面的现状和历史，按最新一章算。 */
@@ -69,6 +79,8 @@ export interface SubjectAttributeView {
 export interface SubjectView {
   readonly key: string;
   readonly name: string;
+  /** 这个主体是一样东西（P3b 起按编号记的）：投影里的东西编号。 */
+  readonly item?: string;
   readonly attributes: readonly SubjectAttributeView[];
 }
 
@@ -127,7 +139,7 @@ export interface ConflictView {
 
 /** 指向了不存在的东西（线索、事实、裁定里的线索）。绝不悄悄丢掉，摆出来给人看。 */
 export interface DanglingView {
-  readonly kind: "thread" | "fact" | "decision";
+  readonly kind: "thread" | "fact" | "decision" | "item";
   readonly ref: string;
   readonly chapter?: number;
   /** 账单条目 id 或裁定 id。 */
@@ -146,6 +158,10 @@ export interface BookProjection {
   readonly subjects: readonly SubjectView[];
   readonly threads: readonly ThreadView[];
   readonly cast: readonly CastMember[];
+  /** 东西（P3b，projection/items.ts）：现在在哪、历史、单列的说法、里面有什么、清点。 */
+  readonly items: readonly ItemView[];
+  /** 投影能确定的东西矛盾（去处接不上、清点对不上……都只是「可能」）。 */
+  readonly itemIssues: readonly ItemIssueView[];
   readonly conflicts: readonly ConflictView[];
   /** 作者定的天数和记账员记的对不上（设计 2.5）。 */
   readonly timeConflicts: readonly TimeConflictView[];

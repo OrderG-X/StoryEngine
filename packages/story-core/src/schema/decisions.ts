@@ -5,6 +5,7 @@
  * 设定卡（身份、年龄、规则这类不变属性）也是作者裁定，留在旧文件里，后面几期再搬。
  */
 import { z } from "zod";
+import { CensusMember, ItemGone, ItemPlace, itemLinks } from "./ledger.js";
 
 export const AUTHOR_DECISIONS_SCHEMA = "author-decisions/1" as const;
 
@@ -48,7 +49,40 @@ const factAssertShape = {
   text,
   corrects: text.optional(),
   note: text.optional(),
+  /** 主体是一样东西（P3b）：东西编号。改后的那条还挂在那样东西上，不按名字重新认。 */
+  subjectId: text.optional(),
 };
+/**
+ * 东西（写作版本 P3b 设计 2.7）。item.merge：这几样是同一样（账里这样就是卡上那样也是它）——账里所有位置指 from 的都算 into。
+ * item.split：这几处说的不是那一样（refs 精确到哪条的哪个位置），是另一样东西（名字 name，编号 `x-<裁定号>`）。
+ * item.retract：记账员这条东西条目记错了（不算）。item.state：到第 chapter 章末它在哪 / 丢了还是毁了 / 里面是什么（作者定的，压过那章记的）。
+ */
+const itemMerge = { type: z.literal("item.merge"), from: z.array(text).min(1), into: text, note: text.optional() };
+export const ItemPosition = z.object({ entry: text, at: z.enum(["item", "to", "from", "member", "subject"]), index: z.number().int().min(0).optional() });
+export type ItemPosition = z.infer<typeof ItemPosition>;
+const itemSplit = { type: z.literal("item.split"), item: text, refs: z.array(ItemPosition).min(1), name: text, note: text.optional() };
+const itemRetract = { type: z.literal("item.retract"), entry: text, note: text.optional() };
+export const ItemStateRuling = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("at"), to: ItemPlace }),
+  z.object({ kind: z.literal("gone"), gone: ItemGone }),
+  z.object({ kind: z.literal("census"), members: z.array(CensusMember), complete: z.boolean() }),
+]);
+export type ItemStateRuling = z.infer<typeof ItemStateRuling>;
+/** 作者定的去处关联的旧记法事实，逐样：at / gone 关联裁定那样东西，清点关联各成员。 */
+export function itemStateLinksOf(decision: {
+  readonly item: string;
+  readonly state: ItemStateRuling;
+  readonly replaces?: readonly string[];
+  readonly overlaps?: readonly string[];
+}): readonly { readonly item: string; readonly replaces: readonly string[]; readonly overlaps: readonly string[] }[] {
+  const own = decision.replaces || decision.overlaps ? [{ item: decision.item, replaces: decision.replaces ?? [], overlaps: decision.overlaps ?? [] }] : [];
+  const members = decision.state.kind === "census"
+    ? decision.state.members.flatMap((member) => (member.replaces || member.overlaps ? [{ item: member.id, replaces: member.replaces ?? [], overlaps: member.overlaps ?? [] }] : []))
+    : [];
+  return [...own, ...members];
+}
+/** at / gone 的旧记法关联挂在裁定上（关联 item）；清点的挂在各成员上（设计 2.6、2.7）。 */
+const itemState = { type: z.literal("item.state"), item: text, chapter: z.number().int().min(1), state: ItemStateRuling, ...itemLinks, note: text.optional() };
 const structured = (value: { nature: string; subject?: string; attribute?: string; value?: string }): boolean =>
   value.nature === "event" || Boolean(value.subject && value.attribute && value.value);
 const STRUCTURE_MESSAGE = "不会变的事实和状态必须写清谁、哪方面、是什么";
@@ -63,6 +97,10 @@ export const DecisionInput = z.discriminatedUnion("type", [
   z.object(factAssertShape),
   z.object(chapterDay),
   z.object(chapterSummary),
+  z.object(itemMerge),
+  z.object(itemSplit),
+  z.object(itemRetract),
+  z.object(itemState),
 ]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE })
   .refine(dayOrdered, { message: DAY_MESSAGE });
 export type DecisionInput = z.infer<typeof DecisionInput>;
@@ -78,6 +116,10 @@ export const AuthorDecision = z.discriminatedUnion("type", [
   z.object({ ...factAssertShape, ...meta }),
   z.object({ ...chapterDay, ...meta }),
   z.object({ ...chapterSummary, ...meta }),
+  z.object({ ...itemMerge, ...meta }),
+  z.object({ ...itemSplit, ...meta }),
+  z.object({ ...itemRetract, ...meta }),
+  z.object({ ...itemState, ...meta }),
 ]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE })
   .refine(dayOrdered, { message: DAY_MESSAGE });
 export type AuthorDecision = z.infer<typeof AuthorDecision>;

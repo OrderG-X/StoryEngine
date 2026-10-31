@@ -81,3 +81,42 @@ describe("定稿清单：哪几条要作者看", () => {
     expect(blind.review.map((item) => [item.index, item.reasons])).toEqual([[1, ["hard-conflict"]], [2, ["closes-thread"]]]);
   });
 });
+
+describe("东西的事实按编号比（P3b 第 6 节第 17 条）", () => {
+  const narration = { kind: "narration" as const };
+  const ledgers = [
+    ledgerOf({
+      chapter: 1,
+      text: "# 第1章\n\n崔家的表是梅花牌。许家的表是上海牌。",
+      entries: [
+        { kind: "item", review: "auto", op: "appear", tag: "N1", name: "表", quote: "崔家的表是梅花牌", source: narration },
+        { kind: "item", review: "auto", op: "appear", tag: "N2", name: "表", quote: "许家的表是上海牌", source: narration },
+        { kind: "fact", review: "auto", nature: "hard", subject: "表", attribute: "牌子", value: "梅花", item: { tag: "N1" }, text: "崔家的表是梅花牌", quote: "崔家的表是梅花牌", source: narration },
+        { kind: "fact", review: "auto", nature: "hard", subject: "表", attribute: "牌子", value: "上海", item: { tag: "N2" }, text: "许家的表是上海牌", quote: "许家的表是上海牌", source: narration },
+      ],
+    }),
+  ];
+  const TEXT2 = "那块旧表是上海牌的。";
+  const brand = (item: string, subject: string, value: string): EntryInput =>
+    ({ kind: "fact", review: "auto", nature: "hard", subject, attribute: "牌子", value, item: { id: item }, text: TEXT2, quote: TEXT2, source: narration });
+  const reasonsOf = (entry: EntryInput, view = project({ ledgers, decisions: [] })) => {
+    const checked = checkEntries([entry], TEXT2, view);
+    expect(checked.rejected).toEqual([]);
+    const plan = classifyForReview(checked.accepted, view, { chapter: 2, text: TEXT2 });
+    return plan.review.flatMap((item) => item.reasons);
+  };
+
+  it("同一样换了叫法照样比；同名的另一样不比", () => {
+    expect(reasonsOf(brand("i1-1", "那块旧表", "上海"))).toEqual(["hard-conflict"]);
+    expect(reasonsOf(brand("i1-2", "表", "上海"))).toEqual([]);
+  });
+
+  it("作者改了其中一样的事实，另一样照旧", () => {
+    const view = project({
+      ledgers,
+      decisions: [{ id: "d-1", at: "x", type: "fact.assert", chapter: 1, nature: "hard", subject: "表", subjectId: "i1-1", attribute: "牌子", value: "上海", text: "崔家的表其实是上海牌", corrects: "c1-3" }],
+    });
+    expect(reasonsOf(brand("i1-1", "那块旧表", "上海"), view)).toEqual([]);
+    expect(reasonsOf(brand("i1-2", "表", "梅花"), view)).toEqual(["hard-conflict"]);
+  });
+});

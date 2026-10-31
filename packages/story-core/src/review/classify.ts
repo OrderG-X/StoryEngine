@@ -9,6 +9,7 @@
  *  - 本章没记时间（timeMissing）——认不出在不在当下线上，后面的天数跟着不知道
  * 人物说的、梦里的、回忆里的不算「改旧账」（P3a 设计第 3 节：不更新现状、不推翻、不收线索），不因它出卡；
  * 在哪段按本章时间声明里的段和原句定（给了正文才分，没给按当下算）。
+ * 东西（P3b）：主体是东西的事实按东西编号和前文比（同名两样各算各的）；东西去向顶掉旧记法事实的算「推翻前文」。
  * 目标：一章要看的 ≤ 8 条（重构计划第一节）。
  */
 import { nameKey } from "../text/quote.js";
@@ -54,6 +55,9 @@ export function classifyForReview(
   }
   const known = new Set([...aliasToKey.keys(), ...(options.knownNames ?? []).map(nameKey)]);
   const resolve = (name: string): string => aliasToKey.get(nameKey(name)) ?? nameKey(name);
+  // 前文的东西编号（作者并过的旧号算到并进去的那样）。
+  const itemAlias = new Map<string, string>();
+  for (const item of before.items) for (const id of [item.id, ...item.mergedFrom]) itemAlias.set(id, item.id);
   const hardValues = new Map<string, Set<string>>();
   for (const fact of before.facts) {
     if (fact.nature !== "hard" || fact.status !== "current" || fact.attributeKey === undefined) continue;
@@ -73,9 +77,13 @@ export function classifyForReview(
     if (entry.kind === "fact" && rights.state) {
       if (entry.replaces && rights.replaces) reasons.push("replaces-fact");
       if (entry.nature === "hard" && entry.subject && entry.attribute && entry.value) {
-        const values = hardValues.get(`${resolve(entry.subject)}|${nameKey(entry.attribute)}`);
+        // 本章新写到的东西（标签）前文没有它的事实。
+        const subjectKey = entry.item ? ("id" in entry.item ? `item:${itemAlias.get(entry.item.id) ?? entry.item.id}` : undefined) : resolve(entry.subject);
+        const values = subjectKey !== undefined ? hardValues.get(`${subjectKey}|${nameKey(entry.attribute)}`) : undefined;
         if (values && !values.has(nameKey(entry.value)) && !entry.replaces) reasons.push("hard-conflict");
       }
+    } else if (entry.kind === "item" && (entry.replaces || entry.members?.some((member) => member.replaces)) && rights.replaces) {
+      reasons.push("replaces-fact");
     } else if (entry.kind === "thread" && entry.op === "close" && rights.close) {
       reasons.push("closes-thread");
     } else if (entry.kind === "presence") {
@@ -100,7 +108,7 @@ function entryRights(entries: readonly EntryInput[], options: ClassifyOptions): 
     }
   }
   return (entry) => {
-    if (entry.kind !== "fact" && entry.kind !== "thread") return rightsOf("unknown", "present");
+    if (entry.kind !== "fact" && entry.kind !== "thread" && entry.kind !== "item") return rightsOf("unknown", "present");
     const located = source && scenes.length > 0 ? locateQuote(entry.quote, source) : undefined;
     const frame = frameOf(located?.units ? [{ units: located.units }] : [], located?.units !== undefined, scenes);
     return rightsOf(entry.source?.kind ?? "unknown", frame);

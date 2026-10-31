@@ -12,12 +12,14 @@
  *    不收线索；来源不明的照旧更新，但矛盾只报「可能」。
  *  - 线索：开 / 推进 / 收按章序；收了又推进 = 重新打开；作者的归并、收口、分量最后套上。
  *  - 时间：projection/time.ts（当下线、两种换天规矩、区间、星期）。
+ *  - 东西（P3b）：projection/items.ts（编号、去向按 seq、清点和它的有效期）；主体是东西的事实按编号成格子。
  */
 import type { SettingCardsFile } from "../schema/cards.js";
-import type { AuthorDecision } from "../schema/decisions.js";
-import { entryQuote, missingKindsOf, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
+import { itemStateLinksOf, type AuthorDecision } from "../schema/decisions.js";
+import { entryQuote, itemLinksOf, missingKindsOf, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
 import { idleChaptersBetween, threadUnknownChapters } from "./coverage.js";
+import { projectItems, type ItemProjection } from "./items.js";
 import { Names } from "./names.js";
 import { lowerConflict, rightsOf, scopeOf, type ConflictLevel, type EntryScope } from "./scope.js";
 import { projectTime, type TimeProjection } from "./time.js";
@@ -95,6 +97,7 @@ function buildFacts(
   decisions: readonly AuthorDecision[],
   names: Names,
   dismissed: ReadonlySet<string>,
+  items: ItemProjection,
 ): { facts: FactView[]; subjects: SubjectView[]; conflicts: ConflictView[]; dangling: DanglingView[] } {
   const retracted = new Set(
     decisions.flatMap((decision) =>
@@ -102,6 +105,7 @@ function buildFacts(
     ),
   );
   const expiries = decisions.filter((decision) => decision.type === "fact.expire");
+  const retractedItems = new Set(decisions.flatMap((decision) => (decision.type === "item.retract" ? [decision.entry] : [])));
   // 作者补记的事实：当成那一章账单末尾多出来的一条（没有原句），和账单里的事实走同一套顶替 / 矛盾规则。
   const asserted = new Map<number, FactEntry[]>();
   const chapters = new Set(ledgers.map((ledger) => ledger.chapter));
@@ -124,7 +128,7 @@ function buildFacts(
       evidenceStatus: "none",
       provenance: "native",
       nature: decision.nature,
-      ...(decision.subject ? { subjectRef: { mention: decision.subject } } : {}),
+      ...(decision.subject ? { subjectRef: { mention: decision.subject, ...(decision.subjectId ? { id: decision.subjectId } : {}) } } : {}),
       ...(decision.attribute ? { predicate: decision.attribute } : {}),
       ...(decision.value ? { value: decision.value } : {}),
       text: decision.text,
@@ -137,7 +141,7 @@ function buildFacts(
   const currentHard = new Map<string, string[]>();
   const conflicts: ConflictView[] = [];
   const dangling: DanglingView[] = [...assertDangling];
-  const subjects = new Map<string, { name: string; attrs: Map<string, { attribute: string; nature: "hard" | "state"; history: string[] }> }>();
+  const subjects = new Map<string, { name: string; item?: string; attrs: Map<string, { attribute: string; nature: "hard" | "state"; history: string[] }> }>();
 
   const supersede = (target: MutableFact, chapter: number, by: string): void => {
     target.status = "superseded";
@@ -151,15 +155,44 @@ function buildFacts(
     }
   };
 
+  /**
+   * 给一样东西定了新去处时关联的旧记法事实（P3b 设计 2.6），和事实的 replaces 同一套：replaces 顶掉；overlaps 不顶掉，
+   * 只记这样东西已经按新记法对上了（没逐样对齐）。账单里的只能关联更早章的；作者在某章末定的连这一章的也算。
+   */
+  const linkOld = (link: { readonly replaces: readonly string[]; readonly overlaps: readonly string[] }, item: string, chapter: number, by: string, sameChapter: boolean): void => {
+    for (const ref of [...link.replaces, ...link.overlaps]) {
+      const target = byId.get(ref);
+      if (!target || target.chapter > chapter || (!sameChapter && target.chapter === chapter)) {
+        dangling.push({ kind: "fact", ref, chapter, source: by });
+        continue;
+      }
+      if (target.status !== "current") continue;
+      if (link.replaces.includes(ref)) supersede(target, chapter, by);
+      else target.unaligned = [...new Set([...(target.unaligned ?? []), item])];
+    }
+  };
+  const itemStates = new Map<number, (AuthorDecision & { type: "item.state" })[]>();
+  for (const decision of decisions) if (decision.type === "item.state") itemStates.set(decision.chapter, [...(itemStates.get(decision.chapter) ?? []), decision]);
+
   // 每条事实报矛盾到什么程度（scope.ts）。
   const conflictLevel = new Map<string, ConflictLevel>();
   const AUTHOR_SCOPE: EntryScope = { frame: "present", source: "author_ruling", rights: rightsOf("author_ruling", "present") };
   for (const ledger of ledgers) {
     const assertedIds = new Set((asserted.get(ledger.chapter) ?? []).map((entry) => entry.id));
     for (const entry of [...ledger.entries, ...(asserted.get(ledger.chapter) ?? [])]) {
+      // 东西的去向第一次用新记法写时对上旧记法里说它去向的事实：逐样（主体、清点的每个成员），跟着这条的限权。
+      if (entry.kind === "item") {
+        const links = itemLinksOf(entry);
+        if (links.length === 0 || retractedItems.has(entry.id) || !scopeOf(entry, ledger).rights.replaces) continue;
+        for (const link of links) {
+          const item = items.resolve(link.ref.id, { entry: entry.id, at: link.at, ...(link.index !== undefined ? { index: link.index } : {}) });
+          linkOld(link, item, ledger.chapter, entry.id, false);
+        }
+        continue;
+      }
       if (entry.kind !== "fact") continue;
       const scope = assertedIds.has(entry.id) ? AUTHOR_SCOPE : scopeOf(entry, ledger);
-      const fact = toFactView(entry, ledger.chapter, names, retracted.has(entry.id), scope);
+      const fact = toFactView(entry, ledger.chapter, names, retracted.has(entry.id), scope, items);
       byId.set(fact.id, fact);
       ordered.push(fact);
       if (fact.status === "retracted") continue;
@@ -181,7 +214,7 @@ function buildFacts(
       if (!scope.rights.state && fact.nature === "state") continue;
       let subject = subjects.get(fact.subjectKey);
       if (!subject) {
-        subject = { name: fact.subject ?? fact.subjectKey, attrs: new Map() };
+        subject = { name: fact.subject ?? fact.subjectKey, ...(fact.item !== undefined ? { item: fact.item } : {}), attrs: new Map() };
         subjects.set(fact.subjectKey, subject);
       }
       let attr = subject.attrs.get(fact.attributeKey);
@@ -211,6 +244,10 @@ function buildFacts(
       }
       if (scope.rights.state) currentHard.set(key, [...list, fact.id]);
     }
+    // 作者定的这章末东西在哪：关联的旧事实在这章末对上。
+    for (const decision of itemStates.get(ledger.chapter) ?? []) {
+      for (const link of itemStateLinksOf(decision)) linkOld(link, items.resolve(link.item), ledger.chapter, decision.id, true);
+    }
   }
 
   // 作者说「从第几章起不再成立」的：在那章作废（没有顶替的新说法）。指向不存在的摆进 dangling。
@@ -238,6 +275,7 @@ function buildFacts(
   const subjectViews: SubjectView[] = [...subjects.entries()].map(([key, subject]) => ({
     key,
     name: subject.name,
+    ...(subject.item !== undefined ? { item: subject.item } : {}),
     attributes: [...subject.attrs.entries()].map(([attrKey, attr]): SubjectAttributeView => ({
       attribute: attr.attribute,
       key: attrKey,
@@ -251,15 +289,19 @@ function buildFacts(
 
 const statementOf = (scope: EntryScope): StatementScope => ({ frame: scope.frame, source: scope.source, ...(scope.speaker ? { speaker: scope.speaker } : {}) });
 
-function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean, scope: EntryScope): MutableFact {
+/** 主体是东西的按编号成格子（同名两样各算各的），名字取投影里那样东西的名字；别的照旧按名字过别名表。 */
+function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean, scope: EntryScope, items: ItemProjection): MutableFact {
   const mention = subjectOf(entry);
-  const subject = mention ? names.resolve(mention) : undefined;
+  const itemId = entry.subjectRef?.id !== undefined ? items.resolve(entry.subjectRef.id, { entry: entry.id, at: "subject" }) : undefined;
+  const itemName = itemId !== undefined ? items.items.find((item) => item.id === itemId)?.name : undefined;
+  const subject = itemId !== undefined ? { key: `item:${itemId}`, name: itemName ?? mention ?? "" } : mention ? names.resolve(mention) : undefined;
   const quote = entryQuote(entry);
   return {
     id: entry.id,
     chapter,
     nature: entry.nature,
     ...(subject ? { subject: subject.name, subjectKey: subject.key } : {}),
+    ...(itemId !== undefined ? { item: itemId } : {}),
     ...(entry.predicate ? { attribute: entry.predicate, attributeKey: nameKey(entry.predicate) } : {}),
     ...(entry.value ? { value: entry.value } : {}),
     text: entry.text,
@@ -442,6 +484,7 @@ function buildChapters(
       ledgerStatus: ledger.status,
       ...(missing.length > 0 ? { missingKinds: missing } : {}),
       time: time.chapters.get(ledger.chapter) as ChapterView["time"],
+      ...(ledger.itemModel === undefined && ledger.status !== "pending" ? { itemsLegacy: true as const } : {}),
       present,
       ...(viewpoint !== undefined ? { viewpoint } : {}),
       ...(textHashes ? (hash === undefined ? {} : { editedSinceCommit: hash !== ledger.textSha256 }) : {}),
@@ -462,7 +505,8 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
   if (input.cards) names.addCards(input.cards);
   for (const ledger of ledgers) for (const entry of ledger.entries) if (entry.kind === "presence") names.addPresence(entry);
 
-  const facts = buildFacts(ledgers, input.decisions, names, dismissed);
+  const items = projectItems(ledgers, input.decisions, names, input.cards, dismissed);
+  const facts = buildFacts(ledgers, input.decisions, names, dismissed, items);
   const threads = buildThreads(ledgers, input.decisions, upTo, staleAfter);
   const time = projectTime(ledgers, input.decisions, input.cards?.calendar?.dayBoundary, dismissed);
   return {
@@ -474,11 +518,13 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
     subjects: facts.subjects,
     threads: threads.threads,
     cast: buildCast(ledgers, names),
+    items: items.items,
+    itemIssues: items.issues,
     conflicts: facts.conflicts,
     timeConflicts: time.conflicts,
     weekdayConflicts: time.weekdayConflicts,
     timeWorlds: time.worlds,
-    dangling: [...facts.dangling, ...threads.dangling],
+    dangling: [...facts.dangling, ...threads.dangling, ...items.dangling],
     dismissedIssues: [...dismissed],
   };
 }

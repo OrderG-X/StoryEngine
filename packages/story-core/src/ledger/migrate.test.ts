@@ -314,7 +314,8 @@ describe("账本升级命令", () => {
       const found = await ledgersToUpgrade(book);
       expect(await migrate(found?.digest as string)).toMatchObject({ ok: true });
       type View = Awaited<ReturnType<typeof projectBook>>;
-      const strip = ({ version: _version, chapters, ...rest }: View) => ({ ...rest, chapters: chapters.map(({ time: _time, ...chapter }) => chapter) });
+      // 迁来的章东西是旧记法（itemsLegacy），新定稿的不是：只比别的。
+      const strip = ({ version: _version, chapters, ...rest }: View) => ({ ...rest, chapters: chapters.map(({ time: _time, itemsLegacy: _items, ...chapter }) => chapter) });
       const migrated = await projectBook(book);
       const fresh = await projectBook(native);
       expect(strip(migrated)).toEqual(strip(fresh));

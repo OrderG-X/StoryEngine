@@ -30,6 +30,7 @@ export interface LedgerCompleteResult {
   readonly recorded: number;
   readonly rejected: ChapterCommitResult["rejected"];
   readonly orphanedThreads: readonly string[];
+  readonly orphanedItems: readonly string[];
 }
 
 export const ledgerComplete: WriteCommandSpec<LedgerCompleteArgs, LedgerCompleteResult> = {
@@ -63,7 +64,7 @@ export const ledgerComplete: WriteCommandSpec<LedgerCompleteArgs, LedgerComplete
       label: `补账：第 ${chapter} 章`,
       writes: [{ path: chapterLedgerPath(chapter), content: `${JSON.stringify(built.ledger, null, 2)}\n` }],
       changed: { ledgers: [chapter] },
-      result: { chapter, ledgerStatus: built.ledger.status, recorded: built.recorded, rejected: built.rejected, orphanedThreads: built.orphanedThreads },
+      result: { chapter, ledgerStatus: built.ledger.status, recorded: built.recorded, rejected: built.rejected, orphanedThreads: built.orphanedThreads, orphanedItems: built.orphanedItems },
     };
   },
 };

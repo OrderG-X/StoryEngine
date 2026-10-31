@@ -17,6 +17,14 @@
  *  | 裁定 · fact.expire | fact；chapter | 事实；章 |
  *  | 裁定 · fact.assert | corrects；chapter；subject | 事实；章；名字解析 |
  *  | 裁定 · chapter.day / chapter.summary | chapter | 章 |
+ *  | 账单 · 东西（P3b） | 主体（证明它存在，不引）；to / from 里面、清点成员；replaces[] / overlaps[]（含清点成员上的）；去处里的人 | 东西（只看还有没有证明它存在的）；事实；名字解析 |
+ *  | 账单 · 事实 | 主体是东西的（subjectRef.id，证明它存在，不引） | — |
+ *  | 裁定 · item.merge | from[]、into | 东西 |
+ *  | 裁定 · item.split | item；refs[].entry | 东西；所选条目（东西条目或主体是它的事实） |
+ *  | 裁定 · item.retract | entry | 东西条目 |
+ *  | 裁定 · item.state | item；chapter；去处 / 成员里的东西；去处里的人；replaces / overlaps（含成员上的） | 东西；章；东西；名字解析；事实 |
+ *  | 裁定 · fact.assert | subjectId | 东西 |
+ *  | 裁定 · issue.dismiss | issue（`item-<种>:<章>:…`） | 那章 + 键里每条条目的整条内容和有效范围 |
  *  | 设定卡 · 关系 | a、b | 卡 |
  *
  * 被引用那条的身份（Resolver）：事实 / 线索 = 定义它的条目的整条内容摘要 + 有效范围（P3a 设计 2.3：它在当下还是哪个段、
@@ -24,15 +32,19 @@
  * 章 = 那章账单的 (committedAt, origin)；名字 = 解析链（起点的键 + 每一跳的出处：哪张卡、哪章哪条出场，带内容摘要；和投影同一个 Names）；
  * 前一个当下章 = 往前到它为止每一章的身份 + 时间摘要（时间条目、段、记没记全），或「没有」；卡 = 卡的内容摘要；
  * 时间冲突（`time-start:<章>:<天>`）= 那章的时间摘要。
+ * 东西（P3b 设计 2.8）= 还有没有证明它存在的（账里以它为主体的条目、以它为主体的事实、设定卡、拆出它的裁定）：
+ * 撤掉的只是它头回写到那章、后文还有证明的，不拦；撤掉的是唯一的证明、后文还装在它里面 / 清点里有它，拦。
+ * 东西条目 = 那条的章 + 整条内容摘要 + 有效范围（和事实同一套）。东西矛盾的问题键 = 那章的身份 + 键里每条条目的身份。
  */
 import type { SettingCardsFile } from "../schema/cards.js";
-import type { AuthorDecision } from "../schema/decisions.js";
-import { missingKindsOf, presenceName, subjectOf, threadOf, timeRoleOf, type ChapterLedger, type LedgerEntry, type TimeEntry } from "../schema/ledger.js";
+import { itemStateLinksOf, type AuthorDecision } from "../schema/decisions.js";
+import { itemLinksOf, itemRefsOf, missingKindsOf, presenceName, subjectOf, threadOf, timeRoleOf, type ChapterLedger, type ItemPlace, type LedgerEntry, type TimeEntry } from "../schema/ledger.js";
 import { canonicalJson } from "../store/basis.js";
 import { CARDS_PATH, chapterLedgerPath, DECISIONS_PATH } from "../store/paths.js";
 import { sha256Bytes } from "../store/transaction.js";
 import { Names } from "../projection/names.js";
 import { scopeOf } from "../projection/scope.js";
+import { splitItemId } from "../projection/items.js";
 import { projectTime, type ChapterTime } from "../projection/time.js";
 
 export type Ref =
@@ -42,7 +54,9 @@ export type Ref =
   | { readonly kind: "name"; readonly raw: string }
   | { readonly kind: "previous"; readonly chapter: number }
   | { readonly kind: "card"; readonly id: string }
-  | { readonly kind: "issue"; readonly issue: string };
+  | { readonly kind: "issue"; readonly issue: string }
+  | { readonly kind: "item"; readonly id: string }
+  | { readonly kind: "itemEntry"; readonly id: string };
 
 /** 引用者在哪（给作者看的位置，结构；文案在外层）。 */
 export type RefWhere =
@@ -78,7 +92,17 @@ export function refsOfEntry(entry: LedgerEntry, chapter: number): Ref[] {
     case "summary":
       return [];
     case "fact":
-      return [...(entry.replaces ?? []).map((id): Ref => ({ kind: "fact", id })), ...(subjectOf(entry) ? [{ kind: "name", raw: subjectOf(entry) as string } as const] : [])];
+      // 主体是东西的：它自己就证明那样东西存在（不引）；名字照旧按别名表。
+      return [
+        ...(entry.replaces ?? []).map((id): Ref => ({ kind: "fact", id })),
+        ...(subjectOf(entry) && entry.subjectRef?.id === undefined ? [{ kind: "name", raw: subjectOf(entry) as string } as const] : []),
+      ];
+    case "item":
+      return [
+        ...itemLinksOf(entry).flatMap((link) => [...link.replaces, ...link.overlaps]).map((id): Ref => ({ kind: "fact", id })),
+        ...itemRefsOf(entry).flatMap(({ at, ref }): Ref[] => (at === "item" ? [] : [{ kind: "item", id: ref.id }])),
+        ...[entry.to, entry.from].flatMap((place): Ref[] => (place?.kind === "person" ? [{ kind: "name", raw: place.ref.mention }] : [])),
+      ];
     case "thread":
       return entry.op === "open" ? [] : [{ kind: "thread", id: threadOf(entry) }];
     case "presence":
@@ -115,11 +139,24 @@ export function refsOfDecision(decision: AuthorDecision): Ref[] {
       return [
         ...(decision.corrects ? [{ kind: "fact", id: decision.corrects } as const] : []),
         { kind: "chapter", chapter: decision.chapter },
-        ...(decision.subject ? [{ kind: "name", raw: decision.subject } as const] : []),
+        ...(decision.subjectId !== undefined ? [{ kind: "item", id: decision.subjectId } as const] : decision.subject ? [{ kind: "name", raw: decision.subject } as const] : []),
       ];
     case "chapter.day":
     case "chapter.summary":
       return [{ kind: "chapter", chapter: decision.chapter }];
+    case "item.merge":
+      return [...decision.from, decision.into].map((id): Ref => ({ kind: "item", id }));
+    case "item.split":
+      return [{ kind: "item", id: decision.item }, ...[...new Set(decision.refs.map((ref) => ref.entry))].map((id): Ref => ({ kind: "itemEntry", id }))];
+    case "item.retract":
+      return [{ kind: "itemEntry", id: decision.entry }];
+    case "item.state": {
+      const state = decision.state;
+      const inner = state.kind === "census" ? state.members.map((member) => member.id) : state.kind === "at" && state.to.kind === "inside" ? [state.to.ref.id] : [];
+      const person = state.kind === "at" && state.to.kind === "person" ? [{ kind: "name", raw: (state.to as ItemPlace & { kind: "person" }).ref.mention } as const] : [];
+      const facts = itemStateLinksOf(decision).flatMap((link) => [...link.replaces, ...link.overlaps]).map((id): Ref => ({ kind: "fact", id }));
+      return [{ kind: "item", id: decision.item }, { kind: "chapter", chapter: decision.chapter }, ...inner.map((id): Ref => ({ kind: "item", id })), ...person, ...facts];
+    }
     default: {
       const never: never = decision;
       return never;
@@ -174,6 +211,10 @@ export class Resolver {
   private readonly presentLine = new Map<number, boolean>();
   /** 投影算的每章时间（段的时间那头离前一个当下章几天）。 */
   private readonly times: ReadonlyMap<number, ChapterTime>;
+  /** 有证明存在的东西编号（账里的主体、主体是东西的事实、设定卡、拆出来的）。 */
+  private readonly provedItems = new Set<string>();
+  /** 东西条目 → 章@摘要。 */
+  private readonly itemEntries = new Map<string, string>();
 
   constructor(truth: TruthView) {
     const ledgers = [...truth.ledgers].sort((a, b) => a.chapter - b.chapter);
@@ -208,6 +249,21 @@ export class Resolver {
       }
     }
     for (const decision of truth.decisions) if (decision.type === "fact.assert") add(this.facts, decision.id, `decision@${digestOf(decision)}`);
+    for (const card of truth.cards?.cards ?? []) if (card.kind === "item") this.provedItems.add(card.id);
+    for (const decision of truth.decisions) if (decision.type === "item.state") this.itemEntries.set(decision.id, `decision@${digestOf(decision)}`);
+    for (const decision of truth.decisions) if (decision.type === "item.split") this.provedItems.add(splitItemId(decision.id));
+    for (const ledger of ledgers) {
+      for (const entry of ledger.entries) {
+        if (entry.kind === "item") {
+          this.provedItems.add(entry.itemRef.id);
+          this.itemEntries.set(entry.id, `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger)}`);
+        }
+        if (entry.kind === "fact" && entry.subjectRef?.id !== undefined) {
+          this.provedItems.add(entry.subjectRef.id);
+          this.itemEntries.set(entry.id, `${ledger.chapter}@${entryDigest(entry)}#${this.scopeDigest(entry, ledger)}`);
+        }
+      }
+    }
   }
 
   /**
@@ -282,7 +338,16 @@ export class Resolver {
       }
       case "card":
         return `card:${ref.id}=${this.cardDigests.get(ref.id) ?? "none"}`;
+      case "item":
+        return `item:${ref.id}=${this.provedItems.has(ref.id) ? "proved" : "none"}`;
+      case "itemEntry":
+        return `itemEntry:${ref.id}=${this.itemEntries.get(ref.id) ?? "none"}`;
       case "issue": {
+        // 自家格式 `item-<种>:<章>:<条目号…>`（projection/items.ts）：那章的身份 + 每条条目的整条内容和有效范围（作者定的是那条裁定）。
+        if (ref.issue.startsWith("item-")) {
+          const [, chapter, ...entries] = ref.issue.split(":");
+          return `issue:${ref.issue}=${this.chapters.get(Number(chapter)) ?? "none"}|${entries.map((id) => this.itemEntries.get(id) ?? "none").join("&")}`;
+        }
         // 自家格式 `time-start:<章>:<天>` / `time-end:<章>:<天>`（projection/time.ts）：那章的时间摘要。
         for (const prefix of ["time-start:", "time-end:"]) {
           if (!ref.issue.startsWith(prefix)) continue;

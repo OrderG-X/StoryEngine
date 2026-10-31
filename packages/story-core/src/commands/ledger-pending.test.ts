@@ -233,7 +233,7 @@ describe("没记全（partial）按没记上的那几类读", () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
     expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: CH2_PARTIAL, entries: [], ledger: { status: "partial", reasonCodes: ["quote_repair_failed"] } }, author("k2")));
     const view = await projectBook(book);
-    expect(view.chapters[1]).toMatchObject({ missingKinds: ["summary", "fact", "thread", "time", "presence"], time: { presentLine: "unknown", basis: "unknown" } });
+    expect(view.chapters[1]).toMatchObject({ missingKinds: ["summary", "fact", "thread", "time", "presence", "item"], time: { presentLine: "unknown", basis: "unknown" } });
     expect(view.threads[0]).toMatchObject({ idleChapters: 0 });
   });
 });

@@ -5,9 +5,12 @@
  *   账里记的现状（会变的，按最新一章）和定下的（不会变的），每条带哪章、原句。
  * - 账里有、卡里没有的列进 uncarded：出场人物一定是人物；别的主体不知道是什么，交给作者 / AI 分，不猜。
  * - 关系两端换成名字。编号只留给程序回指，展示时不许拼进文案。
+ * - 东西（P3b）：物品卡按编号（卡号就是东西编号）带上投影里那样东西的去向、按编号记的特征；旧记法的事实照旧按卡名、别名对。
+ *   账里按编号记的、没建卡的东西列进 ledgerItems（不进 uncarded：它们一定是东西）。
  */
 import type { CanonItem, Card, CardAuthor, CardField, CardKind, SettingCardsFile, WritingRules } from "../schema/cards.js";
 import { nameKey } from "../text/quote.js";
+import type { ItemView } from "../projection/items.js";
 import type { BookProjection, CastMember, FactView, SubjectView } from "../projection/types.js";
 
 export interface BibleFact {
@@ -41,6 +44,16 @@ export interface BibleEntry {
   /** 账里记的定下的（不会变的）。 */
   readonly fixed: readonly BibleFact[];
   readonly relations: readonly BibleRelation[];
+  /** 物品卡：投影里这样东西（去向、历史、里面有什么）。账里还没写到就没有。 */
+  readonly item?: ItemView;
+}
+
+/** 账里按编号记的、还没建卡的东西。 */
+export interface LedgerItemEntry {
+  readonly item: ItemView;
+  readonly now: readonly BibleFact[];
+  readonly fixed: readonly BibleFact[];
+  readonly skipped?: true;
 }
 
 export interface UncardedEntry {
@@ -72,6 +85,8 @@ export interface BibleView {
   readonly lore: readonly BibleEntry[];
   readonly relations: readonly BibleRelationView[];
   readonly uncarded: readonly UncardedEntry[];
+  /** 账里按编号记的、没建卡的东西（P3b）。 */
+  readonly ledgerItems: readonly LedgerItemEntry[];
   /** 定论（作者定下的，全书以它为准）。 */
   readonly canon: readonly CanonItem[];
   /** 主角卡的名字（没标就没有）。 */
@@ -160,14 +175,20 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
   const usedCast = new Set<string>();
   const usedSubjects = new Set<string>();
   const cardById = new Map(cards.cards.map((card) => [card.id, card] as const));
+  const itemById = new Map(projection.items.map((item) => [item.id, item] as const));
 
   const entryOf = (card: Card): BibleEntry => {
     const keys = namesOf(card).map(nameKey);
     // 卡的名字和别名可能在账里是几个出场人物（改名后旧名留作别名：账里旧章记的是旧名）：都归这张卡。
     const members = card.kind === "character" ? unique(keys.map((key) => castByKey.get(key)).filter((item) => item !== undefined)) : [];
     for (const member of members) usedCast.add(member.key);
+    const item = card.kind === "item" ? itemById.get(card.id) : undefined;
+    // 物品卡：按编号记的特征 + 旧记法里按名字记的。
     const subjectKeys = [...keys, ...members.flatMap((member) => [member.key, ...member.aliases.map(nameKey)])];
-    const subjects = unique(subjectKeys.map((key) => subjectByKey.get(key)).filter((item) => item !== undefined));
+    const subjects = unique([
+      ...(item ? projection.subjects.filter((subject) => subject.item === item.id) : []),
+      ...subjectKeys.map((key) => subjectByKey.get(key)).filter((subject) => subject !== undefined && subject.item === undefined),
+    ].filter((subject) => subject !== undefined));
     for (const subject of subjects) usedSubjects.add(subject.key);
     const known = new Set(keys);
     const ledgerAliases = unique(members.flatMap((member) => [member.name, ...member.aliases]).filter((alias) => !known.has(nameKey(alias))));
@@ -177,7 +198,7 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
       .filter((item): item is { relation: SettingCardsFile["relations"][number]; other: Card } => item.other !== undefined)
       .map(({ relation, other }) => ({ id: relation.id, other: other.name, label: relation.label, by: relation.by }));
     const appearances = appearancesOf(mergedMember(members));
-    return { card, ledgerAliases, ...(appearances ? { appearances } : {}), ...mergedFacts(subjects, facts), relations };
+    return { card, ledgerAliases, ...(appearances ? { appearances } : {}), ...mergedFacts(subjects, facts), relations, ...(item ? { item } : {}) };
   };
 
   const entries = cards.cards.map(entryOf);
@@ -201,12 +222,16 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
   uncarded.sort((a, b) => (b.appearances?.chapters.length ?? 0) - (a.appearances?.chapters.length ?? 0));
   const others: UncardedEntry[] = [];
   for (const subject of projection.subjects) {
-    if (usedSubjects.has(subject.key)) continue;
+    if (usedSubjects.has(subject.key) || subject.item !== undefined) continue;
     const found = factsOf(subject, facts);
     if (found.now.length + found.fixed.length === 0) continue;
     others.push({ name: subject.name, aliases: [], character: false, ...skipped([subject.name]), ...found });
   }
   others.sort((a, b) => b.now.length + b.fixed.length - (a.now.length + a.fixed.length));
+
+  const ledgerItems: LedgerItemEntry[] = projection.items
+    .filter((item) => !item.card && !item.dangling)
+    .map((item) => ({ item, ...mergedFacts(projection.subjects.filter((subject) => subject.item === item.id), facts), ...skipped(item.name ? [item.name] : []) }));
 
   const relations = cards.relations
     .map((relation) => ({ relation, a: cardById.get(relation.a), b: cardById.get(relation.b) }))
@@ -223,6 +248,7 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
     lore: byKind("lore"),
     relations,
     uncarded: [...uncarded, ...others],
+    ledgerItems,
     canon: cards.canon,
     ...(protagonist ? { protagonist } : {}),
     ...(cards.calendar?.dayBoundary ? { dayBoundary: cards.calendar.dayBoundary } : {}),

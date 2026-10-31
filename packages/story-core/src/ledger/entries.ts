@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import {
   CHAPTER_LEDGER_SCHEMA,
   ChapterLedger,
+  ITEM_MODEL,
   TIME_MODEL,
   UNITS_VERSION,
   timeRoleOf,
@@ -18,6 +19,12 @@ import {
   type Evidence,
   type EvidenceStatus,
   type FactInput,
+  type ItemEntry,
+  type ItemInput,
+  type ItemPlace,
+  type ItemPlaceInput,
+  type ItemRef,
+  type ItemRefInput,
   type LedgerCoverage,
   type LedgerEntry,
   type LedgerOrigin,
@@ -42,7 +49,7 @@ const sha256 = (text: string): string => createHash("sha256").update(text, "utf-
 
 type Draft<T> = T extends { readonly quote: string } ? Omit<T, "quote"> & { readonly quote?: string } : T;
 /** 声明，原句可以缺（老书导入的旧数据当年没存）。交给定稿命令的照旧是 EntryInput。 */
-export type EntryDraft = Draft<SummaryInput> | Draft<FactInput> | Draft<ThreadInput> | TimeInput | DayInput | Draft<PresenceInput>;
+export type EntryDraft = Draft<SummaryInput> | Draft<FactInput> | Draft<ThreadInput> | TimeInput | DayInput | Draft<PresenceInput> | Draft<ItemInput>;
 
 /** 一章正文和它的切句（算证据用；同一章多条只切一次）。 */
 export interface ChapterSource {
@@ -90,10 +97,37 @@ export function evidenceFor(quote: string | undefined, source: ChapterSource): {
   return { evidence: [evidence], evidenceStatus: located.units ? "located" : "quoted" };
 }
 
-/** 存的时候分给这条的编号（新开的线索另有线索编号）。 */
+/** 存的时候分给这条的编号（新开的线索另有线索编号；新写到的东西另有东西编号）。itemTags：本批东西标签 → 东西编号（整批一份）。 */
 export interface EntryIds {
   readonly id: string;
   readonly thread?: string;
+  readonly item?: string;
+  readonly itemTags?: ReadonlyMap<string, string>;
+}
+
+/** 声明里指的东西 → 账单里的（标签换成本批发的编号；换不上的编号空着，整份账单校验会拒）。 */
+export function storedItemRef(ref: ItemRefInput, tags: ReadonlyMap<string, string> | undefined): ItemRef {
+  const id = "id" in ref ? ref.id : (tags?.get(ref.tag) ?? "");
+  return { id, ...(ref.mention ? { mention: ref.mention } : {}) };
+}
+
+/** 链接（旧记法关联）原样带上：清点成员用。 */
+const linksOf = (value: { readonly replaces?: readonly string[]; readonly overlaps?: readonly string[] }) => ({
+  ...(value.replaces ? { replaces: [...value.replaces] } : {}),
+  ...(value.overlaps ? { overlaps: [...value.overlaps] } : {}),
+});
+
+function storedPlace(place: ItemPlaceInput, tags: ReadonlyMap<string, string> | undefined): ItemPlace {
+  switch (place.kind) {
+    case "person":
+      return { kind: "person", ref: { mention: place.name } };
+    case "place":
+      return { kind: "place", text: place.text };
+    case "inside":
+      return { kind: "inside", ref: storedItemRef(place.item, tags) };
+    case "unknown":
+      return { kind: "unknown" };
+  }
 }
 
 /** 一条时间声明存出来的几条的编号：都跟着这条声明的编号走（重定稿沿用同一个号，后文引用接得上）。 */
@@ -136,7 +170,7 @@ export function storeWithProof(draft: NonTimeDraft, ids: EntryIds, proof: { read
         source: storedSource(draft.source),
         transition: draft.replaces ? "change" : "unknown",
         nature: draft.nature,
-        ...(draft.subject ? { subjectRef: { mention: draft.subject } } : {}),
+        ...(draft.subject ? { subjectRef: { mention: draft.subject, ...(draft.item ? { id: storedItemRef(draft.item, ids.itemTags).id } : {}) } } : {}),
         ...(draft.attribute ? { predicate: draft.attribute } : {}),
         ...(draft.value ? { value: draft.value } : {}),
         text: draft.text,
@@ -164,7 +198,33 @@ export function storeWithProof(draft: NonTimeDraft, ids: EntryIds, proof: { read
       }];
     case "day":
       return storeDay(draft, { ...base, source: { kind: "author_ruling" } });
+    case "item":
+      return [storeItem(draft, ids, base)];
   }
+}
+
+function storeItem(draft: Draft<ItemInput>, ids: EntryIds, base: Pick<ItemEntry, "id" | "review" | "transition" | "evidence" | "evidenceStatus" | "provenance">): ItemEntry {
+  const tags = ids.itemTags;
+  const itemRef: ItemRef = draft.op === "appear"
+    ? { id: ids.item ?? "", ...(draft.name ? { mention: draft.name } : {}) }
+    : draft.item ? storedItemRef(draft.item, tags) : { id: "" };
+  return {
+    kind: "item",
+    ...base,
+    source: storedSource(draft.source),
+    transition: draft.replaces || draft.members?.some((member) => member.replaces) ? "change" : "unknown",
+    op: draft.op,
+    itemRef,
+    ...(draft.seq !== undefined ? { seq: draft.seq } : {}),
+    ...(draft.to ? { to: storedPlace(draft.to, tags) } : {}),
+    ...(draft.from ? { from: storedPlace(draft.from, tags) } : {}),
+    ...(draft.gone ? { gone: draft.gone } : {}),
+    ...(draft.note ? { note: draft.note } : {}),
+    ...(draft.members ? { members: draft.members.map((member) => ({ ...storedItemRef(member, tags), ...linksOf(member) })) } : {}),
+    ...(draft.complete !== undefined ? { complete: draft.complete } : {}),
+    ...(draft.replaces ? { replaces: draft.replaces } : {}),
+    ...(draft.overlaps ? { overlaps: draft.overlaps } : {}),
+  };
 }
 
 type TimeBase = Pick<TimeEntry, "id" | "review" | "source" | "transition" | "evidence" | "evidenceStatus" | "provenance">;
@@ -431,6 +491,7 @@ export function dayDeclarationOf(ledger: TimeParts): (DayInput & { readonly id: 
  */
 export function declarationsOf(ledger: TimeParts): EntryInput[] {
   const out: EntryInput[] = [];
+  const born = bornItems(ledger.entries);
   const time = timeDeclarationOf(ledger);
   const day = dayDeclarationOf(ledger);
   let timeDone = false;
@@ -447,7 +508,7 @@ export function declarationsOf(ledger: TimeParts): EntryInput[] {
       }
       continue;
     }
-    const decl = declarationOf(entry);
+    const decl = declarationOf(entry, born);
     if (decl) out.push(decl);
   }
   if (!timeDone && time) {
@@ -457,8 +518,33 @@ export function declarationsOf(ledger: TimeParts): EntryInput[] {
   return out;
 }
 
-/** 一条非时间的账单条目读回成声明（时间要整章一起读：timeDeclarationOf / dayDeclarationOf）。 */
-export function declarationOf(entry: LedgerEntry): EntryInput | undefined {
+/** 本章头回写到的东西（有 appear 的编号）：读回声明时指它们的写成本批标签（标签就是编号），整章读回再交得进去。 */
+export const bornItems = (entries: readonly LedgerEntry[]): ReadonlySet<string> =>
+  new Set(entries.flatMap((entry) => (entry.kind === "item" && entry.op === "appear" ? [entry.itemRef.id] : [])));
+
+const inputItemRef = (ref: ItemRef, born: ReadonlySet<string>): ItemRefInput => ({
+  ...(born.has(ref.id) ? { tag: ref.id } : { id: ref.id }),
+  ...(ref.mention ? { mention: ref.mention } : {}),
+}) as ItemRefInput;
+
+function inputPlace(place: ItemPlace, born: ReadonlySet<string>): ItemPlaceInput {
+  switch (place.kind) {
+    case "person":
+      return { kind: "person", name: place.ref.mention };
+    case "place":
+      return { kind: "place", text: place.text };
+    case "inside":
+      return { kind: "inside", item: inputItemRef(place.ref, born) };
+    case "unknown":
+      return { kind: "unknown" };
+  }
+}
+
+/**
+ * 一条非时间的账单条目读回成声明（时间要整章一起读：timeDeclarationOf / dayDeclarationOf）。
+ * born：本章头回写到的东西（bornItems），指它们的读回成标签（单读一条不给 = 都当已有的编号）。
+ */
+export function declarationOf(entry: LedgerEntry, born: ReadonlySet<string> = new Set()): EntryInput | undefined {
   const quote = entry.evidence[0]?.quote;
   const q = quote !== undefined ? { quote } : {};
   const source = entry.source.kind === "narration"
@@ -475,6 +561,7 @@ export function declarationOf(entry: LedgerEntry): EntryInput | undefined {
         review: entry.review,
         nature: entry.nature,
         ...(entry.subjectRef ? { subject: entry.subjectRef.mention } : {}),
+        ...(entry.subjectRef?.id !== undefined ? { item: inputItemRef({ id: entry.subjectRef.id }, born) } : {}),
         ...(entry.predicate ? { attribute: entry.predicate } : {}),
         ...(entry.value ? { value: entry.value } : {}),
         text: entry.text,
@@ -504,6 +591,26 @@ export function declarationOf(entry: LedgerEntry): EntryInput | undefined {
         ...(entry.generic !== undefined ? { generic: entry.generic } : {}),
         ...q,
       } as PresenceInput;
+    case "item":
+      return {
+        kind: "item",
+        review: entry.review,
+        op: entry.op,
+        ...(entry.op === "appear"
+          ? { tag: entry.itemRef.id, reuse: entry.itemRef.id, ...(entry.itemRef.mention ? { name: entry.itemRef.mention } : {}) }
+          : { item: inputItemRef(entry.itemRef, born) }),
+        ...(entry.seq !== undefined ? { seq: entry.seq } : {}),
+        ...(entry.to ? { to: inputPlace(entry.to, born) } : {}),
+        ...(entry.from ? { from: inputPlace(entry.from, born) } : {}),
+        ...(entry.gone ? { gone: entry.gone } : {}),
+        ...(entry.note ? { note: entry.note } : {}),
+        ...(entry.members ? { members: entry.members.map((member) => ({ ...inputItemRef(member, born), ...linksOf(member) })) } : {}),
+        ...(entry.complete !== undefined ? { complete: entry.complete } : {}),
+        ...q,
+        ...source,
+        ...(entry.replaces ? { replaces: entry.replaces } : {}),
+        ...(entry.overlaps ? { overlaps: entry.overlaps } : {}),
+      } as ItemInput;
     case "time":
       return undefined;
   }
@@ -552,7 +659,11 @@ export function ledgerOf(input: {
     ? { evidence: [], evidenceStatus: "none" }
     : { evidence: [{ resource: { kind: "chapter", chapter: input.chapter }, revision: textSha256, quote }], evidenceStatus: "quoted" };
   let threads = 0;
+  let items = 0;
   const scenes: LedgerScene[] = [];
+  // 新写到的东西：标签给了编号形状就用它（测试造书点名编号），不然按「i{章}-{n}」。
+  const itemTags = new Map<string, string>();
+  for (const draft of input.entries) if (draft.kind === "item" && draft.op === "appear" && draft.tag) itemTags.set(draft.tag, draft.reuse ?? `i${input.chapter}-${(items += 1)}`);
   const entries = input.entries.flatMap((draft, index) => {
     const { id: given, ...declared } = draft;
     const id = given ?? `c${input.chapter}-${index + 1}`;
@@ -563,9 +674,10 @@ export function ledgerOf(input: {
       return stored.entries;
     }
     const thread = declared.kind === "thread" && declared.op === "open" ? (declared.thread ?? `t${input.chapter}-${(threads += 1)}`) : undefined;
+    const item = declared.kind === "item" && declared.op === "appear" && declared.tag ? itemTags.get(declared.tag) : undefined;
     const quote = "quote" in declared ? declared.quote : undefined;
     const proof = (source ? evidenceFor(quote, source) : undefined) ?? trusted(quote);
-    return storeWithProof(declared as NonTimeDraft, { id, ...(thread ? { thread } : {}) }, proof, input.provenance ?? "native");
+    return storeWithProof(declared as NonTimeDraft, { id, ...(thread ? { thread } : {}), ...(item ? { item } : {}), itemTags }, proof, input.provenance ?? "native");
   });
   return {
     schema: CHAPTER_LEDGER_SCHEMA,
@@ -577,6 +689,7 @@ export function ledgerOf(input: {
     coverage: { ...EMPTY_COVERAGE, ...input.coverage },
     unitsVersion: UNITS_VERSION,
     timeModel: TIME_MODEL,
+    itemModel: ITEM_MODEL,
     scenes,
     entries,
   };
@@ -614,7 +727,7 @@ export function newLedger(input: {
   readonly previous?: ChapterLedger["previous"];
   readonly legacy?: ChapterLedger["legacy"];
   readonly scenes?: readonly LedgerScene[];
-  /** 旧账格式（迁移器、老书导入）：不带 timeModel、不切段。缺 = P3 起的新账。 */
+  /** 旧账格式（迁移器、老书导入）：不带 timeModel、itemModel，不切段。缺 = P3b 起的新账。 */
   readonly legacyTime?: true;
 }): ReturnType<typeof ChapterLedger.safeParse> {
   return ChapterLedger.safeParse({
@@ -627,7 +740,7 @@ export function newLedger(input: {
     coverage: { ...EMPTY_COVERAGE, ...input.coverage },
     ...(input.acceptedBasis ? { acceptedBasis: input.acceptedBasis } : {}),
     unitsVersion: UNITS_VERSION,
-    ...(input.legacyTime ? {} : { timeModel: TIME_MODEL }),
+    ...(input.legacyTime ? {} : { timeModel: TIME_MODEL, itemModel: ITEM_MODEL }),
     scenes: input.scenes ?? [],
     entries: input.entries,
     ...(input.previous ? { previous: input.previous } : {}),
