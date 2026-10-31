@@ -147,6 +147,8 @@ export interface CommitPreview {
   readonly itemIssues?: readonly string[];
   /** 第一遍有原句对不上、请记账员重摘过一次（几条、救回几条）。 */
   readonly quoteRepair?: QuoteRepair;
+  /** 第一遍有东西条目写坏了、请记账员重写过一次（几条、救回几条）。 */
+  readonly itemRepair?: QuoteRepair;
   /** 补摘那一步没成、因此没记上的条目是哪几类（定稿时账记成「没记全」、写明缺这几类）；没成却一条都没拒 = 不给，当全部没记全。 */
   readonly missingKinds?: readonly EntryKind[];
   readonly cold?: ColdCoverage;
@@ -789,6 +791,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing], ...(itemMissingRefs ? { itemMissingRefs } : {}) } : {}),
     ...(time && time.itemIssues.length > 0 ? { itemIssues: time.itemIssues } : {}),
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
+    ...(keeper.itemRepair ? { itemRepair: keeper.itemRepair } : {}),
     ...(missingKinds.length > 0 ? { missingKinds } : {}),
     ...extra,
   };
