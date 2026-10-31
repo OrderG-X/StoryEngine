@@ -641,40 +641,50 @@ function changesById(list: unknown, units: readonly TextUnit[], draft: string): 
 
 /**
  * 两种换天规矩只在半夜十二点到天亮之间差一天（这段时间里按半夜已是新的一天、按天亮还是前一天）。
- * 这一章结尾在不在这段时间里：沿当下线按两个世界的相对天数推「半夜那边比天亮那边多几天」——两个世界一样的（只写了一份、
- * 前面断了链也一样）不变，都确定的取差；绝对天数两边都确定时直接取差（作者定了天数从那里重新对齐）。
- * 差比全书到这章为止最小的那个大一天就在。哪一处推不下去（说不出隔多久、没识别、作者定了换天规矩只推一个世界）、
- * 差得不止一天（前面就对不上了），都不知道。
+ * 这一章结尾在不在这段时间里：沿当下线按两个世界的相对天数推「半夜那边比天亮那边多几天」——开头隔几天、章里每一次换天、
+ * 没列换天的章内跨度，两个世界一样的（只写了一份）不变，都确定的取差。只看相对天数：绝对天数里作者定的那天两个世界写的是同一个数，
+ * 不说明那一刻在不在半夜到天亮之间。差比到这章为止（从基线起）走过的最小那个大一天就在。
+ * 基线：第一个当下章开头，或作者定了开头那章的开头（作者定的天数从那里重新算，前面推的差不能带过来；出口复核第 5 轮 R9c）。
+ * 哪一处推不下去（说不出隔多久、按月 / 年说的、没识别）就一直不知道，直到下一个基线；差得不止一天（前面就对不上了）也不知道。
  */
 export function endsAtNight(before: BookProjection, chapter: number): boolean | undefined {
   const exact = (range: DayRange | undefined): number | undefined => (range?.lo !== undefined && range.lo === range.hi ? range.lo : undefined);
-  const gap = (midnight: DayRange | undefined, dawn: DayRange | undefined): number | undefined => {
-    const a = exact(midnight);
-    const b = exact(dawn);
-    return a !== undefined && b !== undefined ? a - b : undefined;
-  };
   const shift = (midnight: DayRange | undefined, dawn: DayRange | undefined): number | undefined => {
     if (!midnight || !dawn) return undefined;
-    return gap(midnight, dawn) ?? (midnight.lo === dawn.lo && midnight.hi === dawn.hi ? 0 : undefined);
+    const a = exact(midnight);
+    const b = exact(dawn);
+    if (a !== undefined && b !== undefined) return a - b;
+    return midnight.lo === dawn.lo && midnight.hi === dawn.hi ? 0 : undefined;
   };
-  const plus = (state: number | undefined, by: number | undefined): number | undefined => (state === undefined || by === undefined ? undefined : state + by);
   let state: number | undefined;
   let low = 0;
-  let first = true;
+  let started = false;
+  const step = (by: number | undefined): void => {
+    state = state === undefined || by === undefined ? undefined : state + by;
+    if (state !== undefined) low = Math.min(low, state);
+  };
   for (const view of [...before.chapters].sort((a, b) => a.chapter - b.chapter)) {
     if (view.chapter > chapter) break;
     if (view.time.presentLine === false) continue;
     if (view.time.presentLine === "unknown") {
       state = undefined;
-      first = false;
+      started = true;
       continue;
     }
     const { midnight, dawn } = view.time.byWorld;
-    state = gap(midnight?.start, dawn?.start) ?? (first ? 0 : plus(state, shift(midnight?.sincePrevious, dawn?.sincePrevious)));
-    if (state !== undefined) low = Math.min(low, state);
-    state = gap(midnight?.end, dawn?.end) ?? plus(state, shift(midnight?.span, dawn?.span));
-    if (state !== undefined) low = Math.min(low, state);
-    first = false;
+    if (!started || view.time.authorStart !== undefined) {
+      state = 0;
+      low = 0;
+    } else {
+      step(shift(midnight?.sincePrevious, dawn?.sincePrevious));
+    }
+    started = true;
+    // 章里逐次换天走（中途出了又进半夜到天亮之间，只看净跨度会漏掉：R9b）；没列换天的按章内跨度。
+    if (view.time.dayChanges.length > 0) {
+      for (const change of view.time.dayChanges) step(shift(change.byWorld.midnight, change.byWorld.dawn));
+    } else {
+      step(shift(midnight?.span, dawn?.span));
+    }
     if (view.chapter === chapter) return state === undefined || state - low > 1 ? undefined : state - low === 1;
   }
   return undefined;

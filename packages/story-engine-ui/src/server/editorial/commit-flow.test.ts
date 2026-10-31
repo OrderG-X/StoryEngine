@@ -328,6 +328,16 @@ describe("定稿编排", () => {
       callModel: ch2Ledger({ start: { offset: 3, basis: "text", quote: "又过了两天，第二天上午" }, sameDay: true, timeOfDay: "上午" }),
     }));
     expect(shifted.time).toMatchObject({ row: { start: { lo: 4, hi: 4 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 } } } });
+
+    // 出口复核第 5 轮 R11：盘上的定稿正文不是记那套时间时的那版（被外面改了、没了）：证明不了那几句没改，照这次的，两边给作者看。
+    for (const broken of [async () => writeFile(join(book, "chapters/0002.md"), prefixed), async () => rm(join(book, "chapters/0002.md"))]) {
+      await broken();
+      const unproven = expectPreview(await prepareNow({
+        bookDir: book, chapter: 2, text: typo,
+        callModel: ch2Ledger({ start: { offset: 0, basis: "judged", quote: "外乡人又来了" }, sameDay: true, timeOfDay: "上午" }),
+      }));
+      expect(unproven.time).toMatchObject({ row: { start: { lo: 1, hi: 1 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 } } } });
+    }
   });
 
   // 出口复核 R6：中间有一次账待记（记账没成先定正文），再定稿时也照最近那次记的时间比，段也读得回。
@@ -340,16 +350,24 @@ describe("定稿编排", () => {
       callModel: ch2Ledger({ start: { offset: 1, basis: "judged", quote: "第二天上午" }, sameDay: true, segments: [segment] }),
     }));
     expect(await confirmNow(first.ticket, CH2)).toMatchObject({ ok: true });
-    const typo = CH2.replace("没让他进", "没让他进门");
-    const pending = await runCommand(book, chapterCommit, { chapter: 2, text: typo, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: "pending-2" });
+    // 账待记那次正文没改（记账员没交成，作者先定了正文）：盘上还是记那套时间时的正文，照上次的。
+    const pending = await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: "pending-2" });
     expect(pending).toMatchObject({ ok: true });
-
     const same = expectPreview(await prepareNow({
-      bookDir: book, chapter: 2, text: typo,
+      bookDir: book, chapter: 2, text: CH2,
       callModel: ch2Ledger({ start: { offset: 0, basis: "judged", quote: "外乡人又来了" }, sameDay: true }),
     }));
     expect(same.time).toMatchObject({ row: { start: { lo: 2, hi: 2 } }, needsConfirm: true, sinceLast: { kept: true, other: { start: { lo: 1, hi: 1 } } } });
     expect(same.ticket.entries.find((entry) => entry.kind === "time")).toMatchObject({ segments: [expect.objectContaining({ frame: "past" })] });
+
+    // 出口复核第 5 轮 R11：账待记那次换了正文，记那套时间时的正文不在盘上了，证明不了记时间那几句没改：照这次的，两边给作者看。
+    const typo = CH2.replace("没让他进", "没让他进门");
+    expect(await runCommand(book, chapterCommit, { chapter: 2, text: typo, entries: [], ledger: { status: "pending", reasonCodes: ["keeper_failed"] } }, { caller: "author", idempotencyKey: "pending-2b" })).toMatchObject({ ok: true });
+    const changed = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: typo,
+      callModel: ch2Ledger({ start: { offset: 0, basis: "judged", quote: "外乡人又来了" }, sameDay: true }),
+    }));
+    expect(changed.time).toMatchObject({ row: { start: { lo: 1, hi: 1 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 } } } });
   });
 
   // 出口复核第 2 轮 R6c：后来哪次时间没记上、作者照样改了天数，账待记之后再定稿用的是作者最近定的那天。

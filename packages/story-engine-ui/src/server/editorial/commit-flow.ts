@@ -439,8 +439,9 @@ function wholeSentences(quote: string, text: string): string | undefined {
  * 重定稿时天数照上次定稿的记（作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把第二天清早看成当天，
  * 第 6～7 天成了第 5～6 天，后面 45 章跟着挪一天，清单上只露出这一章的天数）。
  * 上次那条时间的原句（开头那句、换天那句、段的首末句）所在的整句都没改就照上次的；和这次看的不一样时两边都给作者看，作者改天数照旧管用。
- * 比整句、不只看原句还在不在（P3a 改早章：作者在「这天下午，……」前面加了「过了两天，」，原句还在，天数却照上次的没挪）；
- * 上次定稿的正文读不到、对不上账单时只看原句还在不在。
+ * 比整句、不只看原句还在不在（P3a 改早章：作者在「这天下午，……」前面加了「过了两天，」，原句还在，天数却照上次的没挪）。
+ * 比的是记那套时间时的正文（时间条目原句所在的版本）：那版读不到（盘上的正文改过、这中间先定了正文账待记、文件没了）
+ * 就证明不了那几句没改，不照上次的，两边都给作者看（出口复核第 5 轮 R11）。
  */
 function keepLastDay(
   truth: Truth,
@@ -457,10 +458,10 @@ function keepLastDay(
   if (!last || !now || !known(last.start) || !known(now.start)) return undefined;
   if (sameRange(last.start, now.start) && sameRange(last.end, now.end)) return undefined;
   const lastTime = declarationsOf(previous).find((entry) => entry.kind === "time");
-  const unchanged = lastTime?.kind === "time" && (lastText === undefined || timeQuotes(lastTime).every((quote) => {
+  const unchanged = lastTime?.kind === "time" && lastText !== undefined && timeQuotes(lastTime).every((quote) => {
     const was = wholeSentences(quote, lastText);
     return was !== undefined && was === wholeSentences(quote, text);
-  }));
+  });
   const carried = lastTime && unchanged ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
   const other = (row: TimelineRow) => ({ ...(row.start ? { start: row.start } : {}), ...(row.end ? { end: row.end } : {}) });
   if (!carried) return { accepted, sinceLast: { kept: false, other: other(last) } };
@@ -540,11 +541,16 @@ function lastRecorded(ledger: ChapterLedger | undefined): PreviousRecord {
   return { entries: [...entries, ...time.entries], scenes: time.scenes, ...(time.timeModel ? { timeModel: time.timeModel } : {}), timeComplete: true };
 }
 
-/** 上次定稿的正文（盘上那份，和账单记的哈希对得上才算）。 */
-async function committedText(bookDir: string, ledger: ChapterLedger | undefined): Promise<string | undefined> {
-  if (!ledger) return undefined;
-  const text = await readFile(join(bookDir, chapterTextPath(ledger.chapter)), "utf-8").catch(() => undefined);
-  return text !== undefined && sha256(text) === ledger.textSha256 ? text : undefined;
+/**
+ * 上次记那套时间时的正文：记账员的时间条目引的都是同一版（证据里的正文哈希），盘上那份正好是这版才算。
+ * 账待记那次换了正文、时间是从更早那份带过来的，盘上的就不是那版。
+ */
+async function timeText(bookDir: string, chapter: number, record: PreviousRecord): Promise<string | undefined> {
+  const revisions = new Set(record.entries.flatMap((entry) => (entry.kind === "time" && entry.relation !== "at" ? entry.evidence.map((item) => item.revision) : [])));
+  if (revisions.size !== 1) return undefined;
+  const [revision] = revisions;
+  const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8").catch(() => undefined);
+  return text !== undefined && sha256(text) === revision ? text : undefined;
 }
 
 export async function prepareChapterCommit(input: PrepareInput): Promise<CommitPreview | PrepareFailure> {
@@ -591,7 +597,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
   const withAuthorDay = recommit ? keepAuthorDay(record, opens?.accepted ?? checked.accepted) : checked.accepted;
   // 读不全上次记账员记的时间（老的账待记）：不比，照这次的记。
-  const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before, await committedText(input.bookDir, current)) : undefined;
+  const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before, await timeText(input.bookDir, input.chapter, record)) : undefined;
   const accepted = kept?.accepted ?? withAuthorDay;
   const rejected = opens?.rejected ?? checked.rejected;
   const missingKinds = keeper.quoteRepair?.failed

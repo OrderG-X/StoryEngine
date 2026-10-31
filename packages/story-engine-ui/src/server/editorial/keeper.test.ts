@@ -759,6 +759,29 @@ describe("记账员跑一章", () => {
     expect([1, 2, 3, 4, 5, 6, 7, 8].map((chapter) => endsAtNight(before, chapter))).toEqual([false, true, false, false, true, false, undefined, undefined]);
   });
 
+  it("上一章结尾在不在半夜到天亮之间：章里每次换天都走（中途出了又进只看净跨度会漏，出口复核第 5 轮 R9b）；作者定了开头那章从头算，前面推的差不带过来（R9c）", () => {
+    const day = (min: number) => ({ unit: "day" as const, min, max: min });
+    const dawn = { byBoundary: { midnight: day(0), dawn: day(1) } };
+    const night = { byBoundary: { midnight: day(1), dawn: day(0) } };
+    const text = (n: number) => `# 第${n}章\n\n她醒了。`;
+    const ledger = (chapter: number, entries: Record<string, unknown>[]) => ledgerOf({ chapter, text: text(chapter), committedAt: "2026-10-17T00:00:00.000Z", entries: entries.map((entry) => ({ review: "auto", ...entry }) as EntryDraft) });
+    // 凌晨一点出门 → 天亮 → 又到凌晨一点：净跨度两边都是 1，结尾在半夜到天亮之间。
+    const outAndIn = project({
+      ledgers: [ledger(1, [{ kind: "time", start: { offset: day(0), basis: "text", quote: "她醒了。" }, dayChanges: [{ ...dawn, quote: "她醒了。" }, { ...night, quote: "她醒了。" }] }])],
+      decisions: [],
+    });
+    expect(endsAtNight(outAndIn, 1)).toBe(true);
+    // 第 1 章凌晨到天亮；第 2 章作者定了第 10 天、整章同一天：从第 2 章开头重新算，不拿第 1 章的差判成半夜。
+    const reanchored = project({
+      ledgers: [
+        ledger(1, [{ kind: "time", start: { offset: day(0), basis: "text", quote: "她醒了。" }, dayChanges: [{ ...dawn, quote: "她醒了。" }] }]),
+        ledger(2, [{ kind: "time", start: { offset: day(1), basis: "text", quote: "她醒了。" }, sameDay: true }, { kind: "day", review: "author", day: 10 }]),
+      ],
+      decisions: [],
+    });
+    expect([1, 2].map((chapter) => endsAtNight(reanchored, chapter))).toEqual([false, false]);
+  });
+
   it("按两种换天规矩对不上 / 结尾还没天亮：只复核这一件——改了走得通就换（开头原句照旧、换天点编号代码取句）；说没记错、看不出、没问成、改了还不通照第一遍交，走不通的如实说明；走得通的不问", async () => {
     const book = await makeHomeTempDir("keeper-night-");
     try {

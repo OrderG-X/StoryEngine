@@ -75,7 +75,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
     expect(out.events[0].mainEvent).toBe("第2章核心事件");
     expect(out.events[0].participants).toEqual(["protagonist", "antagonist"]);
     expect(out.summary).toContain("第 2 章");
-    expect(out.summary).toContain("1 条");
+    expect(out.summary).toContain("共 1 件");
   });
 
   it("查区间 fromChapter=1 toChapter=2 → 返回第 1-2 章事件，ok=true", async () => {
@@ -108,7 +108,7 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
     const out = await run({ chapter: 99 }, ctx);
     expect(out.ok).toBe(true);
     expect(out.events).toHaveLength(0);
-    expect(out.summary).toContain("没有 timeline 事件");
+    expect(out.summary).toContain("没有记下的事");
   });
 
   it("mainEvent 为空时 participants 仍把裸 char-id 解析成角色名（绝不泄露 char-xxx）", async () => {
