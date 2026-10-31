@@ -22,6 +22,7 @@ import {
   knownEntries,
   ledgerOf,
   locateQuote,
+  missingItemRefs,
   nameKey,
   offsetText,
   presenceName,
@@ -55,9 +56,9 @@ import {
   type TimeOffset,
   type TruthBasis,
 } from "@actalk/story-core";
-import { itemTexts, type ItemTexts } from "../book/item-views.js";
+import { itemIssueTexts, itemTexts, type ItemTexts } from "../book/item-views.js";
 import { reopenableItems } from "./keeper-context.js";
-import type { KeeperDrop } from "./keeper-parse.js";
+import { droppedItemRefs, type KeeperDrop } from "./keeper-parse.js";
 import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";
 import type { BrainCallModel, ColdCoverage } from "./reader-window.js";
@@ -140,6 +141,10 @@ export interface CommitPreview {
   readonly omittedItems?: number;
   /** 有东西的条目没记上（核不上、格式不对）：这章东西那类（和连带的事实）记成没记全（P3b 设计 2.4）。 */
   readonly itemMissing?: readonly EntryKind[];
+  /** 缺东西那类时只缺这几样（没记上的条目都认得出指哪几样）；不给 = 整章东西当没记全。 */
+  readonly itemMissingRefs?: readonly ItemRefInput[];
+  /** 定稿后这章东西对不上的地方（投影报的「可能」），已是给作者看的话。 */
+  readonly itemIssues?: readonly string[];
   /** 第一遍有原句对不上、请记账员重摘过一次（几条、救回几条）。 */
   readonly quoteRepair?: QuoteRepair;
   /** 补摘那一步没成、因此没记上的条目是哪几类（定稿时账记成「没记全」、写明缺这几类）；没成却一条都没拒 = 不给，当全部没记全。 */
@@ -185,6 +190,11 @@ const THREAD_TYPE_LABELS = { question: "悬念", intent: "打算", goal: "目标
 const NATURE_LABELS = { hard: "不会变", state: "会变", event: "发生过的事" } as const;
 
 /** 「facts 第 3 条」→「一条事实」；认得出是哪条的带上名字：「线索「谁在敲门」」。 */
+/** 两处「只缺这几样」合起来：有一处说不出（undefined）就是整章。 */
+export function unionItemRefs(a: readonly ItemRefInput[] | undefined, b: readonly ItemRefInput[] | undefined): ItemRefInput[] | undefined {
+  return a && b ? [...a, ...b] : undefined;
+}
+
 function dropLabel(drop: KeeperDrop): string {
   const head = drop.where.split(/[ .]/u)[0] ?? "";
   const kind = KIND_LABELS[head] ?? "记录";
@@ -416,7 +426,7 @@ type Truth = Pick<BookSnapshot, "ledgers" | "decisions" | "cards">;
  * 用核过的条目拼一份临时账单，算出「定稿后」这一章的时间（只用来展示）：带上已有的作者裁定和换天规矩（T7），
  * 和定稿后时间表、概况上那一行是同一个算法。
  */
-function previewTime(truth: Truth, chapter: number, entries: readonly EntryInput[], text: string): { readonly row: TimelineRow; readonly conflicts: PreviewTime["conflicts"]; readonly segments: readonly string[] } | undefined {
+function previewTime(truth: Truth, chapter: number, entries: readonly EntryInput[], text: string): { readonly row: TimelineRow; readonly conflicts: PreviewTime["conflicts"]; readonly segments: readonly string[]; readonly itemIssues: readonly string[] } | undefined {
   const draft = ledgerOf({
     chapter,
     text,
@@ -428,7 +438,7 @@ function previewTime(truth: Truth, chapter: number, entries: readonly EntryInput
   const row = timelineTable(after, chapter).find((item) => item.chapter === chapter);
   if (!row) return undefined;
   const conflicts = after.timeConflicts.filter((conflict) => conflict.chapter === chapter).map(({ kind, authorDay, expected }) => ({ kind, authorDay, expected }));
-  return { row, conflicts, segments: row.segments };
+  return { row, conflicts, segments: row.segments, itemIssues: itemIssueTexts(after, chapter) };
 }
 
 const sameRange = (a: DayRange | undefined, b: DayRange | undefined): boolean => a?.lo === b?.lo && a?.hi === b?.hi;
@@ -725,6 +735,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     if (entry.kind === "fact" && entry.item) itemMissing.add("item").add("fact");
   }
   for (const drop of keeper.parsed.drops) if (drop.kind) itemMissing.add("item").add(drop.kind);
+  const itemMissingRefs = unionItemRefs(missingItemRefs(rejected.map((item) => item.entry)), droppedItemRefs(keeper.parsed.drops));
   const missingKinds = keeper.quoteRepair?.failed
     ? [...new Set(rejected.filter((item) => item.reason === "quote_not_in_text").map((item): EntryKind => (item.entry.kind === "day" ? "time" : item.entry.kind)))]
     : [];
@@ -775,7 +786,8 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     omittedThreads: keeper.omittedThreads,
     omittedFacts: keeper.omittedFacts,
     ...(keeper.omittedItems > 0 ? { omittedItems: keeper.omittedItems } : {}),
-    ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing] } : {}),
+    ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing], ...(itemMissingRefs ? { itemMissingRefs } : {}) } : {}),
+    ...(time && time.itemIssues.length > 0 ? { itemIssues: time.itemIssues } : {}),
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
     ...(missingKinds.length > 0 ? { missingKinds } : {}),
     ...extra,

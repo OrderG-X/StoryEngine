@@ -338,7 +338,8 @@ function itemInputProblem(entry: ItemInput): string | undefined {
       if (!entry.to || entry.gone || entry.members || entry.complete !== undefined) return "挪了要写去处";
       return undefined;
     case "gone":
-      if (!entry.gone || entry.to || entry.members || entry.complete !== undefined) return "丢了 / 毁了要写是哪种";
+      if (!entry.gone) return "丢了 / 毁了要写是哪种";
+      if (entry.to || entry.members || entry.complete !== undefined) return "丢了 / 毁了不再写去处、清点";
       return undefined;
     case "census":
       if (!entry.members || entry.to || entry.from || entry.gone) return "清点要列里面有什么";
@@ -623,7 +624,8 @@ function itemEntryProblem(entry: ItemEntry): string | undefined {
     case "move":
       return !entry.to || entry.gone || entry.members || entry.complete !== undefined ? "挪了要写去处" : undefined;
     case "gone":
-      return !entry.gone || entry.to || entry.members || entry.complete !== undefined ? "丢了 / 毁了要写是哪种" : undefined;
+      if (!entry.gone) return "丢了 / 毁了要写是哪种";
+      return entry.to || entry.members || entry.complete !== undefined ? "丢了 / 毁了不再写去处、清点" : undefined;
     case "census":
       if (!entry.members || entry.to || entry.from || entry.gone || entry.replaces || entry.overlaps) return "清点要列里面有什么";
       if (entry.members.length === 0 && entry.complete !== true) return "清点没列东西就得是正文明说空了";
@@ -726,12 +728,17 @@ export type LedgerOrigin = z.infer<typeof LedgerOrigin>;
 export const LedgerStatus = z.enum(["pending", "partial", "ready"]);
 export type LedgerStatus = z.infer<typeof LedgerStatus>;
 
-/** 账记到什么程度：哪几类明确没记、核不上被拒了几条、为什么（代码）、哪几句没覆盖。 */
+/**
+ * 账记到什么程度：哪几类明确没记、核不上被拒了几条、为什么（代码）、哪几句没覆盖。
+ * missingItems：东西那类没记全只缺这几样（没记上的条目都认得出说的是哪几样；空 = 没记上的只是本章新写到、没进账的东西）；
+ * 不给 = 不知道缺哪几样，整章东西当没记全。
+ */
 export const LedgerCoverage = z.object({
   missingKinds: z.array(EntryKind),
   rejectedCount: z.number().int().min(0),
   reasonCodes: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/u)),
   omittedUnits: z.array(UnitRange),
+  missingItems: z.array(id).optional(),
 });
 export type LedgerCoverage = z.infer<typeof LedgerCoverage>;
 
@@ -852,8 +859,11 @@ function timeLayoutIssues(ledger: { readonly timeModel?: TimeModel; readonly ent
 }
 
 /** 一章里东西条目之间（设计 2.4）：只在新记法的章；一样东西一章最多一条 appear（同一个 seq 是合法的「先后没说清」）。 */
-function itemLayoutIssues(ledger: { readonly itemModel?: ItemModel; readonly timeModel?: TimeModel; readonly entries: readonly LedgerEntry[] }): Issue[] {
+function itemLayoutIssues(ledger: { readonly itemModel?: ItemModel; readonly timeModel?: TimeModel; readonly status: LedgerStatus; readonly coverage: LedgerCoverage; readonly entries: readonly LedgerEntry[] }): Issue[] {
   const issues: Issue[] = [];
+  if (ledger.coverage.missingItems && (ledger.status !== "partial" || !ledger.coverage.missingKinds.includes("item") || ledger.itemModel !== ITEM_MODEL)) {
+    issues.push({ path: ["coverage", "missingItems"], message: "只缺哪几样东西只能记在东西那类没记全的新记法账上" });
+  }
   const appeared = new Set<string>();
   ledger.entries.forEach((entry, index) => {
     if (entry.kind === "fact" && entry.subjectRef?.id !== undefined && ledger.itemModel !== ITEM_MODEL) issues.push({ path: ["entries", index], message: "旧记法的章事实不带东西编号" });
@@ -915,4 +925,14 @@ export function missingKindsOf(ledger: Pick<ChapterLedger, "status" | "coverage"
   if (ledger.status === "ready") return [];
   if (ledger.status === "partial" && ledger.coverage.missingKinds.length > 0) return ledger.coverage.missingKinds;
   return EntryKind.options;
+}
+
+/**
+ * 这章东西账缺到什么程度（P3b 设计 2.4）：none = 记全了；all = 整章东西都可能缺（旧记法、账待记、没写明缺哪几样）；
+ * 否则是只缺的那几样东西的编号（没记上的条目都认得出说的是哪几样）。
+ */
+export function itemGapOf(ledger: Pick<ChapterLedger, "status" | "coverage" | "itemModel">): "none" | "all" | readonly string[] {
+  if (ledger.itemModel !== ITEM_MODEL) return "all";
+  if (!missingKindsOf(ledger).includes("item")) return "none";
+  return ledger.status === "partial" && ledger.coverage.missingItems ? ledger.coverage.missingItems : "all";
 }

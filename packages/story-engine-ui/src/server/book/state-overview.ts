@@ -215,7 +215,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   const timeChecks = views ? timeChecksOf(views.projection) : [];
   const itemsAsOf = views && currentChapter !== null ? projectionBefore(views, currentChapter + 1) : views?.projection;
   const present = itemsAsOf?.chapters.filter((chapter) => chapter.chapter <= (currentChapter ?? Infinity)).at(-1)?.present ?? [];
-  const items = itemsAsOf && itemsAsOf.items.length > 0 ? { ...itemsWhere(itemsAsOf, [], present), total: itemsAsOf.items.length, issues: itemsAsOf.itemIssues.length } : undefined;
+  const items = itemsAsOf && itemsAsOf.items.length > 0 ? { ...itemsWhere(itemsAsOf, [], present), total: itemsAsOf.items.filter((item) => !item.dangling).length, issues: itemsAsOf.itemIssues.length } : undefined;
 
   return {
     project: {

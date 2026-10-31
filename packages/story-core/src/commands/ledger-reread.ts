@@ -5,7 +5,7 @@
  * 一轮通读几百章，撤销点在整轮开跑前打一次。编号分配和重定稿同一套（buildChapterLedger），后文的推进接得上。
  */
 import { z } from "zod";
-import { EntryInput } from "../schema/ledger.js";
+import { EntryInput, ItemRefInput } from "../schema/ledger.js";
 import { readChapterLedger, readChapterText } from "../store/book.js";
 import { chapterLedgerPath } from "../store/paths.js";
 import { buildChapterLedger, itemShortfall, type ChapterCommitResult } from "./chapter-commit.js";
@@ -17,6 +17,8 @@ export const LedgerRereadArgs = z.object({
   entries: z.array(EntryInput),
   /** 记账员交来的东西条目有没记上的（解析掉的、核不上的、等作者看没记的）：这章缺哪几类（P3b 设计 2.4）。 */
   itemMissing: z.array(z.enum(["item", "fact"])).min(1).optional(),
+  /** 缺东西那类时只缺这几样（没记上的条目都认得出指哪几样）；不给 = 整章东西当没记全。 */
+  missingItems: z.array(ItemRefInput).optional(),
 });
 export type LedgerRereadArgs = z.infer<typeof LedgerRereadArgs>;
 
@@ -36,7 +38,7 @@ export const ledgerReread: WriteCommandSpec<LedgerRereadArgs, LedgerRereadResult
   async plan(context, args) {
     const [text, previous] = await Promise.all([readChapterText(context.bookDir, args.chapter), readChapterLedger(context.bookDir, args.chapter)]);
     if (text === undefined || previous === undefined) return fail("not_committed", `第 ${args.chapter} 章还没定稿，没有可重记的账。`);
-    const shortfall = itemShortfall(undefined, args.itemMissing ?? []);
+    const shortfall = itemShortfall(undefined, args.itemMissing ?? [], args.missingItems);
     const built = await buildChapterLedger(context.bookDir, {
       chapter: args.chapter,
       text,

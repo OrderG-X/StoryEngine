@@ -14,6 +14,7 @@ import {
   canonicalJson,
   checkEntries,
   classifyForReview,
+  missingItemRefs,
   project,
   readBookSnapshot,
   readChapterText,
@@ -22,7 +23,8 @@ import {
   type LedgerRereadArgs,
   type TruthBasis,
 } from "@actalk/story-core";
-import { touchesHardFact } from "./commit-flow.js";
+import { touchesHardFact, unionItemRefs } from "./commit-flow.js";
+import { droppedItemRefs } from "./keeper-parse.js";
 import { runLedgerKeeper } from "./ledger-keeper.js";
 import { canCallAgain } from "../lib/llm-client.js";
 import { modelFailureText } from "../lib/ai-errors.js";
@@ -41,8 +43,9 @@ export type RereadChapterOutcome =
       readonly entries: LedgerRereadArgs["entries"];
       readonly skipped: number;
       readonly digest: string;
-      /** 东西条目有没记上的：这章东西那类（和连带的事实）记成没记全。 */
+      /** 东西条目有没记上的：这章东西那类（和连带的事实）记成没记全；missingItems：只缺这几样（不给 = 整章）。 */
       readonly itemMissing?: LedgerRereadArgs["itemMissing"];
+      readonly missingItems?: LedgerRereadArgs["missingItems"];
     }
   /** 这章的账单已经不是导入时那份空账单了（作者定稿过、记过了）：不记。 */
   | { readonly kind: "settled" }
@@ -94,12 +97,13 @@ export async function rereadChapter(projectDir: string, chapter: number, callMod
           if (entry.kind === "fact" && entry.item) itemMissing.add("item").add("fact");
         }
         for (const drop of keeper.parsed.drops) if (drop.kind === "item" || drop.kind === "fact") itemMissing.add("item").add(drop.kind);
+        const missingItems = unionItemRefs(missingItemRefs(skippedEntries), droppedItemRefs(keeper.parsed.drops));
         return {
           kind: "entries",
           entries: checked.accepted.filter((item) => !optIn.has(item.index)).map((item) => item.entry),
           skipped: checked.rejected.length + optIn.size + keeper.parsed.drops.length,
           digest: rereadInputDigest(snapshot.basis, chapter),
-          ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing] } : {}),
+          ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing], ...(missingItems ? { missingItems } : {}) } : {}),
         };
       }
       reason = keeper.reason;

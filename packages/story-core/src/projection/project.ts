@@ -185,6 +185,8 @@ function buildFacts(
         const links = itemLinksOf(entry);
         if (links.length === 0 || retractedItems.has(entry.id) || !scopeOf(entry, ledger).rights.replaces) continue;
         for (const link of links) {
+          // 悬空的成员、装进悬空东西里的那条：关联不生效（设计 3.3）。
+          if (items.voided(entry.id, link.at, link.index)) continue;
           const item = items.resolve(link.ref.id, { entry: entry.id, at: link.at, ...(link.index !== undefined ? { index: link.index } : {}) });
           linkOld(link, item, ledger.chapter, entry.id, false);
         }
@@ -246,6 +248,7 @@ function buildFacts(
     }
     // 作者定的这章末东西在哪：关联的旧事实在这章末对上。
     for (const decision of itemStates.get(ledger.chapter) ?? []) {
+      if (items.voided(decision.id, "item")) continue;
       for (const link of itemStateLinksOf(decision)) linkOld(link, items.resolve(link.item), ledger.chapter, decision.id, true);
     }
   }

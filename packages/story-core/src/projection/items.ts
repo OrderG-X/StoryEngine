@@ -21,9 +21,8 @@ import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision, ItemPosition, ItemStateRuling } from "../schema/decisions.js";
 import {
   entryQuote,
-  ITEM_MODEL,
+  itemGapOf,
   itemRefsOf,
-  missingKindsOf,
   type ChapterLedger,
   type ItemEntry,
   type ItemGone,
@@ -93,6 +92,8 @@ export interface ItemView {
   readonly now?: ItemNow;
   /** 最后一次写它在哪之后，第一个东西账没记全（账待记、没记全、旧记法）的章：读的人照「之后没核全，挪没挪不知道」说。 */
   readonly unverifiedSince?: number;
+  /** 那一章是整章东西账没记全（chapter），还是只有说它的条目没记上（entry）。 */
+  readonly unverifiedBy?: "chapter" | "entry";
   readonly history: readonly ItemStep[];
   /** 人物说的、回忆里的、梦里的、定不了在段里段外的去向（不改现在）。 */
   readonly asides: readonly ItemStep[];
@@ -104,7 +105,8 @@ export interface ItemView {
   readonly dangling?: true;
 }
 
-export type ItemIssueKind = "from" | "census" | "not-in-census" | "destroyed" | "cycle" | "order";
+/** dangling = 用到了账里没有存在证明的东西（重定稿没认上）：含它的清点不再当完整、装进它里面的去向记成不知道。 */
+export type ItemIssueKind = "from" | "census" | "not-in-census" | "destroyed" | "cycle" | "order" | "dangling";
 
 /** 投影能确定的东西矛盾（都只是「可能」）。entries = 两边的条目号（作者定的是裁定号）。 */
 export interface ItemIssueView {
@@ -121,6 +123,8 @@ export interface ItemProjection {
   readonly dangling: readonly DanglingView[];
   /** 账里的东西编号 → 投影里的编号（归并、拆开之后）。事实、清单都照它认。 */
   readonly resolve: (raw: string, position?: Omit<ItemPosition, "index"> & { readonly index?: number }) => string;
+  /** 这一处的旧记法关联不生效（悬空的成员、装进悬空东西里的那条、指着悬空东西的作者裁定）：条目或裁定号 + 位置。 */
+  readonly voided: (entry: string, at: string, index?: number) => boolean;
 }
 
 /** 编号解析：先看这一处有没有被拆开，再沿归并走到底（防环）。 */
@@ -146,8 +150,6 @@ export function itemResolver(decisions: readonly AuthorDecision[]): ItemProjecti
 export const splitItemId = (decision: string): string => `x-${decision}`;
 const positionKey = (position: { readonly entry: string; readonly at: string; readonly index?: number }): string => `${position.entry}|${position.at}|${position.index ?? ""}`;
 
-/** 这一章的东西账记全了没有：旧记法、账待记、东西那类没记全都算没记全。 */
-export const itemsComplete = (ledger: ChapterLedger): boolean => ledger.itemModel === ITEM_MODEL && !missingKindsOf(ledger).includes("item");
 
 const AUTHOR: EntryScope = { frame: "present", source: "author_ruling", rights: rightsOf("author_ruling", "present") };
 const statementOf = (scope: EntryScope): StatementScope => ({ frame: scope.frame, source: scope.source, ...(scope.speaker ? { speaker: scope.speaker } : {}) });
@@ -159,10 +161,10 @@ interface MutableItem {
   mentions: string[];
   mergedFrom: Set<string>;
   firstSeen?: { chapter: number; entry: string; quote?: string };
-  proved: boolean;
   now?: ItemNow;
   lastWrite: number;
   unverifiedSince?: number;
+  unverifiedBy?: "chapter" | "entry";
   history: ItemStep[];
   asides: ItemStep[];
   census?: { chapter: number; entry: string; members: Set<string>; status: CensusView["status"]; since?: number };
@@ -205,7 +207,7 @@ export function projectItems(
   const touch = (id: string): MutableItem => {
     let item = items.get(id);
     if (!item) {
-      item = { id, mentions: [], mergedFrom: new Set(), proved: false, lastWrite: 0, history: [], asides: [] };
+      item = { id, mentions: [], mergedFrom: new Set(), lastWrite: 0, history: [], asides: [] };
       items.set(id, item);
     }
     return item;
@@ -213,12 +215,28 @@ export function projectItems(
   const mention = (item: MutableItem, text: string | undefined): void => {
     if (text && !item.mentions.includes(text)) item.mentions.push(text);
   };
+  /**
+   * 证明它存在的（设计 2.8）：账里以它为主体的东西条目、以它为主体的事实、设定卡、拆出它的裁定。
+   * 只在别的条目里用到（清点成员、装在它里面、裁定指着它）的不算——那几处用不上它（设计 3.3）。
+   */
+  const proven = new Set<string>();
+  for (const card of cards?.cards ?? []) if (card.kind === "item") proven.add(resolve(card.id));
+  for (const decision of decisions) if (decision.type === "item.split") proven.add(splitItemId(decision.id));
+  for (const ledger of ledgers) {
+    for (const entry of ledger.entries) {
+      if (entry.kind === "item" && !retracted.has(entry.id)) proven.add(resolve(entry.itemRef.id, { entry: entry.id, at: "item" }));
+      if (entry.kind === "fact" && entry.subjectRef?.id) proven.add(resolve(entry.subjectRef.id, { entry: entry.id, at: "subject" }));
+    }
+  }
+  const voided = new Set<string>();
+  const voidLink = (entry: string, at: string, index?: number): void => {
+    voided.add(positionKey({ entry, at, ...(index !== undefined ? { index } : {}) }));
+  };
 
   for (const card of cards?.cards ?? []) {
     if (card.kind !== "item") continue;
     const item = touch(resolve(card.id));
     item.card = true;
-    item.proved = true;
     item.name ??= card.name;
     mention(item, card.name);
     for (const alias of card.aliases) mention(item, alias);
@@ -228,7 +246,6 @@ export function projectItems(
     if (decision.type === "item.split") {
       const item = touch(splitItemId(decision.id));
       item.name ??= decision.name;
-      item.proved = true;
     }
   }
 
@@ -254,6 +271,15 @@ export function projectItems(
       dangling.push({ kind: "decision", ref: `chapter:${decision.chapter}`, chapter: decision.chapter, source: decision.id });
       continue;
     }
+    // 指着账里没有存在证明的东西：这条裁定不生效（它关联的旧事实也不动）。
+    const refs = [decision.item, ...(decision.state.kind === "census" ? decision.state.members.map((member) => member.id) : decision.state.kind === "at" && decision.state.to.kind === "inside" ? [decision.state.to.ref.id] : [])];
+    const lost = refs.find((id) => !proven.has(resolve(id)));
+    if (lost !== undefined) {
+      dangling.push({ kind: "item", ref: resolve(lost), chapter: decision.chapter, source: decision.id });
+      voidLink(decision.id, "item");
+      if (decision.state.kind === "census") decision.state.members.forEach((_, index) => voidLink(decision.id, "member", index));
+      continue;
+    }
     authorStates.set(decision.chapter, [...(authorStates.get(decision.chapter) ?? []), decision]);
   }
 
@@ -265,6 +291,10 @@ export function projectItems(
     if (a.kind === "inside" && b.kind === "inside") return a.item === b.item;
     // 地方是原样的字、不发编号：比不了（字不一样不等于不是一处）。
     return undefined;
+  };
+  const markUnverified = (item: MutableItem, chapter: number, by: "chapter" | "entry"): void => {
+    item.unverifiedSince = chapter;
+    item.unverifiedBy = by;
   };
   const unverify = (container: MutableItem | undefined, chapter: number): void => {
     if (container?.census && container.census.status === "valid") {
@@ -282,6 +312,7 @@ export function projectItems(
     item.now = now;
     item.lastWrite = chapter;
     delete item.unverifiedSince;
+    delete item.unverifiedBy;
     if (before === after) return;
     if (before !== undefined) {
       const container = items.get(before);
@@ -312,6 +343,7 @@ export function projectItems(
   const reaffirm = (item: MutableItem, chapter: number): void => {
     item.lastWrite = chapter;
     delete item.unverifiedSince;
+    delete item.unverifiedBy;
   };
 
   /** 这一组里刚立的清点：同组的去向先后不清，不拿它判对不上（组走完不再当完整用）。 */
@@ -366,7 +398,7 @@ export function projectItems(
   interface Placement { readonly item: string; readonly settled: ItemSettled; readonly move: Move; readonly member: boolean }
   const placementsOf = (move: Move): Placement[] => {
     if (move.op === "census") {
-      return (move.members ?? []).map((id) => ({ item: id, settled: { kind: "known", place: { kind: "inside", item: move.item }, chapter: move.chapter, entry: move.entry }, move, member: true }));
+      return (move.members ?? []).filter((id) => proven.has(id)).map((id) => ({ item: id, settled: { kind: "known", place: { kind: "inside", item: move.item }, chapter: move.chapter, entry: move.entry }, move, member: true }));
     }
     const settled = settledOf(move);
     return settled ? [{ item: move.item, settled, move, member: false }] : [];
@@ -456,6 +488,27 @@ export function projectItems(
     scope: statementOf(move.scope),
   });
 
+  /**
+   * 用到账里没有存在证明的东西（设计 3.3）：清点里有它 → 这次清点不再当完整（不排除别的，成员里不列它），
+   * 装进它里面 → 去向记成不知道；从它里面拿出来 → 不核从哪来。那几处附带的旧记法关联不生效，记一条 dangling 问题。
+   */
+  const withoutDangling = (move: Move, members: readonly { readonly id: string; readonly index: number }[]): Move => {
+    const lostMembers = members.filter((member) => !proven.has(member.id));
+    const lostInside = move.to?.kind === "inside" && !proven.has(move.to.item);
+    const lostFrom = move.from?.kind === "inside" && !proven.has(move.from.item);
+    if (lostMembers.length === 0 && !lostInside && !lostFrom) return move;
+    for (const member of lostMembers) voidLink(move.entry, "member", member.index);
+    if (lostInside) voidLink(move.entry, "item");
+    issue("dangling", move.item, move.chapter, [move.entry]);
+    const { from, ...rest } = move;
+    return {
+      ...rest,
+      ...(from && !lostFrom ? { from } : {}),
+      ...(lostInside ? { to: { kind: "unknown" as const } } : {}),
+      ...(lostMembers.length > 0 ? { members: (move.members ?? []).filter((id) => proven.has(id)), complete: false } : {}),
+    };
+  };
+
   for (const ledger of [...ledgers].sort((a, b) => a.chapter - b.chapter)) {
     const chapter = ledger.chapter;
     const moves: Move[] = [];
@@ -470,7 +523,6 @@ export function projectItems(
           target.firstSeen ??= seen;
           continue;
         }
-        target.proved = true;
         if (entry.op === "appear") {
           // 头回写到那条优先（同一章里先被别的条目用到也算这条）；名字取它。
           if (!target.firstSeen || target.firstSeen.chapter === chapter) target.firstSeen = seen;
@@ -480,7 +532,7 @@ export function projectItems(
         }
       }
       if (entry.op === "appear" || entry.seq === undefined) continue;
-      moves.push({
+      const move: Move = {
         chapter,
         entry: entry.id,
         op: entry.op,
@@ -494,7 +546,8 @@ export function projectItems(
         ...(entry.complete !== undefined ? { complete: entry.complete } : {}),
         ...(quote ? { quote } : {}),
         scope: scopeOf(entry, ledger),
-      });
+      };
+      moves.push(withoutDangling(move, entry.members?.map((member, index) => ({ id: resolve(member.id, { entry: entry.id, at: "member", index }), index })) ?? []));
     }
     // 历史按故事里的先后排（同号的照账里的顺序，不代表谁先）。
     moves.sort((a, b) => a.seq - b.seq);
@@ -504,7 +557,7 @@ export function projectItems(
       const list = (id: string) => (move.scope.rights.state ? touch(id).history : touch(id).asides);
       list(move.item).push(stepOf(move));
       // 清点的成员那边也记一笔「在它里面」（同一条为证）。
-      for (const id of move.op === "census" ? (move.members ?? []) : []) list(id).push(memberStep(move));
+      for (const id of move.op === "census" ? (move.members ?? []) : []) if (proven.has(id)) list(id).push(memberStep(move));
     }
     const groups = new Map<number, Move[]>();
     for (const move of effective) groups.set(move.seq, [...(groups.get(move.seq) ?? []), move]);
@@ -516,7 +569,7 @@ export function projectItems(
     const ruled = [...latest.values()].map((decision) => authorMove(decision, decision.state, placeView, resolve));
     for (const move of ruled) {
       touch(move.item).history.push(stepOf(move));
-      for (const id of move.op === "census" ? (move.members ?? []) : []) touch(id).history.push(memberStep(move));
+      for (const id of move.op === "census" ? (move.members ?? []) : []) if (proven.has(id)) touch(id).history.push(memberStep(move));
     }
     if (ruled.length > 0) for (const [id, entries] of runGroup(ruled, chapter)) tied.set(id, entries);
     // 到章末还是先后不清的才报。
@@ -530,10 +583,21 @@ export function projectItems(
       const containers = new Set(item.now.options.flatMap((option) => (option.kind === "known" && option.place.kind === "inside" ? [option.place.item] : [])));
       for (const other of items.values()) if (other.census?.members.has(item.id) || containers.has(other.id)) unverify(other, chapter);
     }
-    if (!itemsComplete(ledger)) {
+    // 这章东西账没记全：只缺认得出的那几样 → 只那几样（和清点里有它们的）此后没核全，这章写过它也算；
+    // 整章没记全（或那几样有认不得的）→ 这章没写到的都没核全。
+    const gap = itemGapOf(ledger);
+    const missing = gap === "all" || gap === "none" ? [] : gap.map((id) => resolve(id));
+    if (gap === "all" || missing.some((id) => !items.has(id))) {
       for (const item of items.values()) {
-        if (item.unverifiedSince === undefined && item.lastWrite < chapter) item.unverifiedSince = chapter;
+        if (item.unverifiedSince === undefined && item.lastWrite < chapter) markUnverified(item, chapter, "chapter");
         unverify(item, chapter);
+      }
+    } else {
+      for (const id of missing) {
+        const item = items.get(id) as MutableItem;
+        if (item.unverifiedSince === undefined) markUnverified(item, chapter, "entry");
+        unverify(item, chapter);
+        for (const other of items.values()) if (other.census?.members.has(id)) unverify(other, chapter);
       }
     }
   }
@@ -563,7 +627,7 @@ export function projectItems(
     mergedFrom: [...item.mergedFrom],
     ...(item.firstSeen ? { firstSeen: item.firstSeen } : {}),
     ...(item.now ? { now: item.now } : {}),
-    ...(item.unverifiedSince !== undefined ? { unverifiedSince: item.unverifiedSince } : {}),
+    ...(item.unverifiedSince !== undefined ? { unverifiedSince: item.unverifiedSince, unverifiedBy: item.unverifiedBy ?? "chapter" } : {}),
     history: item.history,
     asides: item.asides,
     inside: insideIndex.get(item.id) ?? [],
@@ -578,11 +642,11 @@ export function projectItems(
         },
       }
       : {}),
-    ...(item.proved ? {} : { dangling: true as const }),
+    ...(proven.has(item.id) ? {} : { dangling: true as const }),
   }));
   for (const view of views) if (view.dangling) dangling.push({ kind: "item", ref: view.id, ...(view.firstSeen ? { chapter: view.firstSeen.chapter, source: view.firstSeen.entry } : { source: view.id }) });
   views.sort((a, b) => (a.firstSeen?.chapter ?? 0) - (b.firstSeen?.chapter ?? 0) || a.id.localeCompare(b.id));
-  return { items: views, issues, dangling, resolve };
+  return { items: views, issues, dangling, resolve, voided: (entry, at, index) => voided.has(positionKey({ entry, at, ...(index !== undefined ? { index } : {}) })) };
 }
 
 function authorMove(

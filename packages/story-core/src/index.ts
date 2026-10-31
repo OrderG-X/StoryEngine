@@ -63,6 +63,7 @@ export {
   type ItemRefAt,
   entryQuote,
   entryShapeProblem,
+  itemGapOf,
   missingKindsOf,
   presenceName,
   storedShapeProblem,
@@ -280,7 +281,6 @@ export { boundaryText, dayLabel, daysText, offsetText, relativeDaysText, segment
 export { frameOf, lowerConflict, rightsOf, scopeOf, type ConflictLevel, type EntryFrame, type EntryRights, type EntryScope } from "./projection/scope.js";
 export {
   itemResolver,
-  itemsComplete,
   projectItems,
   splitItemId,
   type CensusView,
@@ -334,7 +334,7 @@ export { checkEntries, itemRefsOfInput, type CheckResult, type RejectedEntry, ty
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
 export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
-export { buildChapterLedger, chapterCommit, ChapterCommitArgs, itemShortfall, LedgerShortfall, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { buildChapterLedger, chapterCommit, ChapterCommitArgs, itemShortfall, LedgerShortfall, missingItemRefs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { ledgerComplete, LedgerCompleteArgs, type LedgerCompleteResult } from "./commands/ledger-complete.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";

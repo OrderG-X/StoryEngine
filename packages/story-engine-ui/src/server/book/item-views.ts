@@ -3,7 +3,7 @@
  * 全部从投影的 items 现拼，不读正文、不按名字认东西；编号一律换成名字，同名的加区分（头回那句的前几个字，兜底「第 N 章那件」）。
  * 名字解析不到用中性说法「一样东西」。
  */
-import { nameKey, normalizeForQuote, type BookProjection, type FactView, type ItemNow, type ItemPlaceView, type ItemSettled, type ItemStep, type ItemView } from "@actalk/story-core";
+import { nameKey, normalizeForQuote, type BookProjection, type FactView, type ItemIssueView, type ItemNow, type ItemPlaceView, type ItemSettled, type ItemStep, type ItemView } from "@actalk/story-core";
 
 /** 同名的区分取头回那句的前几个字。 */
 const QUOTE_HINT_CHARS = 8;
@@ -87,16 +87,21 @@ export function contentsText(item: ItemView, texts: ItemTexts): string | undefin
   return undefined;
 }
 
-/** 之后东西账没记全那句。 */
-export const unverifiedText = (item: ItemView): string | undefined =>
-  item.unverifiedSince !== undefined ? `第 ${item.unverifiedSince} 章起东西账没记全，之后挪没挪不知道` : undefined;
+/** 之后东西账没记全那句：整章没记全，还是只有说它的那条没记上。 */
+export function unverifiedText(item: ItemView): string | undefined {
+  if (item.unverifiedSince === undefined) return undefined;
+  return item.unverifiedBy === "entry"
+    ? `第 ${item.unverifiedSince} 章有一条说它的账没记上，从那章起在哪不一定`
+    : `第 ${item.unverifiedSince} 章起东西账没记全，之后挪没挪不知道`;
+}
 
 /** 最近一条单列的说法（人物说的、回忆里、梦里的），比最后一次有权的去向还晚才列；它不改现在。 */
 export function asideText(item: ItemView, texts: ItemTexts): string | undefined {
   const last: ItemStep | undefined = item.asides.at(-1);
   if (!last || (!last.to && last.op !== "gone")) return undefined;
+  // 有权的去向在它之后（后面的章，或同一章故事里更晚）：它已经过时了，不列。
   const latest = item.history.at(-1);
-  if (latest && latest.chapter > last.chapter) return undefined;
+  if (latest && (latest.chapter > last.chapter || (latest.chapter === last.chapter && latest.seq !== undefined && last.seq !== undefined && latest.seq > last.seq))) return undefined;
   const where = last.op === "gone"
     ? `${last.gone === "destroyed" ? "毁了" : "丢了"}${last.note ? `（${last.note}）` : ""}`
     : !last.to || last.to.kind === "unknown" ? "不知道在哪" : placeText(last.to, texts);
@@ -154,7 +159,10 @@ export interface PickItemsOptions {
   readonly recentChapters: number;
   /** 全书不超过这么多样就全列（记账员要认全）；不给 = 只列相关的。 */
   readonly listAllUpTo?: number;
-  /** 最多列几样：相关的里先留叫法写到的，再留拿着它的人出场的，再留最近动过的（装着它们的、同名的排最后）。 */
+  /**
+   * 最多列几样：相关的里先留叫法写到的，再留拿着它的人出场的，再留最近动过的（装着它们的、同名的排最后）；
+   * 相关的不够这么多，拿不相关的补满（最后一次写到它在哪越晚越先），久没动的东西别从读的人眼里消失。
+   */
   readonly max?: number;
 }
 
@@ -163,7 +171,8 @@ export interface PickItemsOptions {
  * 再带上装着它们的（往外找到头）和同名的整组（同名不一定是同一样，要一起看）。
  */
 export function pickItems(projection: Pick<BookProjection, "items" | "cast" | "upTo">, options: PickItemsOptions): { picked: ItemView[]; omitted: number } {
-  const all = projection.items;
+  // 悬空的（账里没有存在证明，设计 3.3）不当它在：读的人、记账员都不列。
+  const all = projection.items.filter((item) => !item.dangling);
   if (options.listAllUpTo !== undefined && all.length <= options.listAllUpTo) return { picked: [...all], omitted: 0 };
   // 不猜白名单：找原句（叫法在本章字里原样出现）
   const text = normalizeForQuote(options.texts.join("\n"));
@@ -193,10 +202,15 @@ export function pickItems(projection: Pick<BookProjection, "items" | "cast" | "u
   const names = new Set([...rank.keys()].flatMap((id) => (byId.get(id)?.name ? [byId.get(id)?.name as string] : [])));
   for (const item of all) if (item.name && names.has(item.name) && !rank.has(item.id)) rank.set(item.id, 0);
   let kept = all.filter((item) => rank.has(item.id));
+  const order = new Map(all.map((item, index) => [item.id, index] as const));
   if (options.max !== undefined && kept.length > options.max) {
-    const order = new Map(all.map((item, index) => [item.id, index] as const));
     const top = new Set([...kept].sort((a, b) => (rank.get(b.id) ?? 0) - (rank.get(a.id) ?? 0) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).slice(0, options.max).map((item) => item.id));
     kept = kept.filter((item) => top.has(item.id));
+  } else if (options.max !== undefined && kept.length < options.max) {
+    const lastWrite = (item: ItemView): number => item.history.at(-1)?.chapter ?? item.firstSeen?.chapter ?? 0;
+    const rest = all.filter((item) => !rank.has(item.id)).sort((a, b) => lastWrite(b) - lastWrite(a) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    const fill = new Set(rest.slice(0, options.max - kept.length).map((item) => item.id));
+    kept = all.filter((item) => rank.has(item.id) || fill.has(item.id));
   }
   return { picked: kept, omitted: all.length - kept.length };
 }
@@ -283,6 +297,34 @@ function changingSteps(history: readonly ItemStep[]): ItemStep[] {
     else if (step.op === "gone") last = undefined;
     return !repeat;
   });
+}
+
+/** 这一章东西对不上的地方（投影报的，都是「可能」），给作者看的一句话；定稿清单列它。 */
+export function itemIssueTexts(projection: Pick<BookProjection, "items" | "itemIssues">, chapter: number): string[] {
+  const nameOf = (id: string) => `「${projection.items.find((item) => item.id === id)?.name ?? "一样东西"}」`;
+  const censusOwner = (entry: string | undefined) => projection.items.find((item) => item.history.some((step) => step.entry === entry && step.op === "census"));
+  const text = (issue: ItemIssueView): string => {
+    const name = nameOf(issue.item);
+    switch (issue.kind) {
+      case "from":
+        return `${name}这章写的从哪拿出来，和前文记的它在哪对不上，记成拿不准`;
+      case "census":
+        return `${name}这章的清点说只有这几样，可前文记着里面还有别的`;
+      case "not-in-census": {
+        const owner = censusOwner(issue.entries[0]);
+        return `${name}不在${owner ? `「${owner.name ?? "那样东西"}」` : "装它的东西"}上回的完整清点里，这章却写它在里面：那次清点不再当完整`;
+      }
+      case "destroyed":
+        return `${name}前文已经毁了，这章又写到它在哪，记成拿不准`;
+      case "cycle":
+        return `${name}装在自己里面绕成了圈`;
+      case "order":
+        return `${name}这章几处去向分不出先后，记成拿不准`;
+      case "dangling":
+        return `${name}这章用到的一样东西账里没了：含它的清点不再当完整、装进它里面的去向记成不知道`;
+    }
+  };
+  return projection.itemIssues.filter((issue) => issue.chapter === chapter).map(text);
 }
 
 /** 某章东西挪了什么（「这章改了什么」）：有权的和单列的都列；头回写到、只是再说一遍还在原处的不列。 */

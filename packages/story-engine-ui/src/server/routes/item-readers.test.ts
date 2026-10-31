@@ -12,7 +12,7 @@ import { collectPlanMaterials, planMaterialBlocks } from "../editorial/plan-mate
 import { toChapterChanges } from "./chapter-changes.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 import { findLedgerNumberConflicts } from "../writing/ledger-number-check.js";
-import { chapterItemMoves, itemsWhere, recentItemMoves } from "../book/item-views.js";
+import { asideText, chapterItemMoves, itemTexts, itemsWhere, pickItems, recentItemMoves, unverifiedText } from "../book/item-views.js";
 import { readStoryViews } from "../book/story-views.js";
 
 const narration = { kind: "narration" as const };
@@ -134,5 +134,38 @@ describe("东西在哪：读的人拿到的材料", () => {
   it("没有相关的东西就不给这一节", async () => {
     const projection = await projectBook(dir);
     expect(itemsWhere({ ...projection, items: [] }, ["随便写写"], []).lines).toEqual([]);
+  });
+});
+
+describe("之后没核全那句", () => {
+  const view = (extra: Record<string, unknown>) => ({ id: "i1-1", mentions: [], mergedFrom: [], history: [], asides: [], inside: [], ...extra }) as never;
+  it("整章东西账没记全和只有说它的那条没记上说法不同；没有就不说", () => {
+    expect(unverifiedText(view({ unverifiedSince: 5, unverifiedBy: "chapter" }))).toBe("第 5 章起东西账没记全，之后挪没挪不知道");
+    expect(unverifiedText(view({ unverifiedSince: 5, unverifiedBy: "entry" }))).toBe("第 5 章有一条说它的账没记上，从那章起在哪不一定");
+    expect(unverifiedText(view({}))).toBeUndefined();
+  });
+});
+
+describe("单列的说法什么时候列", () => {
+  const scope = { frame: "present", source: "narration" } as const;
+  const claim = { frame: "present", source: "character_claim", speaker: "大姑" } as const;
+  const step = (chapter: number, seq: number, name: string, by: typeof scope | typeof claim) => ({ chapter, entry: `c${chapter}-${seq}`, op: "move", seq, to: { kind: "person", name, key: name }, scope: by });
+  const view = (history: unknown[], asides: unknown[]) => ({ id: "i1-1", name: "礼簿", mentions: ["礼簿"], mergedFrom: [], history, asides, inside: [] }) as never;
+  it("同一章里叙述写的去向在人物说的之后：说的过时了，不列；在之前或分不清先后照列", () => {
+    const texts = itemTexts([]);
+    expect(asideText(view([step(5, 5, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBeUndefined();
+    expect(asideText(view([step(5, 3, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBe("大姑说江叶拿着（第 5 章，没核实）");
+    expect(asideText(view([step(5, 4, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBe("大姑说江叶拿着（第 5 章，没核实）");
+    expect(asideText(view([step(6, 1, "江叶", scope)], [step(5, 9, "江叶", claim)]), texts)).toBeUndefined();
+  });
+});
+
+describe("挑给读的人的东西", () => {
+  const item = (id: string, name: string, chapter: number) => ({ id, name, mentions: [name], mergedFrom: [], history: [{ chapter, entry: `c${chapter}-1`, op: "at", seq: 1, to: { kind: "place", text: "桌上" }, scope: { frame: "present", source: "narration" } }], asides: [], inside: [], now: { kind: "known", place: { kind: "place", text: "桌上" }, chapter, entry: `c${chapter}-1` } }) as never;
+  const projection = { upTo: 10, cast: [], items: [item("a", "表", 1), item("b", "伞", 2), item("c", "镜子", 9), item("d", "钥匙", 4), item("e", "信", 3)] };
+  it("相关的不够上限：拿久没写到的补满，后写到的先补；够了就只留相关的", () => {
+    expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1, max: 3 }).picked.map((x: { id: string }) => x.id)).toEqual(["c", "d", "e"]);
+    expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1, max: 1 }).picked.map((x: { id: string }) => x.id)).toEqual(["c"]);
+    expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1 }).picked.map((x: { id: string }) => x.id)).toEqual(["c"]);
   });
 });

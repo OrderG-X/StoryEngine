@@ -242,9 +242,13 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
   for (const item of (preview.lostItems ?? []).slice(0, 3)) {
     notes.push(item.proved
       ? `这章原来写到的「${item.name}」这次没认上，后文还用着它：定稿后它从后面那章才算头回出现`
-      : `这章原来写到的「${item.name}」这次没认上，后文只在装着它、清点它的地方提到：定稿后那几处找不到它，要看一下`);
+      : `这章原来写到的「${item.name}」这次没认上，后文只在装着它、清点它的地方提到：定稿后那几处用不上它（那次清点不再当完整、装进它里面的去向记成不知道），要看一下`);
   }
-  if (preview.itemMissing?.includes("item")) notes.push("东西有几条没记上，这章东西的去向会记成没记全");
+  const itemIssues = preview.itemIssues ?? [];
+  if (itemIssues.length > 0) notes.push(`东西可能对不上：${itemIssues.slice(0, 3).join("；")}${itemIssues.length > 3 ? `；还有 ${itemIssues.length - 3} 处` : ""}`);
+  if (preview.itemMissing?.includes("item")) {
+    notes.push(preview.itemMissingRefs ? "东西有几条没记上，说到的那几样这章起的去向会记成没核全" : "东西有几条没记上，这章东西的去向会记成没记全");
+  }
   const omittedItems = preview.omittedItems ?? 0;
   if (preview.omittedThreads > 0 || preview.omittedFacts > 0 || omittedItems > 0) {
     const omitted = [

@@ -395,10 +395,10 @@ describe("旧记法", () => {
     expect(view.facts.find((fact) => fact.id === "c1-2")).toMatchObject({ status: "current", unaligned: ["i2-2"] });
     expect(item(view, "i2-2").now).toMatchObject({ kind: "known", place: { kind: "inside", item: "i2-1" } });
 
-    const ch2b = chapter(2, "过了几天。", []);
-    const ruling = decision("d-1", { type: "item.state", item: "i9-1", chapter: 2, state: { kind: "at", to: { kind: "person", ref: { mention: "乙" } } }, overlaps: ["c1-2"], replaces: ["c1-1"] });
+    const ch2b = chapter(2, "过了几天，乙看了一眼那块表。", [appear("N1", "表", "乙看了一眼那块表")]);
+    const ruling = decision("d-1", { type: "item.state", item: "i2-1", chapter: 2, state: { kind: "at", to: { kind: "person", ref: { mention: "乙" } } }, overlaps: ["c1-2"], replaces: ["c1-1"] });
     const ruled = viewOf([legacy(), ch2b], [ruling]);
-    expect(ruled.facts.find((fact) => fact.id === "c1-2")).toMatchObject({ status: "current", unaligned: ["i9-1"] });
+    expect(ruled.facts.find((fact) => fact.id === "c1-2")).toMatchObject({ status: "current", unaligned: ["i2-1"] });
     expect(ruled.facts.find((fact) => fact.id === "c1-1")).toMatchObject({ status: "superseded", supersededBy: "d-1" });
     const undone = viewOf([legacy(), ch2b]);
     expect(undone.facts.find((fact) => fact.id === "c1-2")?.unaligned).toBeUndefined();
@@ -410,5 +410,43 @@ describe("旧记法", () => {
     const { itemModel: _itemModel, ...old } = ledgerOf({ chapter: 2, text: T(2, "过了几天。"), entries: [] });
     const view = viewOf([ch1, old as ChapterLedger]);
     expect(item(view, "i1-1").unverifiedSince).toBe(2);
+  });
+});
+
+describe("悬空的东西（设计 3.3：重定稿删了唯一的出处）", () => {
+  // 第 1 章重定稿后没再认上表（appear 没了），第 2 章那条完整清点还写着「盒里只有表」：用不上它，也不是空盒。
+  const ch1 = chapter(1, "甲手里拿着一个木盒。", [appear("N1", "木盒", "甲手里拿着一个木盒"), at(1, N("N1"), person("甲"), "甲手里拿着一个木盒")]);
+  const ch2 = chapter(2, "木盒里只有那块表。表和信原先都在柜里。", [census(1, I("i1-1"), [I("i1-2")], true, "木盒里只有那块表")]);
+  it("清点不再当完整、表不从清点复活、记一条 dangling 问题", () => {
+    const view = viewOf([ch1, ch2]);
+    const box = item(view, "i1-1");
+    expect(box.census).toBeUndefined();
+    expect(box.inside).toEqual([]);
+    expect(box.history.at(-1)).toMatchObject({ op: "census", members: [], complete: false });
+    const watch = item(view, "i1-2");
+    expect(watch).toMatchObject({ dangling: true, history: [] });
+    expect(watch.now).toBeUndefined();
+    expect(view.itemIssues).toEqual([expect.objectContaining({ kind: "dangling", item: "i1-1", chapter: 2 })]);
+    expect(view.dangling).toContainEqual(expect.objectContaining({ kind: "item", ref: "i1-2" }));
+  });
+  it("装进悬空东西里的去向记成不知道；悬空成员带的旧记法关联不生效", () => {
+    const legacy = chapter(1, "表和信原先都在柜里。", [{ kind: "fact", review: "auto", nature: "state", subject: "表和信", attribute: "在哪", value: "柜里", text: "表和信都在柜里", quote: "表和信原先都在柜里" }]);
+    const ch2b = chapter(2, "信塞进了那个铁盒。木盒里只有那块表。", [
+      appear("N1", "信", "信塞进了那个铁盒"),
+      appear("N2", "木盒", "木盒里只有那块表"),
+      move(1, N("N1"), inside(I("i9-9")), "信塞进了那个铁盒", { replaces: ["c1-1"] }),
+      census(2, N("N2"), [{ id: "i9-8", overlaps: ["c1-1"] } as Ref], true, "木盒里只有那块表"),
+    ]);
+    const view = viewOf([legacy, ch2b]);
+    expect(item(view, "i2-1").now).toMatchObject({ kind: "unknown", chapter: 2 });
+    expect(view.facts.find((fact) => fact.id === "c1-1")).toMatchObject({ status: "current" });
+    expect(view.facts.find((fact) => fact.id === "c1-1")?.unaligned).toBeUndefined();
+    expect(view.itemIssues.map((issue) => [issue.kind, issue.item])).toEqual([["dangling", "i2-1"], ["dangling", "i2-2"]]);
+  });
+  it("作者裁定指着悬空的东西：不生效、进悬空", () => {
+    const ruling = decision("d-1", { type: "item.state", item: "i1-1", chapter: 2, state: { kind: "census", members: [{ id: "i1-2" }], complete: true } });
+    const view = viewOf([ch1, chapter(2, "过了几天。", [])], [ruling]);
+    expect(item(view, "i1-1").census).toBeUndefined();
+    expect(view.dangling).toContainEqual(expect.objectContaining({ kind: "item", ref: "i1-2", source: "d-1" }));
   });
 });

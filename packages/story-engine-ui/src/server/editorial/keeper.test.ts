@@ -5,7 +5,7 @@ import { checkEntries, ledgerOf, project, splitUnits, type ChapterLedger, type E
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
-import { nameHandles, parseKeeperOutput } from "./keeper-parse.js";
+import { droppedItemRefs, nameHandles, parseKeeperOutput } from "./keeper-parse.js";
 import { buildChapterEndTask, buildKeeperTask, endingByWorld, endingWeekday, endsAtNight, KEEPER_SPEC, LEDGER_ROLE, nightIssue, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
@@ -344,6 +344,37 @@ describe("记账员交回的账单", () => {
     expect(kinds).toEqual(["presence", "fact:event", "fact:event", "fact:hard", "thread:advance:T7", "thread:open:谁在敲门"]);
     // 推翻的短号对不上：事实照记、不带 replaces。
     expect(parsed?.entries.find((entry) => entry.kind === "fact" && entry.nature === "hard")).not.toHaveProperty("replaces");
+  });
+
+  describe("东西条目的退化写法", () => {
+    const itemHandles = { ...handles, itemHandles: new Map([["I1", "i1-1"], ["I2", "i1-2"]]) };
+    const parse = (items: unknown[], newItems: unknown[] = []) => parseKeeperOutput(JSON.stringify({ newItems, items }), itemHandles);
+
+    it("「装在它自己里面」当没写，剩下的去处照收；丢了再写去处不知道当多塞的", () => {
+      const parsed = parse([
+        { seq: 1, item: "N1", op: "move", to: { inside: "N1", place: "八仙桌抽屉" }, by: "narration", quote: "把它放进抽屉" },
+        { seq: 2, item: "I1", op: "gone", gone: "lost", to: "unknown", by: "narration", quote: "戒指不见了" },
+      ], [{ tag: "N1", name: "礼簿", quote: "一本礼簿", by: "narration" }]);
+      expect(parsed?.drops).toEqual([]);
+      expect(parsed?.entries.filter((entry) => entry.kind === "item" && entry.op !== "appear")).toEqual([
+        expect.objectContaining({ op: "move", item: { tag: "N1" }, to: { kind: "place", text: "八仙桌抽屉" } }),
+        expect.objectContaining({ op: "gone", item: { id: "i1-1" }, gone: "lost" }),
+      ]);
+      expect(parsed?.entries.find((entry) => entry.kind === "item" && entry.op === "gone")).not.toHaveProperty("to");
+    });
+
+    it("丢掉的条目带上它说到的那几样；说不出指哪样的整章算", () => {
+      const parsed = parse([
+        { seq: 1, item: "I1", op: "move", to: { inside: "I2", person: "乙" }, by: "narration", quote: "x" },
+        { seq: 2, item: "I2", op: "gone", gone: "maybe", by: "narration", quote: "y" },
+      ], [{ tag: "N1", quote: "没名字" }]);
+      expect(parsed?.drops.map((drop) => drop.items)).toEqual([[], [{ id: "i1-1" }, { id: "i1-2" }], [{ id: "i1-2" }]]);
+      expect(droppedItemRefs(parsed!.drops)).toEqual([{ id: "i1-1" }, { id: "i1-2" }, { id: "i1-2" }]);
+      const vague = parse([{ seq: 1, item: "I1", op: "move", to: { inside: {}, place: "桌上" }, by: "narration", quote: "x" }]);
+      expect(vague?.drops).toHaveLength(1);
+      expect(droppedItemRefs(vague!.drops)).toBeUndefined();
+      expect(droppedItemRefs(parse(["坏的"])!.drops)).toBeUndefined();
+    });
   });
 });
 

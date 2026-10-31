@@ -170,6 +170,8 @@ export interface AssignedIds {
   readonly droppedOpens: readonly ThreadEntry[];
   /** 认得的、本章上次头回写到的东西这次没认上的（后文还用着它的要如实说）。 */
   readonly droppedItems: readonly ItemEntry[];
+  /** 本批东西标签 → 发的东西编号。 */
+  readonly itemTags: ReadonlyMap<string, string>;
 }
 
 /** 给一章这次要记的条目分配编号（重记时照认得的旧条目沿用）。 */
@@ -231,5 +233,6 @@ export function assignIds(chapter: number, previous: ChapterLedger | undefined, 
     ids,
     droppedOpens: opens.filter((entry) => !usedThreads.has(threadOf(entry))),
     droppedItems: appears.filter((entry) => !usedItems.has(entry.itemRef.id)),
+    itemTags,
   };
 }

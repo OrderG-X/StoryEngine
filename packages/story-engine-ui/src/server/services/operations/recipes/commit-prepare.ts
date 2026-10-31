@@ -250,7 +250,7 @@ type Choices = { readonly excluded: readonly number[]; readonly optedIn: readonl
  * 东西的条目没记上（核不上也算：引用它的、按它算的去向都可能缺）：再缺东西那类，和核心定稿时同一个合法（P3b 设计 2.4）。
  */
 function shortfallOf(preview: CommitPreview, entries: readonly EntryInput[]): LedgerShortfall | undefined {
-  return itemShortfall(quoteShortfallOf(preview, entries), preview.itemMissing ?? []);
+  return itemShortfall(quoteShortfallOf(preview, entries), preview.itemMissing ?? [], preview.itemMissingRefs);
 }
 
 function quoteShortfallOf(preview: CommitPreview, entries: readonly EntryInput[]): LedgerShortfall | undefined {
@@ -324,7 +324,7 @@ async function fill(bookDir: string, preview: CommitPreview, ledgerSha256: strin
       chapter,
       ledgerSha256,
       entries,
-      ...(shortfall ? { partial: { reasonCodes: shortfall.reasonCodes, ...(shortfall.missingKinds ? { missingKinds: shortfall.missingKinds } : {}) } } : {}),
+      ...(shortfall ? { partial: { reasonCodes: shortfall.reasonCodes, ...(shortfall.missingKinds ? { missingKinds: shortfall.missingKinds } : {}), ...(shortfall.missingItems ? { missingItems: shortfall.missingItems } : {}) } } : {}),
       acceptedBasis: ticket.basis.digest,
     }, { what: `补账：第 ${chapter} 章`, caller: "author", basis: ticket.basis });
     if (!result.ok) {

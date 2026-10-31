@@ -60,8 +60,8 @@ describe("定稿落账", () => {
 
     const outcome = expectOk(await commit(2, "表到了丁手里。", [step("at", undefined, { id: "i1-1" }, { kind: "person", name: "丁" }, "表到了丁手里")]));
     expect(outcome.result.rejected).toHaveLength(1);
-    expect(await readChapterLedger(book, 2)).toMatchObject({ status: "partial", coverage: { missingKinds: ["item"], reasonCodes: ["item_rejected"] } });
-    expect((await itemOf("i1-1"))?.unverifiedSince).toBe(2);
+    expect(await readChapterLedger(book, 2)).toMatchObject({ status: "partial", coverage: { missingKinds: ["item"], reasonCodes: ["item_rejected"], missingItems: ["i1-1"] } });
+    expect(await itemOf("i1-1")).toMatchObject({ unverifiedSince: 2, unverifiedBy: "entry" });
   });
 
   it("6.8 只在清点里出现的成员：表在盒里、往外是甲拿着；读回声明再交一次，账一模一样", async () => {
@@ -90,7 +90,8 @@ describe("定稿落账", () => {
     ]));
     expect(outcome.result.rejected.map((item) => item.index)).toEqual([1, 2, 3, 4]);
     const ledger = await readChapterLedger(book, 1);
-    expect(ledger).toMatchObject({ status: "partial", coverage: { missingKinds: ["item", "fact"] } });
+    // 没记上的几条说到铁盒和信；信本身没进账，只缺铁盒。
+    expect(ledger).toMatchObject({ status: "partial", coverage: { missingKinds: ["item", "fact"], missingItems: ["i1-1"] } });
     expect(ledger?.entries.map((entry) => entry.kind)).toEqual(["item"]);
     expect(await itemOf("i1-1")).toMatchObject({ name: "铁盒" });
     expect((await itemOf("i1-1"))?.census).toBeUndefined();
@@ -105,6 +106,53 @@ describe("定稿落账", () => {
     ]));
     expect(await readChapterLedger(book, 1)).toMatchObject({ status: "partial", coverage: { missingKinds: ["item"] } });
     expect((await itemOf("i1-1"))?.census).toMatchObject({ status: "unverified", since: 1 });
+  });
+
+  describe("只缺认得出的那几样（一条没记上不连累别的东西）", () => {
+    const chapter1 = () => commit(1, "乙揣着一块表。丙拿着一把伞。桌上的木盒里只有一枚印章。", [
+      appear("N1", "表", "乙揣着一块表"),
+      appear("N2", "伞", "丙拿着一把伞"),
+      appear("N3", "木盒", "桌上的木盒里只有一枚印章"),
+      appear("N4", "印章", "桌上的木盒里只有一枚印章"),
+      step("at", 1, { tag: "N1" }, { kind: "person", name: "乙" }, "乙揣着一块表"),
+      step("at", 2, { tag: "N2" }, { kind: "person", name: "丙" }, "丙拿着一把伞"),
+      step("at", 3, { tag: "N3" }, { kind: "place", text: "桌上" }, "桌上的木盒里只有一枚印章"),
+      census(4, { tag: "N3" }, [{ tag: "N4" }], true, "桌上的木盒里只有一枚印章"),
+    ]);
+
+    it("说印章的那条没收：只印章和装着它的木盒清点没核全，表、伞照旧", async () => {
+      expectOk(await chapter1());
+      expectOk(await commit(2, "印章被拿了出来。", [step("move", undefined, { id: "i1-4" }, { kind: "person", name: "乙" }, "印章被拿了出来")]));
+      expect(await readChapterLedger(book, 2)).toMatchObject({ status: "partial", coverage: { missingKinds: ["item"], missingItems: ["i1-4"] } });
+      expect(await itemOf("i1-4")).toMatchObject({ unverifiedSince: 2, unverifiedBy: "entry" });
+      expect((await itemOf("i1-3"))?.census).toMatchObject({ status: "unverified", since: 2 });
+      expect((await itemOf("i1-1"))?.unverifiedSince).toBeUndefined();
+      expect((await itemOf("i1-2"))?.unverifiedSince).toBeUndefined();
+    });
+
+    it("交来的没写明缺哪几样、或写的标签本批没有：整章东西都没核全", async () => {
+      expectOk(await chapter1());
+      expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: "# 第2章\n\n过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"] } }, author("k2")));
+      expect((await readChapterLedger(book, 2))?.coverage.missingItems).toBeUndefined();
+      expect(await itemOf("i1-2")).toMatchObject({ unverifiedSince: 2, unverifiedBy: "chapter" });
+      expectOk(await runCommand(book, chapterCommit, { chapter: 3, text: "# 第3章\n\n又过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"], missingItems: [{ tag: "N9" }] } }, author("k3")));
+      expect((await readChapterLedger(book, 3))?.coverage.missingItems).toBeUndefined();
+    });
+
+    it("写明只缺的编号前文没有：读的时候当整章没记全", async () => {
+      expectOk(await chapter1());
+      expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: "# 第2章\n\n过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"], missingItems: [{ id: "i9-9" }] } }, author("k2")));
+      expect((await readChapterLedger(book, 2))?.coverage.missingItems).toEqual(["i9-9"]);
+      expect(await itemOf("i1-2")).toMatchObject({ unverifiedSince: 2, unverifiedBy: "chapter" });
+    });
+
+    it("没记上的只是本章新写到的那样：别的东西不受影响", async () => {
+      expectOk(await chapter1());
+      expectOk(await commit(2, "乙又拿出一面镜子。", [appear("N1", "镜子", "这句正文里没有")]));
+      expect(await readChapterLedger(book, 2)).toMatchObject({ status: "partial", coverage: { missingKinds: ["item"], missingItems: [] } });
+      for (const id of ["i1-1", "i1-2", "i1-4"]) expect((await itemOf(id))?.unverifiedSince).toBeUndefined();
+      expect((await itemOf("i1-3"))?.census).toMatchObject({ status: "valid" });
+    });
   });
 
   it("清点成员上的旧记法关联：前文没有那条事实 → 整条清点不收；有 → 收下、读回再交一模一样", async () => {
