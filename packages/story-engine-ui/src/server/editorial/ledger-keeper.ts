@@ -22,6 +22,8 @@ import {
   readCards,
   splitUnits,
   type BookProjection,
+  type BoundaryOffsets,
+  type ChapterTime,
   type DayRange,
   type EntryInput,
   type SegmentInput,
@@ -34,7 +36,7 @@ import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
-import { extractJsonObject, parseChapterEnd, parseKeeperOutput, relativeOf, type KeeperParseResult } from "./keeper-parse.js";
+import { extractJsonObject, flag, parseChapterEnd, parseKeeperOutput, relativeOf, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -67,8 +69,8 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
-/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次 + 复核星期一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 4;
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 5;
 
 /** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
 const IN_CHAPTER_BOUNDARY =
@@ -367,7 +369,8 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const conversation: BrainMessage[] = [...window, { role: "user", content: task }, { role: "assistant", content: text }];
   const repaired = await repairQuotes(parsed, input, conversation);
   const ended = await askChapterEnd(repaired.parsed, input, conversation);
-  const dated = await recheckWeekday(ended, input, conversation);
+  const nights = await recheckNight(ended, input, conversation);
+  const dated = await recheckWeekday(nights, input, conversation);
   return {
     ok: true,
     parsed: settleTime(withOriginalQuotes(dated, input.draft), input.draft),
@@ -601,19 +604,162 @@ async function askChapterEnd(parsed: KeeperParseResult, input: KeeperInput, conv
   input.onRawOutput?.(reply);
   const raw = extractJsonObject(reply);
   if (!raw) return parsed;
-  const changes = Array.isArray(raw.dayChanges)
-    ? raw.dayChanges.map((item) => {
-      if (item === null || typeof item !== "object") return item;
-      const { id, ...rest } = item as Record<string, unknown>;
-      const unit = units.find((candidate) => candidate.id === positiveIntLike(id));
-      return { ...rest, quote: unit ? input.draft.slice(unit.start, unit.end) : "" };
-    })
-    : raw.dayChanges;
   const adjusted = [...parsed.adjusted];
-  const end = parseChapterEnd({ ...raw, dayChanges: changes }, adjusted);
+  const end = parseChapterEnd({ ...raw, dayChanges: changesById(raw.dayChanges, units, input.draft) }, adjusted);
   if (end.sameDay === undefined && end.dayChanges === undefined) return { ...parsed, adjusted };
   const entries = [...parsed.entries];
   entries[index] = { ...time, ...end };
+  return { ...parsed, entries, adjusted };
+}
+
+/** 追问交回来的换天按句子编号点的：代码取那句原句（编号对不上的原句留空，照交账单的规矩不记）。 */
+function changesById(list: unknown, units: readonly TextUnit[], draft: string): unknown {
+  if (!Array.isArray(list)) return list;
+  return list.map((item) => {
+    if (item === null || typeof item !== "object") return item;
+    const { id, ...rest } = item as Record<string, unknown>;
+    const unit = units.find((candidate) => candidate.id === positiveIntLike(id));
+    return { ...rest, quote: unit ? draft.slice(unit.start, unit.end) : "" };
+  });
+}
+
+/**
+ * 两种换天规矩只在半夜十二点到天亮之间差一天（这段时间里按半夜已是新的一天、按天亮还是前一天）。
+ * 这一章结尾在不在这段时间里：按投影两个世界的天数差算——差比全书到这章为止最小的那个大一天就在。
+ * 两个世界哪边不确定、作者定了换天规矩（只推一个世界）、差得不止一天（前面就对不上了），都不知道。
+ */
+export function endsAtNight(before: BookProjection, chapter: number): boolean | undefined {
+  const exact = (range: DayRange | undefined): number | undefined => (range?.lo !== undefined && range.lo === range.hi ? range.lo : undefined);
+  const gap = (days: ChapterTime["byWorld"], key: "start" | "end"): number | undefined => {
+    const midnight = exact(days.midnight?.[key]);
+    const dawn = exact(days.dawn?.[key]);
+    return midnight !== undefined && dawn !== undefined ? midnight - dawn : undefined;
+  };
+  let low = 0;
+  let end: number | undefined;
+  for (const view of [...before.chapters].sort((a, b) => a.chapter - b.chapter)) {
+    if (view.chapter > chapter) break;
+    if (view.time.presentLine !== true) continue;
+    for (const value of [gap(view.time.byWorld, "start"), gap(view.time.byWorld, "end")]) if (value !== undefined) low = Math.min(low, value);
+    if (view.chapter === chapter) end = gap(view.time.byWorld, "end");
+  }
+  if (end === undefined || end - low > 1) return undefined;
+  return end - low === 1;
+}
+
+/** 这一处相对天数按半夜规矩比按天亮规矩多几天：只写一份的两种一样（0）；不确定、按月 / 年说的不知道。 */
+function nightShift(relative: { readonly offset?: TimeOffset; readonly byBoundary?: BoundaryOffsets }): number | undefined {
+  const exact = (offset: TimeOffset): number | undefined => (offset.unit === "day" && offset.min !== undefined && offset.min === offset.max ? offset.min : undefined);
+  if (relative.byBoundary) {
+    const midnight = exact(relative.byBoundary.midnight);
+    const dawn = exact(relative.byBoundary.dawn);
+    return midnight !== undefined && dawn !== undefined ? midnight - dawn : undefined;
+  }
+  return relative.offset?.unit === "day" ? 0 : undefined;
+}
+
+/** 本章时间按两种规矩走一遍查出的毛病：哪一处两种规矩差得不可能（at：开头 / 第几次换天），或结尾还在半夜到天亮之间。 */
+export type NightIssue =
+  | { readonly kind: "impossible"; readonly at: "start" | number; readonly shift: number }
+  | { readonly kind: "endsAtNight" };
+
+/**
+ * 从上一个当下章结尾（在不在半夜到天亮之间，不知道就从本章自己写的推）起，沿本章开头、各次换天走：
+ * 半夜那边多一天 = 进了半夜到天亮之间（之前得不在），天亮那边多一天 = 出了（之前得在），差一天以上不可能。
+ * 结尾还在半夜到天亮之间也报（常是凌晨开头、章里讲到天亮以后却没列换天）；是本章列的换天进的半夜（③）不报。开头说不出、哪一处不确定就不往下走。
+ * 没有上一个当下章（第 1 章）时开头那处不算（第 1 章开头是原点）。
+ */
+export function nightIssue(time: TimeInput, previous: { readonly exists: boolean; readonly atNight?: boolean }): NightIssue | undefined {
+  if (time.start === undefined || time.start === "unknown") return undefined;
+  let state = previous.atNight;
+  // 进半夜到天亮之间是本章列的换天（③，记账员明说过了半夜）：结尾没天亮多半就是对的，不问。
+  let enteredByChange = false;
+  const steps: { readonly at: "start" | number; readonly relative: { readonly offset?: TimeOffset; readonly byBoundary?: BoundaryOffsets } }[] = [
+    ...(previous.exists ? [{ at: "start" as const, relative: time.start }] : []),
+    ...(time.dayChanges ?? []).map((change, index) => ({ at: index + 1, relative: change })),
+  ];
+  for (const step of steps) {
+    const shift = nightShift(step.relative);
+    if (shift === undefined) return undefined;
+    if (shift === 0) continue;
+    if (Math.abs(shift) > 1 || (shift === 1 && state === true) || (shift === -1 && state === false)) return { kind: "impossible", at: step.at, shift };
+    state = shift === 1;
+    enteredByChange = step.at !== "start";
+  }
+  return state === true && !enteredByChange ? { kind: "endsAtNight" } : undefined;
+}
+
+/** 复核半夜到天亮那条 user 消息（单测也用）。 */
+export function buildNightRecheckTask(issue: NightIssue, previous: number | undefined, numbered: string): string {
+  const what = (() => {
+    if (issue.kind === "endsAtNight") return "按你记的，本章结尾还在半夜以后、天亮以前（按半夜规矩已经换了天，按天亮规矩还没换）。章里要是讲到了天亮以后，那是一次换天没列（④）。";
+    const who = issue.at === "start" ? "本章开头" : `你列的第 ${issue.at} 次换天`;
+    const before = issue.at === "start" ? `上一章（第 ${previous} 章）结尾` : "它前面那一刻";
+    if (Math.abs(issue.shift) > 1) return `${who}两种规矩差了不止一天，两种规矩最多差一天。`;
+    return issue.shift < 0
+      ? `${who}按天亮规矩比按半夜规矩多隔一天，这得${before}在半夜以后、天亮以前才对得上；可按记下的，${before}不在这段时间里。`
+      : `${who}按半夜规矩比按天亮规矩多隔一天，这得${before}不在半夜到天亮之间才对得上；可按记下的，${before}已经过了半夜、还没天亮。`;
+  })();
+  return [
+    `你刚交的账单里，time 按两种换天规矩对不上：${what}`,
+    "两种换天规矩只在半夜十二点到天亮之间差一天：这段时间里按半夜规矩已经是新的一天、按天亮规矩还是前一天；别的时候两种规矩是同一天。请对照正文再看一遍，只交这一件：",
+    "- 记错了：交改好的本章时间，只写要改的那几样：start（本章开头离上一章结尾隔几天，写法同交账单，不用再附 quote）、sameDay 或 dayChanges（逐次点新的一天开头那句的编号 id，写法同交账单）；",
+    ...(issue.kind === "endsAtNight"
+      ? ['- 没记错，本章到结尾确实还没天亮：交 {"keep":true}；']
+      : issue.at === "start" ? ['- 本章没记错，是上一章记的结尾不对：交 {"keep":true}；'] : []),
+    '- 正文里看不出：交 {"unknown":true}。',
+    "",
+    "下面是本章正文，每句前面是编号。",
+    "",
+    "【本章正文】",
+    numbered,
+    "",
+    '只交 JSON：{"start":{"offset":{"unit":"day","min":1,"max":1}},"dayChanges":[{"id":12,"byBoundary":{"midnight":{"unit":"day","min":0,"max":0},"dawn":{"unit":"day","min":1,"max":1}}}]}',
+  ].join("\n");
+}
+
+/**
+ * 记账员按两种换天规矩记的本章时间自相矛盾，或结尾还在半夜到天亮之间（P3a 评测：凌晨开头记对了、章里讲到天亮以后却写同一天，
+ * 天亮规矩那边后面每章少一天；上一章没过半夜、本章开头却写半夜 0 天天亮 1 天）：在同一段对话里只复核这一件。
+ * 改了、按两种规矩走得通就换（开头的原句照第一遍的；换天点句子编号、代码取原句）；说没记错、看不出、没问成、改了还不通，
+ * 都照第一遍交——走不通的如实记一条说明，只是结尾没天亮的不记（本来就可能是对的）。
+ */
+async function recheckNight(parsed: KeeperParseResult, input: KeeperInput, conversation: readonly BrainMessage[]): Promise<KeeperParseResult> {
+  const index = parsed.entries.findIndex((entry) => entry.kind === "time");
+  const time = index >= 0 ? parsed.entries[index] : undefined;
+  if (time?.kind !== "time" || time.start === undefined || time.start === "unknown") return parsed;
+  const previous = previousPresentChapter(input.before, input.chapter);
+  const atNight = previous === undefined ? undefined : endsAtNight(input.before, previous);
+  const where = { exists: previous !== undefined, ...(atNight !== undefined ? { atNight } : {}) };
+  const issue = nightIssue(time, where);
+  if (!issue) return parsed;
+  const keep = (why: string): KeeperParseResult =>
+    issue.kind === "endsAtNight" ? parsed : { ...parsed, adjusted: [...parsed.adjusted, { where: "time", reason: `本章开头、换天按半夜和天亮两种规矩记的对不上，${why}，照第一遍记的` }] };
+  const units = splitUnits(input.draft);
+  let reply: string;
+  try {
+    reply = await withStep("记账员复核半夜到天亮", () => input.callModel([...conversation, { role: "user", content: buildNightRecheckTask(issue, previous, numberedText(units)) }], { json: true }));
+  } catch (error) {
+    rethrowIfStopped(error);
+    return keep(`复核没问成（${modelFailureText(error)}）`);
+  }
+  input.onRawOutput?.(reply);
+  const raw = extractJsonObject(reply);
+  if (!raw) return keep("复核交回来的读不了");
+  if (flag(raw.keep) === true || flag(raw.unknown) === true) return keep(flag(raw.keep) === true ? "复核说本章没记错" : "复核说看不出");
+  const start = typeof raw.start === "object" && raw.start !== null && !Array.isArray(raw.start) ? relativeOf(raw.start as Record<string, unknown>) : undefined;
+  if (typeof start === "string") return keep(`复核改的开头${start}`);
+  const adjusted = [...parsed.adjusted];
+  const end = raw.sameDay !== undefined || raw.dayChanges !== undefined ? parseChapterEnd({ sameDay: raw.sameDay, dayChanges: changesById(raw.dayChanges, units, input.draft) }, adjusted) : undefined;
+  if (!start && (!end || (end.sameDay === undefined && end.dayChanges === undefined))) return keep("复核没交改好的时间");
+  const { sameDay: _sameDay, dayChanges: _dayChanges, ...rest } = time;
+  const fixed: TimeInput = {
+    ...(end && (end.sameDay !== undefined || end.dayChanges !== undefined) ? { ...rest, ...end } : time),
+    start: start ? { ...start, basis: time.start.basis, quote: time.start.quote } : time.start,
+  };
+  if (nightIssue(fixed, where)?.kind === "impossible") return keep("复核改了还是对不上");
+  const entries = [...parsed.entries];
+  entries[index] = fixed;
   return { ...parsed, entries, adjusted };
 }
 

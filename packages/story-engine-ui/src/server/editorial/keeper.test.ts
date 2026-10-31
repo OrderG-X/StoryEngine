@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { checkEntries, ledgerOf, project, splitUnits, type ChapterLedger, type EntryDraft, type SettingCardsFile } from "@actalk/story-core";
+import { checkEntries, ledgerOf, project, splitUnits, type ChapterLedger, type EntryDraft, type SettingCardsFile, type TimeInput } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
 import { nameHandles, parseKeeperOutput } from "./keeper-parse.js";
-import { buildChapterEndTask, buildKeeperTask, endingByWorld, endingWeekday, KEEPER_SPEC, LEDGER_ROLE, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
+import { buildChapterEndTask, buildKeeperTask, endingByWorld, endingWeekday, endsAtNight, KEEPER_SPEC, LEDGER_ROLE, nightIssue, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
 type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: "auto" | "author" } : never) : never;
@@ -692,6 +692,120 @@ describe("记账员跑一章", () => {
       const agrees = run(2, async () => JSON.stringify({ offset: day(9) }));
       await agrees.outcome;
       expect(agrees.asks).toEqual([]);
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("按两种换天规矩走一遍：进半夜到天亮之间得先不在、出来得先在，差一天以上不可能；结尾还没天亮的报（本章列换天进的不报）；第 1 章开头不算", () => {
+    const day = (min: number) => ({ unit: "day" as const, min, max: min });
+    const night = { byBoundary: { midnight: day(1), dawn: day(0) } };
+    const dawn = { byBoundary: { midnight: day(0), dawn: day(1) } };
+    const start = (relative: object) => ({ ...relative, basis: "judged" as const, quote: "q" });
+    const time = (partial: Partial<TimeInput>): TimeInput => ({ kind: "time", review: "auto", start: start({ offset: day(1) }), sameDay: true, ...partial });
+    const out = { exists: true, atNight: false };
+    expect([
+      nightIssue(time({ start: start(night) }), out),
+      nightIssue(time({ start: start(night), sameDay: undefined, dayChanges: [{ ...dawn, quote: "q" }] }), out),
+      nightIssue(time({ start: start(dawn) }), out),
+      nightIssue(time({ start: start(dawn) }), { exists: true, atNight: true }),
+      nightIssue(time({ sameDay: undefined, dayChanges: [{ ...dawn, quote: "q" }] }), out),
+      nightIssue(time({ start: start({ byBoundary: { midnight: day(2), dawn: day(0) } }) }), { exists: true }),
+      nightIssue(time({ sameDay: undefined, dayChanges: [{ ...night, quote: "q" }] }), out),
+      nightIssue(time({}), { exists: true, atNight: true }),
+      nightIssue(time({ start: start(dawn) }), { exists: false }),
+      nightIssue(time({ start: "unknown" }), out),
+      nightIssue(time({ start: start({ offset: { unit: "day", min: 1 } }) }), { exists: true, atNight: true }),
+      nightIssue(time({ start: start({ offset: { unit: "day", min: 0, max: 1 } }), sameDay: undefined, dayChanges: [{ ...dawn, quote: "q" }] }), out),
+    ]).toEqual([
+      { kind: "endsAtNight" },
+      undefined,
+      { kind: "impossible", at: "start", shift: -1 },
+      undefined,
+      { kind: "impossible", at: 1, shift: -1 },
+      { kind: "impossible", at: "start", shift: 2 },
+      undefined,
+      { kind: "endsAtNight" },
+      undefined,
+      undefined,
+      { kind: "endsAtNight" },
+      { kind: "impossible", at: 1, shift: -1 },
+    ]);
+  });
+
+  it("上一章结尾在不在半夜到天亮之间：按投影两个世界的差算，比全书最小的差大一天就在；哪边不确定就不知道", () => {
+    const day = (min: number) => ({ unit: "day" as const, min, max: min });
+    const text = (n: number) => `# 第${n}章\n\n她醒了。`;
+    const ledger = (chapter: number, time: Record<string, unknown>) => ledgerOf({ chapter, text: text(chapter), committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", ...time } as EntryDraft] });
+    const before = project({
+      ledgers: [
+        ledger(1, { start: { offset: day(0), basis: "text", quote: "她醒了。" }, sameDay: true }),
+        ledger(2, { start: { byBoundary: { midnight: day(1), dawn: day(0) }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
+        ledger(3, { start: { byBoundary: { midnight: day(0), dawn: day(1) }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
+        ledger(4, { start: { offset: { unit: "day", min: 1 }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
+      ],
+      decisions: [],
+    });
+    expect([1, 2, 3, 4].map((chapter) => endsAtNight(before, chapter))).toEqual([false, true, false, undefined]);
+  });
+
+  it("按两种换天规矩对不上 / 结尾还没天亮：只复核这一件——改了走得通就换（开头原句照旧、换天点编号代码取句）；说没记错、看不出、没问成、改了还不通照第一遍交，走不通的如实说明；走得通的不问", async () => {
+    const book = await makeHomeTempDir("keeper-night-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const first = "# 第1章\n\n傍晚，面馆打烊。";
+      await writeFile(join(book, "chapters/0001.md"), first);
+      const day = (min: number) => ({ unit: "day" as const, min, max: min });
+      const before = project({ ledgers: [ledgerOf({ chapter: 1, text: first, committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "傍晚，面馆打烊。" }, sameDay: true }] })], decisions: [] });
+      const draft = "# 第2章\n\n凌晨四点，她醒了。天亮了，楼下有了自行车铃。中午，客人进门。";
+      const units = splitUnits(draft);
+      const dawnId = units.find((unit) => draft.slice(unit.start, unit.end).includes("天亮了"))!.id;
+      const run = (first: object, recheck: () => Promise<string>) => {
+        const asks: string[] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("按两种换天规矩对不上")) { asks.push(last); return recheck(); }
+            return JSON.stringify({ time: { start: { ...first, basis: "judged", quote: "凌晨四点，她醒了。" }, sameDay: true } });
+          },
+        });
+        return { asks, outcome };
+      };
+      const timeOf = async (outcome: ReturnType<typeof runLedgerKeeper>) => {
+        const done = await outcome;
+        if (!done.ok) throw new Error(done.reason);
+        return { time: done.parsed.entries.find((entry) => entry.kind === "time"), adjusted: done.parsed.adjusted };
+      };
+      const night = { byBoundary: { midnight: day(1), dawn: day(0) } };
+      const dawn = { byBoundary: { midnight: day(0), dawn: day(1) } };
+
+      const added = run(night, async () => JSON.stringify({ dayChanges: [{ id: dawnId, ...dawn }] }));
+      const fixed = await timeOf(added.outcome);
+      expect(fixed.time).toMatchObject({ start: { ...night, quote: "凌晨四点，她醒了。" }, dayChanges: [{ ...dawn, quote: "天亮了，楼下有了自行车铃。" }] });
+      expect(fixed.time).not.toHaveProperty("sameDay");
+      expect(fixed.adjusted).toEqual([]);
+      expect(added.asks[0]).toContain("本章结尾还在半夜以后、天亮以前");
+      expect(added.asks[0]).toContain(`[${dawnId}]`);
+
+      const confirmed = await timeOf(run(night, async () => JSON.stringify({ keep: true })).outcome);
+      expect(confirmed.time).toMatchObject({ start: night, sameDay: true });
+      expect(confirmed.adjusted).toEqual([]);
+
+      const wrongStart = run(dawn, async () => JSON.stringify({ start: { offset: day(1) } }));
+      expect((await timeOf(wrongStart.outcome)).time).toMatchObject({ start: { offset: day(1), basis: "judged", quote: "凌晨四点，她醒了。" }, sameDay: true });
+      expect(wrongStart.asks[0]).toContain("这得上一章（第 1 章）结尾在半夜以后、天亮以前才对得上");
+
+      for (const reply of [async () => { throw new Error("429 太忙"); }, async () => JSON.stringify({ unknown: true }), async () => JSON.stringify({ keep: true }), async () => JSON.stringify({ start: dawn })]) {
+        const kept = await timeOf(run(dawn, reply).outcome);
+        expect(kept.time).toMatchObject({ start: dawn, sameDay: true });
+        expect(kept.adjusted).toEqual([{ where: "time", reason: expect.stringContaining("按半夜和天亮两种规矩记的对不上") }]);
+      }
+
+      const fine = run({ offset: day(1) }, async () => JSON.stringify({ keep: true }));
+      await fine.outcome;
+      expect(fine.asks).toEqual([]);
     } finally {
       await rm(book, { recursive: true, force: true });
     }

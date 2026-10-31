@@ -185,7 +185,7 @@ function sourceOf(item: Raw): DeclaredSource | undefined {
 const TRUE_WORDS = new Set(["true", "yes", "y", "1", "是", "对"]);
 const FALSE_WORDS = new Set(["false", "no", "n", "0", "否", "不是", "不"]);
 
-function flag(value: unknown): boolean | undefined {
+export function flag(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
   const text = str(value)?.toLowerCase();
   if (text === undefined) return undefined;
