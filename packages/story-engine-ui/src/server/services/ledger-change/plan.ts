@@ -320,6 +320,9 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest, l
           aligned.push(...links.said);
           const existing = members.find((item) => item.id === member.item.id);
           const merged = mergeLinks(existing ?? {}, links.links);
+          // 同一样写了两遍、两遍对同一条旧记录给的说法不一样：如实问，不合成两种都要。
+          const both = merged.replaces?.find((id) => merged.overlaps?.includes(id));
+          if (both !== undefined) return fail("conflict", `${quoteText(view.facts.find((fact) => fact.id === both)?.text ?? "那条旧记录")}不能既整条顶掉、又留着只标「${texts.label(member.item.id)}」，请说是哪一种。`);
           if (existing) Object.assign(existing, merged);
           else members.push({ id: member.item.id, ...merged });
         }

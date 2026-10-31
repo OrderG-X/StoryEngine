@@ -567,10 +567,14 @@ async function repairItems(
   const declared = new Set(parsed.entries.flatMap((entry) => (entry.kind === "item" && entry.op === "appear" && entry.tag ? [entry.tag] : [])));
   const appears = patch.appears.filter((entry) => entry.kind === "item" && entry.tag !== undefined && !declared.has(entry.tag));
   // 只认写明重写的是第几条、而且说的就是那一样的（编号写错了的不认，免得顶掉别的条目）。
-  const items = patch.items.filter((item) => {
+  // 第一遍连是哪样都认不出的：重写交的那条照收（有原句、照样核），但证明不了说的是同一样，那处没记上照留。
+  const subjectOf = (item: { readonly fix: number }) => {
     const problem = problems[item.fix - 1];
-    const subject = problem ? problemSubject(problem, parsed.entries) : undefined;
-    return problem !== undefined && (subject === undefined || (item.entry.kind === "item" && item.entry.item !== undefined && sameItem(item.entry.item, subject)));
+    return problem ? problemSubject(problem, parsed.entries) : undefined;
+  };
+  const items = patch.items.filter((item) => {
+    const subject = subjectOf(item);
+    return problems[item.fix - 1] !== undefined && (subject === undefined || (item.entry.kind === "item" && item.entry.item !== undefined && sameItem(item.entry.item, subject)));
   });
   const base = parsed.entries.filter((_, index) => !replaced.has(index));
   const candidate = [...base, ...appears, ...items.map((item) => item.entry)];
@@ -578,7 +582,7 @@ async function repairItems(
   // 原句对不上的不算没重写好：后面补摘那一步接着补。
   const usable = (index: number): boolean => !rejected.has(index) || rejected.get(index) === "quote_not_in_text";
   const good = items.filter((_, at) => usable(base.length + appears.length + at));
-  const fixedProblems = new Set(good.map((item) => item.fix));
+  const fixedProblems = new Set(good.filter((item) => subjectOf(item) !== undefined).map((item) => item.fix));
   // 只补了声明（指的那样本章新写到、第一遍忘了声明）：原来那条不用重写，补上声明就核得过。
   const restored = problems.flatMap((problem, at) => (problem.kind === "entry" && !fixedProblems.has(at + 1) ? [{ at: at + 1, entry: parsed.entries[problem.index] as EntryInput }] : []));
   const withRestored = [...base, ...appears, ...good.map((item) => item.entry), ...restored.map((item) => item.entry)];

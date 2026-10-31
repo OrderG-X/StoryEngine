@@ -574,6 +574,30 @@ describe("记账员跑一章", () => {
       });
       expect(swapped).toMatchObject({ ok: true, itemRepair: { asked: 1, fixed: 0 } });
       if (swapped.ok) expect(swapped.parsed.drops.map((drop) => drop.where)).toEqual(["items 第 1 条"]);
+      // 第一遍连是哪样都认不出：重写交的那条照收，但说不清是不是同一样，那处没记上照留。
+      const unnamed = JSON.stringify({
+        summary: { text: "取盒", quote: "格子里放着一个铁盒" },
+        newItems: [{ tag: "N1", name: "铁盒", by: "narration", quote: "格子里放着一个铁盒" }, { tag: "N2", name: "账本", by: "narration", quote: "她把账本放回铁盒里" }],
+        items: [{ seq: 1, item: "表", op: "at", to: { place: "格子里" }, by: "narration", quote: "格子里放着一个铁盒" }],
+      });
+      const blind = await runLedgerKeeper({
+        projectDir: book,
+        chapter: 2,
+        draft,
+        before,
+        maxCatchUp: 0,
+        callModel: async (messages, options) => {
+          if (!options.json) return "笔记";
+          return messages.at(-1)?.content.includes("东西的记录没记上")
+            ? JSON.stringify({ items: [{ fix: 1, seq: 1, item: "N2", op: "move", to: { inside: "N1" }, by: "narration", quote: "她把账本放回铁盒里" }] })
+            : unnamed;
+        },
+      });
+      expect(blind).toMatchObject({ ok: true, itemRepair: { asked: 1, fixed: 0 } });
+      if (blind.ok) {
+        expect(blind.parsed.drops.map((drop) => drop.where)).toEqual(["items 第 1 条"]);
+        expect(blind.parsed.entries).toContainEqual(expect.objectContaining({ op: "move", item: { tag: "N2" } }));
+      }
     } finally {
       await rm(book, { recursive: true, force: true });
     }

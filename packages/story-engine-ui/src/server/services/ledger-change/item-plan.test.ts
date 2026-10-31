@@ -129,6 +129,8 @@ describe("改账：东西", () => {
     expect(census.decisions).toEqual([expect.objectContaining({ state: { kind: "census", complete: false, members: [expect.objectContaining({ overlaps: [expect.any(String)] })] } })]);
     expect((await plan({ op: "itemState", query: "信", chapter: 1, where: { person: "甲" }, replaces: ["后来信又到了丙手里"] })).notDone[0]).toContain("比第 1 章晚");
     expect((await plan({ op: "itemState", query: "信", chapter: 1, where: { person: "甲" }, replaces: ["信在乙手里"], overlaps: ["信在乙手里"] })).notDone[0]).toContain("请说是哪一种");
+    // 同一样在清点里写了两遍、对同一条旧记录各给一种说法：合起来再核，照样如实问。
+    expect((await plan({ op: "itemState", query: "怀表", chapter: 2, members: [{ name: "信", replaces: ["信和表都交给了乙"] }, { name: "信", overlaps: ["信和表都交给了乙"] }], complete: false })).notDone[0]).toContain("请说是哪一种");
     // 作者点了：核心认这几条关联（章号、在投影里）。
     await apply(linked.decisions, "linked");
 

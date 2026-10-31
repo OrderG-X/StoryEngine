@@ -348,6 +348,13 @@ describe("清点", () => {
     }
   });
 
+  it("容器毁了（同一组里、之后哪章都一样）：清点不再当完整用", () => {
+    const sameGroup = chapter(2, "铁盒里只有一封信，铁盒烧了。", [census(1, I("i1-1"), [I("i1-2")], true, "铁盒里只有一封信"), gone(1, I("i1-1"), "destroyed", "铁盒烧了")]);
+    expect(item(viewOf([box(), sameGroup]), "i1-1").census).toMatchObject({ status: "unverified", since: 2 });
+    const later = chapter(2, "铁盒烧了。", [gone(1, I("i1-1"), "destroyed", "铁盒烧了")]);
+    expect(item(viewOf([box(), later]), "i1-1").census).toMatchObject({ status: "unverified", since: 2 });
+  });
+
   it("清点之后成员丢了：清点此后没核全，那次清点列的照留（不改成「空了」）", () => {
     const ch2 = chapter(2, "信不见了。", [gone(1, I("i1-2"), "lost", "信不见了")]);
     expect(item(viewOf([box(), ch2]), "i1-1").census).toMatchObject({ chapter: 1, status: "unverified", since: 2, listed: ["i1-2"] });
