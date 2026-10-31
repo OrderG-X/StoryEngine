@@ -24,6 +24,7 @@ import {
 } from "../../inspect-service.js";
 import { inspectStepBudget, inspectTasks, sumBudget } from "../budgets.js";
 import type { OperationResult, Recipe } from "../executor.js";
+import { modelFailureText } from "../../../lib/ai-errors.js";
 
 export const INSPECT_KIND = "inspect.run" as const;
 
@@ -122,8 +123,7 @@ export function createInspectRunRecipe(deps: InspectDeps = DEFAULT_DEPS): Recipe
               return await prepareCheckerNotes(ctx.bookDir, chapter, deps.readerCallModel);
             } catch (error) {
               rethrowIfStopped(error);
-              const message = error instanceof Error ? error.message : String(error);
-              throw coded(((error as { code?: unknown }).code as string | undefined) ?? "notes_failed", `核账员读前文没成：${message}`);
+              throw coded(((error as { code?: unknown }).code as string | undefined) ?? "notes_failed", `核账员读前文没成：${modelFailureText(error)}`);
             }
           });
           ctx.progress(`核账员在核第 ${chapter} 章`);

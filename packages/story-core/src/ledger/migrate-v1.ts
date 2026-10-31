@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { ChapterLedger, FactNature, ReviewMark, ThreadOp, ThreadType, TimeBasis, type Evidence, type EvidenceStatus, type LedgerEntry } from "../schema/ledger.js";
-import { chapterSource, evidenceFor, newLedger, storeWithProof, type ChapterSource } from "./entries.js";
+import { chapterSource, evidenceFor, newLedger, storeLegacyTime, storeWithProof, type ChapterSource } from "./entries.js";
 
 export const LEDGER_V1_SCHEMA = "chapter-ledger/1" as const;
 
@@ -130,7 +130,9 @@ export function upgradeLedgerV1(raw: string, chapterText: string | undefined): U
     const proof = proofOf(entry.quote, v1.chapter, v1.textSha256, source, fallback);
     tally[proof.evidenceStatus] += 1;
     const thread = entry.kind === "thread" && entry.op === "open" ? entry.thread : undefined;
-    entries.push(...storeWithProof(declared, { id: entryId, ...(thread ? { thread } : {}) }, proof, "migrated"));
+    entries.push(...(declared.kind === "time"
+      ? storeLegacyTime(declared, entryId, proof, "migrated")
+      : storeWithProof(declared, { id: entryId, ...(thread ? { thread } : {}) }, proof, "migrated")));
   }
   const empty = v1.origin === "import" && entries.length === 0;
   const built = newLedger({
@@ -142,6 +144,7 @@ export function upgradeLedgerV1(raw: string, chapterText: string | undefined): U
     status: empty ? "pending" : "ready",
     coverage: { reasonCodes: [empty ? "imported_text" : "legacy_protocol"] },
     legacy: { schema: LEDGER_V1_SCHEMA, sha256: sha256(raw) },
+    ...(empty ? {} : { legacyTime: true as const }),
   });
   if (!built.success) {
     return { ok: false, reason: `升级后不成立：${plainReason(built.error.issues[0])}` };

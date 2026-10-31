@@ -13,6 +13,7 @@ export {
   FactEntry,
   FactInput,
   FactNature,
+  LedgerCarryTime,
   LedgerCoverage,
   LedgerEntry,
   LedgerOrigin,
@@ -31,7 +32,18 @@ export {
   TimeBasis,
   TimeEntry,
   TimeInput,
+  TimeOffset,
+  BoundaryOffsets,
+  DayBoundary,
+  DayInput,
+  DeclaredSource,
+  LedgerScene,
+  LegacyTime,
+  SceneFrame,
+  SegmentInput,
+  TIME_MODEL,
   UNITS_VERSION,
+  declaredQuotes,
   entryQuote,
   entryShapeProblem,
   missingKindsOf,
@@ -39,6 +51,9 @@ export {
   storedShapeProblem,
   subjectOf,
   threadOf,
+  timeRoleOf,
+  type DayChangeInput,
+  type TimeRole,
 } from "./schema/ledger.js";
 export {
   chapterEndTimeId,
@@ -51,14 +66,21 @@ export {
   locateQuote,
   newLedger,
   relocateEvidence,
+  relocateScenes,
   storeEntry,
+  storeLegacyTime,
+  dayDeclarationOf,
+  locateSegment,
   timeDeclarationOf,
+  timeDeclarationProblem,
   type ChapterSource,
   type EntryDraft,
   type EntryIds,
+  type LegacyTimeDraft,
+  type StoredDeclaration,
 } from "./ledger/entries.js";
 export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";
-export { assignIds, entryKey, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
+export { assignIds, carriedTime, entryKey, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
 export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {
@@ -213,6 +235,30 @@ export {
 
 export { DEFAULT_STALE_AFTER, project, type ProjectionInput, type ProjectionOptions } from "./projection/project.js";
 export { idleChaptersBetween, threadUnknownChapters } from "./projection/coverage.js";
+export {
+  addRange,
+  dayAt,
+  elapsedDays,
+  inRange,
+  isExact,
+  momentOf,
+  projectTime,
+  TIME_WORLDS,
+  unionRange,
+  type ChapterTime,
+  type DayChangeView,
+  type DayRange,
+  type SegmentView,
+  type TimePoint,
+  type TimeConflictView,
+  type WeekdayConflictView,
+  type TimeProjection,
+  type TimeWorld,
+  type WorldDays,
+} from "./projection/time.js";
+export { boundaryText, dayLabel, daysText, offsetText, relativeDaysText, segmentText } from "./projection/time-text.js";
+export { frameOf, lowerConflict, rightsOf, scopeOf, type ConflictLevel, type EntryFrame, type EntryRights, type EntryScope } from "./projection/scope.js";
+export { legacyTimeOf, legacyTimelineRow, LEGACY_TIME_BASIS, type LegacyTimeOutcome, type LegacyTimeRow } from "./import/legacy-time.js";
 export type * from "./projection/types.js";
 export {
   chapterBrief,
@@ -257,6 +303,7 @@ export { ledgerComplete, LedgerCompleteArgs, type LedgerCompleteResult } from ".
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { LEDGER_MIGRATE_COMMAND, ledgerMigrate, LedgerMigrateArgs, ledgerMigrateKey, ledgersToUpgrade, type LedgerMigrateResult } from "./commands/ledger-migrate.js";
+export { auditedLedger, planTimeAudit, TIME_AUDIT_COMMAND, timeAudit, TimeAuditArgs, timeAuditKey, timeAuditPlan, type TimeAuditChange, type TimeAuditResult } from "./commands/time-audit.js";
 export { decisionRecord, DecisionRecordArgs, MAX_DECISIONS_PER_RECORD, type DecisionRecordResult } from "./commands/decision-record.js";
 export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
 export { planSave, PlanSaveArgs, type PlanSaveResult } from "./commands/plan-save.js";

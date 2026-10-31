@@ -28,6 +28,7 @@ import { submitReaderBackfill } from "../../../lib/reader-backfill.js";
 import { coded } from "../../draft-change/steps.js";
 import { PLAN_PROPOSE_STEP_BUDGET, PLAN_PROPOSE_TASKS, sumBudget } from "../budgets.js";
 import type { OperationResult, Recipe } from "../executor.js";
+import { modelFailureText } from "../../../lib/ai-errors.js";
 
 export const PLAN_PROPOSE_KIND = "plan.propose" as const;
 
@@ -143,8 +144,7 @@ export function createPlanProposeRecipe(deps: PlanProposeDeps = DEFAULT_DEPS): R
           ];
         } catch (error) {
           rethrowIfStopped(error);
-          const message = error instanceof Error ? error.message : String(error);
-          throw coded(((error as { code?: unknown }).code as string | undefined) ?? "notes_failed", `专员读前文没成：${message}`);
+          throw coded(((error as { code?: unknown }).code as string | undefined) ?? "notes_failed", `专员读前文没成：${modelFailureText(error)}`);
         }
         const behind = roles.filter((role) => role.missing > 0 && !role.pausedBackfill).map((role) => role.role);
         if (behind.length > 0) await submitReaderBackfill(bookDir, { roles: behind, upTo: chapter - 1 });

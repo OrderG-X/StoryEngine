@@ -587,6 +587,11 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               projectOperationProgressEverywhere(opId, progress);
             },
+            // 写完那遍核过的账：核账卡挂这条消息，稿纸照它画线、「核账」那步算核过。
+            onInspectCards: (inspect) => {
+              if (!ownsCurrentWorkspace()) return;
+              project({ type: "inspect", inspect });
+            },
             // 写稿操作的步骤开始（稿纸顶上说在拟纲 / 写 / 核）、正文流（逐字进稿纸）。
             onOperationLive: ({ opId, event }) => {
               if (!ownsCurrentWorkspace() || opId !== draftOpId) return;

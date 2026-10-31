@@ -7,10 +7,11 @@
  *   改过的章同名不同事，同一句里也能是两件事，套上旧号会被后文收口错接（P2b 出口复核第 1 条、第 2 轮）。
  * - 其余发新号，从认得的旧号里最大的序号往后排：被裁定作废的、被后文 replaces 引着的旧号空着，不落到别的条目头上。
  * - 新账的 carry = 上一份账单的条目 ∪ 它的 carry：连着几次重记（中间账待记也一样）旧号都还占着。
+ *   时间另带最近一份记了时间的账单那一套（条目、段、时间格式），账待记那份照它读回上次的时间（出口复核 R6）。
  */
-import { threadOf, type ChapterLedger, type EntryInput, type LedgerEntry, type LedgerPrevious, type ThreadEntry } from "../schema/ledger.js";
+import { missingKindsOf, threadOf, type ChapterLedger, type EntryInput, type LedgerCarryTime, type LedgerEntry, type LedgerPrevious, type ThreadEntry, type TimeEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
-import { declarationOf, type EntryIds } from "./entries.js";
+import { dayDeclarationOf, declarationOf, timeDeclarationOf, type EntryIds } from "./entries.js";
 
 /** 判断「同一条」的键：只认写法完全一样，不猜意思（新开线索连写明的线索号一起比：没写旧号的不和任何旧条目同号）。 */
 export function entryKey(entry: EntryInput): string {
@@ -19,6 +20,8 @@ export function entryKey(entry: EntryInput): string {
       return "summary";
     case "time":
       return "time";
+    case "day":
+      return "day";
     case "presence":
       return `presence|${nameKey(entry.name)}|${nameKey(entry.nameUsed)}`;
     case "fact":
@@ -60,11 +63,32 @@ export function knownOpens(previous: ChapterLedger | undefined): readonly Thread
   });
 }
 
-/** 新账单要带的 previous：上一份账单的原样哈希 + 认得的旧条目。没有可带的（新章、上一份是空的待记）就不带。 */
+/**
+ * 最近一份记了时间的账单那一套时间：上一份记全了时间就是它的，没记时间（账待记、时间没记全）就接着它带的。
+ * 时间没记全、但那次照样记了作者定的天数（作者档、不靠记账员）：作者定的天数整套换成那次的（只定了开头就只有开头，
+ * 不把更早那版的结尾拼回来，出口复核 R6c2）；记账员的时间、段、格式照旧接着带的。账待记的那份什么都没记，原样接着带。
+ */
+export function carriedTime(previous: ChapterLedger | undefined): LedgerCarryTime | undefined {
+  if (!previous) return undefined;
+  if (missingKindsOf(previous).includes("time")) {
+    const older = previous.previous?.carry.time;
+    if (!older || previous.status === "pending") return older;
+    const author = previous.entries.filter((entry): entry is TimeEntry => entry.kind === "time" && entry.relation === "at");
+    return { ...older, entries: [...author, ...older.entries.filter((entry) => entry.relation !== "at")] };
+  }
+  const entries = previous.entries.filter((entry) => entry.kind === "time");
+  if (entries.length === 0 && previous.scenes.length === 0) return undefined;
+  return { ...(previous.timeModel ? { timeModel: previous.timeModel } : {}), entries, scenes: previous.scenes };
+}
+
+/** 新账单要带的 previous：上一份账单的原样哈希 + 认得的旧条目（+ 最近那套时间）。没有可带的（新章、上一份是空的待记）就不带。 */
 export function previousOf(previous: ChapterLedger | undefined, previousSha256: string | undefined): LedgerPrevious | undefined {
+  if (!previous || previousSha256 === undefined) return undefined;
   const entries = knownEntries(previous);
-  if (!previous || previousSha256 === undefined || entries.length === 0) return undefined;
-  return { ledgerSha256: previousSha256, carry: { entries: [...entries] } };
+  const time = carriedTime(previous);
+  // 整章只切了段、没有条目的账也要带上（段在 time 里）。
+  if (entries.length === 0 && !time) return undefined;
+  return { ledgerSha256: previousSha256, carry: { entries: [...entries], ...(time ? { time } : {}) } };
 }
 
 /** 编号里最大的序号（`c3-7` → 7；`c3-7-end` 这类不算，它跟着 `c3-7`）。 */
@@ -89,8 +113,13 @@ export interface AssignedIds {
 export function assignIds(chapter: number, previous: ChapterLedger | undefined, entries: readonly EntryInput[]): AssignedIds {
   const known = knownEntries(previous);
   const idByKey = new Map<string, string>();
+  // 时间、作者定的天数整章各一条：编号取最近那版的（认得的条目里排最前的；只取编号，段读不全也不要紧）。
+  const time = timeDeclarationOf({ entries: known, ...(previous ? { scenes: previous.scenes } : {}) });
+  const day = dayDeclarationOf({ entries: known, ...(previous?.timeModel ? { timeModel: previous.timeModel } : {}) });
+  if (time) idByKey.set("time", time.id);
+  if (day) idByKey.set("day", day.id);
   for (const entry of known) {
-    const declared = declarationOf(entry, known);
+    const declared = declarationOf(entry);
     if (declared && !idByKey.has(entryKey(declared))) idByKey.set(entryKey(declared), entry.id);
   }
   const opens = knownOpens(previous);

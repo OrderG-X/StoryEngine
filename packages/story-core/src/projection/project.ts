@@ -8,16 +8,19 @@
  *  - 名字：出场条目里「正文用的称呼 ≠ 已确立名字」就是别名；设定卡上写的别名也算；主体名先过别名表再比。
  *  - 状态（state）：同一主体同一方面，后一章的值顶替前一章的。
  *  - 不会变的（hard）：只有明写推翻（replaces）才作废；值不同又没推翻 = 矛盾，交给作者。
+ *  - 来源和段限权（P3a，projection/scope.ts）：梦里的、回忆里的、人物说的、定不了在段里段外的不更新现状、replaces 不生效、
+ *    不收线索；来源不明的照旧更新，但矛盾只报「可能」。
  *  - 线索：开 / 推进 / 收按章序；收了又推进 = 重新打开；作者的归并、收口、分量最后套上。
- *  - 时间：作者定的 > 隔几天 > 上一章 +1（标 missing，要确认）；星期从最近的明写星期推。
+ *  - 时间：projection/time.ts（当下线、两种换天规矩、区间、星期）。
  */
 import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
 import { entryQuote, missingKindsOf, presenceName, subjectOf, threadOf, type ChapterLedger, type FactEntry, type ThreadEntry } from "../schema/ledger.js";
-import { timeDeclarationOf } from "../ledger/entries.js";
 import { nameKey } from "../text/quote.js";
 import { idleChaptersBetween, threadUnknownChapters } from "./coverage.js";
 import { Names } from "./names.js";
+import { lowerConflict, rightsOf, scopeOf, type ConflictLevel, type EntryScope } from "./scope.js";
+import { projectTime, type TimeProjection } from "./time.js";
 import type {
   BookProjection,
   CastMember,
@@ -26,6 +29,7 @@ import type {
   DanglingView,
   FactView,
   SubjectAttributeView,
+  StatementScope,
   SubjectView,
   ThreadTouch,
   ThreadView,
@@ -53,8 +57,6 @@ export interface ProjectionOptions {
 export const DEFAULT_STALE_AFTER = 5;
 /** 大伏笔本来就要埋很久：没动这么多倍的章数才算「停太久」（缺省 5 × 4 = 20 章），免得作者定了大伏笔还天天被催。 */
 export const MAJOR_STALE_FACTOR = 4;
-
-const mod7 = (value: number): number => ((value % 7) + 7) % 7;
 
 function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[] {
   const members = new Map<string, { name: string; aliases: Set<string>; chapters: Set<number>; viewpoint: Set<number>; quotes: Map<number, string> }>();
@@ -149,15 +151,23 @@ function buildFacts(
     }
   };
 
+  // 每条事实报矛盾到什么程度（scope.ts）。
+  const conflictLevel = new Map<string, ConflictLevel>();
+  const AUTHOR_SCOPE: EntryScope = { frame: "present", source: "author_ruling", rights: rightsOf("author_ruling", "present") };
   for (const ledger of ledgers) {
+    const assertedIds = new Set((asserted.get(ledger.chapter) ?? []).map((entry) => entry.id));
     for (const entry of [...ledger.entries, ...(asserted.get(ledger.chapter) ?? [])]) {
       if (entry.kind !== "fact") continue;
-      const fact = toFactView(entry, ledger.chapter, names, retracted.has(entry.id));
+      const scope = assertedIds.has(entry.id) ? AUTHOR_SCOPE : scopeOf(entry, ledger);
+      const fact = toFactView(entry, ledger.chapter, names, retracted.has(entry.id), scope);
       byId.set(fact.id, fact);
       ordered.push(fact);
       if (fact.status === "retracted") continue;
+      conflictLevel.set(fact.id, scope.rights.conflict);
+      // 梦里的、回忆里的、人物说的……记着，不算现状：不顶替、不推翻；不会变的照样和现状比一比（报到它那一级）。
+      if (!scope.rights.state) fact.status = "aside";
 
-      for (const ref of entry.replaces ?? []) {
+      for (const ref of scope.rights.replaces ? (entry.replaces ?? []) : []) {
         const target = byId.get(ref);
         if (!target || target.chapter >= ledger.chapter) {
           dangling.push({ kind: "fact", ref, chapter: ledger.chapter, source: entry.id });
@@ -168,6 +178,7 @@ function buildFacts(
       if (fact.nature === "event" || fact.attributeKey === undefined || fact.subjectKey === undefined) continue;
 
       const key = `${fact.subjectKey}|${fact.attributeKey}`;
+      if (!scope.rights.state && fact.nature === "state") continue;
       let subject = subjects.get(fact.subjectKey);
       if (!subject) {
         subject = { name: fact.subject ?? fact.subjectKey, attrs: new Map() };
@@ -178,9 +189,10 @@ function buildFacts(
         attr = { attribute: fact.attribute ?? fact.attributeKey, nature: fact.nature, history: [] };
         subject.attrs.set(fact.attributeKey, attr);
       }
-      attr.history.push(fact.id);
+      if (scope.rights.state) attr.history.push(fact.id);
 
       if (fact.nature === "state") {
+        if (!scope.rights.state) continue;
         const previous = currentState.get(key);
         if (previous !== undefined) supersede(byId.get(previous) as MutableFact, ledger.chapter, fact.id);
         currentState.set(key, fact.id);
@@ -191,11 +203,13 @@ function buildFacts(
       for (const otherId of list) {
         const other = byId.get(otherId) as MutableFact;
         if (nameKey(other.value ?? "") === valueKey) continue;
+        const level = lowerConflict(scope.rights.conflict, conflictLevel.get(otherId) ?? "maybe");
+        if (level === "none") continue;
         const issue = `hard-fact:${otherId}:${fact.id}`;
         if (dismissed.has(issue)) continue;
-        conflicts.push({ key: issue, kind: "hard-fact", subject: fact.subject ?? "", attribute: fact.attribute ?? "", facts: [otherId, fact.id] });
+        conflicts.push({ key: issue, kind: "hard-fact", confidence: level, subject: fact.subject ?? "", attribute: fact.attribute ?? "", facts: [otherId, fact.id] });
       }
-      currentHard.set(key, [...list, fact.id]);
+      if (scope.rights.state) currentHard.set(key, [...list, fact.id]);
     }
   }
 
@@ -235,7 +249,9 @@ function buildFacts(
   return { facts: ordered, subjects: subjectViews, conflicts: liveConflicts, dangling };
 }
 
-function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean): MutableFact {
+const statementOf = (scope: EntryScope): StatementScope => ({ frame: scope.frame, source: scope.source, ...(scope.speaker ? { speaker: scope.speaker } : {}) });
+
+function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean, scope: EntryScope): MutableFact {
   const mention = subjectOf(entry);
   const subject = mention ? names.resolve(mention) : undefined;
   const quote = entryQuote(entry);
@@ -250,6 +266,7 @@ function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: 
     ...(quote ? { quote } : {}),
     review: entry.review,
     status: retracted ? "retracted" : "current",
+    scope: statementOf(scope),
   };
 }
 
@@ -265,9 +282,16 @@ interface MutableThread {
   mergedFrom: string[];
 }
 
-function touchOf(entry: ThreadEntry, chapter: number): ThreadTouch {
+function touchOf(entry: ThreadEntry, chapter: number, closeDenied?: EntryScope): ThreadTouch {
   const quote = entryQuote(entry);
-  return { chapter, op: entry.op, note: entry.note, ...(quote ? { quote } : {}), entry: entry.id };
+  return {
+    chapter,
+    op: closeDenied ? "advance" : entry.op,
+    note: entry.note,
+    ...(quote ? { quote } : {}),
+    entry: entry.id,
+    ...(closeDenied ? { closeDenied: statementOf(closeDenied) } : {}),
+  };
 }
 
 function buildThreads(
@@ -305,8 +329,11 @@ function buildThreads(
         dangling.push({ kind: "thread", ref: threadOf(entry), chapter: ledger.chapter, source: entry.id });
         continue;
       }
-      thread.touches.push(touchOf(entry, ledger.chapter));
-      if (entry.op === "close") {
+      // 人物说的、回忆里的、梦里的、定不了在哪的收口：按推进记（设计第 3 节）。
+      const scope = entry.op === "close" ? scopeOf(entry, ledger) : undefined;
+      const denied = scope && !scope.rights.close ? scope : undefined;
+      thread.touches.push(touchOf(entry, ledger.chapter, denied));
+      if (entry.op === "close" && !denied) {
         thread.closedAt = ledger.chapter;
         thread.closedBy = "ledger";
       } else {
@@ -389,47 +416,15 @@ function buildChapters(
   names: Names,
   textHashes: ReadonlyMap<number, string> | undefined,
   decisions: readonly AuthorDecision[],
+  time: TimeProjection,
 ): ChapterView[] {
-  // 定稿后作者改的天数（同一章改过几次，按最后一次）。
-  const dayRulings = new Map<number, { readonly day: number; readonly dayEnd?: number }>();
-  for (const decision of decisions) if (decision.type === "chapter.day") dayRulings.set(decision.chapter, decision);
-  // 定稿后作者改写的梗概（同理按最后一次）。
+  // 定稿后作者改写的梗概（同一章改过几次，按最后一次）。
   const summaryRulings = new Map<number, string>();
   for (const decision of decisions) if (decision.type === "chapter.summary") summaryRulings.set(decision.chapter, decision.text);
-  const views: ChapterView[] = [];
-  // 上一章结尾是第几天；不知道（账待记的章、接着它算的）= undefined，直到下一个作者定的天数。
-  let previousEnd: number | undefined = 0;
-  for (const ledger of ledgers) {
+  return ledgers.map((ledger): ChapterView => {
     const missing = missingKindsOf(ledger);
-    const time = timeDeclarationOf(ledger.entries);
     const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
     const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
-    const ruling = dayRulings.get(ledger.chapter);
-    let day: number | undefined;
-    let basis: ChapterView["dayBasis"];
-    let dayEnd: number | undefined;
-    if (ruling) {
-      day = ruling.day;
-      dayEnd = Math.max(ruling.day, ruling.dayEnd ?? ruling.day);
-      basis = "author";
-    } else if (time?.basis === "author" && time.day !== undefined) {
-      day = time.day;
-      basis = "author";
-    } else if ((!time && missing.includes("time")) || previousEnd === undefined) {
-      // 这章的时间没记上（账待记、没记全）：没有时间可依；上一章就不知道：相对它算的也不知道（不按 +1 估）。
-      basis = "unknown";
-    } else if (time?.daysSincePrevious !== undefined) {
-      day = Math.max(1, previousEnd + time.daysSincePrevious);
-      basis = time.basis;
-    } else {
-      day = previousEnd + 1;
-      // 记了时间却没说离上一章隔几天（「进了暑假」这类没说准的，记账员照规矩不填）：按第二天记是估的，
-      // 定稿清单请作者看一眼（换题材长篇实跑第 21 章：标成「正文明写」，暑假记成了上一章的第二天）。
-      basis = !time ? "missing" : views.length > 0 ? "estimated" : time.basis;
-    }
-    if (day !== undefined) dayEnd ??= day + (time?.daysInChapter ?? 0);
-    previousEnd = dayEnd;
-
     const present: string[] = [];
     let viewpoint: string | undefined;
     for (const entry of ledger.entries) {
@@ -439,33 +434,19 @@ function buildChapters(
       if (entry.viewpoint && viewpoint === undefined) viewpoint = name;
     }
     const hash = textHashes?.get(ledger.chapter);
-    views.push({
+    return {
       chapter: ledger.chapter,
       origin: ledger.origin,
       committedAt: ledger.committedAt,
       ...(summary !== undefined ? { summary } : {}),
       ledgerStatus: ledger.status,
       ...(missing.length > 0 ? { missingKinds: missing } : {}),
-      ...(day !== undefined && dayEnd !== undefined ? { day, dayEnd } : {}),
-      dayBasis: basis,
-      ...(time?.weekday !== undefined ? { weekday: time.weekday } : {}),
-      weekdayDerived: false,
-      ...(time?.timeOfDay ? { timeOfDay: time.timeOfDay } : {}),
+      time: time.chapters.get(ledger.chapter) as ChapterView["time"],
       present,
       ...(viewpoint !== undefined ? { viewpoint } : {}),
       ...(textHashes ? (hash === undefined ? {} : { editedSinceCommit: hash !== ledger.textSha256 }) : {}),
       textMissing: textHashes ? hash === undefined : false,
-    });
-  }
-  // 星期：没明写的，从天数最近的一个明写星期推（天数不知道的两头都不算）。
-  const anchors = views.flatMap((view) => (view.weekday !== undefined && view.day !== undefined ? [{ day: view.day, weekday: view.weekday }] : []));
-  if (anchors.length === 0) return views;
-  return views.map((view) => {
-    const day = view.day;
-    if (view.weekday !== undefined || day === undefined) return view;
-    let best = anchors[0]!;
-    for (const anchor of anchors) if (Math.abs(anchor.day - day) < Math.abs(best.day - day)) best = anchor;
-    return { ...view, weekday: mod7(best.weekday + day - best.day), weekdayDerived: true };
+    };
   });
 }
 
@@ -483,16 +464,20 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
 
   const facts = buildFacts(ledgers, input.decisions, names, dismissed);
   const threads = buildThreads(ledgers, input.decisions, upTo, staleAfter);
+  const time = projectTime(ledgers, input.decisions, input.cards?.calendar?.dayBoundary, dismissed);
   return {
     version: input.version ?? 0,
     upTo,
     unsettled: input.unsettled ?? false,
-    chapters: buildChapters(ledgers, names, input.textHashes, input.decisions),
+    chapters: buildChapters(ledgers, names, input.textHashes, input.decisions, time),
     facts: facts.facts,
     subjects: facts.subjects,
     threads: threads.threads,
     cast: buildCast(ledgers, names),
     conflicts: facts.conflicts,
+    timeConflicts: time.conflicts,
+    weekdayConflicts: time.weekdayConflicts,
+    timeWorlds: time.worlds,
     dangling: [...facts.dangling, ...threads.dangling],
     dismissedIssues: [...dismissed],
   };

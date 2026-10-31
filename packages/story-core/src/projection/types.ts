@@ -2,7 +2,9 @@
  * 投影：全部从真相（章节账单 + 作者裁定 + 正文）算出来，随时可重算，不另存。
  * 界面、核账员、对话 AI 读的都是这一份。里面的 id 只给程序用，展示时一律换成名字 / 标题。
  */
-import type { EntryKind, FactNature, LedgerStatus, ReviewMark, ThreadType, TimeBasis } from "../schema/ledger.js";
+import type { EntryKind, FactNature, LedgerStatus, ReviewMark, ThreadType } from "../schema/ledger.js";
+import type { EntryFrame } from "./scope.js";
+import type { ChapterTime, TimeConflictView, TimeWorld, WeekdayConflictView } from "./time.js";
 
 export interface ChapterView {
   readonly chapter: number;
@@ -13,20 +15,8 @@ export interface ChapterView {
   readonly ledgerStatus: LedgerStatus;
   /** 哪几类没记全（账待记 = 全部；没记全 = 写明的那几类，没写明当全部）；记全了就没有。没记全的那类不能按「账里没有」下结论。 */
   readonly missingKinds?: readonly EntryKind[];
-  /** 故事第几天（从 1 起）。不知道（账待记的章、接着它算的章，直到下一个作者定的天数）就没有。 */
-  readonly day?: number;
-  /** 本章结束时是第几天（有 day 才有）。 */
-  readonly dayEnd?: number;
-  /**
-   * 天数的依据；missing = 账单里没有时间，投影按上一章 +1 估的（要请作者确认）；
-   * unknown = 不知道（这章的时间没记上：账待记、没记全；或上一章的天数就不知道），day / dayEnd 都没有。
-   */
-  readonly dayBasis: TimeBasis | "missing" | "unknown";
-  /** 0 = 周一 … 6 = 周日。 */
-  readonly weekday?: number;
-  /** 星期是从最近一个明写的星期推出来的。 */
-  readonly weekdayDerived: boolean;
-  readonly timeOfDay?: string;
+  /** 故事时间（P3a，projection/time.ts）：当下线、开头 / 结尾区间、段、星期。 */
+  readonly time: ChapterTime;
   /** 出场人物（已确立名字）。 */
   readonly present: readonly string[];
   readonly viewpoint?: string;
@@ -35,7 +25,15 @@ export interface ChapterView {
   readonly textMissing: boolean;
 }
 
-export type FactStatus = "current" | "superseded" | "retracted";
+/** aside = 记着、但不算现状（梦里的、回忆里的、人物说的、定不了在段里段外的，设计第 3 节）。 */
+export type FactStatus = "current" | "superseded" | "retracted" | "aside";
+
+/** 这条在哪说的、谁说的（展示「某某说过」「梦里」用）。 */
+export interface StatementScope {
+  readonly frame: EntryFrame;
+  readonly source: "narration" | "character_claim" | "author_ruling" | "unknown";
+  readonly speaker?: string;
+}
 
 export interface FactView {
   readonly id: string;
@@ -52,6 +50,7 @@ export interface FactView {
   readonly quote?: string;
   readonly review: ReviewMark;
   readonly status: FactStatus;
+  readonly scope: StatementScope;
   readonly supersededAt?: number;
   readonly supersededBy?: string;
 }
@@ -83,6 +82,8 @@ export interface ThreadTouch {
   readonly quote?: string;
   /** 账单条目 id。 */
   readonly entry: string;
+  /** 记账员记的是收口，但它是人物说的 / 回忆里的 / 梦里的 / 定不了在哪的：按推进记（理线索时可以提议收）。 */
+  readonly closeDenied?: StatementScope;
 }
 
 export interface ThreadView {
@@ -117,6 +118,8 @@ export interface ConflictView {
   /** 确定性的问题键，作者点「不是问题」时记进裁定。 */
   readonly key: string;
   readonly kind: "hard-fact";
+  /** sure = 两条都是叙述当下说的；maybe = 有一条来源不明 / 人物说的 / 定不了在段里段外，交核账员拿原文判。 */
+  readonly confidence: "sure" | "maybe";
   readonly subject: string;
   readonly attribute: string;
   readonly facts: readonly [string, string];
@@ -144,6 +147,12 @@ export interface BookProjection {
   readonly threads: readonly ThreadView[];
   readonly cast: readonly CastMember[];
   readonly conflicts: readonly ConflictView[];
+  /** 作者定的天数和记账员记的对不上（设计 2.5）。 */
+  readonly timeConflicts: readonly TimeConflictView[];
+  /** 两处正文写明的星期按天数算不拢。 */
+  readonly weekdayConflicts: readonly WeekdayConflictView[];
+  /** 时间推了哪几个世界（作者定了换天规矩就只有那一个）。 */
+  readonly timeWorlds: readonly TimeWorld[];
   readonly dangling: readonly DanglingView[];
   /** 作者说过「不是问题」的问题键。 */
   readonly dismissedIssues: readonly string[];

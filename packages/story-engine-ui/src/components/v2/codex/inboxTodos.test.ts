@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildInboxTodos } from "./inboxTodos.js";
 
 const ch = (n: number, title: string, status: "committed" | "current" | "planned" = "committed") => ({ id: `c${n}`, chapterNumber: n, title, status });
-const overview = (over: { cleanup?: number; arcs?: { id: string; title: string; lastTouchedChapter?: number }[] } = {}) => ({
+const overview = (over: { cleanup?: number; arcs?: { id: string; title: string; lastTouchedChapter?: number }[]; timeChecks?: unknown[] } = {}) => ({
+  ...(over.timeChecks ? { timeChecks: over.timeChecks } : {}),
   threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: over.cleanup ?? 0, keyOpenItems: [] },
   arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: (over.arcs ?? []).map((a) => ({ ...a, status: "active" })) },
 }) as never;
@@ -53,8 +54,36 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
     expect(buildInboxTodos({ chapters: [ch(1, "死信")], overview: suggest(true), currentChapterNumber: 8, rereading: true })).toEqual([]);
   });
 
+  it("两处写明的星期算不拢：让 AI 对着正文看是星期写错了还是天数记错了", () => {
+    const checks = [{ chapter: 7, kind: "weekday", text: "写的周一，和按第 1 章写的星期、中间的天数推出来的周三对不上" }];
+    const [todo] = buildInboxTodos({ chapters: [ch(8, "雾港")], overview: overview({ timeChecks: checks }), currentChapterNumber: 8 });
+    expect(todo).toMatchObject({ title: "第 7 章的星期对不上", action: "让 AI 对一下", sub: checks[0]!.text });
+    expect(todo?.userAction).toBeUndefined();
+    expect(todo?.prefill).toContain("第 7 章写的星期");
+  });
+
   it("别的待办不带 ops：照旧只把一句话放进输入框", () => {
     const todos = buildInboxTodos({ chapters: [ch(49, "待补")], overview: overview({ cleanup: 3 }), currentChapterNumber: 49 });
     expect(todos.every((todo) => todo.ops === undefined)).toBe(true);
+  });
+
+  it("天数要你看的：导入时记成你定的 →「对，是这天」直接改账；对不上 →「以我定的为准」；换天规矩改了 → 让 AI 对；多了只列前 3 处", () => {
+    const checks = [
+      { chapter: 3, kind: "unproven", day: 4, text: "导入时记成你定的第 4 天，证明不了是你定的，现在算不知道" },
+      { chapter: 5, kind: "conflict", text: "你定的第 9 天，和按上一章、这章开头推出来的第 6 天对不上" },
+      { chapter: 6, kind: "boundary", text: "天数是按天亮换日判的" },
+      { chapter: 8, kind: "boundary", text: "天数是按天亮换日判的" },
+    ];
+    const todos = buildInboxTodos({ chapters: [ch(8, "雾港")], overview: overview({ timeChecks: checks }), currentChapterNumber: 8 });
+    expect(todos.map((t) => [t.title, t.action])).toEqual([
+      ["第 3 章是第 4 天吗", "对，是第 4 天"],
+      ["第 5 章的天数对不上", "以我定的为准"],
+      ["第 6 章是哪天不知道了", "让 AI 对一下"],
+      ["还有 1 处天数要你看", "让 AI 列给我"],
+    ]);
+    expect(todos[0]?.userAction).toMatchObject({ kind: "new", type: "ledger.change", mode: "author", params: { changes: [{ op: "day", chapter: 3, day: 4 }] } });
+    expect(todos[1]?.userAction).toMatchObject({ params: { changes: [{ op: "keepDay", chapter: 5 }] } });
+    expect(todos[2]?.userAction).toBeUndefined();
+    expect(todos[2]?.prefill).toContain("第 6 章");
   });
 });

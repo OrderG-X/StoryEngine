@@ -28,6 +28,9 @@ import {
   sha256,
   splitNumberedReply,
   splitUnits,
+  segmentText,
+  timelineTable,
+  type SegmentView,
   type SettingCardsFile,
   type TextUnit,
   type TruthBasis,
@@ -35,6 +38,7 @@ import {
 import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
 import { shortChapters, type ShortChapter } from "../../book/ledger-short.js";
+import { storySpanText } from "../../book/story-timeline.js";
 import { readTruthBasisForWork } from "../../book/truth-basis.js";
 
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
@@ -144,8 +148,10 @@ interface SweepDoc {
   readonly text: string;
   readonly units: readonly TextUnit[];
   readonly numbered: string;
-  /** 账里记的这章是故事第几天（「12～13」）；没记、估的不给。 */
+  /** 账里记的这章是故事哪几天（「第 12 天到第 13 天」）；不知道、旧账推的不给。 */
   readonly day?: string;
+  /** 本章里不在当下的段（回忆、梦）是哪几句：那几句说的不是现状。 */
+  readonly segments?: string;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
@@ -251,10 +257,11 @@ export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: rea
     "- 每处给出改法 to：把和定论对不上的说法改成定论的说法，别的字尽量照抄；改完还是一整句，读起来要通顺、前后说得通（别留下只有原说法才说得通的半截）；定论说的是别的章、别的日子的事时，照这一句所在那章的时间来说（隔了天的说「昨天」「那天」），别说得像是这一章当天的事；不加新情节、不加新台词，前后句写过的事别再写进这一句；",
     // 换题材长篇实跑 2026-10-28：定论「三月十七倒下」，第 4 章「位置空两个月」改成「快十天」——第 4 章是故事第 4 天，其实不到一礼拜。
     ...(docs.some((doc) => doc.day) ? ["- 章名后面写着账里记的那章是故事第几天：改「隔了多少天、多久以前」这类说法时照它算，别自己估；"] : []),
+    ...(docs.some((doc) => doc.segments) ? ["- 章名后面标着是回忆、梦里的那几句，说的是那一段里的事、不是现状：和定论对不上的照样可以改，但别拿它们当现状去判断别的句子；"] : []),
     "- chapter 写第几章，id 写那句的编号，why 用一句话说哪里和定论对不上。",
     '只输出一个 JSON：{"edits":[{"chapter":1,"id":1,"to":"","why":""}]}。一处都没有就给 {"edits":[]}。',
     "",
-    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}${doc.day ? ` · 故事第 ${doc.day} 天` : ""}】`, doc.numbered, ""]),
+    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}${doc.day ? ` · 故事${doc.day}` : ""}${doc.segments ? ` · ${doc.segments}` : ""}】`, doc.numbered, ""]),
   ].join("\n");
 }
 
@@ -409,6 +416,14 @@ function unitsOfQuote(doc: SweepDoc | undefined, quote: string): TextUnit[] {
 }
 
 /** 把一章（或工作稿）切好编号。 */
+/** 「第 3～5 句是梦、想象或传闻；第 8 句是回忆（3 年前）」：段改文后对不回的说不准是哪几句。 */
+function segmentsNote(segments: readonly SegmentView[]): string {
+  return segments.map((segment) => {
+    const where = segment.stale ? "有几句" : segment.units.from === segment.units.to ? `第 ${segment.units.from} 句` : `第 ${segment.units.from}～${segment.units.to} 句`;
+    return `${where}是${segmentText(segment)}`;
+  }).join("；");
+}
+
 function docOf(chapter: number, target: SweepDoc["target"], text: string): SweepDoc {
   const units = splitUnits(text);
   return { chapter, target, text, units, numbered: numberedText(units) };
@@ -614,13 +629,18 @@ export async function proposeSettle(input: {
     const draftFile = await readDraftFile(projectDir, chapter);
     committed.push({ chapter, textSha256: sha256(text), ...(draftFile?.text.trim() ? { draftVersion: draftFile.version, draftText: draftFile.text } : {}) });
   }
-  // 每章是故事第几天（账里记的；没记、估的不给）：改「隔了多久」时照它算。投影读不了就不带，照常查。
+  // 每章是故事哪几天（账里记的；不知道、旧账推的不给）：改「隔了多久」时照它算。投影读不了就不带，照常查。
+  // 不在当下的段只标在定稿正文上（句子编号和账对得上的那份）。
   const projection = await projectBook(projectDir).catch(() => undefined);
   const ledgerShort = shortChapters(projection?.chapters ?? []);
-  for (const view of projection?.chapters ?? []) {
-    const doc = docs.get(view.chapter);
-    if (!doc || view.dayBasis === "missing" || view.dayBasis === "estimated" || view.day === undefined || view.dayEnd === undefined) continue;
-    docs.set(view.chapter, { ...doc, day: view.dayEnd > view.day ? `${view.day}～${view.dayEnd}` : `${view.day}` });
+  for (const row of projection ? timelineTable(projection) : []) {
+    const doc = docs.get(row.chapter);
+    if (!doc) continue;
+    const day = row.presentLine === true && !row.presumed ? storySpanText(row) : undefined;
+    const time = projection?.chapters.find((view) => view.chapter === row.chapter)?.time;
+    const ledger = doc.target === "committed" && time && time.segments.length > 0 ? await readChapterLedger(projectDir, row.chapter).catch(() => undefined) : undefined;
+    const segments = ledger && ledger.textSha256 === sha256(doc.text) && time ? segmentsNote(time.segments) : undefined;
+    if (day || segments) docs.set(row.chapter, { ...doc, ...(day ? { day } : {}), ...(segments ? { segments } : {}) });
   }
 
   let canon: string;

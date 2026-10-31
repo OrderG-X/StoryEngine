@@ -16,6 +16,7 @@ import { chinesePunctuation } from "../../../lib/dialogue-quotes.js";
 import { type ChapterPlan } from "../../book/chapter-plan.js";
 import { canCallAgain } from "../../lib/llm-client.js";
 import { rethrowIfStopped } from "../../lib/operations/context.js";
+import { modelFailureText } from "../../lib/ai-errors.js";
 
 export type ContinueCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
@@ -114,7 +115,7 @@ export async function continueDraftToLength(input: ContinueDraftInput): Promise<
       })));
     } catch (error) {
       rethrowIfStopped(error);
-      failures.push(`第 ${attempt + 1} 轮续写没成：${error instanceof Error ? error.message : String(error)}`);
+      failures.push(`第 ${attempt + 1} 轮续写没成：${modelFailureText(error)}`);
       // 被拒、结果不明、跑飞：下一轮正文没变、还是同一个请求，不再发（写作版本 P2a 4.2）。
       if (!canCallAgain(error)) break;
       continue;

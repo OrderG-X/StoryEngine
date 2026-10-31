@@ -13,7 +13,9 @@ export function seededThreadId(projectDir: string, name: string): string {
   return threadIds.get(projectDir)?.get(name) ?? name;
 }
 
-type Loose<E> = E extends EntryInput ? Omit<E, "review" | "quote"> & { readonly review?: E["review"]; readonly quote?: string } : never;
+type Loose<E> = E extends EntryInput
+  ? E extends { readonly kind: "time" | "day" } ? Omit<E, "review"> & { readonly review?: E["review"] } : Omit<E, "review" | "quote"> & { readonly review?: E["review"]; readonly quote?: string }
+  : never;
 export type SeedEntry = Loose<EntryInput>;
 
 export interface SeedChapter {
@@ -29,25 +31,35 @@ export async function seedChapters(projectDir: string, chapters: readonly SeedCh
   for (const seed of chapters) {
     const lines: string[] = [];
     const named: (string | undefined)[] = [];
+    const say = (quote: string): void => {
+      if (!lines.includes(quote)) lines.push(quote);
+    };
     const entries = seed.entries.map((raw, index): EntryInput => {
       let entry = raw;
+      // 作者定的天数不带原句；时间的原句在开头、换天、段里（没写开头原句的配一句）。
+      if (entry.kind === "day") return { review: "author", ...entry } as EntryInput;
+      if (entry.kind === "time") {
+        const start = entry.start && entry.start !== "unknown" ? { ...entry.start, quote: entry.start.quote || `第${seed.chapter}章第${index + 1}句。` } : entry.start;
+        if (start && start !== "unknown") say(start.quote);
+        for (const change of entry.dayChanges ?? []) if (change.quote) say(change.quote);
+        for (const segment of entry.segments ?? []) [segment.firstQuote, segment.lastQuote].forEach(say);
+        return { review: "auto", ...entry, ...(start ? { start } : {}) } as EntryInput;
+      }
       named.push(entry.kind === "thread" && entry.op === "open" ? entry.thread : undefined);
       if (entry.kind === "thread") {
         const { thread, ...rest } = entry;
         entry = entry.op === "open" ? rest : { ...rest, thread: thread === undefined ? undefined : seededThreadId(projectDir, thread) };
       }
-      // 作者定的天数不带原句。
-      if (entry.kind === "time" && entry.basis === "author") return { review: "author", ...entry } as EntryInput;
-      const quote = entry.quote ?? `第${seed.chapter}章第${index + 1}句。`;
-      if (!lines.includes(quote)) lines.push(quote);
+      const quote = (entry as { readonly quote?: string }).quote ?? `第${seed.chapter}章第${index + 1}句。`;
+      say(quote);
       return { review: "auto", ...entry, quote } as EntryInput;
     });
     const body = lines.length > 0 ? lines.join("\n\n") : `第${seed.chapter}章正文。`;
     const outcome = await runCommand(projectDir, chapterCommit, { chapter: seed.chapter, text: `# ${seed.title ?? `第${seed.chapter}章`}\n\n${body}`, entries }, { caller: "author", idempotencyKey: `seed-${seed.chapter}-${randomUUID()}` });
     if (!outcome.ok) throw new Error(`第 ${seed.chapter} 章没记上：${outcome.message}`);
     if (outcome.result.rejected.length > 0) throw new Error(`第 ${seed.chapter} 章有条目没记上：${JSON.stringify(outcome.result.rejected)}`);
-    // 一条声明一条（时间存成开头、结尾两条，结尾那条不算）。
-    const stored = (await readChapterLedger(projectDir, seed.chapter))?.entries.filter((entry) => !(entry.kind === "time" && entry.appliesTo === "chapterEnd")) ?? [];
+    // 时间以外一条声明存一条（时间存成好几条，不数）。
+    const stored = (await readChapterLedger(projectDir, seed.chapter))?.entries.filter((entry) => entry.kind !== "time") ?? [];
     named.forEach((name, index) => {
       const entry = stored[index];
       if (name !== undefined && entry?.kind === "thread") ids.set(name, threadOf(entry));

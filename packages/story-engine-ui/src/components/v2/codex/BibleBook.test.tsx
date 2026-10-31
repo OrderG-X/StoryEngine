@@ -98,6 +98,22 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     expect(onChanged).toHaveBeenCalled();
   });
 
+  it("换天按半夜 / 天亮 / 没定：点了就存，点已选的不再存", async () => {
+    renderBook("story");
+    const group = screen.getByRole("group", { name: "换天按" });
+    expect(within(group).getByRole("button", { name: "没定" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(group).getByRole("button", { name: "半夜" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "calendar.dayBoundary", value: "midnight" }]));
+    cleanup();
+    saveCards.mockClear();
+    renderBook("story", { bible: { ...bibleView(), dayBoundary: "dawn" } });
+    const set = screen.getByRole("group", { name: "换天按" });
+    fireEvent.click(within(set).getByRole("button", { name: "天亮" }));
+    expect(saveCards).not.toHaveBeenCalled();
+    fireEvent.click(within(set).getByRole("button", { name: "没定" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "calendar.dayBoundary", value: null }]));
+  });
+
   it("AI 补的标出来，点「认下」算作者的；× 删掉一项", async () => {
     renderBook("story");
     fireEvent.click(screen.getByRole("button", { name: "认下" }));

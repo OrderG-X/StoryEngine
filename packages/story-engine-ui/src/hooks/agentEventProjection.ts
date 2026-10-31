@@ -76,6 +76,8 @@ export type AgentProjectionEvent =
   | { readonly type: "operation"; readonly operation: OperationViewData; readonly announced?: true }
   /** 操作的一句进度。 */
   | { readonly type: "operation-progress"; readonly opId: string; readonly text: string }
+  /** 服务端直接给的检查结果卡（写完那遍核过的账）。 */
+  | { readonly type: "inspect"; readonly inspect: InspectCardsData }
   | {
       readonly type: "tool-result";
       readonly toolCallId: string;
@@ -245,6 +247,8 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       return applyToolCall(message, event);
     case "operation":
       return applyOperation(message, event.operation, event.announced === true);
+    case "inspect":
+      return withCards(message, inspectCards(event.inspect));
     case "operation-progress":
       // 只给还在做的那次记进度：结束了的不再被迟到的进度改回「在做」。
       return updateCard(message, "operation", (card) => (

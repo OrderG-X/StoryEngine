@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { projectBook } from "../index.js";
 import { runCommand } from "../commands/runner.js";
+import { timeAuditPlan } from "../commands/time-audit.js";
 import type { CommandOutcome, CommandSuccess } from "../commands/types.js";
 import { readAllLedgers } from "../store/book.js";
 import { bookImport, type BookImportResult } from "./command.js";
@@ -117,9 +118,15 @@ describe("导入老书", () => {
     expect(threads["hook-c"]).toMatchObject({ status: "closed", closedAt: 3 });
     expect(threads["hook-d"]?.touches.at(-1)?.note).toBe("旧账：放弃了");
     expect(threads["arc-e"]).toMatchObject({ type: "goal", status: "active" });
-    // 时间：投影重算出老时间线的天数；倒叙按作者定的天数记。
-    expect(view.chapters.map((chapter) => [chapter.day, chapter.dayBasis])).toEqual([[1, "text"], [3, "judged"], [2, "author"]]);
-    expect(view.chapters[0]).toMatchObject({ weekday: 1, timeOfDay: "傍晚", summary: "阿甲交出钥匙" });
+    // 时间：老时间线换成离上一章几天（旧账推定，不算已识别）；估的那章不知道，原值留着给作者看。
+    expect(view.chapters.map(({ time }) => [time.start, time.basis, time.legacyDay])).toEqual([
+      [{ lo: 1, hi: 1 }, "presumed", undefined],
+      [{ lo: 3, hi: 3 }, "presumed", undefined],
+      [undefined, "unknown", { day: 2, reason: "estimated" }],
+    ]);
+    expect(view.chapters[0]).toMatchObject({ time: { weekday: 1, timeOfDay: "傍晚" }, summary: "阿甲交出钥匙" });
+    // 新导入就按盘点同一条规则记的：开书盘点没有要改的。
+    expect(await timeAuditPlan(book)).toBeUndefined();
     // 出场：人物 id 换成名字；别称表里人工加的别称记上，机器生成的不记。
     expect(view.cast.find((member) => member.name === "甲")).toMatchObject({ aliases: ["阿甲"], chapters: [1] });
     expect(view.chapters[0]?.present).toEqual(["甲", "乙"]);
@@ -177,8 +184,14 @@ describe("导入老书", () => {
     const outcome = ok(await run());
     expect(outcome.result.counts).toMatchObject({ majorThreads: 1 });
     const view = await projectBook(book);
-    // 第 1 章没章纲 → 第 1 天；第 2 章章纲第 5 天；第 3 章章纲写坏了 → 上一章 +1；第 4 章 +1。
-    expect(view.chapters.map((chapter) => chapter.day)).toEqual([1, 5, 6, 7]);
+    // 老代码推的：第 1 章没章纲 → 第 1 天（估的）；第 2 章章纲第 5 天（差值相对估的那章）；第 3 章章纲写坏了 → 上一章 +1、第 4 章 +1（估的）。
+    // 都不可信：原值留着；第 1 章是全书起点照样推定第 1 天，后面的天数不知道。
+    expect(view.chapters.map(({ time }) => [time.start, time.legacyDay])).toEqual([
+      [{ lo: 1, hi: 1 }, { day: 1, reason: "estimated" }],
+      [undefined, { day: 5, reason: "after_bad" }],
+      [undefined, { day: 6, reason: "estimated" }],
+      [undefined, { day: 7, reason: "estimated" }],
+    ]);
     const byId = new Map(view.threads.map((thread) => [thread.id, thread]));
     expect(byId.get("lead-junk")).toMatchObject({ status: "closed", closedAt: 2 });
     expect(byId.get("lead-junk")?.touches.at(-1)?.note).toBe("旧账：不再追踪了");

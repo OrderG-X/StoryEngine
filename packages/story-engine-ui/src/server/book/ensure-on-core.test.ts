@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { cardsImport, listChapterLedgers, readBible, readCards, runCommand } from "@actalk/story-core";
+import { cardsImport, listChapterLedgers, newLedger, project, readBible, readCards, readChapterLedger, runCommand, storeLegacyTime, type LegacyTimeDraft } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { ensureBookOnCore } from "./ensure-on-core.js";
@@ -192,6 +192,47 @@ describe("开书接到新核心（ensureBookOnCore，重构 P9：先导账单、
     expect(snapshots).toEqual(["ledger.migrate"]);
     expect(JSON.parse(await readFile(join(projectDir, "ledger", "chapters", "0001.json"), "utf-8")).schema).toBe("chapter-ledger/2");
     expect((await readStoryViews(projectDir)).threads.threads.map((thread) => thread.title)).toEqual(["钟为什么停"]);
+    expect(await ensureBookOnCore(projectDir)).toEqual({ ok: true });
+  });
+
+  // 写作版本 P3 设计 2.6：以前导入时把估的天数、紧跟它的下一章的差值都当真记进了账。
+  it("导入时记进账的不可信天数：开书先存撤销点、盘成不知道，原值留着；再开不再盘", async () => {
+    const { projectDir } = await createStoryProject({ rootDir: book, title: "盘点", protagonistName: "沈青禾" });
+    await mkdir(join(projectDir, "ledger", "chapters"), { recursive: true });
+    const drafts: Partial<LegacyTimeDraft>[] = [{ daysSincePrevious: 0 }, { basis: "estimated", daysSincePrevious: 1 }, { daysSincePrevious: 1 }, { daysSincePrevious: 1 }];
+    for (const [index, draft] of drafts.entries()) {
+      const chapter = index + 1;
+      const text = `# 第${chapter}章\n\n第${chapter}章的正文。`;
+      await writeFile(join(projectDir, "chapters", `000${chapter}.md`), text);
+      const parsed = newLedger({
+        chapter,
+        textSha256: createHash("sha256").update(text, "utf-8").digest("hex"),
+        committedAt: "2026-10-01T00:00:00.000Z",
+        origin: "import",
+        legacyTime: true,
+        entries: storeLegacyTime({ review: "auto", basis: "text", ...draft }, `c${chapter}-1`, { evidence: [], evidenceStatus: "none" }, "native"),
+      });
+      if (!parsed.success) throw parsed.error;
+      await writeFile(join(projectDir, "ledger", "chapters", `000${chapter}.json`), `${JSON.stringify(parsed.data, null, 2)}\n`);
+    }
+    await mkdir(join(projectDir, "story"), { recursive: true });
+    await writeFile(join(projectDir, "story", "timeline.json"), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { chapter: 1, day: 1, source: "declared" },
+        { chapter: 2, day: 2, source: "fallback" },
+        { chapter: 3, day: 3, source: "declared" },
+        { chapter: 4, day: 4, source: "declared" },
+      ],
+    }));
+    const snapshots: string[] = [];
+
+    const result = await ensureBookOnCore(projectDir, { snapshot: async (_label, command, mode) => { if (!mode) snapshots.push(command); } });
+
+    expect(result).toMatchObject({ ok: true, audited: { chapters: [2, 3], unproven: [] } });
+    expect(snapshots).toEqual(["time.audit"]);
+    const view = project({ ledgers: await Promise.all([1, 2, 3, 4].map(async (chapter) => (await readChapterLedger(projectDir, chapter))!)), decisions: [] });
+    expect(view.chapters.map(({ time }) => [time.start?.lo, time.legacyDay?.day])).toEqual([[1, undefined], [undefined, 2], [undefined, 3], [undefined, undefined]]);
     expect(await ensureBookOnCore(projectDir)).toEqual({ ok: true });
   });
 

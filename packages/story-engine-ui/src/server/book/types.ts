@@ -72,6 +72,10 @@ export interface FactEntry {
   readonly value?: string;
   /** hard = 不该变的（年龄、门牌、写着的字）；state = 会变的状态（在哪、在谁手里）；event = 发生过的事。 */
   readonly kind?: "hard" | "state" | "event";
+  /** 写作版本 P3a：不是叙述当下说的——梦里、回忆里、人物说的（text 末尾已带上这个说法）。没有 = 叙述当下说的或没标。 */
+  readonly scope?: string;
+  /** 和它对不上能报多确定（核心权限表：来源 × 段）；none = 梦里、回忆里的，不拿来对账。缺省 = sure。 */
+  readonly conflict?: "maybe" | "none";
 }
 
 export interface FactLedger {
@@ -173,11 +177,6 @@ export interface TimelineEvent {
   readonly relatedCharacterIds?: readonly string[];
   readonly effectiveFromChapter?: number;
   readonly supersededByChapter?: number;
-}
-
-export interface StoryCalendar {
-  readonly currentStoryDay: number;
-  readonly currentTimeOfDay: "morning" | "noon" | "afternoon" | "evening" | "night" | "late_night" | "unknown";
 }
 
 export interface ModelSettingsV0 {

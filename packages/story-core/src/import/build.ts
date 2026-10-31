@@ -6,12 +6,14 @@
  *  - 老数据带的原句先核一遍，在本章正文里找不到就去掉原句（条目照记），计数如实报。
  *  - 老事实编号沿用（后文的推翻链要接得上）；其余条目编号 c{章}-{n}。
  *  - 老的「作废」链改写成新那条的 replaces；只说作废、没说被谁取代的，导入成作者裁定 fact.expire（老账里这种只有手动作废才会有）。
- *  - 故事天数：按老时间线逐章算出「隔几天」，投影重算出来的天数和老数据一致；倒回去的（倒叙）按作者定的天数记。
+ *  - 故事天数：按老时间线逐章算出「隔几天」（import/legacy-time.ts，和盘点同一条规则）：作者定的照留；估的、比上一章早的
+ *    （没法判断是倒叙还是记错）和紧跟它们的下一章记成不知道，原值留着给作者看。
  */
-import type { ChapterLedger, EntryKind, LedgerEntry, ThreadType, TimeBasis } from "../schema/ledger.js";
-import { chapterSource, newLedger, storeEntry, type EntryDraft } from "../ledger/entries.js";
+import type { ChapterLedger, EntryKind, LedgerEntry, ThreadType } from "../schema/ledger.js";
+import { chapterSource, evidenceFor, newLedger, storeEntry, storeLegacyTime, type EntryDraft, type LegacyTimeDraft } from "../ledger/entries.js";
 import { nameKey, quoteInText } from "../text/quote.js";
 import { LEGACY_FILES, type ImportSkip, type LegacyData } from "./legacy.js";
+import { legacyTimelineRow, legacyTimeOf } from "./legacy-time.js";
 
 export interface ImportAdjustment {
   readonly file: string;
@@ -50,13 +52,11 @@ export interface ImportBuild {
   readonly adjusted: readonly ImportAdjustment[];
 }
 
-/** 老数据里的一条（老事实沿用老编号；线索的老编号在 thread 上）。 */
-type Draft = EntryDraft & { readonly id?: string };
+/** 老数据里的一条（老事实沿用老编号；线索的老编号在 thread 上）。时间是旧账格式（storeLegacyTime）。 */
+type Draft = (Exclude<EntryDraft, { readonly kind: "time" | "day" }> | (LegacyTimeDraft & { readonly kind: "time" })) & { readonly id?: string };
 
 const SECTION_ORDER: Record<EntryKind, number> = { summary: 0, time: 1, presence: 2, fact: 3, thread: 4 };
 const THREAD_OP_ORDER = { open: 0, advance: 1, close: 2 } as const;
-
-const TIME_BASIS: Record<string, TimeBasis> = { author: "author", declared: "text", plan: "judged", fallback: "estimated" };
 
 export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, string>, committedAt: string): ImportBuild {
   const skipped: ImportSkip[] = [...data.skipped];
@@ -233,33 +233,35 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
     }
   }
 
-  // —— 时间：按老时间线逐章算「隔几天」，投影重算出同样的天数 ——
-  let previousEnd = 0;
+  // —— 时间：按老时间线逐章算「隔几天」；坏锚和紧跟它的一章记成不知道 ——
   const seenTimeChapters = new Set<number>();
-  [...data.timeline].sort((a, b) => a.chapter - b.chapter).forEach((entry, index) => {
+  const timeRows = [...data.timeline].sort((a, b) => a.chapter - b.chapter).flatMap((entry, index) => {
     if (seenTimeChapters.has(entry.chapter)) {
       skipped.push({ file: LEGACY_FILES.timeline, item: index, reason: `第 ${entry.chapter} 章有两条时间` });
-      return;
+      return [];
     }
     seenTimeChapters.add(entry.chapter);
-    const basis = TIME_BASIS[entry.source] ?? "estimated";
-    const gap = entry.day - previousEnd;
-    const asAuthor = basis === "author" || gap < 0;
-    if (gap < 0 && basis !== "author") {
-      adjusted.push({ file: LEGACY_FILES.timeline, item: `第 ${entry.chapter} 章`, change: "天数比上一章结尾还早（倒叙），按作者定的天数记" });
-    }
+    return [{ entry, index }];
+  });
+  const outcomes = legacyTimeOf(timeRows.map(({ entry }) => legacyTimelineRow(entry)));
+  timeRows.forEach(({ entry, index }, at) => {
+    const outcome = outcomes[at]!;
     const explicit = entry.source === "declared" || entry.source === "author";
+    if (outcome.kind === "unknown") {
+      const why = outcome.legacy.reason === "estimated" ? "老书里是估的" : outcome.legacy.reason === "earlier" ? "比上一章早，没法判断是倒叙还是记错" : "上一章的天数记成了不知道，这章的差值没了依据";
+      adjusted.push({ file: LEGACY_FILES.timeline, item: `第 ${entry.chapter} 章`, change: `天数${why}，记成不知道` });
+    }
+    const basis = outcome.kind === "at" ? "author" : outcome.kind === "offset" ? outcome.basis : outcome.legacy.basis;
     place(entry.chapter, {
       kind: "time",
       review: "auto",
-      basis: asAuthor ? "author" : basis,
-      ...(asAuthor ? { day: entry.day } : { daysSincePrevious: gap }),
-      ...(entry.daysInChapter ? { daysInChapter: entry.daysInChapter } : {}),
+      basis,
+      ...(outcome.kind === "at" ? { day: outcome.day } : outcome.kind === "offset" ? { daysSincePrevious: outcome.daysSincePrevious } : { legacy: outcome.legacy }),
+      ...(outcome.kind !== "unknown" && outcome.daysInChapter ? { daysInChapter: outcome.daysInChapter } : {}),
       ...(explicit && entry.weekday !== undefined ? { weekday: entry.weekday } : {}),
       ...(entry.timeOfDay?.trim() ? { timeOfDay: entry.timeOfDay.trim() } : {}),
       ...(basis === "text" || basis === "judged" ? verified(entry.chapter, entry.quote) : {}),
     }, LEGACY_FILES.timeline, index);
-    previousEnd = entry.day + (entry.daysInChapter ?? 0);
   });
 
   // —— 梗概和出场 ——
@@ -336,7 +338,11 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
       const id = kept ?? `c${chapter}-${(seq += 1)}`;
       const thread = declared.kind === "thread" && declared.op === "open" ? declared.thread : undefined;
       // 老数据：来源、范围说不清，按迁移来的记；原句前面核过，在正文里。
-      entries.push(...storeEntry(declared as EntryDraft, { id, ...(thread ? { thread } : {}) }, source, "migrated"));
+      if (declared.kind === "time") {
+        entries.push(...storeLegacyTime(declared, id, evidenceFor(declared.quote, source) ?? { evidence: [], evidenceStatus: "none" }, "migrated"));
+      } else {
+        entries.push(...storeEntry(declared, { id, ...(thread ? { thread } : {}) }, source, "migrated").entries);
+      }
     }
     // 老数据里这章什么都没有：账待记，记账员通读时记（和导入已写的书同一种）。
     const built = newLedger({
@@ -347,6 +353,7 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
       entries,
       status: entries.length === 0 ? "pending" : "ready",
       coverage: { reasonCodes: [entries.length === 0 ? "imported_text" : "legacy_protocol"] },
+      ...(entries.length === 0 ? {} : { legacyTime: true as const }),
     });
     if (!built.success) throw new Error(`第 ${chapter} 章的账单没拼成：${built.error.issues[0]?.message ?? "格式不对"}`);
     ledgers.push(built.data);

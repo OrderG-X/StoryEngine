@@ -4,7 +4,9 @@
  * 名字一律按 nameKey 精确比（已确立名字或别名都行），不做模糊匹配；找不到就是找不到，返回 undefined。
  * 返回值里给人看的字段只有名字、标题、章号；id 留着给程序回指，展示前不许直接拼进文案。
  */
-import type { ThreadType, TimeBasis } from "../schema/ledger.js";
+import type { ThreadType, TimeOffset } from "../schema/ledger.js";
+import type { ChapterTime, DayRange } from "./time.js";
+import { daysText, offsetText, relativeDaysText, segmentText } from "./time-text.js";
 import { nameKey } from "../text/quote.js";
 import { idleChaptersBetween, threadUnknownChapters } from "./coverage.js";
 import { DEFAULT_STALE_AFTER, MAJOR_STALE_FACTOR } from "./project.js";
@@ -100,51 +102,80 @@ export function threadsForPrompt(projection: BookProjection, options: { readonly
 
 export interface TimelineRow {
   readonly chapter: number;
-  /** 不知道（时间没记上的章、接着它算的）就没有。 */
-  readonly day?: number;
-  readonly dayEnd?: number;
+  readonly presentLine: ChapterTime["presentLine"];
+  /** 开头、结尾第几天（不知道就没有）。 */
+  readonly start?: DayRange;
+  readonly end?: DayRange;
+  /** 离前一个当下章结尾多少天；按月 / 年说的原样。 */
+  readonly sincePrevious?: DayRange;
+  readonly relativeText?: TimeOffset;
   /** 0 = 周一 … 6 = 周日。 */
   readonly weekday?: number;
   readonly weekdayDerived: boolean;
   readonly timeOfDay?: string;
-  readonly basis: TimeBasis | "missing" | "unknown";
+  readonly basis: ChapterTime["basis"];
+  /** 天数沿着旧账推定的章推出来的（不算准）。 */
+  readonly presumed: boolean;
+  /** 本章里不在当下线上的段（原样的说法）。 */
+  readonly segments: readonly string[];
+  /** 老书里判成不可信的天数原值。 */
+  readonly legacyDay?: number;
   /** 这章的时间没记上：pending = 账还没记上；partial = 账没记全、时间那类没记上。 */
   readonly ledgerShort?: "pending" | "partial";
+  /** 在当下线上，但和前一个当下章之间（第一个当下章：它前面）有没认出在不在当下线上的章：链断在那儿。 */
+  readonly afterUnknown: boolean;
 }
 
 /** 每章「第几天、星期几、依据」，算到 upTo（含；缺省 = 投影算到的那章）。模型照表对，不自己做日期算术。 */
 export function timelineTable(projection: BookProjection, upTo: number = projection.upTo): TimelineRow[] {
+  let lost = false;
   return projection.chapters
     .filter((chapter) => chapter.chapter <= upTo)
-    .map((chapter) => ({
-      chapter: chapter.chapter,
-      ...(chapter.day !== undefined && chapter.dayEnd !== undefined ? { day: chapter.day, dayEnd: chapter.dayEnd } : {}),
-      ...(chapter.weekday !== undefined ? { weekday: chapter.weekday } : {}),
-      weekdayDerived: chapter.weekdayDerived,
-      ...(chapter.timeOfDay !== undefined ? { timeOfDay: chapter.timeOfDay } : {}),
-      basis: chapter.dayBasis,
-      ...(chapter.ledgerStatus !== "ready" && chapter.missingKinds?.includes("time") ? { ledgerShort: chapter.ledgerStatus } : {}),
-    }));
+    .map(({ chapter, time, ledgerStatus, missingKinds }) => {
+      const afterUnknown = time.presentLine === true && lost;
+      if (time.presentLine === "unknown") lost = true;
+      else if (time.presentLine === true) lost = false;
+      return {
+        chapter,
+        presentLine: time.presentLine,
+        ...(time.start ? { start: time.start } : {}),
+        ...(time.end ? { end: time.end } : {}),
+        ...(time.sincePrevious ? { sincePrevious: time.sincePrevious } : {}),
+        ...(time.relativeText ? { relativeText: time.relativeText } : {}),
+        ...(time.weekday !== undefined ? { weekday: time.weekday } : {}),
+        weekdayDerived: time.weekdayDerived,
+        ...(time.timeOfDay !== undefined ? { timeOfDay: time.timeOfDay } : {}),
+        basis: time.basis,
+        presumed: time.absolutePresumed || time.presumed,
+        segments: time.segments.map(segmentText),
+        ...(time.legacyDay ? { legacyDay: time.legacyDay.day } : {}),
+        ...(ledgerStatus !== "ready" && missingKinds?.includes("time") ? { ledgerShort: ledgerStatus } : {}),
+        afterUnknown,
+      };
+    });
 }
 
 const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"] as const;
-const BASIS_LABELS: Record<TimelineRow["basis"], string> = {
-  text: "正文明写",
-  judged: "按正文推断",
-  author: "作者定的",
-  estimated: "估计的",
-  missing: "没记，按上一章 +1",
-  unknown: "不知道（前面有章的时间没记上）",
-};
+
+function basisLabel(row: TimelineRow): string {
+  if (row.ledgerShort === "pending") return "这章的账还没记上";
+  if (row.ledgerShort === "partial") return "这章的账没记全，时间没记上";
+  if (row.basis === "unknown" && row.legacyDay !== undefined) return `不知道（老书里记的约第 ${row.legacyDay} 天，不可信）`;
+  if (row.presentLine === false) return "整章不在当下线上";
+  if (row.presentLine === "unknown") return "没认出在不在当下线上";
+  if (row.basis === "author") return "作者定的";
+  if (row.basis === "unknown") return "不知道";
+  return row.presumed ? "按旧账推的（不算准）" : "按账推的";
+}
 
 /** 时间表的文字版，给提示词直接贴。 */
 export function timelineText(rows: readonly TimelineRow[]): string {
-  const lines = ["| 章 | 第几天 | 星期 | 时段 | 依据 |", "|---|---|---|---|---|"];
+  const lines = ["| 章 | 开头 | 结尾 | 离上一个当下章 | 星期 | 时段 | 依据 | 不在当下线上的段 |", "|---|---|---|---|---|---|---|---|"];
   for (const row of rows) {
-    const days = row.day === undefined || row.dayEnd === undefined ? "不知道" : row.dayEnd > row.day ? `${row.day}～${row.dayEnd}` : `${row.day}`;
+    const present = row.presentLine === true;
+    const since = !present ? "—" : row.relativeText ? offsetText(row.relativeText) : relativeDaysText(row.sincePrevious);
     const weekday = row.weekday === undefined ? "—" : `${WEEKDAY_NAMES[row.weekday]}${row.weekdayDerived ? "（推算）" : ""}`;
-    const basis = row.ledgerShort === "pending" ? "这章的账还没记上" : row.ledgerShort === "partial" ? "这章的账没记全，时间没记上" : BASIS_LABELS[row.basis];
-    lines.push(`| 第 ${row.chapter} 章 | ${days} | ${weekday} | ${row.timeOfDay ?? "—"} | ${basis} |`);
+    lines.push(`| 第 ${row.chapter} 章 | ${present ? daysText(row.start) : "—"} | ${present ? daysText(row.end) : "—"} | ${since} | ${weekday} | ${row.timeOfDay ?? "—"} | ${basisLabel(row)} | ${row.segments.join("；") || "—"} |`);
   }
   return lines.join("\n");
 }
@@ -174,7 +205,7 @@ export function chapterBrief(projection: BookProjection, chapter: number): Chapt
       if (touch.chapter === chapter) threads.push({ id: thread.id, title: thread.title, op: touch.op });
     }
   }
-  const [time] = timelineTable({ ...projection, chapters: [view] }, chapter);
+  const time = timelineTable(projection, chapter).find((row) => row.chapter === chapter);
   return {
     chapter,
     ledgerStatus: view.ledgerStatus,
@@ -251,7 +282,7 @@ export function preWriteMemo(projection: BookProjection, chapter: number): PreWr
   const view = projection.chapters.filter((item) => item.chapter < chapter).at(-1);
   if (!view) return empty;
   const upTo = view.chapter;
-  const [time] = timelineTable({ ...projection, chapters: [view] }, upTo);
+  const time = timelineTable(projection, upTo).find((row) => row.chapter === upTo);
   const previous: PreWritePrevious = {
     chapter: upTo,
     ...(view.summary !== undefined ? { summary: view.summary } : {}),

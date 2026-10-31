@@ -18,8 +18,8 @@ import { applyCardOps, CardOp, MAX_OPS_PER_CHANGE } from "../bible/ops.js";
 import { readCardsOrLegacy } from "../bible/commands.js";
 import { draftVersionOf, readDraftStamp } from "../draft/draft.js";
 import type { AuthorDecision } from "../schema/decisions.js";
-import { ChapterLedger, entryQuote, storedShapeProblem, type LedgerEntry } from "../schema/ledger.js";
-import { chapterSource, evidenceFor, relocateEvidence, type ChapterSource } from "../ledger/entries.js";
+import { ChapterLedger, entryQuote, storedShapeProblem, timeRoleOf, type LedgerEntry } from "../schema/ledger.js";
+import { chapterSource, evidenceFor, relocateEvidence, relocateScenes, type ChapterSource } from "../ledger/entries.js";
 import { cardsFileText, decisionsFileText, readAllLedgers, readChapterText, readDecisions, sha256 } from "../store/book.js";
 import { CARDS_PATH, chapterLedgerPath, chapterTextPath, DECISIONS_PATH, draftPath } from "../store/paths.js";
 import type { TxWrite } from "../store/transaction.js";
@@ -123,7 +123,7 @@ function settleLedger(
         ...(patch.text ? { text: patch.text } : {}),
         ...proof,
       };
-      if (!proof || proof.evidenceStatus === "none" || storedShapeProblem(updated)) {
+      if (!proof || proof.evidenceStatus === "none" || storedShapeProblem(updated, ledger.timeModel)) {
         return { ok: false, code: "fact_patch_invalid", message: `第 ${chapter} 章账里「${entry.text}」的改法核不上改后的正文` };
       }
       entries.push(updated);
@@ -165,12 +165,14 @@ function settleLedger(
       continue;
     }
     entries.push(requote(entry, edit.to, source));
-    // 时间存成开头、结尾两条，算一条。
-    if (!(entry.kind === "time" && entry.appliesTo === "chapterEnd")) requoted += 1;
+    // 一条时间声明存成好几条（开头、同一天、换天、段），按本章开头那条算一条。
+    if (!(entry.kind === "time" && timeRoleOf(entry) !== "start")) requoted += 1;
   }
   const unknown = [...patches.map((patch) => patch.id), ...retractIds].find((id) => !ledger.entries.some((entry) => entry.kind === "fact" && entry.id === id));
   if (unknown) return { ok: false, code: "unknown_fact", message: `第 ${chapter} 章账里没有要改的那条事实了` };
-  const parsed = ChapterLedger.safeParse({ ...ledger, textSha256: sha256(next), entries });
+  // 段跟着改后的正文重新对回句号，对不回的标 stale（按「段未知」处理，设计第 6 节）。
+  const replaced = (quote: string): string => (quoteInText(quote, next) || !quoteInText(quote, original) ? quote : (applied.find((item) => brokenBy(original, item, quote))?.to ?? quote));
+  const parsed = ChapterLedger.safeParse({ ...ledger, textSha256: sha256(next), entries, scenes: relocateScenes(ledger.scenes, source, replaced) });
   if (!parsed.success) return { ok: false, code: "ledger_invalid", message: `第 ${chapter} 章的账单没拼成` };
   return {
     ok: true,

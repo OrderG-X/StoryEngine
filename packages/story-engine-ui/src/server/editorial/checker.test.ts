@@ -524,8 +524,8 @@ describe("B 时间线表进核账", () => {
   /** 第 1、2 章照原文定稿，作者定了天数（时间线从账算）。 */
   async function writeTimeline(dir: string): Promise<void> {
     await seedChapters(dir, [
-      { chapter: 1, entries: [{ kind: "summary", text: "客人送来怀表。", quote: CH1 }, { kind: "time", basis: "author", day: 1, weekday: 0 }] },
-      { chapter: 2, entries: [{ kind: "summary", text: "林舟把怀表锁进抽屉。", quote: CH2 }, { kind: "time", basis: "author", day: 2, weekday: 1 }] },
+      { chapter: 1, entries: [{ kind: "summary", text: "客人送来怀表。", quote: CH1 }, { kind: "day", day: 1 }] },
+      { chapter: 2, entries: [{ kind: "summary", text: "林舟把怀表锁进抽屉。", quote: CH2 }, { kind: "day", day: 2 }] },
     ]);
   }
 
@@ -642,8 +642,8 @@ describe("F 时间线表只进自复核（R2.1）", () => {
   /** 第 1、2 章照原文定稿，作者定了天数（时间线从账算）。 */
   async function writeTimeline(dir: string): Promise<void> {
     await seedChapters(dir, [
-      { chapter: 1, entries: [{ kind: "summary", text: "客人送来怀表。", quote: CH1 }, { kind: "time", basis: "author", day: 1, weekday: 0 }] },
-      { chapter: 2, entries: [{ kind: "summary", text: "林舟把怀表锁进抽屉。", quote: CH2 }, { kind: "time", basis: "author", day: 2, weekday: 1 }] },
+      { chapter: 1, entries: [{ kind: "summary", text: "客人送来怀表。", quote: CH1 }, { kind: "day", day: 1 }] },
+      { chapter: 2, entries: [{ kind: "summary", text: "林舟把怀表锁进抽屉。", quote: CH2 }, { kind: "day", day: 2 }] },
     ]);
   }
 

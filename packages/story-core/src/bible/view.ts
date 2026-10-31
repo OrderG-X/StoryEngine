@@ -76,6 +76,8 @@ export interface BibleView {
   readonly canon: readonly CanonItem[];
   /** 主角卡的名字（没标就没有）。 */
   readonly protagonist?: string;
+  /** 换天按什么算：过了半夜 / 天亮才算第二天；没定就没有（两种都推，说不准的照实说）。只有作者定。 */
+  readonly dayBoundary?: "midnight" | "dawn";
 }
 
 function namesOf(card: Card): string[] {
@@ -223,5 +225,6 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
     uncarded: [...uncarded, ...others],
     canon: cards.canon,
     ...(protagonist ? { protagonist } : {}),
+    ...(cards.calendar?.dayBoundary ? { dayBoundary: cards.calendar.dayBoundary } : {}),
   };
 }

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  readStoryClock,
   buildChapterPlanSection,
   chapterPlanPath,
   collectPlanEntityTerms,
@@ -19,6 +18,8 @@ import { findEarlierPassages } from "./earlier-passages.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { createStoryProject } from "../book/project-store.js";
 import { seedChapters } from "../book/ledger-test-helpers.js";
+import { planClock } from "../book/story-timeline.js";
+import { readStoryViews } from "../book/story-views.js";
 
 const NOW = new Date("2026-10-08T00:00:00.000Z");
 
@@ -190,41 +191,48 @@ describe("buildWriterContext 带章纲", () => {
 });
 
 describe("故事日历（十章验收：「三天前」一直是三天前、星期算错）", () => {
-  it("storyDay 宽进：数字、「第12天」都收，非正数/乱写不收", () => {
+  it("章纲的日子宽进：离上一个当下章几天（可负）、接在哪章、整章回忆；旧的绝对天数不收", () => {
     const base = { summary: "s", beats: ["b"] };
-    expect(normalizeChapterPlan({ ...base, storyDay: 12 }, { chapter: 3 })?.storyDay).toBe(12);
-    expect(normalizeChapterPlan({ ...base, storyDay: "第12天" }, { chapter: 3 })?.storyDay).toBe(12);
-    expect(normalizeChapterPlan({ ...base, scene: { storyDay: "5" } }, { chapter: 3 })?.storyDay).toBe(5);
-    expect(normalizeChapterPlan({ ...base, storyDay: 0 }, { chapter: 3 })?.storyDay).toBeUndefined();
-    expect(normalizeChapterPlan({ ...base, storyDay: "过几天" }, { chapter: 3 })?.storyDay).toBeUndefined();
-    expect(normalizeChapterPlan(base, { chapter: 1 })?.storyDay).toBe(1);
+    expect(normalizeChapterPlan({ ...base, dayOffset: 2, after: 2 }, { chapter: 3 })).toMatchObject({ dayOffset: 2, after: 2 });
+    expect(normalizeChapterPlan({ ...base, dayOffset: -2, after: 1 }, { chapter: 3 })).toMatchObject({ dayOffset: -2, after: 1 });
+    // 接在本章或后面的章上不成立：只留天数。
+    const late = normalizeChapterPlan({ ...base, dayOffset: 1, after: 3 }, { chapter: 3 })!;
+    expect(late.dayOffset).toBe(1);
+    expect(late).not.toHaveProperty("after");
+    expect(normalizeChapterPlan({ ...base, dayOffset: 1.5 }, { chapter: 3 })).not.toHaveProperty("dayOffset");
+    // 整章回忆、梦：不在当下线上，不记离上一章几天。
+    expect(normalizeChapterPlan({ ...base, frame: "回忆", dayOffset: 1 }, { chapter: 3 })).toMatchObject({ frame: "past" });
+    expect(normalizeChapterPlan({ ...base, frame: "回忆", dayOffset: 1 }, { chapter: 3 })).not.toHaveProperty("dayOffset");
+    expect(normalizeChapterPlan({ ...base, frame: "梦" }, { chapter: 3 })?.frame).toBe("other");
+    expect(normalizeChapterPlan({ ...base, frame: "当下" }, { chapter: 3 })).not.toHaveProperty("frame");
+    expect(normalizeChapterPlan({ ...base, storyDay: 12 }, { chapter: 3 })).not.toHaveProperty("storyDay");
   });
 
-  it("读前面各章的天数（时间线从账算，没记天数的章按上一章 +1 估），写手段里给出今天第几天和前文天数", async () => {
+  it("写手段里给出今天第几天、星期几，前面各章是哪天、离今天多久（时间线从账算，不看章纲）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "story-engine-story-clock-"));
+    const at = (min: number) => ({ kind: "time" as const, start: { offset: { unit: "day" as const, min, max: min }, basis: "text" as const, quote: "" }, sameDay: true });
     await seedChapters(dir, [
-      { chapter: 1, entries: [{ kind: "time", basis: "author", day: 1 }] },
-      { chapter: 2, entries: [{ kind: "summary", text: "铺子照常开门。" }] },
-      { chapter: 3, entries: [{ kind: "time", basis: "author", day: 4 }] },
+      { chapter: 1, entries: [{ ...at(0), weekday: 0, timeOfDay: "上午" }] },
+      { chapter: 2, entries: [at(1)] },
+      { chapter: 3, entries: [at(2)] },
     ]);
-    // 摘要、开场时间优先章纲。
-    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "怀表送到铺子", beats: ["b"], storyDay: 1, scene: { time: "周一上午" } }, { chapter: 1, now: NOW })!);
-    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "去档案馆", beats: ["b"], storyDay: 4 }, { chapter: 3, now: NOW })!);
-    const clock = await readStoryClock(dir, 4);
-    expect(clock.map((entry) => [entry.chapter, entry.storyDay])).toEqual([[1, 1], [2, 2], [3, 4]]);
-    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 9 }, { chapter: 4, now: NOW })!;
+    // 章纲里写的日子不算。
+    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "去档案馆", beats: ["b"], dayOffset: 9, after: 2 }, { chapter: 3, now: NOW })!);
+    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], dayOffset: 5, after: 3 }, { chapter: 4, now: NOW })!;
+    const clock = planClock((await readStoryViews(dir)).projection, 4, plan);
     const section = buildChapterPlanSection(plan, clock) as { storyClock: { today: string; earlier: string[]; rule: string } };
     // 第十五轮：只给天数让写手自己减，台词里的「昨天 / 上周」错了 11 处 → 直接标好从本章看是哪天、星期几。
     expect(section.storyClock.today).toBe("本章是故事第 9 天，周二");
     expect(section.storyClock.earlier).toEqual([
-      "8 天前（故事第 1 天，周一）：第 1 章，周一上午，怀表送到铺子",
-      "7 天前（故事第 2 天，周二）：第 2 章，铺子照常开门。",
-      "5 天前（故事第 4 天，周四）：第 3 章，去档案馆",
+      "第 3 章：故事第 4 天（周四）；离今天：5 天前",
+      "第 2 章：故事第 2 天（周二）；离今天：7 天前",
+      "第 1 章：故事第 1 天（周一），上午；离今天：8 天前",
     ]);
     expect(section.storyClock.rule).toContain("不要自己推算");
+    expect(buildChapterPlanSection(plan)).not.toHaveProperty("storyClock");
   });
 
-  it("「故事第 N 天」不进要点 / 摘要 / 开场时间，只留在 storyDay（第十八轮正文照抄出「第十一天」）", () => {
+  it("「故事第 N 天」不进要点 / 摘要 / 开场时间，也不存（日子以账和离上一章几天为准；第十八轮正文照抄出「第十一天」）", () => {
     const plan = normalizeChapterPlan({
       summary: "故事第11天，林舟去房管所",
       beats: ["故事第11天上午，林舟锁好铺子去房管所", "（故事第11天）下午回铺子"],
@@ -233,34 +241,10 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(plan.summary).toBe("林舟去房管所");
     expect(plan.beats).toEqual(["上午，林舟锁好铺子去房管所", "下午回铺子"]);
     expect(plan.scene.time).toBe("第二天上午");
-    expect(plan.storyDay).toBe(11);
+    expect(plan).not.toHaveProperty("storyDay");
     const digits = normalizeChapterPlan({ summary: "s", beats: ["第3天上午，林舟开门", "第二天一早他又去了"], scene: { time: "第3天上午" } }, { chapter: 3, now: NOW })!;
     expect(digits.beats).toEqual(["上午，林舟开门", "第二天一早他又去了"]);
     expect(digits.scene.time).toBe("上午");
-    expect(digits.storyDay).toBe(3);
-  });
-
-  it("describeStoryDay：本章第几天、星期几（给记事实环节换掉「下周三」）", async () => {
-    const { describeStoryDay } = await import("../book/chapter-plan.js");
-    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 8 }, { chapter: 9, now: NOW })!;
-    expect(describeStoryDay(plan, [{ chapter: 1, storyDay: 1, time: "周三上午", summary: "a" }])).toBe("本章是故事第 8 天，周三");
-    expect(describeStoryDay(plan)).toBe("本章是故事第 8 天");
-    expect(describeStoryDay(undefined)).toBeUndefined();
-  });
-
-  it("相对说法：同一天 / 昨天 / 前天；没有星期锚就不编星期", () => {
-    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 5 }, { chapter: 6, now: NOW })!;
-    const section = buildChapterPlanSection(plan, [
-      { chapter: 3, storyDay: 3, summary: "a" },
-      { chapter: 4, storyDay: 4, summary: "b" },
-      { chapter: 5, storyDay: 5, time: "上午", summary: "c" },
-    ]) as { storyClock: { today: string; earlier: string[] } };
-    expect(section.storyClock.today).toBe("本章是故事第 5 天");
-    expect(section.storyClock.earlier).toEqual([
-      "前天（故事第 3 天）：第 3 章，a",
-      "昨天（故事第 4 天）：第 4 章，b",
-      "今天早些时候（故事第 5 天）：第 5 章，上午，c",
-    ]);
   });
 });
 

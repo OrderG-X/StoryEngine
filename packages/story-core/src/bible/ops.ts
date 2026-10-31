@@ -75,6 +75,8 @@ export const CardOp = z.discriminatedUnion("op", [
   /** 「还没建卡」里这个名字不用建卡（只有作者能说）；unskip 放回去。 */
   z.object({ op: z.literal("uncarded.skip"), name }),
   z.object({ op: z.literal("uncarded.unskip"), name }),
+  /** 换天规矩（P3a）：半夜 / 天亮；null = 没定（两种都推）。只有作者能定。 */
+  z.object({ op: z.literal("calendar.dayBoundary"), value: z.union([z.enum(["midnight", "dawn"]), z.null()]) }),
 ]);
 export type CardOp = z.infer<typeof CardOp>;
 
@@ -389,6 +391,18 @@ export function applyCardOp(file: SettingCardsFile, op: CardOp, context: OpConte
         at: context.at,
       };
       return { ok: true, file: { ...file, rules: { ...file.rules, exemplars: [...exemplars, exemplar] } }, line: "加了一段文风样本" };
+    }
+    case "calendar.dayBoundary": {
+      if (ai) return needsAuthor("换天按半夜还是天亮只能你定");
+      const current = file.calendar?.dayBoundary ?? null;
+      if (current === op.value) return { ok: true, file };
+      const { calendar: _calendar, ...rest } = file;
+      const label = op.value === "midnight" ? "过了半夜就算第二天" : op.value === "dawn" ? "天亮才算第二天" : "没定";
+      return {
+        ok: true,
+        file: op.value === null ? rest : { ...file, calendar: { dayBoundary: op.value, at: context.at } },
+        line: `换天规矩改成了：${label}`,
+      };
     }
     case "uncarded.skip": {
       if (ai) return needsAuthor("建不建卡要你自己定");

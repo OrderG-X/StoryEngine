@@ -7,7 +7,7 @@
  */
 import { z } from "zod";
 import { ChapterLedger } from "../schema/ledger.js";
-import { chapterSource, relocateEvidence } from "../ledger/entries.js";
+import { chapterSource, relocateEvidence, relocateScenes } from "../ledger/entries.js";
 import { readChapterLedger, readChapterText, sha256 } from "../store/book.js";
 import { chapterLedgerPath, chapterTextPath, draftPath } from "../store/paths.js";
 import { composeDraftFile, parseDraftFile, readDraft } from "../draft/draft.js";
@@ -50,7 +50,12 @@ export const chapterRetitle: WriteCommandSpec<ChapterRetitleArgs, ChapterRetitle
     if (nextText !== text) {
       // 证据跟着换到新一版正文（章名行不切句，句号不变）。
       const source = chapterSource(args.chapter, nextText);
-      const next = ChapterLedger.parse({ ...ledger, textSha256: sha256(nextText), entries: ledger.entries.map((entry) => relocateEvidence(entry, source)) });
+      const next = ChapterLedger.parse({
+        ...ledger,
+        textSha256: sha256(nextText),
+        entries: ledger.entries.map((entry) => relocateEvidence(entry, source)),
+        scenes: relocateScenes(ledger.scenes, source),
+      });
       writes.push(
         { path: chapterTextPath(args.chapter), content: nextText },
         { path: chapterLedgerPath(args.chapter), content: `${JSON.stringify(next, null, 2)}\n` },

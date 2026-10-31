@@ -9,13 +9,13 @@
  *
  * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
-import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, threadOf, timeDeclarationOf, type BibleView, type BookProjection, type ChapterLedger, type ThreadView } from "@actalk/story-core";
-import type { StoryTimeline, TimelineEntry, TimelineSource, UnknownDay } from "./story-timeline.js";
+import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, rightsOf, scopeOf, timelineTable, type BibleView, type BookProjection, type ChapterLedger, type ThreadView, type TimelineRow } from "@actalk/story-core";
 import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
 export interface LedgerViews {
   readonly projection: BookProjection;
-  readonly timeline: StoryTimeline;
+  /** 每章是故事哪几天（核心时间表；给模型的样子见 story-timeline.ts）。 */
+  readonly timeline: readonly TimelineRow[];
   readonly facts: FactLedger;
   readonly threads: ThreadPool;
   readonly goals: ArcGoalPool;
@@ -49,14 +49,6 @@ async function readChapterTitles(projectDir: string, chapters: readonly number[]
   return titles;
 }
 
-const TIME_SOURCE: Record<Exclude<BookProjection["chapters"][number]["dayBasis"], "unknown">, TimelineSource> = {
-  author: "author",
-  text: "declared",
-  judged: "plan",
-  estimated: "fallback",
-  missing: "fallback",
-};
-
 /** 账待记的章在「各章事件」里的梗概：如实说给不出（写手、章纲、概况照读这一句，不当成「这章什么都没发生」）。 */
 export const PENDING_CHAPTER_SUMMARY = "这章的账还没记上，梗概给不出";
 /** 账没记全、梗概那条没记上。 */
@@ -78,56 +70,33 @@ function goalStatus(thread: ThreadView): ArcGoal["status"] {
 }
 
 export function storyViewsOf(projection: BookProjection, ledgers: readonly ChapterLedger[], chapterTitles: ReadonlyMap<number, string>): LedgerViews {
-  const timeEntries = new Map(ledgers.flatMap((ledger) => {
-    const time = timeDeclarationOf(ledger.entries);
-    return time ? [[ledger.chapter, time] as const] : [];
-  }));
-
-  const unknownDays = projection.chapters.flatMap((chapter): UnknownDay[] => {
-    if (chapter.day !== undefined) return [];
-    const own = chapter.ledgerStatus !== "ready" && chapter.missingKinds?.includes("time") ? chapter.ledgerStatus : undefined;
-    return [{ chapter: chapter.chapter, ...(own ? { own } : {}) }];
-  });
-  const timeline: StoryTimeline = {
-    schemaVersion: 1,
-    entries: projection.chapters.flatMap((chapter): TimelineEntry[] => {
-      if (chapter.day === undefined || chapter.dayEnd === undefined || chapter.dayBasis === "unknown") return [];
-      const time = timeEntries.get(chapter.chapter);
-      const span = chapter.dayEnd - chapter.day;
-      return [{
-        chapter: chapter.chapter,
-        day: chapter.day,
-        // 只给明写的星期，推出来的不给（读者自己按最近的锚点推）。
-        ...(chapter.weekday !== undefined && !chapter.weekdayDerived ? { weekday: chapter.weekday } : {}),
-        ...(chapter.timeOfDay ? { timeOfDay: chapter.timeOfDay } : {}),
-        ...(time?.daysSincePrevious !== undefined && chapter.dayBasis !== "author" ? { daysSincePrevious: time.daysSincePrevious } : {}),
-        ...(span > 0 ? { daysInChapter: span } : {}),
-        source: TIME_SOURCE[chapter.dayBasis],
-        ...(time?.quote ? { quote: time.quote } : {}),
-      }];
-    }),
-    ...(unknownDays.length > 0 ? { unknownDays } : {}),
-  };
+  const timeline = timelineTable(projection);
 
   const facts: FactLedger = {
     version: "v0",
     facts: projection.facts
       // 作者说「记错了」的不给：读者不认作废，给了就当真。
       .filter((fact) => fact.status !== "retracted")
-      .map((fact): FactEntry => ({
-        id: fact.id,
-        chapter: fact.chapter,
-        text: fact.text,
-        source: fact.review === "author" ? "manual" : "auto",
-        effectiveFromChapter: fact.chapter,
-        ...(fact.supersededAt !== undefined ? { supersededByChapter: fact.supersededAt } : {}),
-        ...(fact.supersededBy !== undefined ? { supersededByFactId: fact.supersededBy } : {}),
-        ...(fact.quote ? { quote: fact.quote } : {}),
-        ...(fact.subject ? { subject: fact.subject } : {}),
-        ...(fact.attribute ? { attribute: fact.attribute } : {}),
-        ...(fact.value ? { value: fact.value } : {}),
-        kind: fact.nature,
-      })),
+      .map((fact): FactEntry => {
+        const scope = scopeLabel(fact.scope);
+        const { conflict } = rightsOf(fact.scope.source, fact.scope.frame);
+        return {
+          id: fact.id,
+          chapter: fact.chapter,
+          text: scope ? `${fact.text}（${scope}）` : fact.text,
+          source: fact.review === "author" ? "manual" : "auto",
+          effectiveFromChapter: fact.chapter,
+          ...(fact.supersededAt !== undefined ? { supersededByChapter: fact.supersededAt } : {}),
+          ...(fact.supersededBy !== undefined ? { supersededByFactId: fact.supersededBy } : {}),
+          ...(fact.quote ? { quote: fact.quote } : {}),
+          ...(fact.subject ? { subject: fact.subject } : {}),
+          ...(fact.attribute ? { attribute: fact.attribute } : {}),
+          ...(fact.value ? { value: fact.value } : {}),
+          kind: fact.nature,
+          ...(scope ? { scope } : {}),
+          ...(conflict !== "sure" ? { conflict } : {}),
+        };
+      }),
   };
 
   const evidenceOf = (thread: ThreadView): string[] => unique(thread.touches.flatMap((touch) => (touch.quote ? [touch.quote] : [])));
@@ -162,17 +131,18 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
       })),
   };
 
-  const threadTypes = new Map(projection.threads.flatMap((thread) => [thread.id, ...thread.mergedFrom].map((id) => [id, thread.type] as const)));
+  const touches = new Map(projection.threads.flatMap((thread) => thread.touches.map((touch) => [touch.entry, { touch, type: thread.type }] as const)));
   const events = projection.chapters.map((chapter): TimelineEvent => {
     const ledger = ledgers.find((item) => item.chapter === chapter.chapter);
     const short = chapter.ledgerStatus !== "ready" ? chapter.ledgerStatus : undefined;
     const summary = chapter.summary ?? (short === "pending" ? PENDING_CHAPTER_SUMMARY : short === "partial" && chapter.missingKinds?.includes("summary") ? PARTIAL_CHAPTER_SUMMARY : "");
     const participants = [...chapter.present];
     const aliases = aliasesOf(ledger, projection);
-    const { decision, discovery } = turnsOf(ledger, threadTypes);
+    const { decision, discovery } = turnsOf(ledger, touches);
+    // 梦里、回忆里、人物说的事带上说明（出口复核 R3：不带就成了当下发生的事）；说明放前头，写手材料截短也截不掉。
     const keyEvents = projection.facts
       .filter((fact) => fact.chapter === chapter.chapter && fact.nature === "event" && fact.status !== "retracted")
-      .map((fact) => fact.text);
+      .map((fact) => scoped(fact.text, scopeLabel(fact.scope)));
     return {
       id: `ch${String(chapter.chapter).padStart(4, "0")}-001`,
       chapter: chapter.chapter,
@@ -204,23 +174,43 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
   return { projection, timeline, facts, threads, goals, events };
 }
 
+/** 不是叙述当下说的事实，给模型的字上带一句（写作版本 P3a 第 3 节）：梦里、回忆里的不是现状；人物说的不一定是真的。 */
+function scopeLabel(scope: BookProjection["facts"][number]["scope"]): string | undefined {
+  if (scope.frame === "other") return "梦里、想象或传闻里的，不是现状";
+  if (scope.frame === "past") return "回忆里的，不是现状";
+  if (scope.frame === "unknown") return "这句在不在回忆、梦里对不上了，不一定是现状";
+  if (scope.source === "character_claim") return `${scope.speaker ?? "人物"}说的，不一定是真的`;
+  return undefined;
+}
+
 /**
  * 每章的「决定」「发现」：本章新开的打算就是人物做的决定，本章收掉的悬念就是揭开的事。
+ * 照投影里实际生效的动作（出口复核 R3）：梦里、回忆里、人物说的收口按推进记，不算揭开；梦里、回忆里开的打算带上说明。
  * 账里没有「冲突」，不编。
  */
-function turnsOf(ledger: ChapterLedger | undefined, types: ReadonlyMap<string, ThreadView["type"]>): { decision?: string; discovery?: string } {
+function turnsOf(
+  ledger: ChapterLedger | undefined,
+  touches: ReadonlyMap<string, { readonly touch: ThreadView["touches"][number]; readonly type: ThreadView["type"] }>,
+): { decision?: string; discovery?: string } {
+  if (!ledger) return {};
   const decisions: string[] = [];
   const discoveries: string[] = [];
-  for (const entry of ledger?.entries ?? []) {
+  for (const entry of ledger.entries) {
     if (entry.kind !== "thread") continue;
-    if (entry.op === "open" && entry.type === "intent") decisions.push(entry.note);
-    if (entry.op === "close" && types.get(threadOf(entry)) === "question") discoveries.push(entry.note);
+    const applied = touches.get(entry.id);
+    if (!applied) continue;
+    if (entry.op === "open" && entry.type === "intent") {
+      decisions.push(scoped(entry.note, scopeLabel(scopeOf(entry, ledger))));
+    }
+    if (applied.touch.op === "close" && applied.type === "question") discoveries.push(entry.note);
   }
   return {
     ...(decisions.length > 0 ? { decision: unique(decisions).join("；") } : {}),
     ...(discoveries.length > 0 ? { discovery: unique(discoveries).join("；") } : {}),
   };
 }
+
+const scoped = (text: string, scope: string | undefined): string => (scope ? `（${scope}）${text}` : text);
 
 /** 本章正文里换了叫法的人：name = 已确立名，alias = 本章的叫法。 */
 function aliasesOf(ledger: ChapterLedger | undefined, projection: BookProjection): { name: string; alias: string }[] {

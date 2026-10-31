@@ -5,9 +5,11 @@
  *  - 推进密度 = 每千字推进了几条线索（收一条算两条，开新线索不算推进）。拿全书自己的中位数当「平常」，不设死标准。
  *  - 可能拖：推进密度不到平常的 0.4，故事时间也没怎么走（≤ 2 天）；挨着的几章并成一段。
  *  - 可能赶：推进密度是平常的 2.5 倍以上、且推进得不少（≥ 5）；或一章里跨了 5 天以上、字数却不到平常的 0.75。
+ *  - 故事走了几天只用两种换天规矩下都确定的相对天数（P3a）：不确定的章不按天数判拖、赶。
  * 定稿不到 6 章（能算密度的）不下结论。结论只是「可能」，原因带数字，作者自己判断。
  */
 import type { BookProjection } from "./types.js";
+import { isExact } from "./time.js";
 
 /** 能算推进密度的章少于这个数，不下结论。 */
 export const PACE_MIN_CHAPTERS = 6;
@@ -34,13 +36,13 @@ export interface PaceChapter {
   readonly closed: number;
   /** 每千字推进几条（收一条算两条）；字太少、或前面没有开着的线索可推时没有。 */
   readonly density?: number;
-  /** 这章开头到结尾跨了几天（天数不知道就没有）。 */
+  /** 这章开头到结尾跨了几天（不确定就没有）。 */
   readonly span?: number;
-  /** 从上一章结尾到这章结尾，故事走了几天（第一章 = 本章跨的天数；两头有一头不知道就没有）。 */
+  /** 从前一个当下章结尾到这章结尾，故事走了几天（第一个当下章 = 本章跨的天数；不确定就没有）。 */
   readonly storyDays?: number;
   /** 这章的线索账没记全（账待记、没记全）：不知道推进了什么，不算密度、不下结论。 */
   readonly movesUnknown?: true;
-  /** 天数是正文写明 / 判断 / 作者定的（估的、没记的不算准）。 */
+  /** 章内跨度确定（两种换天规矩下都是同一个数）。 */
   readonly timeSure: boolean;
   readonly pace?: "slow" | "fast";
 }
@@ -112,15 +114,19 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
   const openBefore = (chapter: number): number => projection.threads.filter((thread) =>
     thread.openedAt < chapter && !(thread.closedAt !== undefined && thread.closedAt < chapter)).length;
 
-  const base = projection.chapters.map((view, index) => {
-    const previous = projection.chapters[index - 1];
+  const base = projection.chapters.map((view) => {
     const count = words.get(view.chapter) ?? 0;
     const row = moves.get(view.chapter) ?? { opened: 0, advanced: 0, closed: 0 };
     const weighted = row.advanced + row.closed * 2;
     const movesUnknown = view.missingKinds?.includes("thread") === true;
     const density = !movesUnknown && count >= PACE_MIN_WORDS && openBefore(view.chapter) > 0 ? weighted / (count / 1000) : undefined;
-    const span = view.day !== undefined && view.dayEnd !== undefined ? view.dayEnd - view.day : undefined;
-    const storyDays = view.dayEnd === undefined ? undefined : previous ? (previous.dayEnd === undefined ? undefined : view.dayEnd - previous.dayEnd) : span;
+    const time = view.time;
+    const span = time.presentLine === true && isExact(time.span) ? time.span.lo : undefined;
+    const storyDays = span === undefined
+      ? undefined
+      : time.previousPresent === undefined
+        ? (time.start && isExact(time.start) && time.start.lo === 1 ? span : undefined)
+        : isExact(time.sincePrevious) ? time.sincePrevious.lo + span : undefined;
     return {
       chapter: view.chapter,
       words: count,
@@ -128,7 +134,7 @@ export function paceReport(projection: Pick<BookProjection, "chapters" | "thread
       ...(density !== undefined ? { density } : {}),
       ...(span !== undefined ? { span } : {}),
       ...(storyDays !== undefined ? { storyDays } : {}),
-      timeSure: view.dayBasis !== "estimated" && view.dayBasis !== "missing" && view.dayBasis !== "unknown",
+      timeSure: span !== undefined,
       ...(movesUnknown ? { movesUnknown: true as const } : {}),
       weighted,
     };

@@ -6,6 +6,7 @@
  * 去掉这行就一起去掉），默认不写、作者勾上才写的是 `o<序号>`。天数那一行不是条目，键是 `day`，改的是天数两栏。
  */
 import {
+  isExact,
   nameKey,
   parseDraftFile,
   project,
@@ -13,10 +14,12 @@ import {
   readCardsOrLegacy,
   readChapterLedger,
   readChapterPaper,
+  timelineTable,
   type ChapterCommitResult,
+  type TimelineRow,
   type LedgerCompleteResult,
 } from "@actalk/story-core";
-import { WEEKDAY_NAMES } from "../book/story-timeline.js";
+import { storySpanText, timeConflictText, unknownDayWhy, WEEKDAY_NAMES } from "../book/story-timeline.js";
 import { markdownTitle } from "../book/story-views.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import { describeReaderWait } from "../editorial/reader-progress.js";
@@ -31,6 +34,8 @@ const KEEP_PREFIX = "i";
 const OPT_IN_PREFIX = "o";
 /** 天数那一行。 */
 export const DAY_ITEM_ID = "day";
+/** 不在当下的段那一行。 */
+const SEGMENTS_ITEM_ID = "segments";
 
 export interface ChecklistItem {
   readonly id: string;
@@ -39,9 +44,10 @@ export interface ChecklistItem {
   readonly reason?: string;
   readonly detail?: string;
   readonly removable: boolean;
+  /** 天数那一行：开头是确定的哪天才有（是区间、不知道的两栏空着请作者填，dayUnknown）。 */
   readonly editableDay?: number;
+  /** 结尾是确定的哪天才有（= editableDay 就是同一天）；没有 = 章末是哪天说不准，作者只改开头时不替他定结尾。 */
   readonly editableDayEnd?: number;
-  /** 天数那一行：这章是哪天不知道（前面有章的账还没记上），两栏空着请作者填。 */
   readonly dayUnknown?: true;
   readonly needsConfirm?: boolean;
   readonly defaultUnchecked?: boolean;
@@ -142,37 +148,62 @@ function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
   };
 }
 
-const daySpan = (day: number, dayEnd: number) => (dayEnd > day ? `第 ${day} 天到第 ${dayEnd} 天` : `第 ${day} 天`);
-
-/** 重定稿天数和上次不一样：为什么要作者看（照上次的记了 / 这次按新的记）。 */
+/** 天数那一行为什么要作者看：重定稿和上次不一样、作者定的和记下的对不上。 */
 function dayReason(preview: CommitPreview): string | undefined {
+  const reasons: string[] = [];
   const since = preview.time.sinceLast;
-  if (!since) return undefined;
-  const other = daySpan(since.otherDay, since.otherDayEnd);
-  return since.kept
-    ? `记账员这次看成${other}，和上次定稿不一样；先照上次的记，不对就改天数`
-    : `上次定稿记的是${other}，记时间的那句改过了，这次按新的记；不对就改天数`;
+  if (since) {
+    const other = storySpanText(since.other) ?? "哪天不知道";
+    reasons.push(since.kept
+      ? `记账员这次看成${other}，和上次定稿不一样；先照上次的记，不对就改天数`
+      : `上次定稿记的是${other}，记时间的那句改过了，这次按新的记；不对就改天数`);
+  }
+  for (const conflict of preview.time.conflicts) reasons.push(timeConflictText(conflict));
+  return reasons.length > 0 ? reasons.join("；") : undefined;
 }
 
 function dayLabel(preview: CommitPreview): string {
-  const { time } = preview;
-  if (time.day === undefined || time.dayEnd === undefined) return "这一章是哪天不知道（前面有章的账还没记上）；知道的话填上";
-  const span = `故事${daySpan(time.day, time.dayEnd)}`;
-  const extra = [time.timeOfDay, time.weekday !== undefined ? WEEKDAY_NAMES[time.weekday] : undefined].filter(Boolean).join("，");
-  const basis = time.sinceLast?.kept
+  const { row } = preview.time;
+  if (row.presentLine === false) return "这一章整章不在当下线上（回忆、梦这类），不占故事天数";
+  const span = storySpanText(row);
+  if (!span) {
+    // 不估（写作版本 P3 删了「按上一章 +1」）：说清为什么不知道，请作者填。
+    const why = !preview.time.recorded ? "正文里没认出这章的时间" : unknownDayWhy(row);
+    return `${why}，是故事哪天不知道；知道的话填上`;
+  }
+  const weekday = row.weekday !== undefined ? `${row.weekdayDerived ? "推算是" : ""}${WEEKDAY_NAMES[row.weekday]}` : undefined;
+  const extra = [row.timeOfDay, weekday].filter(Boolean).join("，");
+  const basis = preview.time.sinceLast?.kept
     ? "（照上次定稿）"
-    : time.basis === "text"
-      ? "（正文明写）"
-      : time.basis === "author"
-        ? "（你定的）"
-        : time.basis === "judged"
-          ? "（按前后文判断）"
-          : time.basis === "estimated"
-            ? "（正文没说离上一章隔了几天，先按第二天记，不对就改）"
-            : preview.chapter <= 1
-              ? "（正文里没找到时间说法，先这么记，不对就改）"
-              : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
-  return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
+    : row.basis === "author"
+      ? "（你定的）"
+      : row.basis === "presumed" || row.presumed
+        ? "（按旧账推的，不算准）"
+        : preview.time.declared === "text"
+          ? "（正文明写）"
+          : preview.time.declared === "judged"
+            ? "（按前后文判断）"
+            : "";
+  return `这一章记为故事${span}${extra ? `（${extra}）` : ""}${basis}`;
+}
+
+/** 本章不在当下线上的段，清单上一行（不是条目，不能单独去掉）。 */
+function segmentsLine(preview: CommitPreview): ChecklistItem | undefined {
+  const { segments } = preview.time;
+  if (segments.length === 0) return undefined;
+  return {
+    id: SEGMENTS_ITEM_ID,
+    kind: "time",
+    label: `不在当下的段：${segments.map((segment) => segment.text).join("；")}——段里的事记着，不改现状`,
+    detail: segments.map((segment) => segment.quote).join(" / "),
+    removable: false,
+  };
+}
+
+/** 天数两栏：开头确定才填上（结尾确定才填结尾）；整章不在当下线上的也能填（作者说它是哪天就是哪天）。 */
+function editableDays(row: TimelineRow): Pick<ChecklistItem, "editableDay" | "editableDayEnd" | "dayUnknown"> {
+  if (!isExact(row.start)) return { dayUnknown: true };
+  return { editableDay: row.start.lo, ...(isExact(row.end) ? { editableDayEnd: row.end.lo } : {}) };
 }
 
 /** 能定稿的清单：天数一行在最前，要作者看的随后，自动记下的最后；keys = 每行的键 → 条目序号。 */
@@ -192,11 +223,10 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
       ...(dayReason(preview) ? { reason: dayReason(preview) } : {}),
       ...(timeQuote ? { detail: timeQuote } : {}),
       removable: false,
-      ...(preview.time.day !== undefined && preview.time.dayEnd !== undefined
-        ? { editableDay: preview.time.day, ...(preview.time.dayEnd > preview.time.day ? { editableDayEnd: preview.time.dayEnd } : {}) }
-        : { dayUnknown: true as const }),
+      ...editableDays(preview.time.row),
       ...(preview.time.needsConfirm ? { needsConfirm: true } : {}),
     },
+    ...(segmentsLine(preview) ? [segmentsLine(preview) as ChecklistItem] : []),
     ...others(preview.review).map((item) => toChecklistItem(item, true)),
     ...others(preview.auto).map((item) => toChecklistItem(item, false)),
   ];
@@ -264,9 +294,8 @@ export interface CommitLedgerReport {
     readonly threadsAdvanced: number;
     readonly threadsClosed: number;
     readonly present: number;
-    /** 是哪天不知道（账待记、前面有章账待记）就没有。 */
-    readonly day?: number;
-    readonly dayEnd?: number;
+    /** 故事哪几天（「第 5～6 天」）；不知道、整章不在当下线上就没有。 */
+    readonly storyTime?: string;
     readonly notRecorded: number;
     /** pending = 正文定了、账还没记上。 */
     readonly status: "pending" | "partial" | "ready";
@@ -300,7 +329,8 @@ async function ledgerReportOf(projectDir: string, chapter: number, notRecorded: 
   const entries = ledger?.entries ?? [];
   const count = (predicate: (entry: (typeof entries)[number]) => boolean): number => entries.filter(predicate).length;
   const after = project(await readBookSnapshot(projectDir));
-  const view = after.chapters.find((item) => item.chapter === chapter);
+  const row = timelineTable(after, chapter).find((item) => item.chapter === chapter);
+  const storyTime = row?.presentLine === true ? storySpanText(row) : undefined;
   const cards = await readCardsOrLegacy(projectDir);
   const known = new Set(cards.cards.filter((card) => card.kind === "character").flatMap((card) => [card.name, ...card.aliases]).map(nameKey));
   // 作者说过不用建卡的，也不再点名。
@@ -320,7 +350,7 @@ async function ledgerReportOf(projectDir: string, chapter: number, notRecorded: 
       threadsAdvanced: count((entry) => entry.kind === "thread" && entry.op === "advance"),
       threadsClosed: count((entry) => entry.kind === "thread" && entry.op === "close"),
       present: count((entry) => entry.kind === "presence"),
-      ...(view?.day !== undefined && view.dayEnd !== undefined ? { day: view.day, dayEnd: view.dayEnd } : {}),
+      ...(storyTime ? { storyTime } : {}),
       notRecorded,
       status: ledger?.status ?? "ready",
     },

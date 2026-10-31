@@ -38,10 +38,11 @@ async function makeBook(chapters = 2): Promise<string> {
 }
 
 /** 第 2 章定稿时记了一条不会变的事实（扉页上的年份），正文照旧再多一句扉页那句。 */
-async function writeLedger(dir: string): Promise<void> {
+/** narration = false：记账员没说是叙述还是人物说的（旧账都这样），对不上也只算「可能」。 */
+async function writeLedger(dir: string, narration = true): Promise<void> {
   await seedChapters(dir, [{ chapter: 2, entries: [
     { kind: "summary", text: "林舟锁好怀表。", quote: CH2 },
-    { kind: "fact", nature: "hard", subject: "城南旧事", attribute: "扉页", value: "林秋，一九八七年春", text: "扉页写着林秋，一九八七年春", quote: "扉页上写着两行字：林秋，一九八七年春。" },
+    { kind: "fact", nature: "hard", subject: "城南旧事", attribute: "扉页", value: "林秋，一九八七年春", text: "扉页写着林秋，一九八七年春", quote: "扉页上写着两行字：林秋，一九八七年春。", ...(narration ? { source: { kind: "narration" as const } } : {}) },
   ] }]);
 }
 
@@ -106,6 +107,14 @@ describe("核账服务（核账员一路）", () => {
     expect(result.sure.map((item) => item.quote)).toEqual([LEDGER_SENTENCE]);
     expect(result.sure[0]).toMatchObject({ earlierChapter: 2 });
     expect(result.maybe.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
+  });
+
+  it("账里那条不知道是叙述还是人物说的（旧账）：数字对不上只报「可能」，交原文判（写作版本 P3a 第 3 节）", async () => {
+    const dir = await makeBook();
+    await writeLedger(dir, false);
+    const result = await checkChapterBody(dir, 3, `${BODY}${LEDGER_SENTENCE}`, { readerCallModel: readerModel("maybe").callModel });
+    expect(result.sure).toEqual([]);
+    expect(result.maybe.map((item) => item.quote)).toContain(LEDGER_SENTENCE);
   });
 
   it("上次的问题两边原句还在就照带，把握沿用上次（不随这次的运气跳）", async () => {
@@ -276,12 +285,12 @@ describe("核账服务：核账记忆", () => {
   it("作者改了前一章是哪天 → 不复用上次「没问题」的结果（时间线表进键）", async () => {
     const dir = await makeHomeTempDir("check-service-day-");
     const text = "林舟把怀表放进抽屉。周婶走到柜台。";
-    expect((await runCommand(dir, chapterCommit, { chapter: 1, text, entries: [{ kind: "time", review: "auto", basis: "author", day: 1, quote: text }] }, { caller: "author", idempotencyKey: "commit-1" })).ok).toBe(true);
+    expect((await runCommand(dir, chapterCommit, { chapter: 1, text, entries: [{ kind: "day", review: "author", day: 1 }] }, { caller: "author", idempotencyKey: "commit-1" })).ok).toBe(true);
     const reader = readerModel();
     await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
     expect(await canReuseCheck(dir, 2, BODY)).toBe(true);
     expect((await runCommand(dir, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, { caller: "author", idempotencyKey: "day-1" })).ok).toBe(true);
-    expect((await readStoryViews(dir)).timeline.entries[0]?.day).toBe(20);
+    expect((await readStoryViews(dir)).timeline[0]?.start?.lo).toBe(20);
     expect(await canReuseCheck(dir, 2, BODY)).toBe(false);
     const checksBefore = reader.calls.checks;
     const after = await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
@@ -539,7 +548,7 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
   /** 第 4 章的核账记忆和这次的正文、前文对得上 → 走复用，结果就是这两条。 */
   async function bookWithChapter4Memory(): Promise<string> {
     const dir = await makeBook(3);
-    const timeline = describeTimelineForChapter((await readStoryViews(dir)).timeline, 4);
+    const timeline = describeTimelineForChapter((await readStoryViews(dir)).projection, 4);
     await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(await readTruthBasis(dir), 4, { timeline }), issues: [CURRENT, OLD] });
     return dir;
   }

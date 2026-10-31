@@ -2,12 +2,13 @@
  * 改账的规划（写作版本 P2a 片 3B，从 agent/ledger-decisions.ts 挪来）：一次改账请求翻成裁定草案。
  * 只算草案、不写盘；作者点「确认改账」才由 ledger.change 操作按作者档记下（见 recipes/ledger-change.ts）。
  */
-import { DecisionInput, nameKey, type BookProjection, type FactView, type ThreadView } from "@actalk/story-core";
+import { DecisionInput, isExact, nameKey, type BookProjection, type FactView, type ThreadView } from "@actalk/story-core";
+import { storySpanText, WEEKDAY_NAMES } from "../../book/story-timeline.js";
 
 /** 一次最多改几条（卡上摆得下、看得清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
 
-export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "summary"] as const;
+export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "keepDay", "summary"] as const;
 export type LedgerEditOp = (typeof LEDGER_OPS)[number];
 
 export interface LedgerChangeRequest {
@@ -138,20 +139,41 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest): 
       const chapter = request.chapter ?? latest;
       return proposal([{ type: "thread.close", thread: thread.id, chapter }], [`把线索「${thread.title}」记为第 ${chapter} 章已收`]);
     }
+    case "keepDay": {
+      // 作者定的天数和按记下的推出来的对不上：以作者定的为准；两处写明的星期算不拢：照写的留着。
+      // 都是记「不是问题」裁定，以后不再提；账、正文都不动。
+      const chapter = request.chapter ?? latest;
+      const conflicts = view.timeConflicts.filter((conflict) => conflict.chapter === chapter);
+      const weekdays = view.weekdayConflicts.filter((conflict) => conflict.chapter === chapter);
+      if (conflicts.length === 0 && weekdays.length === 0) return fail("unchanged", `第 ${chapter} 章你定的天数、写的星期和记下的没有对不上的，不用改。`);
+      return proposal(
+        [...conflicts, ...weekdays].map((conflict) => ({ type: "issue.dismiss", issue: conflict.key })),
+        [
+          ...conflicts.map((conflict) => `第 ${chapter} 章以你定的第 ${conflict.authorDay} 天为准`),
+          ...weekdays.map((conflict) => `第 ${chapter} 章写的${WEEKDAY_NAMES[conflict.weekday]}照留，不再提`),
+        ],
+      );
+    }
     case "day": {
       const chapter = request.chapter ?? latest;
       const current = view.chapters.find((item) => item.chapter === chapter);
       if (!current) return fail("unknown_chapter", `第 ${chapter} 章还没定稿，天数定稿时在清单上改。`);
       if (!request.day || request.day < 1) return fail("missing_day", `第 ${chapter} 章该是故事第几天？`);
       const day = request.day;
-      const dayEnd = request.dayEnd !== undefined && request.dayEnd > day ? request.dayEnd : undefined;
       if (request.dayEnd !== undefined && request.dayEnd < day) return fail("bad_day", `到第 ${request.dayEnd} 天比第 ${day} 天还早，请说清这一章是第几天到第几天。`);
-      const days = (from: number, to: number) => (to > from ? `第 ${from} 天到第 ${to} 天` : `第 ${from} 天`);
-      if (current.day === day && current.dayEnd === (dayEnd ?? day)) return fail("unchanged", `第 ${chapter} 章记的就是故事${days(day, dayEnd ?? day)}，不用改。`);
-      const from = current.day !== undefined && current.dayEnd !== undefined ? `从故事${days(current.day, current.dayEnd)}` : "";
+      // 给了结尾才记结尾（和开头一样 = 明确就这一天）；只说开头的，结尾按这章里换天推（写作版本 P3 设计 2.5，T4：不再吞掉）。
+      const dayEnd = request.dayEnd;
+      const days = (from: number, to: number | undefined) => (to !== undefined && to > from ? `第 ${from} 天到第 ${to} 天` : `第 ${from} 天`);
+      const { start, end } = current.time;
+      const sameStart = isExact(start) && start.lo === day;
+      if (sameStart && (dayEnd === undefined || (isExact(end) && end.lo === dayEnd))) {
+        return fail("unchanged", `第 ${chapter} 章记的就是故事${storySpanText(current.time) ?? days(day, dayEnd)}，不用改。`);
+      }
+      const was = storySpanText(current.time);
+      const from = was ? `从故事${was}` : "";
       return proposal(
         [{ type: "chapter.day", chapter, day, ...(dayEnd !== undefined ? { dayEnd } : {}) }],
-        [`第 ${chapter} 章${from}改记为${from ? "" : "故事"}${days(day, dayEnd ?? day)}`],
+        [`第 ${chapter} 章${from}改记为${from ? "" : "故事"}${days(day, dayEnd)}`],
       );
     }
     case "summary": {

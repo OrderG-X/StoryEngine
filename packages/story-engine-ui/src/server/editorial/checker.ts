@@ -634,7 +634,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
   } catch (error) {
     rethrowIfStopped(error);
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成（上一稿的问题照带）。
-    return { failure: `核账员读前文没成：${error instanceof Error ? error.message : String(error)}` };
+    return { failure: `核账员读前文没成：${modelFailureText(error)}` };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   // R7.3 设定本进核账：人物卡 / 地点 / 资产 / 世界规则拼一份「设定」对照材料，三遍和自复核都带上。
@@ -651,7 +651,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
   // F（时间线只进自复核）开着时三遍不带表、只在 A 那一轮带（表照样读一次）。
   const timelineTable = variant.timeline || variant.timelineInReview
     ? await readStoryViews(input.projectDir)
-      .then((views) => describeTimelineForChapter(views.timeline, input.chapter))
+      .then((views) => describeTimelineForChapter(views.projection, input.chapter))
       .catch(() => undefined)
     : undefined;
   // 前文有看不到原文的章（折叠只剩笔记 / 冷窗口没给到）→ 先翻一轮原文贴回去，三遍和自复核共用这一段前缀。
@@ -1043,7 +1043,7 @@ export async function checkPlanByReader(input: {
     }
   } catch (error) {
     rethrowIfStopped(error);
-    return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
+    return { problems: [], failures: [`核账员读前文没成：${modelFailureText(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.plan.chapter);
   try {

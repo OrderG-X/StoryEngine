@@ -225,7 +225,7 @@ describe("StoryEngine-NG ContextGateway", () => {
     const pending = envelope.sections.find((section) => section.name === "ledger_pending")?.content as { chapters: number[]; note: string } | undefined;
     expect(pending?.chapters).toEqual([1]);
     expect(pending?.note).toContain("第 1 章的账还没记上");
-    expect(envelope.sections.find((section) => section.name === "story_calendar")?.content).toEqual({ currentStoryDay: "不知道（前面有章的时间没记上）" });
+    expect(envelope.sections.find((section) => section.name === "story_calendar")?.content).toEqual({ currentStoryDay: "不知道（第 1 章：这章的账还没记上）" });
     // 最近那章账待记：承接它的正文，不拿「梗概给不出」当要推进的事。
     const continuity = envelope.sections.find((section) => section.name === "story_continuity")?.content as { recentEvents: string[]; carryForwardInstruction: string } | undefined;
     expect(continuity?.recentEvents).toEqual(["第 1 章：这章的账还没记上，梗概给不出"]);
@@ -244,7 +244,7 @@ describe("StoryEngine-NG ContextGateway", () => {
       expect(outcome.ok).toBe(true);
     };
     await commit(1, "# 第1章\n\n林远在渡口捡到一封信。", [
-      { kind: "time", review: "auto", basis: "author", day: 1 },
+      { kind: "day", review: "author", day: 1 },
       { kind: "thread", review: "auto", op: "open", type: "question", title: "信是谁写的", note: "捡到一封信", quote: "林远在渡口捡到一封信" },
     ]);
     // 第 2 章补摘原句没成，梗概、时间、线索都没记上；第 3、4 章账待记。

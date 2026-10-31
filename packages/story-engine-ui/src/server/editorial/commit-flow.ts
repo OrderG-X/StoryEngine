@@ -2,35 +2,53 @@
  * 定稿编排（重构 P3；写作版本 P2a 片 4A 起是执行器 commit.prepare 的两步，配方在 services/operations/recipes/commit-prepare.ts）：
  *
  *   prepareChapterCommit：读真相 → 投影（算到上一章）→ 记账员交账单 → checkEntries 核原句 → classifyForReview 分流
- *                         → 返回清单（要你看的 / 自动记下的 / 没记上的 / 这章是第几天）+ 预览票（条目、正文指纹、依据；存在操作的检查点里）
- *   commitEntriesOf：照票减掉作者去掉的、套上作者改的天数 → 交给「定稿」命令的条目（配方带着预览时的依据交命令：
+ *                         → 返回清单（要你看的 / 自动记下的 / 没记上的 / 这章的时间）+ 预览票（条目、正文指纹、依据；存在操作的检查点里）
+ *   commitEntriesOf：照票减掉作者去掉的、加上作者改的天数（和记账员记的时间并存，写作版本 P3 设计 2.5）→ 交给「定稿」命令的条目（配方带着预览时的依据交命令：
  *                    预览之后前面的章、账、设定、裁定有一样变了，核心不写、如实说哪里变了）
  *
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
+  boundaryText,
+  chapterSource,
+  chapterTextPath,
   checkEntries,
   classifyForReview,
   declarationOf,
   declarationsOf,
   knownEntries,
   ledgerOf,
+  locateQuote,
   nameKey,
+  offsetText,
   presenceName,
   project,
   readBookSnapshot,
+  relativeDaysText,
+  segmentText,
   sha256,
   threadOf,
+  TIME_MODEL,
+  timelineTable,
+  timeRoleOf,
   type BookProjection,
+  type BookSnapshot,
   type ChapterLedger,
   type ClassifiedEntry,
+  type DayInput,
+  type DayRange,
   type EntryInput,
   type EntryKind,
   type LedgerEntry,
   type ReviewReason,
+  type LedgerScene,
   type ThreadInput,
-  type TimeBasis,
+  type TimeConflictView,
   type TimeInput,
+  type TimelineRow,
+  type TimeOffset,
   type TruthBasis,
 } from "@actalk/story-core";
 import type { KeeperDrop } from "./keeper-parse.js";
@@ -102,22 +120,7 @@ export interface CommitPreview {
   readonly notRecorded: readonly NotRecorded[];
   /** 记上了但改过的（比如缺字段的事实按「发生过的事」记）。 */
   readonly adjusted: readonly NotRecorded[];
-  readonly time: {
-    /** 不知道（前面有章的账还没记上、这章的时间又是相对上一章的）就没有：清单上请作者填。 */
-    readonly day?: number;
-    readonly dayEnd?: number;
-    readonly basis: TimeBasis | "missing" | "unknown";
-    readonly weekday?: number;
-    readonly timeOfDay?: string;
-    /** 天数是估的（记账员没给时间），要作者确认或改。 */
-    readonly needsConfirm: boolean;
-    /**
-     * 重定稿、记账员这次看的天数和上次定稿记的不一样（一样就没有）。
-     * kept：上次那条时间的原句还在正文里，照上次的记，other 是记账员这次看成的；
-     * 没 kept：那句改没了，按这次的记，other 是上次定稿记的。
-     */
-    readonly sinceLast?: { readonly kept: boolean; readonly otherDay: number; readonly otherDayEnd: number };
-  };
+  readonly time: PreviewTime;
   /** 重定稿：这章上次开的、后文还接着的线索，这次没记上、上次的原句也没了（定稿后它们没了开头）。 */
   readonly lostThreads?: readonly string[];
   readonly omittedThreads: number;
@@ -128,6 +131,28 @@ export interface CommitPreview {
   readonly missingKinds?: readonly EntryKind[];
   readonly cold?: ColdCoverage;
   readonly waited?: ReaderWaited;
+}
+
+/** 定稿后这一章的时间（清单最前那一行）。 */
+export interface PreviewTime {
+  /** 和时间表同一行：开头、结尾第几天（区间；不知道就没有）、离上一个当下章多久、星期、时段、依据（带上已有的作者裁定，T7）。 */
+  readonly row: TimelineRow;
+  /** 记账员记上了这章的时间（没记上 = 正文里没认出时间）。 */
+  readonly recorded: boolean;
+  /** 记账员这次怎么判的本章开头：正文明写 / 按前后文判断（没写开头、说不出就没有）。 */
+  readonly declared?: "text" | "judged";
+  /** 本章不在当下线上的段（清单上一行）：说法 + 首句。 */
+  readonly segments: readonly { readonly text: string; readonly quote: string }[];
+  /** 要作者看：没记上时间、是哪天不知道、和上次定稿不一样、和作者定的对不上。 */
+  readonly needsConfirm: boolean;
+  /**
+   * 重定稿、这次的天数和上次定稿记的不一样（一样、有一边不知道就没有）。
+   * kept：上次那条时间的原句还在正文里，照上次的记，other 是记账员这次看成的；
+   * 没 kept：那句改没了，按这次的记，other 是上次定稿记的。
+   */
+  readonly sinceLast?: { readonly kept: boolean; readonly other: { readonly start?: DayRange; readonly end?: DayRange } };
+  /** 作者定的天数和记账员记的对不上（设计 2.5，只说两边不能同时成立，不判谁对）。 */
+  readonly conflicts: readonly Pick<TimeConflictView, "kind" | "authorDay" | "expected">[];
 }
 
 export type PrepareFailureCode = "book_unsettled" | "basis_changed" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
@@ -161,28 +186,57 @@ function subjectResolver(before: BookProjection): (name: string) => string {
   return (name) => aliasToKey.get(nameKey(name)) ?? nameKey(name);
 }
 
+/** 一处相对的说法：按天说的「过了 1 天」「往回 2 天」；按月、年的原样；看换天规矩才定的两种都说。 */
+function relativeText(value: { readonly offset?: TimeOffset; readonly byBoundary?: Parameters<typeof boundaryText>[0] }): string {
+  if (value.byBoundary) return boundaryText(value.byBoundary);
+  if (!value.offset) return "说不准";
+  return value.offset.unit === "day" ? relativeDaysText({ lo: value.offset.min, hi: value.offset.max }) : offsetText(value.offset);
+}
+
+/** 记账员记的这一章的时间（清单「没记上的」那几行用；天数那一行看 PreviewTime）。 */
+function timeEntryLabel(entry: TimeInput): string {
+  const parts: string[] = [];
+  if (entry.start === undefined) parts.push("整章不在当下线上");
+  else if (entry.start === "unknown") parts.push("离上一个当下章多久说不准");
+  else parts.push(`离上一个当下章${relativeText(entry.start)}${entry.start.basis === "text" ? "（正文明写）" : "（按前后文判断）"}`);
+  if (entry.sameDay) parts.push("本章同一天");
+  if (entry.dayChanges?.length) parts.push(`本章里换了 ${entry.dayChanges.length} 次天`);
+  if (entry.start !== undefined && entry.segments?.length) parts.push(`${entry.segments.length} 段不在当下`);
+  if (entry.timeOfDay) parts.push(entry.timeOfDay);
+  return parts.join("，");
+}
+
+const dayInputText = (entry: DayInput): string =>
+  entry.dayEnd !== undefined && entry.dayEnd > entry.day ? `故事第 ${entry.day} 天到第 ${entry.dayEnd} 天` : `故事第 ${entry.day} 天`;
+
 function entryLabel(entry: EntryInput, before: BookProjection): string {
   switch (entry.kind) {
     case "summary":
       return `梗概：${entry.text}`;
-    case "time": {
-      const parts: string[] = [];
-      if (entry.daysSincePrevious !== undefined) parts.push(entry.daysSincePrevious === 0 ? "和上一章同一天" : `离上一章隔 ${entry.daysSincePrevious} 天`);
-      if (entry.daysInChapter !== undefined) parts.push(`本章内过了 ${entry.daysInChapter} 天`);
-      if (entry.timeOfDay) parts.push(entry.timeOfDay);
-      return `时间：${parts.join("，") || "见原句"}${entry.basis === "text" ? "（正文明写）" : "（按前后文判断）"}`;
-    }
+    case "time":
+      return `时间：${timeEntryLabel(entry)}`;
+    case "day":
+      return `你定的天数：${dayInputText(entry)}`;
     case "presence": {
       const alias = nameKey(entry.name) === nameKey(entry.nameUsed) ? "" : `（正文叫「${entry.nameUsed}」）`;
       return `出场：${entry.name}${alias}${entry.viewpoint ? "，视角人物" : ""}`;
     }
     case "fact":
-      return `事实（${NATURE_LABELS[entry.nature]}）：${entry.text}`;
+      // 人物嘴里说的单独标出来：不顶替现状，作者一眼看得出（设计第 3 节）。
+      return entry.source?.kind === "character_claim"
+        ? `事实（${entry.source.speaker ?? "人物"}说的）：${entry.text}`
+        : `事实（${NATURE_LABELS[entry.nature]}）：${entry.text}`;
     case "thread": {
       if (entry.op === "open") return `新开${THREAD_TYPE_LABELS[entry.type ?? "question"]}：${entry.title ?? entry.note}`;
       return `${entry.op === "close" ? "收口" : "推进"}「${threadTitle(entry, before)}」：${entry.note}`;
     }
   }
+}
+
+/** 清单上那一行给的原句：时间给开头那句（没写开头、说不出就没有）。 */
+function entryQuote(entry: EntryInput): string | undefined {
+  if (entry.kind === "time") return entry.start && entry.start !== "unknown" ? entry.start.quote || undefined : undefined;
+  return "quote" in entry && entry.quote ? entry.quote : undefined;
 }
 
 function threadTitle(entry: ThreadInput, before: BookProjection): string {
@@ -253,8 +307,6 @@ function reasonTexts(
       }
       case "new-character":
         return { code, text: "第一次出场的人物；要是已有人物的新称呼，去掉这条告诉我是谁" };
-      case "time-estimated":
-        return { code, text: "天数是估的" };
     }
   });
 }
@@ -289,18 +341,29 @@ export function touchesHardFact(item: ClassifiedEntry, before: BookProjection): 
   return (item.entry.replaces ?? []).some((id) => before.facts.find((fact) => fact.id === id)?.nature === "hard");
 }
 
-/** 用核过的条目拼一份临时账单，算出「定稿后」这一章是第几天（只用来展示）。 */
-function previewDay(ledgers: readonly ChapterLedger[], chapter: number, entries: readonly EntryInput[], textSha: string) {
+type Truth = Pick<BookSnapshot, "ledgers" | "decisions" | "cards">;
+
+/**
+ * 用核过的条目拼一份临时账单，算出「定稿后」这一章的时间（只用来展示）：带上已有的作者裁定和换天规矩（T7），
+ * 和定稿后时间表、概况上那一行是同一个算法。
+ */
+function previewTime(truth: Truth, chapter: number, entries: readonly EntryInput[], text: string): { readonly row: TimelineRow; readonly conflicts: PreviewTime["conflicts"]; readonly segments: readonly string[] } | undefined {
   const draft = ledgerOf({
     chapter,
-    textSha256: textSha,
+    text,
     entries: entries.map((entry, index) =>
       entry.kind === "thread" && entry.op === "open" ? { ...entry, id: `preview-${index}`, thread: `preview-t${index}` } : { ...entry, id: `preview-${index}` },
     ),
   });
-  const after = project({ ledgers: [...ledgers.filter((ledger) => ledger.chapter < chapter), draft], decisions: [] }, { upTo: chapter });
-  return after.chapters.find((view) => view.chapter === chapter);
+  const after = project({ ledgers: [...truth.ledgers.filter((ledger) => ledger.chapter < chapter), draft], decisions: truth.decisions, cards: truth.cards }, { upTo: chapter });
+  const row = timelineTable(after, chapter).find((item) => item.chapter === chapter);
+  if (!row) return undefined;
+  const conflicts = after.timeConflicts.filter((conflict) => conflict.chapter === chapter).map(({ kind, authorDay, expected }) => ({ kind, authorDay, expected }));
+  return { row, conflicts, segments: row.segments };
 }
+
+const sameRange = (a: DayRange | undefined, b: DayRange | undefined): boolean => a?.lo === b?.lo && a?.hi === b?.hi;
+const known = (range: DayRange | undefined): boolean => range !== undefined && (range.lo !== undefined || range.hi !== undefined);
 
 type Accepted = ReturnType<typeof checkEntries>["accepted"];
 type Rejected = ReturnType<typeof checkEntries>["rejected"];
@@ -355,33 +418,66 @@ function keepLastOpens(
   return { accepted, rejected: checked.rejected.filter((item) => !folded.has(item)), lost };
 }
 
+/** 时间声明里的原句：开头那句、换天那句、段的首末句。 */
+function timeQuotes(time: TimeInput): string[] {
+  return [
+    ...(time.start && time.start !== "unknown" ? [time.start.quote] : []),
+    ...(time.dayChanges ?? []).flatMap((change) => (change.quote ? [change.quote] : [])),
+    ...(time.segments ?? []).flatMap((segment) => [segment.firstQuote, segment.lastQuote]),
+  ];
+}
+
+/** 这句原句落在的整句（一句或几句连着）：找不到、不止一处就没有。 */
+function wholeSentences(quote: string, text: string): string | undefined {
+  const source = chapterSource(0, text);
+  const at = locateQuote(quote, source)?.units;
+  if (!at) return undefined;
+  return source.units.filter((unit) => unit.id >= at.from && unit.id <= at.to).map((unit) => text.slice(unit.start, unit.end)).join("");
+}
+
 /**
  * 重定稿时天数照上次定稿的记（作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把第二天清早看成当天，
  * 第 6～7 天成了第 5～6 天，后面 45 章跟着挪一天，清单上只露出这一章的天数）。
- * 上次那条时间的原句还在正文里就照上次的；和记账员这次看的不一样时两边都给作者看，作者改天数照旧管用。
+ * 上次那条时间的原句（开头那句、换天那句、段的首末句）所在的整句都没改就照上次的；和这次看的不一样时两边都给作者看，作者改天数照旧管用。
+ * 比整句、不只看原句还在不在（P3a 改早章：作者在「这天下午，……」前面加了「过了两天，」，原句还在，天数却照上次的没挪）。
+ * 比的是记那套时间时的正文（时间条目原句所在的版本）：那版读不到（盘上的正文改过、这中间先定了正文账待记、文件没了）
+ * 就证明不了那几句没改，不照上次的，两边都给作者看（出口复核第 5 轮 R11）。
  */
 function keepLastDay(
-  ledgers: readonly ChapterLedger[],
+  truth: Truth,
   chapter: number,
-  previous: readonly LedgerEntry[],
+  previous: PreviousRecord,
   accepted: Accepted,
   text: string,
   before: BookProjection,
-  textSha: string,
-): { readonly accepted: Accepted; readonly sinceLast: NonNullable<CommitPreview["time"]["sinceLast"]> } | undefined {
-  const last = previewDay(ledgers, chapter, declarationsOf(previous), textSha);
-  const now = previewDay(ledgers, chapter, accepted.map((item) => item.entry), textSha);
-  // 两边有一边是哪天不知道（前面有章账待记）：没得比，照这次的记。
-  if (last?.day === undefined || last.dayEnd === undefined || now?.day === undefined || now.dayEnd === undefined) return undefined;
-  if (last.day === now.day && last.dayEnd === now.dayEnd) return undefined;
+  lastText: string | undefined,
+): { readonly accepted: Accepted; readonly sinceLast: NonNullable<PreviewTime["sinceLast"]> } | undefined {
+  const last = previewTime(truth, chapter, declarationsOf(previous), text)?.row;
+  const now = previewTime(truth, chapter, accepted.map((item) => item.entry), text)?.row;
+  // 有一边是哪天不知道（前面有章账待记、说不准）：没得比，照这次的记。
+  if (!last || !now || !known(last.start) || !known(now.start)) return undefined;
+  if (sameRange(last.start, now.start) && sameRange(last.end, now.end)) return undefined;
   const lastTime = declarationsOf(previous).find((entry) => entry.kind === "time");
-  const carried = lastTime ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
-  if (!carried) return { accepted, sinceLast: { kept: false, otherDay: last.day, otherDayEnd: last.dayEnd } };
+  const unchanged = lastTime?.kind === "time" && lastText !== undefined && timeQuotes(lastTime).every((quote) => {
+    const was = wholeSentences(quote, lastText);
+    return was !== undefined && was === wholeSentences(quote, text);
+  });
+  const carried = lastTime && unchanged ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
+  const other = (row: TimelineRow) => ({ ...(row.start ? { start: row.start } : {}), ...(row.end ? { end: row.end } : {}) });
+  if (!carried) return { accepted, sinceLast: { kept: false, other: other(last) } };
   const at = accepted.findIndex((item) => item.entry.kind === "time");
   const next = at >= 0
     ? accepted.map((item, index) => (index === at ? { index: item.index, entry: carried } : item))
     : [...accepted, { index: Math.max(-1, ...accepted.map((item) => item.index)) + 1, entry: carried }];
-  return { accepted: next, sinceLast: { kept: true, otherDay: now.day, otherDayEnd: now.dayEnd } };
+  return { accepted: next, sinceLast: { kept: true, other: other(now) } };
+}
+
+/** 重定稿时作者上次在清单上定的天数照留（作者的，不是记账员的；记账员这次记的照样记，对不上由投影列出来）。 */
+function keepAuthorDay(previous: PreviousRecord, accepted: Accepted): Accepted {
+  const authorDay = declarationsOf(previous).find((entry): entry is DayInput & { id: string } => entry.kind === "day");
+  if (!authorDay || accepted.some((item) => item.entry.kind === "day")) return accepted;
+  const { id: _id, ...entry } = authorDay;
+  return [...accepted, { index: Math.max(-1, ...accepted.map((item) => item.index)) + 1, entry }];
 }
 
 export interface PrepareInput {
@@ -406,20 +502,55 @@ export interface PrepareInput {
   readonly now?: () => Date;
 }
 
+/** 这章上次记下的（条目，和读回时间声明要的段、时间格式）。 */
+interface PreviousRecord {
+  readonly entries: readonly LedgerEntry[];
+  readonly scenes?: readonly LedgerScene[];
+  readonly timeModel?: typeof TIME_MODEL;
+  /** 上次记账员记的时间读得全（老的账待记 carry 没带那套时间：只有作者定的天数）。 */
+  readonly timeComplete: boolean;
+}
+
 /**
  * 这章上次记下的条目（沿用线索、天数、认过的人都照它）。账待记的那份是空的：照它带着的 carry 里最近那版
- * （carry 里上一份账单的条目排在前面；时间、梗概各只留最前那条）。
+ * （carry 里上一份账单的条目排在前面；梗概只留最前那条）。
+ * 时间照 carry 带的最近那套（作者定的天数、记账员的时间、段、格式原样，出口复核 R6；作者定的天数是最近那次整套的，
+ * 见核心 carriedTime）。老账的 carry 没带那套：记账员的时间读不全，只留作者定的天数（认得的条目里每头排最前的那条；
+ * 按 P3 的读法：作者给了结尾才有结尾），时间不拿来比（见 prepareChapterCommit）。
  */
-function lastRecordedEntries(ledger: ChapterLedger | undefined): readonly LedgerEntry[] {
-  if (!ledger) return [];
-  if (ledger.status !== "pending") return ledger.entries;
-  const single = new Set<string>();
-  return knownEntries(ledger).filter((entry) => {
-    if (entry.kind !== "time" && entry.kind !== "summary") return true;
-    if (single.has(entry.kind)) return false;
-    single.add(entry.kind);
+function lastRecorded(ledger: ChapterLedger | undefined): PreviousRecord {
+  if (!ledger) return { entries: [], timeComplete: true };
+  if (ledger.status !== "pending") return { entries: ledger.entries, scenes: ledger.scenes, ...(ledger.timeModel ? { timeModel: ledger.timeModel } : {}), timeComplete: true };
+  const time = ledger.previous?.carry.time;
+  const authorRoles = new Set<string>();
+  let summary = false;
+  const entries = knownEntries(ledger).filter((entry) => {
+    if (entry.kind === "time") {
+      if (time || entry.relation !== "at") return false;
+      const role = timeRoleOf(entry);
+      if (authorRoles.has(role)) return false;
+      authorRoles.add(role);
+      return true;
+    }
+    if (entry.kind !== "summary") return true;
+    if (summary) return false;
+    summary = true;
     return true;
   });
+  if (!time) return { entries, timeModel: TIME_MODEL, timeComplete: false };
+  return { entries: [...entries, ...time.entries], scenes: time.scenes, ...(time.timeModel ? { timeModel: time.timeModel } : {}), timeComplete: true };
+}
+
+/**
+ * 上次记那套时间时的正文：记账员的时间条目引的都是同一版（证据里的正文哈希），盘上那份正好是这版才算。
+ * 账待记那次换了正文、时间是从更早那份带过来的，盘上的就不是那版。
+ */
+async function timeText(bookDir: string, chapter: number, record: PreviousRecord): Promise<string | undefined> {
+  const revisions = new Set(record.entries.flatMap((entry) => (entry.kind === "time" && entry.relation !== "at" ? entry.evidence.map((item) => item.revision) : [])));
+  if (revisions.size !== 1) return undefined;
+  const [revision] = revisions;
+  const text = await readFile(join(bookDir, chapterTextPath(chapter)), "utf-8").catch(() => undefined);
+  return text !== undefined && sha256(text) === revision ? text : undefined;
 }
 
 export async function prepareChapterCommit(input: PrepareInput): Promise<CommitPreview | PrepareFailure> {
@@ -439,7 +570,8 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   }
   const before = project(snapshot, { upTo: input.chapter - 1 });
   const current = snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter);
-  const previous = lastRecordedEntries(current);
+  const record = lastRecorded(current);
+  const previous = record.entries;
   const reopenable = previous
     .flatMap((entry) => (entry.kind === "thread" && entry.op === "open"
       ? [{ thread: threadOf(entry), type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
@@ -463,13 +595,13 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const checked = checkEntries(keeper.parsed.entries, input.text, before);
   const recommit = committed.includes(input.chapter);
   const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
-  // 账待记那份没记天数：没有「上次记的」可比（carry 里留着更早那版的时间才比）。
-  const lastDayKnown = current?.status !== "pending" || previous.some((entry) => entry.kind === "time");
-  const kept = recommit && lastDayKnown ? keepLastDay(snapshot.ledgers, input.chapter, previous, opens?.accepted ?? checked.accepted, input.text, before, textSha) : undefined;
-  const accepted = kept?.accepted ?? opens?.accepted ?? checked.accepted;
+  const withAuthorDay = recommit ? keepAuthorDay(record, opens?.accepted ?? checked.accepted) : checked.accepted;
+  // 读不全上次记账员记的时间（老的账待记）：不比，照这次的记。
+  const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before, await timeText(input.bookDir, input.chapter, record)) : undefined;
+  const accepted = kept?.accepted ?? withAuthorDay;
   const rejected = opens?.rejected ?? checked.rejected;
   const missingKinds = keeper.quoteRepair?.failed
-    ? [...new Set(rejected.filter((item) => item.reason === "quote_not_in_text").map((item) => item.entry.kind))]
+    ? [...new Set(rejected.filter((item) => item.reason === "quote_not_in_text").map((item): EntryKind => (item.entry.kind === "day" ? "time" : item.entry.kind)))]
     : [];
   // 重定稿：这章上次定稿时作者认过的出场人物不再当「第一次出场」问一遍（真跑：改两个错字重定稿，又问老郑、刀疤军官是谁）。
   const confirmedNames = previous.flatMap((entry) => (entry.kind === "presence" ? [presenceName(entry)] : []));
@@ -484,12 +616,12 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     index: position.get(item.index) ?? -1,
     kind: item.entry.kind,
     label: entryLabel(item.entry, before),
-    ...("quote" in item.entry && item.entry.quote ? { quote: item.entry.quote } : {}),
+    ...(entryQuote(item.entry) ? { quote: entryQuote(item.entry) } : {}),
     reasons: reasonTexts(item, before, resolve, later),
     optIn: optIn(item),
   });
   const entries = accepted.map((item) => item.entry);
-  const day = previewDay(snapshot.ledgers, input.chapter, entries, textSha);
+  const time = previewTime(snapshot, input.chapter, entries, input.text);
   const ticket: PreviewTicket = {
     chapter: input.chapter,
     textSha256: draftFingerprint(input.text),
@@ -511,20 +643,38 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
       ...keeper.parsed.drops.map((drop) => ({ code: "parse", label: dropLabel(drop), reason: drop.reason })),
     ],
     adjusted: keeper.parsed.adjusted.map((drop) => ({ code: "adjusted", label: dropLabel(drop), reason: drop.reason })),
-    time: {
-      ...(day?.day !== undefined && day.dayEnd !== undefined ? { day: day.day, dayEnd: day.dayEnd } : day?.dayBasis === "unknown" ? {} : { day: 1, dayEnd: 1 }),
-      basis: day?.dayBasis ?? "missing",
-      ...(day?.weekday !== undefined ? { weekday: day.weekday } : {}),
-      ...(day?.timeOfDay !== undefined ? { timeOfDay: day.timeOfDay } : {}),
-      needsConfirm: plan.timeMissing || day?.dayBasis === "missing" || day?.dayBasis === "estimated" || day?.dayBasis === "unknown" || kept?.sinceLast !== undefined,
-      ...(kept?.sinceLast ? { sinceLast: kept.sinceLast } : {}),
-    },
+    time: previewTimeOf(time, entries, plan.timeMissing, kept?.sinceLast, input.chapter),
     ...(opens && opens.lost.length > 0 ? { lostThreads: opens.lost } : {}),
     omittedThreads: keeper.omittedThreads,
     omittedFacts: keeper.omittedFacts,
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
     ...(missingKinds.length > 0 ? { missingKinds } : {}),
     ...extra,
+  };
+}
+
+/** 清单最前那一行。临时账单拼不出来（不该发生）按不知道给，照样请作者看。 */
+function previewTimeOf(
+  time: ReturnType<typeof previewTime>,
+  entries: readonly EntryInput[],
+  timeMissing: boolean,
+  sinceLast: PreviewTime["sinceLast"],
+  chapter: number,
+): PreviewTime {
+  const row: TimelineRow = time?.row ?? { chapter, presentLine: "unknown", weekdayDerived: false, basis: "unknown", presumed: false, segments: [], afterUnknown: false };
+  const declared = entries.find((entry): entry is TimeInput => entry.kind === "time");
+  const startBasis = declared?.start && declared.start !== "unknown" ? declared.start.basis : undefined;
+  const segments = (declared?.segments ?? []).map((segment, index) => ({ text: time?.segments[index] ?? segmentText(segment), quote: segment.firstQuote }));
+  const conflicts = time?.conflicts ?? [];
+  const unknownDay = row.presentLine !== false && !known(row.start);
+  return {
+    row,
+    recorded: declared !== undefined,
+    ...(startBasis ? { declared: startBasis } : {}),
+    segments,
+    needsConfirm: timeMissing || unknownDay || row.basis === "presumed" || sinceLast !== undefined || conflicts.length > 0,
+    ...(sinceLast ? { sinceLast } : {}),
+    conflicts,
   };
 }
 
@@ -536,13 +686,16 @@ export interface CommitChoices {
   readonly excluded?: readonly number[];
   /** 作者勾上的「默认不写」条目序号（见 CommitItem.optIn）。 */
   readonly optedIn?: readonly number[];
-  /** 作者改的「故事第几天」。 */
+  /** 作者改的「故事第几天」（本章开头）。 */
   readonly day?: number;
-  /** 作者改的「到第几天」（这一章跨天；没给或不比 day 大＝就这一天）。 */
+  /** 作者填的「到第几天」：给了才记结尾（和 day 一样 = 明确就这一天）；没给按记账员记的章内跨度推（设计 2.5，T4）。 */
   readonly dayEnd?: number;
 }
 
-/** 照票和作者的选择算出交给「定稿」命令的条目：去掉作者去掉的、默认不写的没勾就不写、套上作者改的天数。 */
+/**
+ * 照票和作者的选择算出交给「定稿」命令的条目：去掉作者去掉的、默认不写的没勾就不写；作者改了天数就加一条作者定的天数
+ * （换掉票里原有的那条），记账员记的时间原样留着——两样分开存、一起核，对不上由投影列给作者（设计 2.5）。
+ */
 export function commitEntriesOf(ticket: PreviewTicket, choices: CommitChoices): EntryInput[] {
   const optedIn = new Set(choices.optedIn ?? []);
   const excluded = new Set([
@@ -552,23 +705,16 @@ export function commitEntriesOf(ticket: PreviewTicket, choices: CommitChoices): 
   ]);
   const review = new Set(ticket.reviewIndexes);
   const day = choices.day !== undefined && choices.day >= 1 ? choices.day : undefined;
-  const span = day !== undefined && choices.dayEnd !== undefined && choices.dayEnd > day ? choices.dayEnd - day : undefined;
   const entries: EntryInput[] = [];
-  let timeSet = false;
   ticket.entries.forEach((entry, index) => {
     if (excluded.has(index)) return;
-    if (entry.kind === "time" && day !== undefined) {
-      // 作者改了天数：这一条改成作者定的，星期、时段、原句照留。章内过了几天也照作者填的「到第几天」——
-      // 只填一天（或两头一样）就是这一天，记账员记的跨天一并去掉（P6 第 7 步：不然改完还是「第 N～N+1 天」，改不掉）；
-      // 跨天的章改了头一天、两头都填（长篇实跑：第 24 章改成第 21 天，章里第二天那段丢了，后面的章跟着错一天）。
-      const { daysSincePrevious: _drop, daysInChapter: _span, ...rest } = entry;
-      entries.push({ ...rest, basis: "author", day, ...(span ? { daysInChapter: span } : {}), review: "author" } satisfies TimeInput);
-      timeSet = true;
-      return;
-    }
+    if (entry.kind === "day" && day !== undefined) return;
     // 作者在清单上看过的，记成作者确认过。
     entries.push(review.has(index) ? { ...entry, review: "author" } : entry);
   });
-  if (!timeSet && day !== undefined) entries.push({ kind: "time", review: "author", basis: "author", day, ...(span ? { daysInChapter: span } : {}) });
+  if (day !== undefined) {
+    const dayEnd = choices.dayEnd !== undefined && choices.dayEnd >= day ? choices.dayEnd : undefined;
+    entries.push({ kind: "day", review: "author", day, ...(dayEnd !== undefined ? { dayEnd } : {}) } satisfies DayInput);
+  }
   return entries;
 }

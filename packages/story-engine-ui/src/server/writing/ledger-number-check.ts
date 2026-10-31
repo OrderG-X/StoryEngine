@@ -20,6 +20,8 @@ export interface LedgerNumberConflict {
   readonly factId: string;
   /** 一句话说哪里对不上。 */
   readonly reason: string;
+  /** 那条事实是人物说的、来源没标的（核心权限表）：最多「可能」。 */
+  readonly confidence: "sure" | "maybe";
 }
 
 const DIGITS: Readonly<Record<string, number>> = {
@@ -135,7 +137,8 @@ function bareSubject(subject: string | undefined): string | undefined {
 function factInForce(fact: FactEntry, chapter: number): boolean {
   if (!(fact.chapter < chapter)) return false;
   if (fact.supersededByChapter !== undefined && fact.supersededByChapter <= chapter) return false;
-  return fact.kind === "hard";
+  // 梦里、回忆里的不是现状，不拿来对账（写作版本 P3a 第 3 节）。
+  return fact.kind === "hard" && fact.conflict !== "none";
 }
 
 export function findLedgerNumberConflicts(input: {
@@ -196,6 +199,7 @@ export function findLedgerNumberConflicts(input: {
         earlierQuote: target.source,
         earlierChapter: target.fact.chapter,
         factId: target.fact.id,
+        confidence: target.fact.conflict === "maybe" ? "maybe" : "sure",
         reason: `第 ${target.fact.chapter} 章写的是「${target.slot.left}${target.slot.text}${target.slot.unit}」，这里写成了「${here.left}${here.text}${here.unit}」`,
       });
       break;

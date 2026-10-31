@@ -134,15 +134,16 @@ it("照本章章纲写的途中章纲被重拟：不换上、留候选（第 5 �
   expect(await pendingDraftFor(book, 2)).toMatchObject({ kind: "candidate", reason: "basis_moved" });
 });
 
-it("写手读过的前章章纲写的途中重拟了：不换上（第 6 轮 T5）", async () => {
+it("前章章纲写的途中重拟了：不换上（第 6 轮 T5；写手的故事日历从账算、不读前章章纲，材料照旧按整本的章纲核）", async () => {
   const book = await makeBook();
-  // 前章定了稿、记了天数：写手段的故事日历按时间线读前章，连带读它的章纲（摘要、开场时间）。
-  await seedChapters(book, [{ chapter: 1, entries: [{ kind: "summary", text: "林远走到河岸。", quote: "林远走到了河岸。" }, { kind: "time", basis: "author", day: 1 }] }]);
+  await seedChapters(book, [{ chapter: 1, entries: [{ kind: "summary", text: "林远走到河岸。", quote: "林远走到了河岸。" }, { kind: "day", day: 1, dayEnd: 1 }] }]);
   await writeChapterPlan(book, normalizeChapterPlan(JSON.parse(planJson("钥匙交给老周")), { chapter: 1, source: "author" })!);
-  await writeChapterPlan(book, normalizeChapterPlan({ ...JSON.parse(planJson("林远接着走")), storyDay: 2 }, { chapter: 2, source: "author" })!);
+  await writeChapterPlan(book, normalizeChapterPlan({ ...JSON.parse(planJson("林远接着走")), dayOffset: 1, after: 1 }, { chapter: 2, source: "author" })!);
   const result = await write(book, 2, {
     async generateDraft({ context }) {
-      expect(JSON.stringify(context.sections.find((section) => section.name === "chapter_plan")?.content)).toContain("钥匙交给老周");
+      const plan = JSON.stringify(context.sections.find((section) => section.name === "chapter_plan")?.content);
+      expect(plan).toContain("本章是故事第 2 天");
+      expect(plan).not.toContain("钥匙交给老周");
       const replanned = await resolveChapterPlanForDraft({ projectDir: book, chapter: 1, direction: "钥匙当场熔毁", plannerCallModel: planner("钥匙当场熔毁"), planCheckReaderCallModel: noProblems });
       expect(replanned.plan?.summary).toBe("钥匙当场熔毁");
       await writeChapterPlan(book, replanned.plan!);

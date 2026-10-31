@@ -97,8 +97,17 @@ describe("v1 → v2 迁移器", () => {
     expect(ledger.entries.find((entry) => entry.id === "c2-3")).toMatchObject({ subjectRef: { mention: "外乡人" }, predicate: "在哪", value: "门外" });
   });
 
-  it("读回成声明和 v1 一字不差（时间两条并回一条）", () => {
-    expect(declarationsOf(upgraded(v1Raw(), TEXT).entries)).toEqual(V1_ENTRIES.map(withoutId));
+  it("读回成声明：别的和 v1 一字不差；时间两条并回一条、换成 P3 的说法（开头离上一章、章内换天）", () => {
+    const [time, ...rest] = [...declarationsOf(upgraded(v1Raw(), TEXT))].reverse();
+    expect(rest.reverse()).toEqual(V1_ENTRIES.slice(0, 5).map(withoutId));
+    expect(time).toEqual({
+      kind: "time",
+      review: "auto",
+      start: { offset: { unit: "day", min: 1, max: 1 }, basis: "text", quote: "第二天上午" },
+      dayChanges: [{ offset: { unit: "day", min: 2, max: 2 } }],
+      weekday: 3,
+      timeOfDay: "上午",
+    });
   });
 
   it("定稿后正文改过：原句一律 stale，版本号仍是定稿那版；正文不在了：unlocated_legacy", () => {
@@ -273,31 +282,45 @@ describe("账本升级命令", () => {
     expect(JSON.parse(await read(chapterLedgerPath(1)))).toMatchObject({ status: "pending", origin: "import" });
   });
 
-  it("迁移来的书和同样内容新定稿的书投影一样", async () => {
+  it("迁移来的书和同样内容新定稿的书投影一样；时间天数一样，只是旧账算推定的", async () => {
     const native = await mkdtemp(join(tmpdir(), "story-core-native-"));
     try {
-      const declared = (entries: readonly object[]) => entries.map(withoutId) as EntryInput[];
+      // 新定稿那本：时间按 P3 的说法记（和 v1 那两条同一个意思）。
+      const p3Time: Record<number, EntryInput> = {
+        1: { kind: "time", review: "auto", start: { offset: { unit: "day", min: 0, max: 0 }, basis: "judged", quote: "钟停在三点十五分" }, sameDay: true },
+        2: { kind: "time", review: "auto", start: { offset: { unit: "day", min: 1, max: 1 }, basis: "text", quote: "第二天上午" }, dayChanges: [{ offset: { unit: "day", min: 2, max: 2 } }], weekday: 3, timeOfDay: "上午" },
+      };
+      const declared = (chapter: number, entries: readonly object[]) =>
+        entries.map((entry) => ((entry as { kind: string }).kind === "time" ? p3Time[chapter] : withoutId(entry))) as EntryInput[];
       for (const [chapter, text, entries] of [[1, CH1, CH1_ENTRIES], [2, TEXT, V1_ENTRIES]] as const) {
-        const outcome = await runCommand(native, chapterCommit, { chapter, text, entries: declared(entries) }, { caller: "author", idempotencyKey: `c${chapter}` });
+        const outcome = await runCommand(native, chapterCommit, { chapter, text, entries: declared(chapter, entries) }, { caller: "author", idempotencyKey: `c${chapter}` });
         expect(outcome).toMatchObject({ ok: true, result: { rejected: [] } });
       }
-      // 旧账照新定稿那本的编号、时间写（迁移只换格式，编号原样）。
-      for (const chapter of [1, 2]) {
+      // 旧账照新定稿那本的编号写（迁移只换格式，编号原样）；时间用 v1 当年的写法。
+      for (const [chapter, text, v1] of [[1, CH1, CH1_ENTRIES], [2, TEXT, V1_ENTRIES]] as const) {
         const ledger = ChapterLedger.parse(JSON.parse(await readFile(join(native, chapterLedgerPath(chapter)), "utf-8")));
-        const ids = ledger.entries.filter((entry) => !entry.id.endsWith("-end")).map((entry: LedgerEntry) => entry.id);
+        const ids = new Map(ledger.entries.filter((entry) => entry.kind !== "time").map((entry: LedgerEntry, index) => [index, entry.id]));
         const threads = new Map(ledger.entries.flatMap((entry) => (entry.kind === "thread" && entry.op === "open" ? [[entry.id, entry.threadRef.id] as const] : [])));
-        const entries = declarationsOf(ledger.entries).map((entry, index) => {
-          const id = ids[index] as string;
-          return { id, ...entry, ...(threads.has(id) ? { thread: threads.get(id) } : {}) };
+        const timeId = ledger.entries.find((entry) => entry.kind === "time")?.id as string;
+        let index = 0;
+        const entries = v1.map((entry) => {
+          if (entry.kind === "time") return { ...entry, id: timeId };
+          const id = ids.get(index++) as string;
+          return { ...withoutId(entry), id, ...(threads.has(id) ? { thread: threads.get(id) } : {}) };
         });
-        const text = chapter === 1 ? CH1 : TEXT;
         await writeFile(join(book, chapterTextPath(chapter)), text);
         await writeFile(join(book, chapterLedgerPath(chapter)), `${JSON.stringify({ schema: LEDGER_V1_SCHEMA, chapter, textSha256: ledger.textSha256, committedAt: ledger.committedAt, origin: "commit", entries }, null, 2)}\n`);
       }
       const found = await ledgersToUpgrade(book);
       expect(await migrate(found?.digest as string)).toMatchObject({ ok: true });
-      const strip = ({ version: _version, ...rest }: Awaited<ReturnType<typeof projectBook>>) => rest;
-      expect(strip(await projectBook(book))).toEqual(strip(await projectBook(native)));
+      type View = Awaited<ReturnType<typeof projectBook>>;
+      const strip = ({ version: _version, chapters, ...rest }: View) => ({ ...rest, chapters: chapters.map(({ time: _time, ...chapter }) => chapter) });
+      const migrated = await projectBook(book);
+      const fresh = await projectBook(native);
+      expect(strip(migrated)).toEqual(strip(fresh));
+      const days = (view: View) => view.chapters.map(({ time }) => [time.start, time.end, time.weekday, time.basis]);
+      expect(days(fresh)).toEqual([[{ lo: 1, hi: 1 }, { lo: 1, hi: 1 }, 2, "ledger"], [{ lo: 2, hi: 2 }, { lo: 4, hi: 4 }, 3, "ledger"]]);
+      expect(days(migrated)).toEqual([[{ lo: 1, hi: 1 }, { lo: 1, hi: 1 }, 2, "presumed"], [{ lo: 2, hi: 2 }, { lo: 4, hi: 4 }, 3, "presumed"]]);
     } finally {
       await rm(native, { recursive: true, force: true });
     }

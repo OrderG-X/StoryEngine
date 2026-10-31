@@ -4,7 +4,8 @@
  * 直接读新核心投影：第一次出场的人、这章记的事实（改掉了哪条旧的）、线索开 / 推进 / 收口。
  * 不带 chapter＝最近定稿的那章。全部是名字和原句，不出 id。
  */
-import { projectBook, type BookProjection } from "@actalk/story-core";
+import { projectBook, timelineTable, type BookProjection, type FactView } from "@actalk/story-core";
+import { storySpanText } from "../book/story-timeline.js";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { ensureBookOnCore } from "../book/ensure-on-core.js";
@@ -20,6 +21,8 @@ export interface ChapterChangeFact {
   readonly auto: boolean;
   /** 后来又被别的章改掉了 / 作者撤了。 */
   readonly later?: "superseded" | "retracted";
+  /** 不是叙述当下说的（写作版本 P3a）：「梦里」「回忆里」「老周说的」——记着，不改现状。 */
+  readonly scope?: string;
 }
 
 export interface ChapterChangeThread {
@@ -36,14 +39,32 @@ export interface ChapterChanges {
   readonly summary?: string;
   /** 这章的账没记全：pending = 还没记上（梗概、出场、线索、事实都给不出）；partial = 记了一部分。界面如实说，不说「这章没变」。 */
   readonly ledgerShort?: "pending" | "partial";
-  /** 是哪天不知道就没有。 */
-  readonly day?: number;
-  readonly dayEnd?: number;
+  /** 故事哪几天（「故事第 5 天到第 6 天 · 含回忆（3 年前）」「不在当下（梦、想象或传闻）」）；是哪天不知道就没有。 */
+  readonly days?: string;
   readonly present: readonly string[];
   /** 这章第一次出场的人。 */
   readonly newCast: readonly { readonly name: string; readonly quote?: string }[];
   readonly threads: readonly ChapterChangeThread[];
   readonly facts: readonly ChapterChangeFact[];
+}
+
+/** 不是叙述当下说的事实，标一个短说法。 */
+function scopeOf(fact: FactView): string | undefined {
+  if (fact.scope.frame === "other") return "梦里";
+  if (fact.scope.frame === "past") return "回忆里";
+  if (fact.scope.frame === "unknown") return "段对不上";
+  if (fact.scope.source === "character_claim") return `${fact.scope.speaker ?? "人物"}说的`;
+  return undefined;
+}
+
+function daysOf(projection: Pick<BookProjection, "chapters">, chapter: number): string | undefined {
+  const row = timelineTable(projection as BookProjection, chapter).find((item) => item.chapter === chapter);
+  if (!row) return undefined;
+  const segments = row.segments.join("；");
+  if (row.presentLine === false) return `不在当下（${segments || "回忆、梦这类"}）`;
+  const span = row.presentLine === true ? storySpanText(row) : undefined;
+  if (!span) return undefined;
+  return `故事${span}${segments ? ` · 含${segments}` : ""}`;
 }
 
 const THREAD_ORDER: Record<ChapterChangeThread["op"], number> = { open: 0, advance: 1, close: 2 };
@@ -66,7 +87,8 @@ export function toChapterChanges(
         ...(fact.quote ? { quote: fact.quote } : {}),
         ...(replaced ? { replaces: replaced.text } : {}),
         auto: fact.review === "auto",
-        ...(fact.status !== "current" ? { later: fact.status } : {}),
+        ...(fact.status === "superseded" || fact.status === "retracted" ? { later: fact.status } : {}),
+        ...(scopeOf(fact) ? { scope: scopeOf(fact) } : {}),
       };
     });
   const threads = projection.threads
@@ -90,7 +112,7 @@ export function toChapterChanges(
     chapters: projection.chapters.map((item) => item.chapter),
     ...(view.summary ? { summary: view.summary } : {}),
     ...(view.ledgerStatus !== "ready" ? { ledgerShort: view.ledgerStatus } : {}),
-    ...(view.day !== undefined && view.dayEnd !== undefined ? { day: view.day, dayEnd: view.dayEnd } : {}),
+    ...(daysOf(projection, target) ? { days: daysOf(projection, target) } : {}),
     present: view.present,
     newCast,
     threads,

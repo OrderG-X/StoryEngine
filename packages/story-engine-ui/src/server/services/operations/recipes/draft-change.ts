@@ -70,6 +70,7 @@ import {
 import type { RevisionModelCaller } from "../../draft-change/revise-text.js";
 import { DRAFT_EDIT_TASKS, draftChangeStepBudget, draftChangeTasks, draftEditSends, sumBudget } from "../budgets.js";
 import type { OperationResult, Recipe, RecipeContext } from "../executor.js";
+import { modelFailureText } from "../../../lib/ai-errors.js";
 
 export { DRAFT_CHANGE_KIND };
 
@@ -214,8 +215,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
           });
         } catch (error) {
           rethrowIfStopped(error);
-          const message = error instanceof Error ? error.message : String(error);
-          throw coded(((error as { code?: unknown }).code as string | undefined) ?? "notes_failed", `专员读前文没成：${message}`);
+          throw coded(((error as { code?: unknown }).code as string | undefined) ?? "notes_failed", `专员读前文没成：${modelFailureText(error)}`);
         }
         // 缺得更多：交后台补读，停下等（读完点「接着做」从这一步接着）。这个角色的后台补读停着等作者的不等，照冷窗口往下走。
         const behind = outcome.roles.filter((role) => role.missing > 0 && !role.pausedBackfill);

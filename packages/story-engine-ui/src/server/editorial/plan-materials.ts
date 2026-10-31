@@ -9,17 +9,17 @@
  * → 有问题交回章纲员改一轮（不循环）。本文件是章纲员、头脑风暴复用的材料和纯函数（P7 第 6 步从 plan-chapter 拆出，
  * 拆掉 plan-chapter ↔ planner 的 import 环）：材料收集（collectPlanMaterials）、
  * 章纲 JSON 要求（PLAN_REQUIREMENT_LINES / PLAN_JSON_FIELDS / planMaterialBlocks）、解析与天数归一
- * （parsePlanJson / readDayOffset / reconcileStoryDay / storyDayAtChapterEnd / previousChapterEndDay）。
+ * （parsePlanJson / readDayOffset / datePlan / previousPresentFor）。
  * 改提示词必须在题库上比分（docs/editorial-room/ 的规矩），别凭感觉改。
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { findRecurringPhrases, parseDraftFile } from "@actalk/story-core";
+import { findRecurringPhrases, parseDraftFile, timelineTable, type BookProjection } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
 import { shortChapters, shortChaptersText } from "../book/ledger-short.js";
 import { readStoryViews, type StoryViews } from "../book/story-views.js";
-import { readChapterPlan, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
-import { unknownDayOf } from "../book/story-timeline.js";
+import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { chapterDaysText, previousPresentChapter } from "../book/story-timeline.js";
 import { selectEffectiveFacts } from "../writing/fact-selection.js";
 import { foundationMessage, readFoundationDigest } from "./foundation-digest.js";
 
@@ -45,7 +45,7 @@ export interface PlanChapterMaterials {
   readonly entities: readonly string[];
   /** 与接下来要写的内容相关的已确立事实（拟章纲时就得避开前后矛盾——验收：三分之一的矛盾在章纲里就写错了）。 */
   readonly facts: readonly string[];
-  /** 前几章的时间（取各章章纲的开场时间）：让日期、星期顺得下去。 */
+  /** 前几章是故事哪几天（时间表，和核账员、写手同一套说法）：让日期、星期顺得下去。 */
   readonly recentTimes: readonly string[];
   /** 近几章反复出现的描写（确定性检出）：本章别再用。 */
   readonly recurringPhrases: readonly string[];
@@ -87,27 +87,21 @@ async function readRecentPlanBeats(projectDir: string, chapter: number): Promise
   return out;
 }
 
-/** 前几章章纲里的开场时间：「第 8 章：六月十六（周日）下午」。 */
-async function readRecentPlanTimes(projectDir: string, chapter: number): Promise<readonly string[]> {
-  const out: string[] = [];
-  for (let n = Math.max(1, chapter - RECENT_PLAN_TIMES); n < chapter; n += 1) {
-    const plan = await readChapterPlan(projectDir, n).catch(() => undefined);
-    if (plan?.scene.time || plan?.storyDay) {
-      out.push(`第 ${n} 章：${plan.storyDay ? `故事第 ${plan.storyDay} 天，` : ""}${plan.scene.time ?? ""}${plan.scene.location ? `，${plan.scene.location}` : ""}`);
-    }
-  }
-  return out;
+/** 前几章是故事哪几天：「第 8 章：故事第 9 天（周日），下午」；整章回忆、不知道的照实说。 */
+function recentTimesOf(projection: BookProjection | undefined, chapter: number): readonly string[] {
+  if (!projection) return [];
+  return timelineTable(projection, chapter - 1).slice(-RECENT_PLAN_TIMES).map((row) => `第 ${row.chapter} 章：${chapterDaysText(row)}`);
 }
 
 /** 读盘收集拟章纲的材料。全部读失败即空、绝不阻断（拟不成就回落无章纲出稿）。 */
 export async function collectPlanMaterials(projectDir: string, chapter: number, direction?: string): Promise<PlanChapterMaterials> {
-  const [bible, views, previousChapter, recentBodies, recentTimes] = await Promise.all([
+  const [bible, views, previousChapter, recentBodies] = await Promise.all([
     settle(readBible(projectDir).then((read): BibleView | undefined => read.bible), undefined),
     settle(readStoryViews(projectDir).then((read): StoryViews | undefined => read), undefined),
     readPreviousChapterText(projectDir, chapter),
     readRecentChapterBodies(projectDir, chapter),
-    readRecentPlanTimes(projectDir, chapter),
   ]);
+  const recentTimes = recentTimesOf(views?.projection, chapter);
   const threadPool = views?.threads ?? { threads: [] };
   const goalPool = views?.goals ?? { goals: [] };
   const timeline = views?.events ?? [];
@@ -176,7 +170,7 @@ export const PLAN_REQUIREMENT_LINES: readonly string[] = [
   "5. 优先用已有的人物、地点、物件；确需新人物或新物件可以引入，但要写进 characters / entities。",
   "6. 设定本里写着还没揭开、不能说破的，不要揭开，除非作者方向明确要求。",
   "7. 不能和【已确立事实】【设定本】矛盾：已确立事实里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍；人物关系、年龄、过去发生过的事照设定本安排。",
-  "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；dayOffset 写本章开场离上一章结尾过了几天（同一天 0、第二天 1、三天后 3；天数由程序往后加，你不用数第几天）；本章中途要换天的，那个要点开头就写「第二天上午，……」；beats 和 time 里不写「第 N 天」；涉及年份时，人物当年多大要对得上他现在的年龄。",
+  "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；dayOffset 写本章开场离上一章结尾过了几天（同一天 0、第二天 1、三天后 3；换到另一条线、开场比上一章还早的写负数，往回两天就是 -2；上一章整章是回忆或梦的，从再前面那章算；天数由程序往后加，你不用数第几天）；整章都是回忆或梦、不在当下的，frame 写「回忆」或「梦」，scene.time 写那是什么时候；本章中途要换天的，那个要点开头就写「第二天上午，……」；beats 和 time 里不写「第 N 天」；涉及年份时，人物当年多大要对得上他现在的年龄。",
   "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；设定本里的主线冲突、核心谜团每两三章要有实质进展。",
   "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
   "11. 【前几章用过的桥段】里反复出现的推进方式（又有人来打听、又去档案处查、又接到催期限的电话），本章不要再用同一个路数，换一种让局面变化的方式。",
@@ -197,7 +191,7 @@ export function planRequirementLines(chapter: number): readonly string[] {
 }
 export const PLAN_JSON_FIELDS = [
   "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事（人、地点、关键物件在谁手里）\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
-  "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"dayOffset\":离上一章结尾过了几天（整数，同一天 0）,\"characters\":[\"出场人物名\"],",
+  "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"dayOffset\":离上一章结尾过了几天（整数，同一天 0，往回接写负数）,\"frame\":\"当下\"（整章是回忆写回忆，梦或想象写梦）,\"characters\":[\"出场人物名\"],",
   "\"entities\":[\"本章涉及的物件/地点/文书名，用前文里的原名\"],\"threadsAdvanced\":[{\"title\":\"推进的线索或目标（照抄下面列表里的说法）\",\"how\":\"怎么推进\"}],",
   "\"avoid\":[\"本章不要重复的东西\"],\"directionChanges\":[{\"said\":\"作者方向原话\",\"changedTo\":\"改成了什么\",\"why\":\"和前文哪里对不上\"}]（没改就给空数组）}",
 ].join("\n");
@@ -249,13 +243,13 @@ const CJK_DIGITS: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四
 // 不猜白名单：日期归一
 const SAME_DAY = /当天|当日|当晚|同一天|同日|紧接上一?章(?:结尾)?/u;
 
-/** 模型给的「离上一章过了几天」：数字、「第二天」「同一天」都收；给不出就 undefined。 */
+/** 模型给的「离上一章过了几天」：整数（可负）、「-2」「第二天」「同一天」都收；给不出就 undefined。 */
 export function readDayOffset(raw: unknown): number | undefined {
   const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>).dayOffset : undefined;
-  if (typeof value === "number") return Number.isInteger(value) && value >= 0 && value <= 365 ? value : undefined;
+  if (typeof value === "number") return Number.isInteger(value) && Math.abs(value) <= 365 ? value : undefined;
   if (typeof value !== "string" || !value.trim()) return undefined;
-  const digits = /\d+/u.exec(value);
-  if (digits) return Math.min(Number(digits[0]), 365);
+  const digits = /^\s*([-+−]?)\s*(\d+)/u.exec(value);
+  if (digits) return Math.min(Number(digits[2]), 365) * (digits[1] === "-" || digits[1] === "−" ? -1 : 1);
   return stepFromTimeText(value);
 }
 
@@ -268,21 +262,18 @@ function stepFromTimeText(time: string): number | undefined {
 }
 
 /**
- * 故事第几天由程序按上一章往后加，不让模型数（第十九轮：章纲 storyDay 第 4、7 章各少记一天、第 5 章开场写「第 4 天」
- * 天数却记 5——日历跟着错，写手把前天标成「昨天」）。先用模型给的 dayOffset（离上一章结尾过了几天），没给就看开场时间
- * 里的「第二天 / 三天后 / 当天」；都没有才用模型的 storyDay，且不许比上一章早；全没有当同一天。第 1 章由引擎记为第 1 天。
+ * 章纲的时间由程序记，不让模型数第几天（第十九轮：章纲 storyDay 第 4、7 章各少记一天——日历跟着错，写手把前天标成「昨天」）。
+ * 记的是「离上一个当下章结尾过了几天」（写作版本 P3a：可负，换到另一条线往回接；不再拦「不许比上一章早」）：
+ * 先用模型给的 dayOffset，没给就看开场时间里的「第二天 / 三天后 / 当天」；都没有就是说不准，不猜。
+ * 整章是回忆、梦（frame）的不记离上一章多久。上一章是不是当下不知道（账待记那类）→ 没有依据，不记。
  */
-export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefined, lastDay: number | "unknown" | undefined): ChapterPlan {
-  if (lastDay === "unknown") {
-    // 上一章是哪天不知道：章纲员给的天数没有依据，不留（留了写手会照它说「昨天、前天」）。
-    const { storyDay: _unknown, ...rest } = plan;
-    return rest;
-  }
-  if (lastDay === undefined) return plan;
+export function datePlan(plan: ChapterPlan, dayOffset: number | undefined, previous: number | "unknown" | undefined): ChapterPlan {
+  const { dayOffset: _offset, after: _after, ...rest } = plan;
+  if (plan.frame || previous === "unknown") return rest;
   const step = dayOffset ?? stepFromTimeText(plan.scene.time ?? "");
-  if (step !== undefined) return { ...plan, storyDay: lastDay + step };
-  if (plan.storyDay === undefined || plan.storyDay < lastDay) return { ...plan, storyDay: lastDay };
-  return plan;
+  // 前面没有当下章：本章就是第 1 天，离谁多久无从说起。
+  if (previous === undefined) return rest;
+  return step !== undefined ? { ...rest, dayOffset: step, after: previous } : rest;
 }
 
 /** 只有一句话加几个要点、人物 / 开场 / 新信息全空的章纲（第二十轮第 5、7 章）：算不出过了几天（日历少记一天）、
@@ -291,42 +282,14 @@ export function isSkeletonPlan(plan: ChapterPlan, dayOffset: number | undefined)
   return plan.characters.length === 0 && plan.newInformation.length === 0 && !plan.scene.location && !plan.scene.time && dayOffset === undefined;
 }
 
-/** 要点开头就写了换天（「第二天上午，……」「三天后，……」）：本章到这里跨了几天。转述里的「约好第二天去」不算。 */
-// 不猜白名单：日期归一
-const BEAT_OPENS_WITH_DAY_CHANGE = /^[^，。,]{0,2}?(第二天|第二日|次日|翌日|隔天|隔日|转天|([一两二三四五六七八九十\d]+)\s*天(?:以)?后)/u;
-
 /**
- * 上一章结束时是故事第几天：开场那天加上章内要点写明的换天（第二十一轮第 2 章跨了夜，
- * 按开场那天往后推，此后全书少一天）。
+ * 拟第 chapter 章时的上一个当下章（整章是回忆、梦的跳过）：章纲的 dayOffset 从它的结尾算。
+ * 中间有章是不是当下不知道（账待记、没记时间）→ "unknown"：不拿再前一章顶（写作版本 P2b 设计 3.3）。前面没有 → undefined。
  */
-export function storyDayAtChapterEnd(plan: ChapterPlan | undefined): number | undefined {
-  if (!plan?.storyDay) return undefined;
-  let day = plan.storyDay;
-  // 第 1 个要点写的是本章开场（「第二天上午，……」），那一天已经算进 storyDay 了，不能再加（第二十二轮第 3、4、6、9 章各多记一天）。
-  for (const beat of plan.beats.slice(1)) {
-    const match = BEAT_OPENS_WITH_DAY_CHANGE.exec(beat);
-    if (!match) continue;
-    day += match[2] ? (CJK_DIGITS[match[2]] ?? (Number(match[2]) || 1)) : 1;
-  }
-  return day;
-}
-
-/**
- * 上一章结束时是故事第几天（章纲员路也要用：天数归一在拟和改两处都跑）。
- * 上一章定稿了但天数不知道（它或它前面有章账待记）→ "unknown"：不拿再前一章的天数顶（写作版本 P2b 设计 3.3）。
- */
-export async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | "unknown" | undefined> {
-  if (chapter > 1) {
-    const views = await readStoryViews(projectDir).catch(() => undefined);
-    if (views && unknownDayOf(views.timeline, chapter - 1)) return "unknown";
-  }
-  const last = (await readStoryClock(projectDir, chapter).catch(() => [])).at(-1);
-  if (!last) return undefined;
-  // 时间线记了章内换天（定稿时正文声明、原句核过）就用它；没记再按那章章纲的要点推。
-  if (last.endDay !== undefined) return last.endDay;
-  // 没记再按那章章纲的要点推章内换了几天；开场是第几天以时间线为准——定稿时按正文记过，
-  // 旧章纲的天数可能早过时了（2026-10-28 第 32 章章纲第 125 天、正文「评估过去三天了」记成第 130 天，第 33 章章纲跟着旧的记成第 126 天）。
-  const previous = await readChapterPlan(projectDir, last.chapter).catch(() => undefined);
-  const planEnd = storyDayAtChapterEnd(previous);
-  return planEnd !== undefined && previous?.storyDay ? last.storyDay + (planEnd - previous.storyDay) : last.storyDay;
+export async function previousPresentFor(projectDir: string, chapter: number): Promise<number | "unknown" | undefined> {
+  if (chapter <= 1) return undefined;
+  const views = await readStoryViews(projectDir).catch(() => undefined);
+  if (!views) return "unknown";
+  const previous = previousPresentChapter(views.projection, chapter);
+  return previous === undefined || previous === "unknown" ? previous : previous.chapter;
 }

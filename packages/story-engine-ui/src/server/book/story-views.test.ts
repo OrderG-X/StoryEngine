@@ -1,5 +1,6 @@
 // @vitest-environment node
 import {
+  ChapterLedger as LedgerSchema,
   ledgerOf,
   project,
   type AuthorDecision,
@@ -7,7 +8,6 @@ import {
   type EntryDraft,
 } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
-import { weekdayOfDay } from "./story-timeline.js";
 import { storyViewsOf } from "./story-views.js";
 
 type Draft = EntryDraft extends infer E ? (E extends EntryDraft ? Omit<E, "review"> & { readonly id?: string; readonly review?: "auto" | "author" } : never) : never;
@@ -16,12 +16,13 @@ function ledger(chapter: number, drafts: Draft[]): ChapterLedger {
   return ledgerOf({ chapter, committedAt: "2026-10-18T00:00:00.000Z", entries: drafts.map((draft) => ({ review: "auto", ...draft }) as EntryDraft & { id?: string }) });
 }
 const q = "原句原句";
+const days = (min: number) => ({ unit: "day" as const, min, max: min });
 
 function sample() {
   const ledgers = [
     ledger(1, [
       { kind: "summary", text: "沈青禾进钟楼拿走钥匙", quote: q },
-      { kind: "time", basis: "text", weekday: 1, timeOfDay: "傍晚", quote: "周二傍晚" },
+      { kind: "time", start: { offset: days(0), basis: "text", quote: "周二傍晚" }, sameDay: true, weekday: 1, timeOfDay: "傍晚" },
       { kind: "presence", name: "沈青禾", nameUsed: "沈青禾", viewpoint: true, quote: q },
       { kind: "presence", name: "周守义", nameUsed: "老周", quote: q },
       { id: "f-key", kind: "fact", nature: "state", subject: "钥匙", attribute: "在哪", value: "钟箱里", text: "钥匙在钟箱里", quote: q },
@@ -33,7 +34,7 @@ function sample() {
     ]),
     ledger(2, [
       { kind: "summary", text: "钥匙到了沈青禾手里", quote: q },
-      { kind: "time", basis: "text", daysSincePrevious: 1, daysInChapter: 1, quote: "第二天" },
+      { kind: "time", start: { offset: days(1), basis: "text", quote: "第二天" }, dayChanges: [{ offset: days(1) }] },
       { kind: "presence", name: "周守义", nameUsed: "周守义", quote: q },
       { kind: "fact", nature: "state", subject: "钥匙", attribute: "在哪", value: "沈青禾手里", text: "钥匙在沈青禾手里", quote: q },
       { kind: "thread", op: "advance", thread: "t-clock", note: "钟是被拨停的", quote: "钟是被拨停的" },
@@ -53,12 +54,11 @@ describe("账的几种读法（从投影现算）", () => {
     const { ledgers, projection } = sample();
     const views = storyViewsOf(projection, ledgers, new Map([[1, "第1章 · 钟停"]]));
 
-    expect(views.timeline.entries).toEqual([
-      { chapter: 1, day: 1, weekday: 1, timeOfDay: "傍晚", source: "declared", quote: "周二傍晚" },
-      { chapter: 2, day: 2, daysSincePrevious: 1, daysInChapter: 1, source: "declared", quote: "第二天" },
+    // 时间线就是核心那张表：第几天、星期（明写的 / 推的）、时段。
+    expect(views.timeline).toMatchObject([
+      { chapter: 1, presentLine: true, start: { lo: 1, hi: 1 }, end: { lo: 1, hi: 1 }, weekday: 1, weekdayDerived: false, timeOfDay: "傍晚" },
+      { chapter: 2, presentLine: true, start: { lo: 2, hi: 2 }, end: { lo: 3, hi: 3 }, sincePrevious: { lo: 1, hi: 1 }, weekday: 2, weekdayDerived: true },
     ]);
-    // 星期只给明写的，别的日子读者按锚点推：第 2 天推成周三。
-    expect(weekdayOfDay(views.timeline, 2)).toBe(2);
 
     // 作者撤掉的那条不给；被取代的带上取代信息；作者亲手点过的记 manual。
     expect(views.facts.facts.map((fact) => fact.id)).toEqual(["f-key", "f-clock", "c2-4"]);
@@ -148,10 +148,35 @@ describe("账的几种读法（从投影现算）", () => {
     expect(views.events[1]?.effects?.semanticSummary).toMatchObject({ characterAliases: [{ name: "周守义", alias: "周伯" }] });
   });
 
+  // 出口复核 R3：梦里、回忆里、人物说的事件和收口，不能在写手材料里当成当下发生、揭开了的。
+  it.each(["past", "other", "claim"] as const)("%s：事件、打算前头带说明，收口按推进记、不算「发现」", (frame) => {
+    const text = "# 二\n\n她走进门。老周死了。门外是老周。她决定去开门。她转身离开。";
+    const source = frame === "claim" ? { source: { kind: "character_claim" as const, speaker: "阿姨" } } : {};
+    const ledgers = [
+      ledger(1, [{ kind: "thread", thread: "t-door", op: "open", type: "question", title: "门外是谁", note: "有人敲门", quote: q }]),
+      LedgerSchema.parse(ledgerOf({
+        chapter: 2,
+        text,
+        committedAt: "2026-10-18T00:00:00.000Z",
+        entries: [
+          { kind: "time", review: "auto", start: { offset: days(0), basis: "text", quote: "她走进门。" }, sameDay: true, ...(frame === "claim" ? {} : { segments: [{ frame, firstQuote: "老周死了。", lastQuote: "她决定去开门。" }] }) },
+          { kind: "fact", review: "auto", nature: "event", text: "老周死了", quote: "老周死了。", ...source },
+          { kind: "thread", review: "auto", op: "close", thread: "t-door", note: "门外是老周", quote: "门外是老周。", ...source },
+          { kind: "thread", review: "auto", op: "open", type: "intent", title: "去开门", note: "她决定去开门", quote: "她决定去开门。", ...source },
+        ],
+      })),
+    ];
+    const semantic = storyViewsOf(project({ ledgers, decisions: [] }), ledgers, new Map()).events[1]?.effects?.semanticSummary as { keyEvents?: string[]; discovery?: string; decision?: string } | undefined;
+    const label = frame === "past" ? "回忆里的，不是现状" : frame === "other" ? "梦里、想象或传闻里的，不是现状" : "阿姨说的，不一定是真的";
+    expect(semantic?.keyEvents).toEqual([`（${label}）老周死了`]);
+    expect(semantic?.discovery).toBeUndefined();
+    expect(semantic?.decision).toBe(`（${label}）她决定去开门`);
+  });
+
   it("空书：每样都是空的", () => {
     const views = storyViewsOf(project({ ledgers: [], decisions: [] }), [], new Map());
     expect({ timeline: views.timeline, facts: views.facts, threads: views.threads, goals: views.goals, events: views.events }).toEqual({
-      timeline: { schemaVersion: 1, entries: [] },
+      timeline: [],
       facts: { version: "v0", facts: [] },
       threads: { threads: [] },
       goals: { goals: [] },

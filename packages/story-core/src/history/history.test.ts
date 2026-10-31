@@ -12,6 +12,7 @@ import { ChapterLedger, LedgerEntry } from "../schema/ledger.js";
 import { ledgerOf, type EntryDraft } from "../ledger/entries.js";
 import { LEDGER_V1_SCHEMA } from "../ledger/migrate-v1.js";
 import { LEDGER_MIGRATE_COMMAND, ledgerMigrate, ledgerMigrateKey, ledgersToUpgrade } from "../commands/ledger-migrate.js";
+import { project } from "../projection/project.js";
 import { readBookSnapshot } from "../store/book.js";
 import { opBookEpoch, readBookEpoch, readDraftGens } from "../store/control.js";
 import { CARDS_PATH, chapterLedgerPath, chapterTextPath, DECISIONS_PATH, draftPath } from "../store/paths.js";
@@ -92,6 +93,8 @@ const open = (chapter: number, n: number, title: string) => ({ id: `c${chapter}-
 const advance = (chapter: number, n: number, thread: string, note = "追下去") => ({ id: `c${chapter}-${n}`, kind: "thread", review: "auto", op: "advance", note, quote: quote(chapter), thread });
 const factOf = (chapter: number, n: number, subject: string, value: string) => ({ id: `c${chapter}-${n}`, kind: "fact", review: "auto", nature: "state", subject, attribute: "伤势", value, text: `${subject}${value}`, quote: quote(chapter) });
 const timeOf = (chapter: number, n: number, time: Record<string, unknown>) => ({ id: `c${chapter}-${n}`, kind: "time", review: "auto", ...time });
+const dayOf = (chapter: number, n: number, day: number, dayEnd?: number) => ({ id: `c${chapter}-${n}`, kind: "day", review: "auto", day, ...(dayEnd !== undefined ? { dayEnd } : {}) });
+const days = (value: number, unit: "day" | "year" = "day") => ({ unit, min: value, max: value });
 
 function ledgerText(chapter: number, entries: unknown[], options: { readonly stamp?: string; readonly text?: string } = {}): string {
   const ledger = ledgerOf({ chapter, text: options.text ?? TEXT(chapter), committedAt: options.stamp ?? `stamp-${chapter}`, entries: entries as EntryDraft[] });
@@ -263,13 +266,109 @@ describe("撤销核引用：基准按引用者自己接着的那一刻", () => {
   });
 
   it("相对时间：第 3 章「当天」接着第 2 章 → 撤掉第 2 章被拒；撤掉一条天数裁定不拦", async () => {
-    await write("P", chapter(1, [timeOf(1, 1, { basis: "author", day: 1 })]));
-    await write("A", chapter(2, [timeOf(2, 1, { basis: "author", day: 10 })]));
-    await write("C", chapter(3, [timeOf(3, 1, { basis: "text", quote: quote(3), daysSincePrevious: 0 })]));
+    await write("P", chapter(1, [dayOf(1, 1, 1, 1)]));
+    await write("A", chapter(2, [dayOf(2, 1, 10, 10)]));
+    await write("C", chapter(3, [timeOf(3, 1, { start: { offset: days(0), basis: "text", quote: quote(3) }, sameDay: true })]));
     expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
     const decisions = { schema: "author-decisions/1", decisions: [{ id: "d-1", at: "x", type: "chapter.day", chapter: 1, day: 2 }] };
     await write("D", [{ path: DECISIONS_PATH, content: JSON.stringify(decisions) }]);
     expect(await applyRevert("D", await revert("D"))).toMatchObject({ ok: true });
+  });
+
+  describe("有效范围（P3a）", () => {
+    const text = "# 第1章\n\n钟楼里的钟停了。那夜他梦见钟又走了。";
+    const opened = { id: "c1-1", kind: "thread", review: "auto", op: "open", type: "question", title: "钟为什么停", note: "停了", quote: "钟楼里的钟停了", thread: "t1-1" };
+    const start = (segment?: string) => timeOf(1, 2, {
+      start: { offset: days(0), basis: "text", quote: "钟楼里的钟停了" },
+      sameDay: true,
+      ...(segment ? { segments: [{ frame: "other", firstQuote: segment, lastQuote: segment }] } : {}),
+    });
+
+    it("线索编号、原句都没变，只是被划进了梦段 → 后文推进它的照样拦", async () => {
+      await write("P", chapter(1, [opened, start()], { text }));
+      await write("A", chapter(1, [opened, start("钟楼里的钟停了")], { text, stamp: "stamp-1b" }));
+      await write("B", chapter(2, [advance(2, 1, "t1-1")]));
+      expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
+    });
+
+    // 出口复核 R4：回忆里那件事相对本章开头，本章开头挪了，它也跟着挪（编号、原句都没变）。
+    const recall = "# 第2章\n\n今日抵达。想起昨天丢了钥匙。";
+    const lost = { id: "c2-2", kind: "fact", review: "auto", nature: "event", text: "钥匙丢了", quote: "想起昨天丢了钥匙" };
+    const arrive = (offset: number, inSegment = true) => timeOf(2, 1, {
+      start: { offset: days(offset), basis: "text", quote: "今日抵达" },
+      sameDay: true,
+      segments: [{ frame: "past", firstQuote: inSegment ? "想起昨天丢了钥匙" : "今日抵达", lastQuote: inSegment ? "想起昨天丢了钥匙" : "今日抵达", when: { offset: days(-1) } }],
+    });
+    const replacing = { id: "c3-1", kind: "fact", review: "auto", nature: "event", text: "钥匙没丢", quote: quote(3), replaces: ["c2-2"] };
+
+    it("段的时间相对本章开头：本章开头挪了，段里那条事实后文接着 → 拦", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", chapter(2, [arrive(2), lost], { text: recall, stamp: "stamp-2b" }));
+      await write("B", chapter(3, [replacing]));
+      expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
+    });
+
+    const rulings = (...items: { chapter: number; day: number; dayEnd?: number }[]) => [{
+      path: DECISIONS_PATH,
+      content: JSON.stringify({ schema: "author-decisions/1", decisions: items.map((item, index) => ({ id: `d-${index + 1}`, at: "x", type: "chapter.day", ...item })) }),
+    }];
+
+    it("裁定改了前一章是哪天：本章、回忆里那条、后文一起挪，相对没变 → 不拦（同撤掉天数裁定不拦）", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", rulings({ chapter: 1, day: 5, dayEnd: 5 }));
+      await write("B", chapter(3, [replacing]));
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+    });
+
+    // 出口复核 R4b2：后文那章作者自己定了天数，前面整体挪了它不跟着挪。和当下线上的事实同一个口径（P2a 起）：
+    // 引用只核它接着的那条还是不是那条（内容、范围、段在本章里的相对位置），不核两章之间隔几天；隔的天数不对了，
+    // 时间线上那章如实报「作者定的天数和前文推的对不上」，作者在那里定。
+    it("后文那章作者自己定了天数：撤前章的天数裁定照撤，时间线上那章如实报和前文对不上", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", rulings({ chapter: 1, day: 5, dayEnd: 5 }));
+      const pinned = timeOf(3, 2, { start: { offset: days(0), basis: "text", quote: quote(3) }, sameDay: true });
+      await write("B", chapter(3, [replacing, pinned, dayOf(3, 3, 5, 5)]));
+      const conflicts = async () => {
+        const snapshot = await readBookSnapshot(book);
+        return project({ ledgers: snapshot.ledgers, decisions: snapshot.decisions }).timeConflicts.map((item) => [item.chapter, item.kind, item.authorDay]);
+      };
+      expect(await conflicts()).toEqual([]);
+      expect(await applyRevert("A", await revert("A"))).toMatchObject({ ok: true });
+      expect(await conflicts()).toEqual([[3, "time-start", 5]]);
+    });
+
+    it("裁定改了本章开头那天：回忆离前一章的位置变了 → 拦；只改本章结尾那天 → 不拦", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0), lost], { text: recall })]);
+      await write("A", rulings({ chapter: 2, day: 4 }));
+      await write("B", chapter(3, [replacing]));
+      expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
+      await write("C", rulings({ chapter: 2, day: 4, dayEnd: 6 }));
+      await write("D", chapter(3, [replacing], { stamp: "stamp-3b" }));
+      expect((await planRevert(book, { opId: "C" }, git)).ok).toBe(true);
+    });
+
+    it("那条事实不在有时间的段里：本章开头挪了也不拦", async () => {
+      await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [arrive(0, false), lost], { text: recall })]);
+      await write("A", chapter(2, [arrive(2, false), lost], { text: recall, stamp: "stamp-2b" }));
+      await write("B", chapter(3, [replacing]));
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+    });
+
+    it("段划在别的句子上：这条线索的范围没变，照撤", async () => {
+      await write("P", chapter(1, [opened, start()], { text }));
+      await write("A", chapter(1, [opened, start("那夜他梦见钟又走了")], { text, stamp: "stamp-1b" }));
+      await write("B", chapter(2, [advance(2, 1, "t1-1")]));
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+    });
+  });
+
+  it("前一个当下章（P3a）：第 2 章改成整章回忆后第 3 章接着第 1 章 → 撤掉这次改动第 3 章的锚会变，拒", async () => {
+    const flashback = timeOf(2, 1, { segments: [{ frame: "past", firstQuote: quote(2), lastQuote: quote(2) }] });
+    const present = timeOf(2, 1, { start: { offset: days(1), basis: "text", quote: quote(2) }, sameDay: true });
+    await write("P", [...chapter(1, [dayOf(1, 1, 1, 1)]), ...chapter(2, [present])]);
+    await write("A", chapter(2, [flashback], { stamp: "stamp-2b" }));
+    await write("C", chapter(3, [timeOf(3, 1, { start: { offset: days(1), basis: "text", quote: quote(3) }, sameDay: true })]));
+    expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
   });
 
   it("名字解析链：撤掉立别名「阿青 → 林青」的那张卡，后章事实的主体会变 → 拒", async () => {
@@ -560,15 +659,23 @@ describe("引用表按 schema 穷举", () => {
     summary: [{ id: "e", kind: "summary", review: "auto", text: "梗概", quote: "q" }],
     fact: [factOf(2, 1, "林青", "伤"), { ...factOf(2, 2, "林青", "伤"), replaces: ["c1-1"] }],
     thread: [open(2, 1, "题"), advance(2, 2, "t1-1"), { ...advance(2, 3, "t1-1"), op: "close" }],
-    time: [timeOf(2, 1, { basis: "author", day: 3 }), timeOf(2, 2, { basis: "text", quote: "q", daysSincePrevious: 1, daysInChapter: 1 })],
+    time: [
+      dayOf(2, 1, 3),
+      timeOf(2, 2, {
+        start: { offset: days(1), basis: "text", quote: "q" },
+        dayChanges: [{ offset: days(1) }],
+        segments: [{ frame: "past", firstQuote: "三年前那个冬天", lastQuote: "三年前那个冬天", when: { offset: days(-3, "year") } }],
+      }),
+      timeOf(2, 3, { segments: [{ frame: "past", firstQuote: "前天夜里起了雾", lastQuote: "前天夜里起了雾", when: { offset: days(-2) } }] }),
+    ],
     presence: [{ id: "e", kind: "presence", review: "auto", name: "林青", nameUsed: "阿青", quote: "q" }],
   };
   const expected: Record<string, string[][]> = {
     summary: [[]],
     fact: [["name"], ["fact", "name"]],
     thread: [[], ["thread"], ["thread"]],
-    // 第二条存成本章开头（接着上一章）+ 本章结尾（只相对本章开头）两条。
-    time: [[], ["previous"], []],
+    // 作者定的天数不接谁；记账员记的开头接着前一个当下章，换天、本章开头之后的回忆只相对本章；整章是回忆的那段接着前一个当下章。
+    time: [[], ["previous"], [], [], ["previous"]],
     presence: [["name"]],
   };
   const decisions: Record<string, unknown> = {
