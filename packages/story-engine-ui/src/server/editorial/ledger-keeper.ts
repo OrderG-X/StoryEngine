@@ -27,13 +27,14 @@ import {
   type SegmentInput,
   type TextUnit,
   type TimeInput,
+  type TimeOffset,
 } from "@actalk/story-core";
 import { WEEKDAY_NAMES } from "../book/story-timeline.js";
 import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
-import { extractJsonObject, parseChapterEnd, parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
+import { extractJsonObject, parseChapterEnd, parseKeeperOutput, relativeOf, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -66,8 +67,8 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
-/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 3;
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次 + 复核星期一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 4;
 
 /** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
 const IN_CHAPTER_BOUNDARY =
@@ -366,9 +367,10 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const conversation: BrainMessage[] = [...window, { role: "user", content: task }, { role: "assistant", content: text }];
   const repaired = await repairQuotes(parsed, input, conversation);
   const ended = await askChapterEnd(repaired.parsed, input, conversation);
+  const dated = await recheckWeekday(ended, input, conversation);
   return {
     ok: true,
-    parsed: settleTime(withOriginalQuotes(ended, input.draft), input.draft),
+    parsed: settleTime(withOriginalQuotes(dated, input.draft), input.draft),
     omittedThreads: context.omittedThreads,
     omittedFacts: context.omittedFacts,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
@@ -553,9 +555,12 @@ async function repairQuotes(
   return { parsed: { ...parsed, entries }, repair: { asked, fixed } };
 }
 
-/** 写了本章开头是哪天（在当下线上），却没说结尾：既没写整章同一天，也没列换天（或写坏了没记上）。开头就不知道的不问，问了也接不上。 */
+/**
+ * 写了本章开头（在当下线上，开头隔多久说不出也算），却没说结尾：既没写整章同一天，也没列换天（或写坏了没记上）。
+ * 开头说不出的也问：第 1 章开头总是第 1 天，作者定了开头的也接得上（P3a 评测：第 1 章开头写了不知道、结尾漏了，全书断）。
+ */
 function endMissing(time: TimeInput | undefined): time is TimeInput {
-  return Boolean(time && time.start !== undefined && time.start !== "unknown" && time.sameDay !== true && (time.dayChanges ?? []).length === 0);
+  return Boolean(time && time.start !== undefined && time.sameDay !== true && (time.dayChanges ?? []).length === 0);
 }
 
 /** 追问本章结尾那条 user 消息（单测也用）。 */
@@ -610,6 +615,72 @@ async function askChapterEnd(parsed: KeeperParseResult, input: KeeperInput, conv
   const entries = [...parsed.entries];
   entries[index] = { ...time, ...end };
   return { ...parsed, entries, adjusted };
+}
+
+/** 开头离上一个当下章结尾确定隔几天（两种换天规矩一样）；不确定、只写了一种的不算。 */
+function startDays(start: TimeInput["start"]): number | undefined {
+  if (start === undefined || start === "unknown") return undefined;
+  const exact = (offset: TimeOffset): number | undefined => (offset.unit === "day" && offset.min !== undefined && offset.min === offset.max ? offset.min : undefined);
+  if ("byBoundary" in start && start.byBoundary) {
+    const midnight = exact(start.byBoundary.midnight);
+    return midnight !== undefined && midnight === exact(start.byBoundary.dawn) ? midnight : undefined;
+  }
+  return "offset" in start && start.offset ? exact(start.offset) : undefined;
+}
+
+const weekdayAfter = (weekday: number, days: number): number => (((weekday + days) % 7) + 7) % 7;
+
+/** 复核星期那条 user 消息（单测也用）。 */
+export function buildWeekdayRecheckTask(wrote: number, previous: number, previousWeekday: number, days: number): string {
+  const name = (weekday: number) => WEEKDAY_NAMES[weekday];
+  return [
+    `你刚交的账单里，本章写的是${name(wrote)}；上一个当下章（第 ${previous} 章）结尾是${name(previousWeekday)}，按你写的开头离它 ${days} 天，本章开头该是${name(weekdayAfter(previousWeekday, days))}，对不上。请对照正文再看一遍，只交这一件：`,
+    '- 隔的天数写错了：交改好的开头离上一个当下章结尾隔几天，写法同交账单（{"offset":{"unit":"day","min":2,"max":2}}，要看换天规矩才定的写 byBoundary），往回接的写负数；',
+    '- 隔的天数没错，是星期写错了、或那个星期说的不是本章开头那天：交 {"weekday":null}；',
+    '- 正文里看不出哪个对：交 {"unknown":true}。',
+    "只交 JSON。",
+  ].join("\n");
+}
+
+/**
+ * 记账员写的本章星期，和按它写的开头、上一个当下章结尾的星期（投影推的）算出来的对不上（P3a 评测：上一章周二、本章「周四下午」记成隔 1 天）：
+ * 在同一段对话里只复核这一件。改了隔几天、算得上就换（原句照第一遍的）；说星期不是本章开头那天就不记星期；
+ * 没问成、看不出、改了还对不上，都照第一遍交，如实记一条说明（清单上照实列）。
+ */
+async function recheckWeekday(parsed: KeeperParseResult, input: KeeperInput, conversation: readonly BrainMessage[]): Promise<KeeperParseResult> {
+  const index = parsed.entries.findIndex((entry) => entry.kind === "time");
+  const time = index >= 0 ? parsed.entries[index] : undefined;
+  if (time?.kind !== "time" || time.weekday === undefined || time.start === undefined || time.start === "unknown") return parsed;
+  const days = startDays(time.start);
+  const previous = previousPresentChapter(input.before, input.chapter);
+  const previousWeekday = previous === undefined ? undefined : endingWeekday(input.before, previous);
+  if (days === undefined || previous === undefined || previousWeekday === undefined || weekdayAfter(previousWeekday, days) === time.weekday) return parsed;
+  const keep = (why: string): KeeperParseResult => ({
+    ...parsed,
+    adjusted: [...parsed.adjusted, { where: "time.weekday", reason: `本章写的${WEEKDAY_NAMES[time.weekday as number]}和按开头推的${WEEKDAY_NAMES[weekdayAfter(previousWeekday, days)]}对不上，${why}，照第一遍记的` }],
+  });
+  let reply: string;
+  try {
+    reply = await withStep("记账员复核星期", () => input.callModel([...conversation, { role: "user", content: buildWeekdayRecheckTask(time.weekday as number, previous, previousWeekday, days) }], { json: true }));
+  } catch (error) {
+    rethrowIfStopped(error);
+    return keep(`复核没问成（${modelFailureText(error)}）`);
+  }
+  input.onRawOutput?.(reply);
+  const raw = extractJsonObject(reply);
+  if (!raw) return keep("复核交回来的读不了");
+  const entries = [...parsed.entries];
+  if ("weekday" in raw && (raw.weekday === null || raw.weekday === "")) {
+    const { weekday: _weekday, ...rest } = time;
+    entries[index] = rest;
+    return { ...parsed, entries };
+  }
+  if (raw.offset === undefined && raw.byBoundary === undefined) return keep("复核说看不出");
+  const relative = relativeOf(raw);
+  const fixed = typeof relative === "string" ? undefined : startDays({ ...relative, basis: time.start.basis, quote: time.start.quote });
+  if (typeof relative === "string" || fixed === undefined || weekdayAfter(previousWeekday, fixed) !== time.weekday) return keep("复核改了还是对不上");
+  entries[index] = { ...time, start: { ...relative, basis: time.start.basis, quote: time.start.quote } };
+  return { ...parsed, entries };
 }
 
 /** 补摘要求里每条怎么称呼（只给记账员看，不进清单）。时间那几处另列（slotLabel）。 */

@@ -584,7 +584,7 @@ describe("记账员跑一章", () => {
     }
   });
 
-  it("写了开头没说结尾：同一段对话里只追问结尾——同一天、点换天那句的编号（代码取原句）；没问成、看不出照第一遍交；说了结尾、开头不知道的不问", async () => {
+  it("写了开头没说结尾：同一段对话里只追问结尾——同一天、点换天那句的编号（代码取原句）；没问成、看不出照第一遍交；说了结尾的不问", async () => {
     const book = await makeHomeTempDir("keeper-end-");
     try {
       await mkdir(join(book, "chapters"), { recursive: true });
@@ -636,9 +636,62 @@ describe("记账员跑一章", () => {
 
       const told = run({ ...startOnly, sameDay: true }, async () => JSON.stringify({ sameDay: true }));
       await told.outcome;
+      expect(told.asks).toEqual([]);
+      // 开头说不出隔多久的也问（第 1 章开头总是第 1 天，结尾漏了全书断）。
       const noStart = run({ start: "unknown" }, async () => JSON.stringify({ sameDay: true }));
-      await noStart.outcome;
-      expect([told.asks, noStart.asks]).toEqual([[], []]);
+      expect((await timeOf(noStart.outcome)).time).toMatchObject({ kind: "time", start: "unknown", sameDay: true });
+      expect(noStart.asks).toHaveLength(1);
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("写的星期和按开头推的对不上：只复核这一件——改了隔几天、算得上就换（原句照旧）；说星期不是开头那天就不记星期；没问成、改了还对不上照第一遍交并说明；对得上的不问", async () => {
+    const book = await makeHomeTempDir("keeper-weekday-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const monday = "# 第1章\n\n周一下午，面馆还没上客。";
+      await writeFile(join(book, "chapters/0001.md"), monday);
+      const day = (min: number) => ({ unit: "day" as const, min, max: min });
+      const before = project({ ledgers: [ledgerOf({ chapter: 1, text: monday, committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "周一下午" }, weekday: 0, sameDay: true }] })], decisions: [] });
+      const draft = "# 第2章\n\n周三上午，她又来了。";
+      const run = (offset: number, recheck: () => Promise<string>) => {
+        const asks: string[] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("对不上。请对照正文再看一遍")) { asks.push(last); return recheck(); }
+            return JSON.stringify({ time: { start: { offset: day(offset), basis: "judged", quote: "周三上午" }, weekday: "周三", sameDay: true } });
+          },
+        });
+        return { asks, outcome };
+      };
+      const timeOf = async (outcome: ReturnType<typeof runLedgerKeeper>) => {
+        const done = await outcome;
+        if (!done.ok) throw new Error(done.reason);
+        return { time: done.parsed.entries.find((entry) => entry.kind === "time"), adjusted: done.parsed.adjusted };
+      };
+
+      const fixed = run(1, async () => JSON.stringify({ offset: day(2) }));
+      expect((await timeOf(fixed.outcome)).time).toMatchObject({ start: { offset: day(2), basis: "judged", quote: "周三上午" }, weekday: 2 });
+      expect(fixed.asks[0]).toContain("本章写的是周三；上一个当下章（第 1 章）结尾是周一，按你写的开头离它 1 天，本章开头该是周二");
+
+      const notStart = await timeOf(run(1, async () => JSON.stringify({ weekday: null })).outcome);
+      expect(notStart.time).toMatchObject({ start: { offset: day(1) } });
+      expect(notStart.time).not.toHaveProperty("weekday");
+      expect(notStart.adjusted).toEqual([]);
+
+      for (const reply of [async () => { throw new Error("429 太忙"); }, async () => JSON.stringify({ offset: day(3) }), async () => JSON.stringify({ unknown: true })]) {
+        const kept = await timeOf(run(1, reply).outcome);
+        expect(kept.time).toMatchObject({ start: { offset: day(1) }, weekday: 2 });
+        expect(kept.adjusted).toEqual([{ where: "time.weekday", reason: expect.stringContaining("本章写的周三和按开头推的周二对不上") }]);
+      }
+
+      const agrees = run(2, async () => JSON.stringify({ offset: day(9) }));
+      await agrees.outcome;
+      expect(agrees.asks).toEqual([]);
     } finally {
       await rm(book, { recursive: true, force: true });
     }

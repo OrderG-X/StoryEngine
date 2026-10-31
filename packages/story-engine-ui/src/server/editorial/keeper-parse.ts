@@ -149,8 +149,8 @@ function offsetOf(value: unknown): TimeOffset | string {
   return { unit, ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) };
 }
 
-/** 一处相对：offset 或 byBoundary（两种换天规矩各一份，只用天）。两样都给了按 byBoundary（更细）。 */
-function relativeOf(raw: Raw): { offset: TimeOffset } | { byBoundary: BoundaryOffsets } | string {
+/** 一处相对：offset 或 byBoundary（两种换天规矩各一份，只用天）。两样都给了按 byBoundary（更细）。复核星期那步也用。 */
+export function relativeOf(raw: Raw): { offset: TimeOffset } | { byBoundary: BoundaryOffsets } | string {
   if (raw.byBoundary !== undefined && raw.byBoundary !== null) {
     const both = isRecord(raw.byBoundary) ? raw.byBoundary : {};
     const midnight = offsetOf(both.midnight);
