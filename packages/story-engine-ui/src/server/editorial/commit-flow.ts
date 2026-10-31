@@ -8,14 +8,19 @@
  *
  * 一次定稿只调一次模型（补笔记另算）；确认时不再调模型。清单上给人看的只有名字、标题、原句，不带任何编号。
  */
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   boundaryText,
+  chapterSource,
+  chapterTextPath,
   checkEntries,
   classifyForReview,
   declarationOf,
   declarationsOf,
   knownEntries,
   ledgerOf,
+  locateQuote,
   nameKey,
   offsetText,
   presenceName,
@@ -413,10 +418,29 @@ function keepLastOpens(
   return { accepted, rejected: checked.rejected.filter((item) => !folded.has(item)), lost };
 }
 
+/** 时间声明里的原句：开头那句、换天那句、段的首末句。 */
+function timeQuotes(time: TimeInput): string[] {
+  return [
+    ...(time.start && time.start !== "unknown" ? [time.start.quote] : []),
+    ...(time.dayChanges ?? []).flatMap((change) => (change.quote ? [change.quote] : [])),
+    ...(time.segments ?? []).flatMap((segment) => [segment.firstQuote, segment.lastQuote]),
+  ];
+}
+
+/** 这句原句落在的整句（一句或几句连着）：找不到、不止一处就没有。 */
+function wholeSentences(quote: string, text: string): string | undefined {
+  const source = chapterSource(0, text);
+  const at = locateQuote(quote, source)?.units;
+  if (!at) return undefined;
+  return source.units.filter((unit) => unit.id >= at.from && unit.id <= at.to).map((unit) => text.slice(unit.start, unit.end)).join("");
+}
+
 /**
  * 重定稿时天数照上次定稿的记（作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把第二天清早看成当天，
  * 第 6～7 天成了第 5～6 天，后面 45 章跟着挪一天，清单上只露出这一章的天数）。
- * 上次那条时间的原句（开头那句、换天那句、段的首末句）都还在正文里就照上次的；和这次看的不一样时两边都给作者看，作者改天数照旧管用。
+ * 上次那条时间的原句（开头那句、换天那句、段的首末句）所在的整句都没改就照上次的；和这次看的不一样时两边都给作者看，作者改天数照旧管用。
+ * 比整句、不只看原句还在不在（P3a 改早章：作者在「这天下午，……」前面加了「过了两天，」，原句还在，天数却照上次的没挪）；
+ * 上次定稿的正文读不到、对不上账单时只看原句还在不在。
  */
 function keepLastDay(
   truth: Truth,
@@ -425,6 +449,7 @@ function keepLastDay(
   accepted: Accepted,
   text: string,
   before: BookProjection,
+  lastText: string | undefined,
 ): { readonly accepted: Accepted; readonly sinceLast: NonNullable<PreviewTime["sinceLast"]> } | undefined {
   const last = previewTime(truth, chapter, declarationsOf(previous), text)?.row;
   const now = previewTime(truth, chapter, accepted.map((item) => item.entry), text)?.row;
@@ -432,7 +457,11 @@ function keepLastDay(
   if (!last || !now || !known(last.start) || !known(now.start)) return undefined;
   if (sameRange(last.start, now.start) && sameRange(last.end, now.end)) return undefined;
   const lastTime = declarationsOf(previous).find((entry) => entry.kind === "time");
-  const carried = lastTime ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
+  const unchanged = lastTime?.kind === "time" && (lastText === undefined || timeQuotes(lastTime).every((quote) => {
+    const was = wholeSentences(quote, lastText);
+    return was !== undefined && was === wholeSentences(quote, text);
+  }));
+  const carried = lastTime && unchanged ? checkEntries([lastTime], text, before).accepted[0]?.entry : undefined;
   const other = (row: TimelineRow) => ({ ...(row.start ? { start: row.start } : {}), ...(row.end ? { end: row.end } : {}) });
   if (!carried) return { accepted, sinceLast: { kept: false, other: other(last) } };
   const at = accepted.findIndex((item) => item.entry.kind === "time");
@@ -511,6 +540,13 @@ function lastRecorded(ledger: ChapterLedger | undefined): PreviousRecord {
   return { entries: [...entries, ...time.entries], scenes: time.scenes, ...(time.timeModel ? { timeModel: time.timeModel } : {}), timeComplete: true };
 }
 
+/** 上次定稿的正文（盘上那份，和账单记的哈希对得上才算）。 */
+async function committedText(bookDir: string, ledger: ChapterLedger | undefined): Promise<string | undefined> {
+  if (!ledger) return undefined;
+  const text = await readFile(join(bookDir, chapterTextPath(ledger.chapter)), "utf-8").catch(() => undefined);
+  return text !== undefined && sha256(text) === ledger.textSha256 ? text : undefined;
+}
+
 export async function prepareChapterCommit(input: PrepareInput): Promise<CommitPreview | PrepareFailure> {
   if (input.text.trim().length === 0) return { ok: false, code: "empty_text", reason: "正文是空的，没有可定稿的" };
   const snapshot = await readBookSnapshot(input.bookDir);
@@ -555,7 +591,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
   const withAuthorDay = recommit ? keepAuthorDay(record, opens?.accepted ?? checked.accepted) : checked.accepted;
   // 读不全上次记账员记的时间（老的账待记）：不比，照这次的记。
-  const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before) : undefined;
+  const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before, await committedText(input.bookDir, current)) : undefined;
   const accepted = kept?.accepted ?? withAuthorDay;
   const rejected = opens?.rejected ?? checked.rejected;
   const missingKinds = keeper.quoteRepair?.failed

@@ -320,6 +320,14 @@ describe("定稿编排", () => {
       callModel: ch2Ledger({ start: { offset: 3, basis: "text", quote: "三天后的上午" }, sameDay: true, timeOfDay: "上午" }),
     }));
     expect(moved.time).toMatchObject({ row: { start: { lo: 4, hi: 4 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 }, end: { lo: 2, hi: 2 } } } });
+
+    // 记时间那句里加了字、原句还在（P3a 改早章：「这天下午，……」前面加「过了两天，」）：那句改过了，按这次的记。
+    const prefixed = typo.replace("第二天上午", "又过了两天，第二天上午");
+    const shifted = expectPreview(await prepareNow({
+      bookDir: book, chapter: 2, text: prefixed,
+      callModel: ch2Ledger({ start: { offset: 3, basis: "text", quote: "又过了两天，第二天上午" }, sameDay: true, timeOfDay: "上午" }),
+    }));
+    expect(shifted.time).toMatchObject({ row: { start: { lo: 4, hi: 4 } }, needsConfirm: true, sinceLast: { kept: false, other: { start: { lo: 2, hi: 2 } } } });
   });
 
   // 出口复核 R6：中间有一次账待记（记账没成先定正文），再定稿时也照最近那次记的时间比，段也读得回。

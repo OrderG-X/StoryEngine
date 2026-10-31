@@ -697,7 +697,7 @@ describe("记账员跑一章", () => {
     }
   });
 
-  it("按两种换天规矩走一遍：进半夜到天亮之间得先不在、出来得先在，差一天以上不可能；结尾还没天亮的报（本章列换天进的不报）；第 1 章开头不算", () => {
+  it("按两种换天规矩走一遍：进半夜到天亮之间得先不在、出来得先在，差一天以上不可能；结尾还没天亮的报；第 1 章开头不算", () => {
     const day = (min: number) => ({ unit: "day" as const, min, max: min });
     const night = { byBoundary: { midnight: day(1), dawn: day(0) } };
     const dawn = { byBoundary: { midnight: day(0), dawn: day(1) } };
@@ -712,6 +712,7 @@ describe("记账员跑一章", () => {
       nightIssue(time({ sameDay: undefined, dayChanges: [{ ...dawn, quote: "q" }] }), out),
       nightIssue(time({ start: start({ byBoundary: { midnight: day(2), dawn: day(0) } }) }), { exists: true }),
       nightIssue(time({ sameDay: undefined, dayChanges: [{ ...night, quote: "q" }] }), out),
+      nightIssue(time({ sameDay: undefined, dayChanges: [{ ...night, quote: "q" }, { ...dawn, quote: "q" }] }), out),
       nightIssue(time({}), { exists: true, atNight: true }),
       nightIssue(time({ start: start(dawn) }), { exists: false }),
       nightIssue(time({ start: "unknown" }), out),
@@ -724,6 +725,7 @@ describe("记账员跑一章", () => {
       undefined,
       { kind: "impossible", at: 1, shift: -1 },
       { kind: "impossible", at: "start", shift: 2 },
+      { kind: "endsAtNight" },
       undefined,
       { kind: "endsAtNight" },
       undefined,
@@ -733,7 +735,7 @@ describe("记账员跑一章", () => {
     ]);
   });
 
-  it("上一章结尾在不在半夜到天亮之间：按投影两个世界的差算，比全书最小的差大一天就在；哪边不确定就不知道", () => {
+  it("上一章结尾在不在半夜到天亮之间：沿当下线按两个世界的相对天数推差（断了链只写一份的照样推），比全书最小的差大一天就在；说不出隔多久就不知道", () => {
     const day = (min: number) => ({ unit: "day" as const, min, max: min });
     const text = (n: number) => `# 第${n}章\n\n她醒了。`;
     const ledger = (chapter: number, time: Record<string, unknown>) => ledgerOf({ chapter, text: text(chapter), committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", ...time } as EntryDraft] });
@@ -743,10 +745,15 @@ describe("记账员跑一章", () => {
         ledger(2, { start: { byBoundary: { midnight: day(1), dawn: day(0) }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
         ledger(3, { start: { byBoundary: { midnight: day(0), dawn: day(1) }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
         ledger(4, { start: { offset: { unit: "day", min: 1 }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
+        ledger(5, { start: { offset: day(1), basis: "judged", quote: "她醒了。" }, sameDay: undefined, dayChanges: [{ byBoundary: { midnight: day(1), dawn: day(0) }, quote: "她醒了。" }] }),
+        ledger(6, { start: { byBoundary: { midnight: day(0), dawn: day(1) }, basis: "judged", quote: "她醒了。" }, sameDay: true }),
+        ledger(7, { start: "unknown", sameDay: true }),
+        ledger(8, { start: { offset: day(1), basis: "judged", quote: "她醒了。" }, sameDay: true }),
       ],
       decisions: [],
     });
-    expect([1, 2, 3, 4].map((chapter) => endsAtNight(before, chapter))).toEqual([false, true, false, undefined]);
+    // 第 4 章「至少隔 1 天」断了绝对天数，两个世界一样，差照样推得下去；第 7 章说不出隔多久，之后不知道。
+    expect([1, 2, 3, 4, 5, 6, 7, 8].map((chapter) => endsAtNight(before, chapter))).toEqual([false, true, false, false, true, false, undefined, undefined]);
   });
 
   it("按两种换天规矩对不上 / 结尾还没天亮：只复核这一件——改了走得通就换（开头原句照旧、换天点编号代码取句）；说没记错、看不出、没问成、改了还不通照第一遍交，走不通的如实说明；走得通的不问", async () => {

@@ -641,26 +641,43 @@ function changesById(list: unknown, units: readonly TextUnit[], draft: string): 
 
 /**
  * 两种换天规矩只在半夜十二点到天亮之间差一天（这段时间里按半夜已是新的一天、按天亮还是前一天）。
- * 这一章结尾在不在这段时间里：按投影两个世界的天数差算——差比全书到这章为止最小的那个大一天就在。
- * 两个世界哪边不确定、作者定了换天规矩（只推一个世界）、差得不止一天（前面就对不上了），都不知道。
+ * 这一章结尾在不在这段时间里：沿当下线按两个世界的相对天数推「半夜那边比天亮那边多几天」——两个世界一样的（只写了一份、
+ * 前面断了链也一样）不变，都确定的取差；绝对天数两边都确定时直接取差（作者定了天数从那里重新对齐）。
+ * 差比全书到这章为止最小的那个大一天就在。哪一处推不下去（说不出隔多久、没识别、作者定了换天规矩只推一个世界）、
+ * 差得不止一天（前面就对不上了），都不知道。
  */
 export function endsAtNight(before: BookProjection, chapter: number): boolean | undefined {
   const exact = (range: DayRange | undefined): number | undefined => (range?.lo !== undefined && range.lo === range.hi ? range.lo : undefined);
-  const gap = (days: ChapterTime["byWorld"], key: "start" | "end"): number | undefined => {
-    const midnight = exact(days.midnight?.[key]);
-    const dawn = exact(days.dawn?.[key]);
-    return midnight !== undefined && dawn !== undefined ? midnight - dawn : undefined;
+  const gap = (midnight: DayRange | undefined, dawn: DayRange | undefined): number | undefined => {
+    const a = exact(midnight);
+    const b = exact(dawn);
+    return a !== undefined && b !== undefined ? a - b : undefined;
   };
+  const shift = (midnight: DayRange | undefined, dawn: DayRange | undefined): number | undefined => {
+    if (!midnight || !dawn) return undefined;
+    return gap(midnight, dawn) ?? (midnight.lo === dawn.lo && midnight.hi === dawn.hi ? 0 : undefined);
+  };
+  const plus = (state: number | undefined, by: number | undefined): number | undefined => (state === undefined || by === undefined ? undefined : state + by);
+  let state: number | undefined;
   let low = 0;
-  let end: number | undefined;
+  let first = true;
   for (const view of [...before.chapters].sort((a, b) => a.chapter - b.chapter)) {
     if (view.chapter > chapter) break;
-    if (view.time.presentLine !== true) continue;
-    for (const value of [gap(view.time.byWorld, "start"), gap(view.time.byWorld, "end")]) if (value !== undefined) low = Math.min(low, value);
-    if (view.chapter === chapter) end = gap(view.time.byWorld, "end");
+    if (view.time.presentLine === false) continue;
+    if (view.time.presentLine === "unknown") {
+      state = undefined;
+      first = false;
+      continue;
+    }
+    const { midnight, dawn } = view.time.byWorld;
+    state = gap(midnight?.start, dawn?.start) ?? (first ? 0 : plus(state, shift(midnight?.sincePrevious, dawn?.sincePrevious)));
+    if (state !== undefined) low = Math.min(low, state);
+    state = gap(midnight?.end, dawn?.end) ?? plus(state, shift(midnight?.span, dawn?.span));
+    if (state !== undefined) low = Math.min(low, state);
+    first = false;
+    if (view.chapter === chapter) return state === undefined || state - low > 1 ? undefined : state - low === 1;
   }
-  if (end === undefined || end - low > 1) return undefined;
-  return end - low === 1;
+  return undefined;
 }
 
 /** 这一处相对天数按半夜规矩比按天亮规矩多几天：只写一份的两种一样（0）；不确定、按月 / 年说的不知道。 */
@@ -682,14 +699,13 @@ export type NightIssue =
 /**
  * 从上一个当下章结尾（在不在半夜到天亮之间，不知道就从本章自己写的推）起，沿本章开头、各次换天走：
  * 半夜那边多一天 = 进了半夜到天亮之间（之前得不在），天亮那边多一天 = 出了（之前得在），差一天以上不可能。
- * 结尾还在半夜到天亮之间也报（常是凌晨开头、章里讲到天亮以后却没列换天）；是本章列的换天进的半夜（③）不报。开头说不出、哪一处不确定就不往下走。
+ * 结尾还在半夜到天亮之间也报（常是凌晨开头、或过了半夜之后章里又讲到天亮以后，却没列天亮那次换天；P3a 评测两样都有）。
+ * 开头说不出、哪一处不确定就不往下走。
  * 没有上一个当下章（第 1 章）时开头那处不算（第 1 章开头是原点）。
  */
 export function nightIssue(time: TimeInput, previous: { readonly exists: boolean; readonly atNight?: boolean }): NightIssue | undefined {
   if (time.start === undefined || time.start === "unknown") return undefined;
   let state = previous.atNight;
-  // 进半夜到天亮之间是本章列的换天（③，记账员明说过了半夜）：结尾没天亮多半就是对的，不问。
-  let enteredByChange = false;
   const steps: { readonly at: "start" | number; readonly relative: { readonly offset?: TimeOffset; readonly byBoundary?: BoundaryOffsets } }[] = [
     ...(previous.exists ? [{ at: "start" as const, relative: time.start }] : []),
     ...(time.dayChanges ?? []).map((change, index) => ({ at: index + 1, relative: change })),
@@ -700,9 +716,8 @@ export function nightIssue(time: TimeInput, previous: { readonly exists: boolean
     if (shift === 0) continue;
     if (Math.abs(shift) > 1 || (shift === 1 && state === true) || (shift === -1 && state === false)) return { kind: "impossible", at: step.at, shift };
     state = shift === 1;
-    enteredByChange = step.at !== "start";
   }
-  return state === true && !enteredByChange ? { kind: "endsAtNight" } : undefined;
+  return state === true ? { kind: "endsAtNight" } : undefined;
 }
 
 /** 复核半夜到天亮那条 user 消息（单测也用）。 */
