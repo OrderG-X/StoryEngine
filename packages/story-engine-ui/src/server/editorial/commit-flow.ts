@@ -16,6 +16,7 @@ import {
   chapterTextPath,
   checkEntries,
   classifyForReview,
+  decisionItemIds,
   declarationOf,
   declarationsOf,
   itemRefsOf,
@@ -513,8 +514,8 @@ function keepLastAppears(
 ): { readonly accepted: Accepted; readonly lost: readonly { readonly name: string; readonly proved: boolean }[] } {
   const lastAppears = reopenableItems(previous);
   const covered = new Set(checked.accepted.flatMap(({ entry }) => (entry.kind === "item" && entry.op === "appear" && entry.reuse ? [entry.reuse] : [])));
-  // 后文怎么用着它：用到（任何位置）/ 自己的记录（主体是它的条目、事实）。设定卡、拆出它的裁定也算它还在。
-  const used = new Set<string>();
+  // 后文怎么用着它：用到（任何位置，作者裁定指着它也算）/ 自己的记录（主体是它的条目、事实）。设定卡、拆出它的裁定也算它还在。
+  const used = new Set<string>(decisionItemIds(snapshot.decisions));
   const proved = new Set<string>([...(snapshot.cards?.cards ?? []).filter((card) => card.kind === "item").map((card) => card.id)]);
   for (const ledger of snapshot.ledgers) {
     if (ledger.chapter <= chapter) continue;

@@ -37,6 +37,8 @@ export interface KeeperDrop {
   readonly kind?: EntryKind;
   /** 丢的这条说的是哪几样（认得出才有；空 = 本章新写到的那样没记上，别的东西不受影响）。没有 = 说不出，整章东西当没记全。 */
   readonly items?: readonly ItemRefInput[];
+  /** 丢的这条是记哪一样的（条目的主体，认得出才有；别的位置认不出也照留）：重写时只认说的就是这一样的。 */
+  readonly subject?: ItemRefInput;
 }
 
 /** 解析掉的东西那类条目缺的是哪几样：都认得出 → 那几样；有一条说不出 → undefined（整章东西当没记全）。 */
@@ -273,6 +275,14 @@ function handleList(value: unknown): string[] {
   return parts.map((part) => part.toUpperCase());
 }
 
+/** 清点成员：列表（只有一样时直接写一个号或一个对象也认）；没写 = undefined；写了认不成列表 = unreadable。 */
+function censusMembers(value: unknown): unknown[] | undefined | "unreadable" {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (Array.isArray(value)) return value;
+  if (isRecord(value) || itemHandle(value)) return [value];
+  return "unreadable";
+}
+
 function asList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (isRecord(value)) return [value];
@@ -285,8 +295,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
   const entries: EntryInput[] = [];
   const drops: KeeperDrop[] = [];
   const adjusted: KeeperDrop[] = [];
-  const drop = (where: string, reason: string, name?: string, kind?: EntryKind, items?: readonly ItemRefInput[]): void => {
-    drops.push({ where, reason, ...(name ? { name } : {}), ...(kind ? { kind } : {}), ...(items ? { items } : {}) });
+  const drop = (where: string, reason: string, name?: string, kind?: EntryKind, items?: readonly ItemRefInput[], subject?: ItemRefInput): void => {
+    drops.push({ where, reason, ...(name ? { name } : {}), ...(kind ? { kind } : {}), ...(items ? { items } : {}), ...(subject ? { subject } : {}) });
   };
   const named = (value: string | undefined): string | undefined => (value === undefined ? undefined : nameHandles(value, handles.handleNames));
 
@@ -541,7 +551,10 @@ function rawItemRefs(raw: Raw, item: ItemRefInput, handles: KeeperHandles): Item
   const out: ItemRefInput[] = [item];
   // 「装在哪样里面」写的是一段字（不是号）：那是地方，不是账里的东西。
   const insides = [insideField(raw.to), insideField(raw.from)].filter((field) => !(typeof field === "string" && !itemHandle(field)));
-  const fields = [...insides, ...asList(raw.members)];
+  // 清点的成员没写、写成认不出的样子：说不出缺的是哪几样。
+  const members = censusMembers(raw.members);
+  if (members === "unreadable" || (members === undefined && ITEM_OPS[str(raw.op)?.toLowerCase() ?? ""] === "census")) return undefined;
+  const fields = [...insides, ...(members ?? [])];
   for (const field of fields) {
     if (field === undefined || field === null || field === "") continue;
     const ref = itemRefOf(field, undefined, handles);
@@ -559,7 +572,7 @@ function parseItems(
   root: Raw,
   handles: KeeperHandles,
   entries: EntryInput[],
-  drop: (where: string, reason: string, name?: string, kind?: EntryKind, items?: readonly ItemRefInput[]) => void,
+  drop: (where: string, reason: string, name?: string, kind?: EntryKind, items?: readonly ItemRefInput[], subject?: ItemRefInput) => void,
   adjusted: KeeperDrop[],
   onItem?: (entry: EntryInput, raw: Raw) => void,
 ): void {
@@ -601,7 +614,7 @@ function parseItems(
     const item = itemRefOf(raw.item, raw.as, handles);
     const name = item ? handleName(item, handles) : undefined;
     if (!op || !item) {
-      drop(where, !op ? (opText ? `op 写成了「${opText}」，认不出（只认 at、move、gone、census）` : "没写 op") : "没写对是哪样东西", name, "item", item ? rawItemRefs(raw, item, handles) : undefined);
+      drop(where, !op ? (opText ? `op 写成了「${opText}」，认不出（只认 at、move、gone、census）` : "没写 op") : "没写对是哪样东西", name, "item", item ? rawItemRefs(raw, item, handles) : undefined, item);
       continue;
     }
     const entry: Mutable<ItemInput> = { kind: "item", review: "auto", op, item, quote: quoteText(raw.quote) ?? "" };
@@ -635,8 +648,11 @@ function parseItems(
       else broken ??= "没写是丢了（lost）还是毁了（destroyed）";
     }
     if (op === "census") {
+      const list = censusMembers(raw.members);
+      // 成员没写、写成认不出的样子：说不出里面有什么，整条不收（不当成「空了」）。
+      if (!Array.isArray(list)) broken ??= list === undefined ? "清点没写里面有哪几样（空了写 []）" : "清点的 members 没写成列表";
       const members: CensusMemberInput[] = [];
-      for (const [at, member] of asList(raw.members).entries()) {
+      for (const [at, member] of (Array.isArray(list) ? list : []).entries()) {
         const ref = itemRefOf(member, undefined, handles);
         if (!ref) {
           broken ??= `清点第 ${at + 1} 样没写对是哪样`;
@@ -649,7 +665,7 @@ function parseItems(
       if (complete !== undefined) entry.complete = complete;
     } else Object.assign(entry, factLinks(raw, handles, where, drop));
     if (broken) {
-      drop(where, `${broken}，这条没记`, name, "item", rawItemRefs(raw, item, handles));
+      drop(where, `${broken}，这条没记`, name, "item", rawItemRefs(raw, item, handles), item);
       continue;
     }
     entries.push(entry);

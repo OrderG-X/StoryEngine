@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
-import { chapterCommit, itemShortfall, projectBook, readChapterLedger, readTruthBasis, runCommand } from "@actalk/story-core";
+import { chapterCommit, decisionRecord, itemShortfall, projectBook, readChapterLedger, readTruthBasis, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { commitEntriesOf, prepareChapterCommit, type CommitPreview, type PrepareFailure, type PrepareInput, type PreviewTicket } from "../editorial/commit-flow.js";
@@ -69,6 +69,31 @@ describe("定稿清单：东西", () => {
     expect(after.itemIssues).toEqual([expect.objectContaining({ kind: "dangling", chapter: 2 })]);
   });
 
+
+  it("后文只有作者裁定用着它：重定稿照样记回；原句没了清单、回执如实说，那条裁定不生效、记一条问题", async () => {
+    const one = `${CH1}\n\n桌上放着一只铜盒。`;
+    const two = "# 第2章 · 外乡人\n\n第二天上午，沈青禾出了门。";
+    const ledger1 = { ...LEDGER1, newItems: [{ tag: "N1", name: "铜盒", by: "narration", quote: "桌上放着一只铜盒" }] };
+    const first = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: one, callModel: fakeModel(ledger1), knownNames: ["沈青禾"] }));
+    expect(await confirmNow(first.ticket, one)).toMatchObject({ ok: true });
+    const second = expectPreview(await prepareNow({ bookDir: book, chapter: 2, text: two, callModel: fakeModel({ summary: { text: "出门", quote: "沈青禾出了门" } }) }));
+    expect(await confirmNow(second.ticket, two)).toMatchObject({ ok: true });
+    const box = (await projectBook(book)).items.find((item) => item.name === "铜盒")!;
+    const ruled = await runCommand(book, decisionRecord, { decisions: [{ type: "item.state", item: box.id, chapter: 2, state: { kind: "at", to: { kind: "person", ref: { mention: "沈青禾" } } } }] } as never, { caller: "author", idempotencyKey: randomUUID() });
+    expect(ruled).toMatchObject({ ok: true });
+
+    const kept = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: `${one}\n\n风停了。`, callModel: fakeModel({ ...ledger1, newItems: [] }) }));
+    expect(kept.lostItems).toBeUndefined();
+    expect([...kept.review, ...kept.auto].map((item) => item.label)).toContain("新东西：铜盒");
+
+    const gone = expectPreview(await prepareNow({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel({ ...ledger1, newItems: [] }) }));
+    expect(gone.lostItems).toEqual([{ name: "铜盒", proved: false }]);
+    const receipt = await confirmNow(gone.ticket, CH1);
+    expect(receipt).toMatchObject({ ok: true, result: { orphanedItems: ["铜盒"] } });
+    const after = await projectBook(book);
+    expect(after.items.some((item) => item.id === box.id)).toBe(false);
+    expect(after.itemIssues).toContainEqual(expect.objectContaining({ kind: "dangling", chapter: 2 }));
+  });
 
   it("这章东西对不上的（投影报的「可能」）进清单，说名字不说编号", async () => {
     const one = `${CH1}\n\n铜盒里只有那把铜钥匙。`;

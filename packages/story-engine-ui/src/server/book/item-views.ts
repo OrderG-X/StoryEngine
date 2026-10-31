@@ -74,17 +74,24 @@ export function nowText(now: ItemNow | undefined, texts: ItemTexts): string | un
   return `${settledText(now, texts)}，第 ${now.chapter} 章`;
 }
 
-/** 里面有什么：完整清点（有效 / 此后没核全 / 对不上）或已知有的（一律「可能还有别的」）；什么都不知道 = undefined。 */
+/**
+ * 里面有什么：完整清点（有效 / 此后没核全 / 对不上）或已知有的（一律「可能还有别的」）；什么都不知道 = undefined。
+ * 清点不再有效时说那次清点列的（原样，不拿后来的挪动改它），已知现在在里面的另说。
+ */
 export function contentsText(item: ItemView, texts: ItemTexts): string | undefined {
   const census = item.census;
+  const only = (ids: readonly string[]) => (ids.length === 0 ? "空了" : `只有${ids.map(texts.label).join("、")}`);
+  const known = item.inside.length > 0 ? `已知里面有${item.inside.map(texts.label).join("、")}（可能还有别的）` : undefined;
   if (census) {
-    const listed = census.members.length === 0 ? "空了" : `只有${census.members.map(texts.label).join("、")}`;
-    if (census.status === "valid") return `第 ${census.chapter} 章清点过，之后的挪动都记着：现在里面${listed}`;
-    if (census.status === "unverified") return `第 ${census.chapter} 章清点过（${listed}），第 ${census.since} 章起没核全，不能据此说哪样不在里面`;
-    return `第 ${census.chapter} 章清点「${listed}」和别处记的对不上，不能据此说哪样不在里面`;
+    if (census.status === "valid") return `第 ${census.chapter} 章清点过，之后的挪动都记着：现在里面${only(census.members)}`;
+    const said = census.status === "unverified"
+      ? `第 ${census.chapter} 章清点过（${only(census.listed)}），第 ${census.since} 章起没核全，不能据此说哪样不在里面`
+      : `第 ${census.chapter} 章清点「${only(census.listed)}」和别处记的对不上，不能据此说哪样不在里面`;
+    // 已知在里面的和那次列的一样就不重复说。
+    const same = item.inside.length === census.listed.length && item.inside.every((id) => census.listed.includes(id));
+    return known && !same ? `${said}；${known}` : said;
   }
-  if (item.inside.length > 0) return `已知里面有${item.inside.map(texts.label).join("、")}（可能还有别的）`;
-  return undefined;
+  return known;
 }
 
 /** 之后东西账没记全那句：整章没记全，还是只有说它的那条没记上。 */

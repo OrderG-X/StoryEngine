@@ -334,7 +334,7 @@ export { checkEntries, itemRefsOfInput, type CheckResult, type RejectedEntry, ty
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
 export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
-export { buildChapterLedger, chapterCommit, ChapterCommitArgs, itemShortfall, LedgerShortfall, missingItemRefs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { buildChapterLedger, chapterCommit, ChapterCommitArgs, decisionItemIds, itemShortfall, LedgerShortfall, missingItemRefs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { ledgerComplete, LedgerCompleteArgs, type LedgerCompleteResult } from "./commands/ledger-complete.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";

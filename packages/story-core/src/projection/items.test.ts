@@ -128,21 +128,63 @@ describe("去向按 seq 走", () => {
     expect(item(ruled, "i1-1").now).toMatchObject({ kind: "known", place: { name: "丙" }, entry: "d-1" });
   });
 
-  it("挪动写了从哪来、和前一刻接不上：拿不准 + 去处接不上；地方和地方不比", () => {
-    const ch1 = chapter(1, "表在乙手里。钥匙在柜台上。", [
+  it("挪动写了从哪来、和前一刻接不上：拿不准 + 去处接不上；地方和地方不比；搁在某处、从哪来写人算拿起来的", () => {
+    const ch1 = chapter(1, "表在乙手里。钥匙在柜台上。伞在乙手里。灯在柜台上。", [
       appear("N1", "表", "表在乙手里"),
       appear("N2", "钥匙", "钥匙在柜台上"),
+      appear("N3", "伞", "伞在乙手里"),
+      appear("N4", "灯", "灯在柜台上"),
       at(1, N("N1"), person("乙"), "表在乙手里"),
       at(2, N("N2"), place("柜台上"), "钥匙在柜台上"),
+      at(3, N("N3"), person("乙"), "伞在乙手里"),
+      at(4, N("N4"), place("柜台上"), "灯在柜台上"),
     ]);
-    const ch2 = chapter(2, "丁把表从口袋里掏出来递给戊。他把钥匙从柜台拿起来。", [
+    const ch2 = chapter(2, "丁把表从口袋里掏出来递给戊。他把钥匙从柜台拿起来。丁把伞从门后拿出来。丁把灯放进柜里。", [
       move(1, I("i1-1"), person("戊"), "丁把表从口袋里掏出来递给戊", { from: person("丁") }),
       move(2, I("i1-2"), person("他"), "他把钥匙从柜台拿起来", { from: place("柜台") }),
+      move(3, I("i1-3"), person("丁"), "丁把伞从门后拿出来", { from: place("门后") }),
+      move(4, I("i1-4"), place("柜里"), "丁把灯放进柜里", { from: person("丁") }),
     ]);
     const view = viewOf([ch1, ch2]);
     expect(item(view, "i1-1").now).toMatchObject({ kind: "uncertain", reason: "from" });
     expect(item(view, "i1-2").now).toMatchObject({ kind: "known", place: { name: "他" } });
-    expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["from"]);
+    expect(item(view, "i1-3").now).toMatchObject({ kind: "uncertain", reason: "from" });
+    expect(item(view, "i1-4").now).toMatchObject({ kind: "known", place: { text: "柜里" } });
+    expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["from", "from"]);
+  });
+
+  it("同号两处结果一样：每处都核（从哪来接不上、毁了又在），和数组里谁在前无关", () => {
+    const ch1 = chapter(1, "表在甲手里。", [appear("N1", "表", "表在甲手里"), at(1, N("N1"), person("甲"), "表在甲手里")]);
+    const a = at(1, I("i1-1"), person("丙"), "表到了丙手里");
+    const b = move(1, I("i1-1"), person("丙"), "乙把表给了丙", { from: person("乙") });
+    for (const order of [[a, b], [b, a]]) {
+      const view = viewOf([ch1, chapter(2, "表到了丙手里。乙把表给了丙。", order)]);
+      expect(item(view, "i1-1").now).toMatchObject({ kind: "uncertain", reason: "from" });
+      expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["from"]);
+    }
+  });
+
+  it("毁了之后清点又列了它：拿不准 + 一条矛盾（不直接复活）", () => {
+    const ch1 = chapter(1, "信烧成了灰。木匣在桌上。", [
+      appear("N1", "信", "信烧成了灰"),
+      appear("N2", "木匣", "木匣在桌上"),
+      gone(1, N("N1"), "destroyed", "信烧成了灰"),
+      at(2, N("N2"), place("桌上"), "木匣在桌上"),
+    ]);
+    const ch2 = chapter(2, "木匣里有一封信。", [census(1, I("i1-2"), [I("i1-1")], false, "木匣里有一封信")]);
+    const view = viewOf([ch1, ch2]);
+    expect(item(view, "i1-1").now).toMatchObject({ kind: "uncertain", reason: "destroyed" });
+    expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["destroyed"]);
+  });
+
+  it("头一回写它的那条没了、后文只剩说它的事实：清单里照列，头一回写到算那条事实", () => {
+    const ch1 = chapter(1, "天阴着。", []);
+    const ch2 = chapter(2, "表盖裂了。", [
+      { kind: "fact", review: "auto", nature: "state", subject: "表", attribute: "表盖", value: "裂了", text: "表盖裂了", quote: "表盖裂了", source: narration, item: I("i1-1") } as EntryInput,
+    ]);
+    const view = viewOf([ch1, ch2]);
+    expect(item(view, "i1-1")).toMatchObject({ name: "表", firstSeen: { chapter: 2, quote: "表盖裂了" } });
+    expect(item(view, "i1-1").dangling).toBeUndefined();
   });
 
   it("毁了之后又写它在哪：拿不准 + 一条矛盾", () => {
@@ -294,6 +336,21 @@ describe("清点", () => {
     const lost = viewOf([...ledgers, burnt], [decision("d-1", { type: "item.retract", entry: "c2-1" }), decision("d-2", { type: "item.state", item: "i1-2", chapter: 2, state: { kind: "gone", gone: "lost" } })]);
     expect(item(lost, "i1-2").now).toMatchObject({ kind: "gone", gone: "lost", entry: "d-2" });
     expect(item(viewOf([...ledgers, burnt]), "i1-2").now).toMatchObject({ kind: "gone", gone: "destroyed" });
+  });
+
+  it("作者同一章既定盒子在哪、又定里面有什么：两方面各管各的，谁先定都一样", () => {
+    const where = decision("d-1", { type: "item.state", item: "i1-1", chapter: 1, state: { kind: "at", to: { kind: "person", ref: { mention: "乙" } } } });
+    const contents = decision("d-2", { type: "item.state", item: "i1-1", chapter: 1, state: { kind: "census", members: [{ id: "i1-2" }], complete: true } });
+    for (const decisions of [[where, contents], [contents, where]]) {
+      const view = viewOf([box()], decisions);
+      expect(item(view, "i1-1").now).toMatchObject({ kind: "known", place: { kind: "person", name: "乙" }, entry: "d-1" });
+      expect(item(view, "i1-1").census).toMatchObject({ entry: "d-2", status: "valid", members: ["i1-2"] });
+    }
+  });
+
+  it("清点之后成员丢了：清点此后没核全，那次清点列的照留（不改成「空了」）", () => {
+    const ch2 = chapter(2, "信不见了。", [gone(1, I("i1-2"), "lost", "信不见了")]);
+    expect(item(viewOf([box(), ch2]), "i1-1").census).toMatchObject({ chapter: 1, status: "unverified", since: 2, listed: ["i1-2"] });
   });
 
   it("装在里面绕成圈：报结构冲突", () => {
@@ -448,5 +505,6 @@ describe("悬空的东西（设计 3.3：重定稿删了唯一的出处）", () 
     const view = viewOf([ch1, chapter(2, "过了几天。", [])], [ruling]);
     expect(item(view, "i1-1").census).toBeUndefined();
     expect(view.dangling).toContainEqual(expect.objectContaining({ kind: "item", ref: "i1-2", source: "d-1" }));
+    expect(view.itemIssues).toContainEqual(expect.objectContaining({ kind: "dangling", item: "i1-1", chapter: 2, entries: ["d-1"] }));
   });
 });

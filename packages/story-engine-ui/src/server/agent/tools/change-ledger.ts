@@ -14,6 +14,8 @@ import { readMessageRefFromContext, readProjectDirFromContext } from "../request
 import { receiptOf, type SubmitReceipt } from "./op-tools.js";
 
 const groupList = z.array(z.union([z.string(), z.array(z.string())]));
+// 只有一条时模型常直接给一个字符串：也认（请求读回时按一条算）。
+const factRefList = coerceJsonArray(z.union([z.array(z.string()), z.string()]).optional());
 
 const changeSchema = z.object({
   // 模型无关：枚举大小写宽容（模型常传 "Add"/"REMOVE"）。
@@ -23,7 +25,8 @@ const changeSchema = z.object({
       "天数：day=改已定稿某章是故事第几天（chapter + day；作者说了到第几天才给 dayEnd）；keepDay=作者定的天数和记下的对不上时以作者定的为准（chapter；作者明说了才用）。" +
       "梗概：summary=改写已定稿某章的梗概（chapter + text，text 是整条新梗概）。" +
       "东西（东西在哪见 read_state_overview）：itemMerge=这几样是同一样（groups，每组第一样留下）；itemSplit=第几章写的那样其实是另一样（query 原来那样 + chapter + text 新名字，targetText 可用原句几个字只拆那一处）；" +
-      "itemRetract=第几章记它的某条去向记错了（query + chapter，那章记了几条时 targetText 给那句原话里的几个字）；itemState=作者定它到第几章末在哪（query + chapter + where，或 members + complete 说里面有什么）。" +
+      "itemRetract=第几章记它的某条去向记错了（query + chapter，那章记了几条时 targetText 给那句原话里的几个字）；itemState=作者定它到第几章末在哪（query + chapter + where，或 members + complete 说里面有什么；" +
+      "作者说老记录里它的去向以这回为准的，带上那几条事实：只说这一样的放 replaces、一句说了好几样的放 overlaps）。" +
       "这四种只认账里已有的东西（read_state_overview 列的）；账里没有的先用 change_settings 建物品卡，下一条消息再定在哪。",
   )),
   id: blankToUndefined(z.string().optional().describe("事实或线索的编号（read_state_overview 里取）。别念给作者听。")),
@@ -52,7 +55,11 @@ const changeSchema = z.object({
     unknown: coerceBoolean(z.boolean().optional().describe("true=不知道在哪了")),
     gone: coerceEnum(z.enum(["lost", "destroyed"]).optional().describe("lost=丢了 / 被拿走不知去向；destroyed=毁了 / 用光了")),
   }).optional().describe("itemState：它在哪，只给一种。"),
-  members: coerceJsonArray(z.array(z.string()).optional().describe("itemState 清点：里面有哪几样（东西名字）；空数组 + complete=true 是空了。")),
+  members: coerceJsonArray(z.array(z.union([z.string(), z.object({ name: z.string(), replaces: factRefList, overlaps: factRefList })])).optional().describe(
+    "itemState 清点：里面有哪几样（东西名字）；空数组 + complete=true 是空了。某样要对齐老记录的写成 {name, replaces / overlaps}。",
+  )),
+  replaces: factRefList.describe("itemState：老记录里只说这一样东西去向的事实（编号或原话），以这回定的为准、顶掉。"),
+  overlaps: factRefList.describe("itemState：老记录里一句说了好几样、其中有它的事实（编号或原话），那条留着、只标它以这回定的为准。"),
   complete: coerceBoolean(z.boolean().optional().describe("itemState 清点：作者说「只有这些」才 true。")),
 });
 

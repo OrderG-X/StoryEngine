@@ -102,4 +102,48 @@ describe("改账：东西", () => {
     expect((await plan({ op: "itemRetract", query: "信" })).notDone).toEqual(["「信」是第几章那条记错了？"]);
     expect((await plan({ op: "itemState", query: "烟斗", chapter: 2, where: { person: "甲" } })).notDone).toEqual(["账里没找到叫「烟斗」的东西（要记它，先在设定本给它建一张物品卡）"]);
   });
+
+  it("清点列多少样记多少样，不截；超了上限、有一样没写名字都如实说，不悄悄少列", async () => {
+    const many = Array.from({ length: 21 }, () => "信");
+    const census = await plan({ op: "itemState", query: "怀表", chapter: 2, members: [...many, "怀表（「甲把怀表塞进抽屉」那件）"].slice(0, 21), complete: true });
+    expect(readLedgerRequest({ op: "itemState", members: many })?.members).toHaveLength(21);
+    expect(census.decisions).toHaveLength(1);
+    expect((await plan({ op: "itemState", query: "怀表", chapter: 2, members: Array.from({ length: 101 }, () => "信"), complete: true })).notDone).toEqual(["一次清点最多列 100 样，这次列了 101 样"]);
+    expect((await plan({ op: "itemState", query: "怀表", chapter: 2, members: ["信", { replaces: ["x"] }], complete: true })).notDone).toEqual(["没说是哪样东西"]);
+  });
+
+  it("作者定的去处对齐老记录：只说这一样的顶掉、一句说了几样的留着只标它；后面章的不认；同一条两种都给如实问；改东西的事实还挂在那样东西上", async () => {
+    // 老记法的事实（第 1 章）：一条只说信，一条说了信和表。
+    await apply([
+      { type: "fact.assert", chapter: 1, nature: "state", subject: "信", attribute: "在哪", value: "在乙手里", text: "信在乙手里" },
+      { type: "fact.assert", chapter: 1, nature: "event", text: "信和表都交给了乙" },
+      { type: "fact.assert", chapter: 2, nature: "event", text: "后来信又到了丙手里" },
+    ], "old-facts");
+    const linked = await plan({ op: "itemState", query: "信", chapter: 1, where: { person: "甲" }, replaces: "信在乙手里", overlaps: ["信和表都交给了乙"] });
+    expect(linked.notDone).toEqual([]);
+    expect(linked.decisions).toEqual([expect.objectContaining({ type: "item.state", replaces: [expect.any(String)], overlaps: [expect.any(String)] })]);
+    expect(linked.lines[0]).toContain("第 1 章的旧记录「信在乙手里」以这回定的为准，不再算");
+    expect(linked.lines[0]).toContain("第 1 章的旧记录「信和表都交给了乙」留着，其中「信」的去向以这回定的为准");
+    expect(linked.lines[0]).not.toMatch(RAW_ID);
+    const census = await plan({ op: "itemState", query: "怀表", chapter: 2, members: [{ name: "信", overlaps: ["信和表都交给了乙"] }], complete: false });
+    expect(census.decisions).toEqual([expect.objectContaining({ state: { kind: "census", complete: false, members: [expect.objectContaining({ overlaps: [expect.any(String)] })] } })]);
+    expect((await plan({ op: "itemState", query: "信", chapter: 1, where: { person: "甲" }, replaces: ["后来信又到了丙手里"] })).notDone[0]).toContain("比第 1 章晚");
+    expect((await plan({ op: "itemState", query: "信", chapter: 1, where: { person: "甲" }, replaces: ["信在乙手里"], overlaps: ["信在乙手里"] })).notDone[0]).toContain("请说是哪一种");
+    // 作者点了：核心认这几条关联（章号、在投影里）。
+    await apply(linked.decisions, "linked");
+
+    // 第 3 章记一条说怀表的事实（主体是那样东西）；改写它，改后的那条还挂在怀表上。
+    const watch = project(await readBookSnapshot(dir)).items.find((item) => item.name === "怀表")!;
+    const outcome = await runCommand(dir, chapterCommit, {
+      chapter: 3,
+      text: "# 第3章\n\n怀表的表盖裂了。",
+      entries: [{ kind: "fact", review: "auto", nature: "state", subject: "怀表", attribute: "表盖", value: "裂了", text: "怀表的表盖裂了", quote: "怀表的表盖裂了", source: narration, item: { id: watch.id } } as EntryInput],
+    }, { caller: "author", idempotencyKey: "c3" });
+    expect(outcome.ok).toBe(true);
+    const itemFact = project(await readBookSnapshot(dir)).facts.find((fact) => fact.item === watch.id)!;
+    const updated = await plan({ op: "update", id: itemFact.id, text: "怀表的表盖碎了", value: "碎了" });
+    expect(updated.decisions).toEqual([expect.objectContaining({ type: "fact.assert", corrects: itemFact.id, subject: "怀表", subjectId: watch.id })]);
+    const after = await apply(updated.decisions, "update-item-fact");
+    expect(after.facts.find((fact) => fact.text === "怀表的表盖碎了")).toMatchObject({ item: watch.id });
+  });
 });

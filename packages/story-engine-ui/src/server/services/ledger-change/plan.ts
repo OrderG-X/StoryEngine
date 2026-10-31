@@ -22,6 +22,8 @@ import { storySpanText, WEEKDAY_NAMES } from "../../book/story-timeline.js";
 
 /** 一次最多改几条（卡上摆得下、看得清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
+/** 作者一次清点最多列几样（完整清点拆不开，超了如实说，不截）。 */
+export const MAX_CENSUS_MEMBERS = 100;
 
 export const LEDGER_OPS = [
   "add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "keepDay", "summary",
@@ -48,9 +50,22 @@ export interface LedgerChangeRequest {
   readonly dayEnd?: number;
   /** itemState：到这一章末这样东西在哪 / 丢了毁了 / 里面是什么（只给一种）。 */
   readonly where?: ItemWhereRequest;
-  /** itemState 清点：里面有哪几样（名字）；complete = 作者说「只有这些」。 */
-  readonly members?: readonly string[];
+  /** itemState 清点：里面有哪几样（名字；各自可带对齐的旧记录）；complete = 作者说「只有这些」。 */
+  readonly members?: readonly ItemMemberRequest[];
   readonly complete?: boolean;
+  /**
+   * itemState 在哪 / 丢了毁了：旧记法里说它去向的事实（编号或原话），以作者这回定的为准（设计 2.6）。
+   * replaces = 只说这一样的那条（顶掉）；overlaps = 一句里说了好几样的那条（留着，只标它以这里为准）。
+   */
+  readonly replaces?: readonly string[];
+  readonly overlaps?: readonly string[];
+}
+
+/** 清点里的一样：名字，和它对齐的旧记录（同 replaces / overlaps）。 */
+export interface ItemMemberRequest {
+  readonly name: string;
+  readonly replaces?: readonly string[];
+  readonly overlaps?: readonly string[];
 }
 
 /** 作者说的去处：谁拿着 / 在哪个地方 / 在哪样东西里面 / 不知道在哪了 / 丢了、毁了。 */
@@ -117,6 +132,45 @@ function findItem(view: BookProjection, ref: string, texts: ItemTexts):
   const shown = found.slice(0, 5).map((item) => `「${texts.label(item.id)}」`).join("、");
   return { ok: false, code: "ambiguous", reason: `${quoteText(trimmed)}对得上 ${found.length} 样东西：${shown}${found.length > 5 ? " 等" : ""}，请说清是哪一样。` };
 }
+
+type ItemFactLinks = { replaces?: string[]; overlaps?: string[] };
+
+/**
+ * 作者说旧记录里它的去向以这回定的为准：按编号或原话找那几条事实（对上多条如实问），只认这一章或更早的（设计 2.6 作者那一支）。
+ * 一条事实只说这一样还是一句说了好几样，由作者（经对话 AI）说明，代码不拆。
+ */
+function itemFactLinks(view: BookProjection, request: { readonly replaces?: readonly string[]; readonly overlaps?: readonly string[] }, chapter: number, label: string):
+  | { readonly ok: true; readonly links: ItemFactLinks; readonly said: readonly string[] }
+  | { readonly ok: false; readonly code: string; readonly reason: string } {
+  const links: ItemFactLinks = {};
+  const said: string[] = [];
+  for (const key of ["replaces", "overlaps"] as const) {
+    for (const ref of request[key] ?? []) {
+      const found = findFact(view, ref);
+      if (!found.ok) return found;
+      const fact = found.item;
+      if (fact.chapter > chapter) return { ok: false, code: "later_fact", reason: `${quoteText(fact.text)}记在第 ${fact.chapter} 章，比第 ${chapter} 章晚，没法拿第 ${chapter} 章末的样子去顶它。` };
+      const other = key === "replaces" ? links.overlaps : links.replaces;
+      if (other?.includes(fact.id)) return { ok: false, code: "conflict", reason: `${quoteText(fact.text)}不能既整条顶掉、又留着只标「${label}」，请说是哪一种。` };
+      const list = (links[key] ??= []);
+      if (list.includes(fact.id)) continue;
+      list.push(fact.id);
+      said.push(key === "replaces"
+        ? `第 ${fact.chapter} 章的旧记录${quoteText(fact.text)}以这回定的为准，不再算`
+        : `第 ${fact.chapter} 章的旧记录${quoteText(fact.text)}留着，其中「${label}」的去向以这回定的为准`);
+    }
+  }
+  return { ok: true, links, said };
+}
+
+const mergeLinks = (a: ItemFactLinks, b: ItemFactLinks): ItemFactLinks => {
+  const out: ItemFactLinks = {};
+  for (const key of ["replaces", "overlaps"] as const) {
+    const ids = [...new Set([...(a[key] ?? []), ...(b[key] ?? [])])];
+    if (ids.length > 0) out[key] = ids;
+  }
+  return out;
+};
 
 /** 本章东西条目的原句里有没有这几个字（找原句）。 */
 const quoteHas = (quote: string | undefined, text: string | undefined): boolean =>
@@ -253,12 +307,21 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest, l
       if (!view.chapters.some((item) => item.chapter === chapter)) return fail("unknown_chapter", `第 ${chapter} 章还没定稿，东西在哪定稿时记。`);
       let state: ItemStateRuling;
       let said: string;
+      let own: ItemFactLinks = {};
+      const aligned: string[] = [];
       if (request.members) {
-        const members: { id: string }[] = [];
+        if (request.members.length > MAX_CENSUS_MEMBERS) return fail("too_many", `一次清点最多列 ${MAX_CENSUS_MEMBERS} 样，这次列了 ${request.members.length} 样。`);
+        const members: { id: string; replaces?: string[]; overlaps?: string[] }[] = [];
         for (const ref of request.members) {
-          const member = findItem(view, ref, texts);
+          const member = findItem(view, ref.name, texts);
           if (!member.ok) return fail(member.code, member.reason);
-          if (!members.some((item) => item.id === member.item.id)) members.push({ id: member.item.id });
+          const links = itemFactLinks(view, ref, chapter, texts.label(member.item.id));
+          if (!links.ok) return fail(links.code, links.reason);
+          aligned.push(...links.said);
+          const existing = members.find((item) => item.id === member.item.id);
+          const merged = mergeLinks(existing ?? {}, links.links);
+          if (existing) Object.assign(existing, merged);
+          else members.push({ id: member.item.id, ...merged });
         }
         const complete = request.complete === true;
         state = { kind: "census", members, complete };
@@ -269,10 +332,14 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest, l
         if (!where.ok) return fail(where.code, where.reason);
         state = where.state;
         said = where.text;
+        const links = itemFactLinks(view, request, chapter, texts.label(found.item.id));
+        if (!links.ok) return fail(links.code, links.reason);
+        own = links.links;
+        aligned.push(...links.said);
       }
       return proposal(
-        [{ type: "item.state", item: found.item.id, chapter, state }],
-        [`到第 ${chapter} 章末，「${texts.label(found.item.id)}」${said}（以你定的为准）`],
+        [{ type: "item.state", item: found.item.id, chapter, state, ...own }],
+        [`到第 ${chapter} 章末，「${texts.label(found.item.id)}」${said}（以你定的为准）${aligned.length > 0 ? `；${aligned.join("；")}` : ""}`],
       );
     }
     case "add": {
@@ -307,6 +374,8 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest, l
           ...(structured ? { subject: old.subject, attribute: old.attribute, value: request.value?.trim() || old.value } : {}),
           text: request.text.trim(),
           corrects: old.id,
+          // 说的是一样东西：改后的那条还挂在那样东西上，不按名字重新认（同名两样分不开，设计 2.7）。
+          ...(old.item !== undefined && old.subject ? { subject: old.subject, subjectId: old.item } : {}),
         } as DecisionInput],
         [`把第 ${old.chapter} 章的事实${quoteText(old.text)}改成${quoteText(request.text, 60)}`],
       );
@@ -476,6 +545,17 @@ const oneOf = <T extends string>(items: readonly T[], value: unknown): T | undef
 
 const GONE = ["lost", "destroyed"] as const;
 
+/** 对齐的旧记录：编号或原话的列表（只给一条时直接写一个字符串也认）。 */
+function factRefs(value: Record<string, unknown>): { replaces?: string[]; overlaps?: string[] } {
+  const out: { replaces?: string[]; overlaps?: string[] } = {};
+  for (const key of ["replaces", "overlaps"] as const) {
+    const raw = value[key];
+    const list = (Array.isArray(raw) ? raw : [raw]).map(text).filter((item): item is string => item !== undefined);
+    if (list.length > 0) out[key] = [...new Set(list)];
+  }
+  return out;
+}
+
 function itemStateFields(value: Record<string, unknown>): Record<string, unknown> {
   const raw = typeof value.where === "object" && value.where !== null && !Array.isArray(value.where) ? (value.where as Record<string, unknown>) : {};
   const where = Object.fromEntries(Object.entries({
@@ -485,11 +565,19 @@ function itemStateFields(value: Record<string, unknown>): Record<string, unknown
     unknown: raw.unknown === true ? true : undefined,
     gone: oneOf(GONE, raw.gone),
   }).filter(([, item]) => item !== undefined));
-  const members = Array.isArray(value.members) ? value.members.map(text).filter((item): item is string => item !== undefined).slice(0, MAX_DECISIONS_PER_CHANGE) : undefined;
+  // 成员：名字，或 { name, replaces, overlaps }；空字符串当没写，写了别的样子留个空名字，planOnView 如实说没说是哪样（不悄悄少列一样）。
+  const members = Array.isArray(value.members)
+    ? value.members.flatMap((member): ItemMemberRequest[] => {
+      if (typeof member === "string") return text(member) ? [{ name: text(member) as string }] : [];
+      const record = typeof member === "object" && member !== null && !Array.isArray(member) ? (member as Record<string, unknown>) : {};
+      return [{ name: text(record.name) ?? "", ...factRefs(record) }];
+    })
+    : undefined;
   return {
     ...(Object.keys(where).length > 0 ? { where } : {}),
     ...(members ? { members } : {}),
     ...(value.complete === true ? { complete: true } : {}),
+    ...factRefs(value),
   };
 }
 

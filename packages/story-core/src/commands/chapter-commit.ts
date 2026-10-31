@@ -19,6 +19,8 @@ import { readAllLedgers, readCards, readChapterLedgerFile, readDecisions, sha256
 import { chapterLedgerPath, chapterTextPath } from "../store/paths.js";
 import { project } from "../projection/project.js";
 import { checkEntries, itemRefsOfInput, type RejectedEntry } from "../review/check.js";
+import { refsOfDecision } from "../history/references.js";
+import type { AuthorDecision } from "../schema/decisions.js";
 import { fail } from "./runner.js";
 import type { CommandFailure, WriteCommandSpec } from "./types.js";
 
@@ -157,11 +159,11 @@ export async function buildChapterLedger(
     }
   }
 
-  // 上次头回写到的东西这次没认上，后文还用着它（任何位置）：如实列出来。
+  // 上次头回写到的东西这次没认上，后文还用着它（任何位置，作者裁定也算）：如实列出来。
   const lostItems = new Set(assigned.droppedItems.map((entry) => entry.itemRef.id));
   const orphanedItems: string[] = [];
   if (lostItems.size > 0) {
-    const used = new Set<string>();
+    const used = new Set<string>(decisionItemIds(decisions).filter((id) => lostItems.has(id)));
     for (const later of ledgers) {
       if (later.chapter <= input.chapter) continue;
       for (const entry of later.entries) {
@@ -182,6 +184,10 @@ export async function buildChapterLedger(
     recorded: checked.accepted.length,
   };
 }
+
+/** 作者裁定指着的东西（合并、拆开、定在哪、装进 / 清点的、改事实挂着的）。 */
+export const decisionItemIds = (decisions: readonly AuthorDecision[]): string[] =>
+  decisions.flatMap((decision) => refsOfDecision(decision).flatMap((ref) => (ref.kind === "item" ? [ref.id] : [])));
 
 /**
  * 东西条目有没收的时这章记到什么程度：本来记全了 → 没记全、缺这几类；本来就没记全且写明了缺哪几类 → 加上这几类；

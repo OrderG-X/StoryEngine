@@ -600,7 +600,7 @@ async function repairItems(
 
 /** 要重写的那条说的是哪一样（认得出才有）。 */
 function problemSubject(problem: ItemProblem, entries: readonly EntryInput[]): ItemRefInput | undefined {
-  if (problem.kind === "drop") return problem.drop.items?.[0];
+  if (problem.kind === "drop") return problem.drop.subject;
   const entry = entries[problem.index];
   if (entry?.kind !== "item") return undefined;
   return entry.op === "appear" ? (entry.tag ? { tag: entry.tag } : undefined) : entry.item;

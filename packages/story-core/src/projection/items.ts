@@ -72,6 +72,9 @@ export interface ItemStep {
 export interface CensusView {
   readonly chapter: number;
   readonly entry: string;
+  /** 那次清点列的（清点时的断言，原样留着）。 */
+  readonly listed: readonly string[];
+  /** 按之后记全了的挪进挪出算下来的；只有清点有效时才是「现在里面的」。 */
   readonly members: readonly string[];
   readonly status: "valid" | "unverified" | "conflict";
   readonly since?: number;
@@ -167,7 +170,7 @@ interface MutableItem {
   unverifiedBy?: "chapter" | "entry";
   history: ItemStep[];
   asides: ItemStep[];
-  census?: { chapter: number; entry: string; members: Set<string>; status: CensusView["status"]; since?: number };
+  census?: { chapter: number; entry: string; listed: string[]; members: Set<string>; status: CensusView["status"]; since?: number };
 }
 
 /** 一条要走的去向：账单条目或作者定的。 */
@@ -276,6 +279,7 @@ export function projectItems(
     const lost = refs.find((id) => !proven.has(resolve(id)));
     if (lost !== undefined) {
       dangling.push({ kind: "item", ref: resolve(lost), chapter: decision.chapter, source: decision.id });
+      issue("dangling", resolve(decision.item), decision.chapter, [decision.id]);
       voidLink(decision.id, "item");
       if (decision.state.kind === "census") decision.state.members.forEach((_, index) => voidLink(decision.id, "member", index));
       continue;
@@ -292,6 +296,9 @@ export function projectItems(
     // 地方是原样的字、不发编号：比不了（字不一样不等于不是一处）。
     return undefined;
   };
+  /** 从哪来和前一刻接不接得上（false = 接不上）。前一刻搁在某处、从哪来写的是人：当那人从那儿拿起来的（拿起常不单写一句）。 */
+  const fromConnects = (previous: ItemPlaceView, from: ItemPlaceView): boolean | undefined =>
+    from.kind === "person" && previous.kind !== "person" ? true : samePlace(previous, from);
   const markUnverified = (item: MutableItem, chapter: number, by: "chapter" | "entry"): void => {
     item.unverifiedSince = chapter;
     item.unverifiedBy = by;
@@ -363,37 +370,6 @@ export function projectItems(
     delete container.census.since;
   };
 
-  /** 一条 at / move / gone 走一步。 */
-  const apply = (move: Move): void => {
-    const item = touch(move.item);
-    const settled = settledOf(move);
-    if (!settled) return;
-    const previous = item.now;
-    if (previous?.kind === "gone" && previous.gone === "destroyed" && settled.kind !== "gone") {
-      issue("destroyed", item.id, move.chapter, [previous.entry, move.entry]);
-      setNow(item, { kind: "uncertain", reason: "destroyed", options: [settled, previous], chapter: move.chapter }, move.chapter);
-      return;
-    }
-    // 中间东西账都记全了（最后一次写它之后没有没核全的章），从哪来接不上才算数。
-    if (move.from && previous?.kind === "known" && item.unverifiedSince === undefined && samePlace(previous.place, move.from) === false) {
-      issue("from", item.id, move.chapter, [previous.entry, move.entry]);
-      setNow(item, { kind: "uncertain", reason: "from", options: [settled, previous], chapter: move.chapter }, move.chapter);
-      return;
-    }
-    // 从里面拿出了有效完整清点里没有的：清点被反证，改记对不上。
-    const leaving = move.from?.kind === "inside" ? move.from.item : insideOf(previous);
-    const container = leaving !== undefined ? items.get(leaving) : undefined;
-    const entering = insideOf(settled.kind === "known" ? settled : undefined);
-    if (checkable(container) && !container.census.members.has(item.id) && entering !== leaving) {
-      issue("not-in-census", item.id, move.chapter, [container.census.entry, move.entry]);
-      container.census.status = "conflict";
-      delete container.census.since;
-    }
-    // 挪进来（move）的照算进清点；只是写它此刻在里面（at、作者定的）的要核。
-    if (entering !== undefined && (move.op !== "move" || move.scope.source === "author_ruling")) observeInside(item, touch(entering), move);
-    setNow(item, settled, move.chapter);
-  };
-
   /** 一处「它到这儿了」：条目自己的去向，或清点给成员的「在里面」。 */
   interface Placement { readonly item: string; readonly settled: ItemSettled; readonly move: Move; readonly member: boolean }
   const placementsOf = (move: Move): Placement[] => {
@@ -403,13 +379,54 @@ export function projectItems(
     const settled = settledOf(move);
     return settled ? [{ item: move.item, settled, move, member: false }] : [];
   };
-  const place = (placement: Placement): void => {
-    if (!placement.member) return apply(placement.move);
-    const member = touch(placement.item);
-    const container = touch(placement.move.item);
-    if (insideOf(member.now) === container.id) return reaffirm(member, placement.move.chapter);
-    observeInside(member, container, placement.move);
-    setNow(member, placement.settled, placement.move.chapter);
+
+  /**
+   * 一样东西在这一组里的几处去向（结果都一样）走一次（设计 2.5）：每一处都核——毁了之后又写它在哪（清点给的「在里面」也算）、
+   * 从哪来接不上、从里面拿出了清点里没有的——不看数组里谁在前；有一处写了挪进来的照算进清点，都只是写它此刻在里面的才核清点。
+   * 证据取头一处条目自己的去向（只有清点给的才取清点那条）。
+   */
+  const settle = (id: string, list: readonly Placement[]): void => {
+    const item = touch(id);
+    const lead = list.find((placement) => !placement.member) ?? (list[0] as Placement);
+    const { settled } = lead;
+    const chapter = lead.move.chapter;
+    const previous = item.now;
+    if (previous?.kind === "gone" && previous.gone === "destroyed" && settled.kind !== "gone") {
+      for (const placement of list) issue("destroyed", id, chapter, [previous.entry, placement.move.entry]);
+      setNow(item, { kind: "uncertain", reason: "destroyed", options: [settled, previous], chapter }, chapter);
+      return;
+    }
+    const own = list.filter((placement) => !placement.member).map((placement) => placement.move);
+    // 中间东西账都记全了（最后一次写它之后没有没核全的章），从哪来接不上才算数。
+    if (previous?.kind === "known" && item.unverifiedSince === undefined) {
+      const unlinked = own.filter((move) => move.from !== undefined && fromConnects(previous.place, move.from) === false);
+      if (unlinked.length > 0) {
+        for (const move of unlinked) issue("from", id, chapter, [previous.entry, move.entry]);
+        setNow(item, { kind: "uncertain", reason: "from", options: [settled, previous], chapter }, chapter);
+        return;
+      }
+    }
+    // 从里面拿出了有效完整清点里没有的：清点被反证，改记对不上（几处一起核完再改）。
+    const entering = insideOf(settled.kind === "known" ? settled : undefined);
+    const refuted = new Map<MutableItem, string[]>();
+    for (const placement of list) {
+      const leaving = !placement.member && placement.move.from?.kind === "inside" ? placement.move.from.item : insideOf(previous);
+      const container = leaving !== undefined ? items.get(leaving) : undefined;
+      if (checkable(container) && !container.census.members.has(id) && entering !== leaving) refuted.set(container, [...(refuted.get(container) ?? []), placement.move.entry]);
+    }
+    for (const [container, entries] of refuted) {
+      for (const entry of entries) issue("not-in-census", id, chapter, [container.census?.entry ?? "", entry]);
+      if (container.census) {
+        container.census.status = "conflict";
+        delete container.census.since;
+      }
+    }
+    // 已经在里面、这组只是清点又列了它：算又核了一次。
+    if (entering !== undefined && insideOf(previous) === entering && list.every((placement) => placement.member)) return reaffirm(item, chapter);
+    // 挪进来（move）的照算进清点；都只是写它此刻在里面（at、清点给的、作者定的）才核。
+    const movedIn = own.some((move) => move.op === "move" && move.scope.source !== "author_ruling");
+    if (entering !== undefined && !movedIn) observeInside(item, touch(entering), lead.move);
+    setNow(item, settled, chapter);
   };
 
   /**
@@ -429,7 +446,7 @@ export function projectItems(
       stale.history.push({ ...memberStep(move), to: { kind: "unknown" } });
       setNow(stale, { kind: "unknown", chapter: move.chapter, entry: move.entry }, move.chapter);
     }
-    container.census = { chapter: move.chapter, entry: move.entry, members: listed, status: fresh.length > 0 ? "conflict" : "valid" };
+    container.census = { chapter: move.chapter, entry: move.entry, listed: [...listed], members: new Set(listed), status: fresh.length > 0 ? "conflict" : "valid" };
     for (const other of fresh) issue("census", container.id, move.chapter, [move.entry, (other.now as ItemSettled).entry]);
   };
 
@@ -449,14 +466,15 @@ export function projectItems(
     for (const [id, list] of byItem) {
       const first = list[0] as Placement;
       if (list.every((placement) => sameOutcome(placement.settled, first.settled))) {
-        place(first);
+        settle(id, list);
         continue;
       }
       setNow(touch(id), { kind: "uncertain", reason: "order", options: list.map((placement) => placement.settled), chapter }, chapter);
       tied.set(id, list.map((placement) => placement.move.entry));
     }
     for (const census of censuses) {
-      const touches = group.some((move) => move !== census && (move.item === census.item || (move.to?.kind === "inside" && move.to.item === census.item) || (move.from?.kind === "inside" && move.from.item === census.item) || census.members?.includes(move.item)));
+      // 它的另一条清点、挪进挪出它的、清单里的东西又挪了：先后不清。挪它自己不动里面有什么。
+      const touches = group.some((move) => move !== census && ((move.op === "census" && move.item === census.item) || (move.to?.kind === "inside" && move.to.item === census.item) || (move.from?.kind === "inside" && move.from.item === census.item) || census.members?.includes(move.item)));
       if (touches) unverify(touch(census.item), chapter);
     }
     freshCensus = new Set();
@@ -513,6 +531,13 @@ export function projectItems(
     const chapter = ledger.chapter;
     const moves: Move[] = [];
     for (const entry of ledger.entries) {
+      // 以它为主体的事实也证明它在（设计 2.8）：只剩事实的，清单里照列，头一回写到的算那条。
+      if (entry.kind === "fact" && entry.subjectRef?.id) {
+        const target = touch(resolve(entry.subjectRef.id, { entry: entry.id, at: "subject" }));
+        mention(target, entry.subjectRef.mention);
+        const quote = entryQuote(entry);
+        target.firstSeen ??= { chapter, entry: entry.id, ...(quote ? { quote } : {}) };
+      }
       if (entry.kind !== "item" || retracted.has(entry.id)) continue;
       const quote = entryQuote(entry);
       const seen = { chapter, entry: entry.id, ...(quote ? { quote } : {}) };
@@ -563,9 +588,9 @@ export function projectItems(
     for (const move of effective) groups.set(move.seq, [...(groups.get(move.seq) ?? []), move]);
     const tied = new Map<string, string[]>();
     for (const seq of [...groups.keys()].sort((a, b) => a - b)) for (const [id, entries] of runGroup(groups.get(seq) as Move[], chapter)) tied.set(id, entries);
-    // 作者定的这章末尾的样子：压过记账员这章记的；同一样东西定了几次的，后定的算。
+    // 作者定的这章末尾的样子：压过记账员这章记的；同一样东西同一方面（在哪 / 里面有什么）定了几次的，后定的算，两方面各管各的。
     const latest = new Map<string, AuthorDecision & { type: "item.state" }>();
-    for (const decision of authorStates.get(chapter) ?? []) latest.set(resolve(decision.item), decision);
+    for (const decision of authorStates.get(chapter) ?? []) latest.set(`${resolve(decision.item)}:${decision.state.kind === "census" ? "contents" : "where"}`, decision);
     const ruled = [...latest.values()].map((decision) => authorMove(decision, decision.state, placeView, resolve));
     for (const move of ruled) {
       touch(move.item).history.push(stepOf(move));
@@ -636,6 +661,7 @@ export function projectItems(
         census: {
           chapter: item.census.chapter,
           entry: item.census.entry,
+          listed: item.census.listed,
           members: [...item.census.members],
           status: item.census.status,
           ...(item.census.since !== undefined ? { since: item.census.since } : {}),
