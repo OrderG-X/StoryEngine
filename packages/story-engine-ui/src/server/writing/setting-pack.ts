@@ -84,6 +84,7 @@ export const EMPTY_BIBLE: BibleView = {
   relations: [],
   uncarded: [],
   canon: [],
+  ledgerItems: [],
 };
 
 /**

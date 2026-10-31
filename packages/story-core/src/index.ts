@@ -51,6 +51,11 @@ export {
   ItemPlaceInput,
   ItemRef,
   ItemRefInput,
+  CensusMember,
+  CensusMemberInput,
+  itemLinksOf,
+  itemReplacesOf,
+  type ItemLinkAt,
   UNITS_VERSION,
   declaredQuotes,
   factItemOf,
@@ -95,7 +100,7 @@ export {
 } from "./ledger/entries.js";
 export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";
 export { assignIds, carriedTime, entryKey, knownAppears, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
-export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput, ItemPosition, ItemStateRuling } from "./schema/decisions.js";
+export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput, ItemPosition, ItemStateRuling, itemStateLinksOf } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {
   CANON_MAX,
@@ -329,7 +334,7 @@ export { checkEntries, itemRefsOfInput, type CheckResult, type RejectedEntry, ty
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
 export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
-export { buildChapterLedger, chapterCommit, ChapterCommitArgs, LedgerShortfall, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { buildChapterLedger, chapterCommit, ChapterCommitArgs, itemShortfall, LedgerShortfall, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { ledgerComplete, LedgerCompleteArgs, type LedgerCompleteResult } from "./commands/ledger-complete.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";

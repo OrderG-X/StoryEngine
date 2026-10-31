@@ -54,6 +54,7 @@ const projection = {
     thread("t3", "半夜的来电", [{ chapter: 12, op: "open", note: "号码又打来", entry: "e4" }]),
   ],
   cast: [member("林舟", [11, 12]), member("沈家侄女", [12])],
+  items: [],
 };
 
 describe("这一章定稿记下了什么（重构 P6 第 6 步）", () => {
@@ -75,6 +76,6 @@ describe("这一章定稿记下了什么（重构 P6 第 6 步）", () => {
   it("不给章号＝最近定稿那章；没定稿的章返回空", () => {
     expect(toChapterChanges(projection)!.chapter).toBe(12);
     expect(toChapterChanges(projection, 13)).toBeUndefined();
-    expect(toChapterChanges({ chapters: [], facts: [], threads: [], cast: [] })).toBeUndefined();
+    expect(toChapterChanges({ chapters: [], facts: [], threads: [], cast: [], items: [] })).toBeUndefined();
   });
 });

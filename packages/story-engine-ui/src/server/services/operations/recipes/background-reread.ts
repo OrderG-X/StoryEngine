@@ -96,7 +96,7 @@ export function createBackgroundRereadRecipe(deps: RereadDeps = DEFAULT_DEPS): R
             // 依据是落账这一刻重读的：记账员读的那一版（指纹）和现在不一样就不记；读完到落账之间再有写，命令核依据挡下。
             const snapshot = await readBookSnapshot(ctx.bookDir);
             if (snapshot.unsettled || rereadInputDigest(snapshot.basis, chapter) !== read.digest) return { changed: true };
-            const { result } = await runCommandInOperation(ctx.bookDir, ledgerReread, { chapter, entries: [...read.entries] }, {
+            const { result } = await runCommandInOperation(ctx.bookDir, ledgerReread, { chapter, entries: [...read.entries], ...(read.itemMissing ? { itemMissing: [...read.itemMissing] } : {}) }, {
               what: `通读记账：第 ${chapter} 章`,
               caller: "author",
               basis: snapshot.basis,

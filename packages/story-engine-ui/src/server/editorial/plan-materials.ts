@@ -17,7 +17,8 @@ import { join } from "node:path";
 import { findRecurringPhrases, parseDraftFile, timelineTable, type BookProjection } from "@actalk/story-core";
 import { readBible, type BibleView } from "@actalk/story-core";
 import { shortChapters, shortChaptersText } from "../book/ledger-short.js";
-import { readStoryViews, type StoryViews } from "../book/story-views.js";
+import { itemsWhere } from "../book/item-views.js";
+import { projectionBefore, readStoryViews, type StoryViews } from "../book/story-views.js";
 import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 import { chapterDaysText, previousPresentChapter } from "../book/story-timeline.js";
 import { selectEffectiveFacts } from "../writing/fact-selection.js";
@@ -45,6 +46,10 @@ export interface PlanChapterMaterials {
   readonly entities: readonly string[];
   /** 与接下来要写的内容相关的已确立事实（拟章纲时就得避开前后矛盾——验收：三分之一的矛盾在章纲里就写错了）。 */
   readonly facts: readonly string[];
+  /** 东西在哪（写作版本 P3b，和写手同一节）：本章相关的东西每样一行；没有就是空。 */
+  readonly itemsWhere?: readonly string[];
+  /** 旧记法里没逐样对齐的事实（其中哪几样以「东西在哪」为准）。 */
+  readonly legacyItemFacts?: readonly string[];
   /** 前几章是故事哪几天（时间表，和核账员、写手同一套说法）：让日期、星期顺得下去。 */
   readonly recentTimes: readonly string[];
   /** 近几章反复出现的描写（确定性检出）：本章别再用。 */
@@ -115,12 +120,14 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
   ];
   const entityNames = [...(bible?.places ?? []), ...(bible?.items ?? []), ...(bible?.lore ?? [])].map((entry) => entry.card.name);
   const facts = selectEffectiveFacts({
-    facts: factLedger?.facts ?? [],
+    facts: (factLedger?.facts ?? []).filter((fact) => !fact.unaligned),
     chapter,
     relevantNames: characterNames,
     continuityText: [previousChapter?.text, direction].filter(Boolean).join("\n"),
     cap: PLAN_FACT_CAP,
   }).facts;
+  const before = views ? projectionBefore(views, chapter) : undefined;
+  const items = before ? itemsWhere(before, [previousChapter?.text ?? "", direction ?? ""], []) : undefined;
   const recurringPhrases = findRecurringPhrases({
     chapters: recentBodies,
     knownNames: [...characterNames, ...entityNames],
@@ -155,6 +162,8 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     characters: characterNames,
     entities: entityNames,
     facts,
+    ...(items && items.lines.length > 0 ? { itemsWhere: items.lines } : {}),
+    ...(items && items.legacyFacts.length > 0 ? { legacyItemFacts: items.legacyFacts } : {}),
     recentTimes,
     recurringPhrases,
     recentBeats,
@@ -175,7 +184,7 @@ export const PLAN_REQUIREMENT_LINES: readonly string[] = [
   "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
   "11. 【前几章用过的桥段】里反复出现的推进方式（又有人来打听、又去档案处查、又接到催期限的电话），本章不要再用同一个路数，换一种让局面变化的方式。",
   // 第十五、十七轮要点限到 60 字后矛盾翻倍（物件位置错 15 条）：章纲不再交代东西在哪，写手就乱放。要点写细，但物件状态照事实抄、不另编。
-  "12. 每个要点写清谁、在哪、做了什么、局面怎么变；牵涉到的关键物件（文书、信物、钥匙、证据）写明此刻在谁手里或放在哪——照【已确立事实】和上一章结尾抄，不要另编；不写对白原话；不替前文补它没写过的设定（某张纸是谁的笔迹、某样东西原先归谁）。每个要点不超过 120 字。",
+  "12. 每个要点写清谁、在哪、做了什么、局面怎么变；牵涉到的关键物件（文书、信物、钥匙、证据）写明此刻在谁手里或放在哪——照【东西在哪】【已确立事实】和上一章结尾抄，不要另编；不写对白原话；不替前文补它没写过的设定（某张纸是谁的笔迹、某样东西原先归谁）。每个要点不超过 120 字。",
 ];
 /**
  * 第 1 章前面还没有正文：要求第 1、3 条（接上一章、别重演前文）换成开篇的说法（换题材长篇实跑 2026-10-27：
@@ -216,6 +225,8 @@ export function planMaterialBlocks(
     materials.characters.length > 0 ? `【已有人物（身份、年龄见设定本，别用错人、别算错年代）】${materials.characters.join("、")}` : "",
     materials.foundation ?? "",
     materials.facts.length > 0 ? `【已确立事实（不能矛盾，做过的别再做）】\n${materials.facts.join("\n")}` : "",
+    materials.itemsWhere && materials.itemsWhere.length > 0 ? `【东西在哪（关键物件此刻在谁手里、放在哪照这里）】\n${materials.itemsWhere.join("\n")}` : "",
+    materials.legacyItemFacts && materials.legacyItemFacts.length > 0 ? `【旧记法、没逐样对齐的事实】\n${materials.legacyItemFacts.join("\n")}` : "",
     materials.recentTimes.length > 0 ? `【前几章的时间】\n${materials.recentTimes.join("\n")}` : "",
     materials.recurringPhrases.length > 0 ? `【近几章反复出现的描写（本章别再用）】${materials.recurringPhrases.join("、")}` : "",
     materials.recentBeats.length > 0 ? `【前几章用过的桥段】\n${materials.recentBeats.join("\n")}` : "",

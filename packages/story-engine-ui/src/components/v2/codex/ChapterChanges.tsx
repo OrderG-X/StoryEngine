@@ -66,6 +66,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
 
   const threadFold = useFold(changes?.threads ?? [], changes?.chapter ?? 0);
   const factFold = useFold(changes?.facts ?? [], changes?.chapter ?? 0);
+  const itemFold = useFold(changes?.items ?? [], changes?.chapter ?? 0);
 
   if (!changes) {
     return (
@@ -84,7 +85,8 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   // 章名表里有的带「第N章 ·」前缀（工作稿刚定稿那章），只取章名。
   const title = chapterBareTitle(chapterTitles.get(changes.chapter) ?? "");
   const day = changes.days ?? "哪天不知道";
-  const empty = changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
+  const items = changes.items ?? [];
+  const empty = changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0 && items.length === 0;
   const nothing = !changes.ledgerShort && empty;
   return (
     <section className="se-sm se-cc" aria-label="这章改了什么">
@@ -100,7 +102,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
         ) : undefined}
       />
       {changes.ledgerShort ? <p className="se-bk-blank">{changes.ledgerShort === "pending" ? "这章的账还没记上。" : empty ? "这章的账没记全。" : "这章的账没记全，下面只是记上的那些。"}</p> : null}
-      {nothing ? <p className="se-bk-blank">这章定稿时没记下新的人、线索和事。</p> : null}
+      {nothing ? <p className="se-bk-blank">这章定稿时没记下新的人、线索、事和东西。</p> : null}
       {changes.newCast.length > 0 ? (
         <div className="se-cc-block is-cast">
           <Sec title="第一次出场" count={changes.newCast.length} />
@@ -147,6 +149,23 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
             ))}
           </ul>
           <More count={factFold.more} onClick={factFold.open} />
+        </div>
+      ) : null}
+      {items.length > 0 ? (
+        <div className="se-cc-block">
+          <Sec title="东西挪了" count={items.length} />
+          <ul className="se-cc-list">
+            {itemFold.shown.map((item, i) => (
+              <li key={`${item.name}-${i}`}>
+                <span className="se-cc-text">
+                  <b>{item.name}</b>：{item.text}
+                  {item.scope ? <em className="se-cc-tag" title="记着，不改现在在哪">{item.scope}</em> : null}
+                </span>
+                {item.quote ? <Quote chapter={changes.chapter} quote={item.quote} {...(onJump ? { onJump } : {})} /> : null}
+              </li>
+            ))}
+          </ul>
+          <More count={itemFold.more} onClick={itemFold.open} />
         </div>
       ) : null}
     </section>

@@ -3,7 +3,7 @@
  * 只管输入，不管存哪：存什么由上层拼成 ops 交给 POST /api/cards（作者档，可撤销）。
  */
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { BibleAppearances, BibleFact, CardAuthor } from "../../../api/bibleClient.js";
+import type { BibleAppearances, BibleFact, CardAuthor, ItemTextView } from "../../../api/bibleClient.js";
 import { PresenceStrip, Sec } from "./bibleVisual.js";
 
 /** 存完（连设定本重读回来）再收起编辑框：先收起会闪一下改前的字；没存成就留着框，写的字不丢。 */
@@ -240,11 +240,50 @@ function FactGroup({ title, facts, variant, onJump }: {
             {fact.quote && onJump ? (
               <button type="button" className="se-bk-ch" title={`「${fact.quote}」`} onClick={() => onJump(fact.chapter, fact.quote!)}>第 {fact.chapter} 章</button>
             ) : <span className="se-bk-ch is-plain">第 {fact.chapter} 章</span>}
-            <span className="se-bk-fact"><b>{fact.attribute}<i>：</i></b>{fact.value}</span>
+            <span className="se-bk-fact"><b>{fact.attribute}<i>：</i></b>{fact.value}{fact.legacy ? <em className="se-cc-tag" title="P3b 之前按名字记的，去向以「去向」为准">旧记法</em> : null}</span>
           </li>
         ))}
       </ul>
       {facts.length > shown.length ? <button type="button" className="se-bk-link" onClick={() => setAll(true)}>再看 {facts.length - shown.length} 条</button> : null}
+    </div>
+  );
+}
+
+const STEPS_VISIBLE = 8;
+
+/**
+ * 一样东西的去向（写作版本 P3b）：现在在哪、里面有什么、此后没核全，下面一条小时间线（头回写到、每次挪、清点；
+ * 人物说的、回忆里、梦里的标出来，不改现在在哪）。字是服务端出好的，这里只摆。
+ */
+export function ItemWhere({ view, onJump }: { readonly view: ItemTextView | undefined; readonly onJump?: (chapter: number, quote: string) => void }) {
+  const [all, setAll] = useState(false);
+  if (!view || (view.steps.length === 0 && !view.now)) return null;
+  const shown = all ? view.steps : view.steps.slice(-STEPS_VISIBLE);
+  return (
+    <div className="se-bk-ledger">
+      <Sec title="去向" />
+      <div className="se-bk-facts is-now">
+        <ul>
+          <li><span className="se-bk-fact"><b>现在<i>：</i></b>{view.now ?? "正文还没写过它在哪"}</span></li>
+          {view.contents ? <li><span className="se-bk-fact"><b>里面<i>：</i></b>{view.contents}</span></li> : null}
+          {view.unverified ? <li><span className="se-bk-fact"><b>没核全<i>：</i></b>{view.unverified}</span></li> : null}
+        </ul>
+      </div>
+      {shown.length > 0 ? (
+        <div className="se-bk-facts is-timeline">
+          <ul>
+            {shown.map((step, index) => (
+              <li key={`${step.chapter}-${index}`}>
+                {step.quote && onJump ? (
+                  <button type="button" className="se-bk-ch" title={`「${step.quote}」`} onClick={() => onJump(step.chapter, step.quote!)}>第 {step.chapter} 章</button>
+                ) : <span className="se-bk-ch is-plain">第 {step.chapter} 章</span>}
+                <span className="se-bk-fact">{step.text}{step.scope ? <em className="se-cc-tag" title="记着，不改现在在哪">{step.scope}</em> : null}</span>
+              </li>
+            ))}
+          </ul>
+          {view.steps.length > shown.length ? <button type="button" className="se-bk-link" onClick={() => setAll(true)}>再看前面 {view.steps.length - shown.length} 条</button> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

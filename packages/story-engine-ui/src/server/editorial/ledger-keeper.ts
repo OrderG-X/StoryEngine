@@ -36,7 +36,7 @@ import { WEEKDAY_NAMES } from "../book/story-timeline.js";
 import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
-import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
+import { buildKeeperContext, type ReopenableItem, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, flag, parseChapterEnd, parseKeeperOutput, relativeOf, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
@@ -108,13 +108,24 @@ export const KEEPER_SPEC: readonly string[] = [
   "",
   "facts：本章写明的、以后写作要守住的事实。",
   "- 先问自己「subject 的 attribute 是什么？」：只有一个答案的才是一个格子，才能写 state 或 hard；能列出好几条的（过去的事、经历、特征、来历、背景、证言、知道的事）不是格子，写 event（subject 照写，attribute 不写）。",
-  "- nature：会随剧情变的格子写 state——人在哪、东西在谁手里、和某人的关系、伤势病情、知不知道某件事（attribute 写「知不知道某事」，一件事一条）、身份暴没暴露。不会变的格子写 hard——年纪、出生年、籍贯、职业、门牌、某样东西上写的字、某件旧事发生在哪年、世界的某条规则。发生过的事、一段经历、一处描写写 event。拿不准的写 event。",
+  "- nature：会随剧情变的格子写 state——人在哪、和某人的关系、伤势病情、知不知道某件事（attribute 写「知不知道某事」，一件事一条）、身份暴没暴露。不会变的格子写 hard——年纪、出生年、籍贯、职业、门牌、某样东西上写的字、某件旧事发生在哪年、世界的某条规则。发生过的事、一段经历、一处描写写 event。拿不准的写 event。",
   "- state 和 hard 必须写清 subject（谁或什么）、attribute（哪一方面）、value（是什么）；text 用一句话说清这条事实。",
-  "- 同一个人、同一样东西每次都用同一个名字当 subject；同一方面每次都用同一个说法当 attribute，尽量用短的常用说法（在哪、在谁手里、年纪、职业、和某某的关系、知不知道某事）。上面【现在有效的事实】里已经有的人、物和方面，照抄那里的写法——代码按写法认「同一方面」，写法一变，旧的现状就顶替不掉。",
+  "- 同一个人、同一样东西每次都用同一个名字当 subject；同一方面每次都用同一个说法当 attribute，尽量用短的常用说法（在哪、年纪、职业、和某某的关系、知不知道某事）。上面【现在有效的事实】里已经有的人、物和方面，照抄那里的写法——代码按写法认「同一方面」，写法一变，旧的现状就顶替不掉。",
   "- 本章明写推翻了上面【现在有效的事实】里某条不会变的事实（比如揭穿了假身份），在 replaces 里填它的编号（如 [\"F3\"]），quote 引推翻它的那句。会变的事实有了新值不用填 replaces，代码按最新一章算。",
   "- 这条是某个人物嘴里说的（不是叙述直接写的），加 \"speaker\":\"正文里对说话人的称呼\"；叙述直接写的加 \"source\":\"narration\"；拿不准就都不写。梦里、回忆里的照常记，算不算现状由代码按 segments 定。",
   "- 本章里同一件事只记一条：同一个动作、同一样东西的同一个变化（把钥匙揣进兜里 / 身上多了一把钥匙），不要换个说法再记一条。",
   "- 前文已经记过、本章只是又提了一遍的，不要再记。换了说法、意思一样（「姓张」和「弓长张」），或者只是补了细节、不和前文那条打架的（「信上有落款」和「落款是某某」），也不要在同一个 subject 同一个 attribute 下再记一条——代码会把同一格子的不同 value 当成前后矛盾报给作者。补的是新的一方面，就换一个 attribute 写；只有本章写的和前文那条真的不可能同时成立，才照同一个 attribute 记。",
+  "- 东西在哪、在谁手里不记进 facts，只记 items（见下）。东西不会变的特征（上面写的字、样子、牌子、金额）照样记 facts，加 \"item\":\"I3\"（或 N 号），subject 写它的名字。",
+  "",
+  "newItems、items：东西——正文里能拿、能放、能转手的实物（人、地方、抽象的不算）。",
+  "- 本章写到的东西：是上面【已有的东西】里哪一样就写它的 I 号；那里没有、或拿不准是不是那一样的，当新的，在 newItems 里声明 N 号（N1、N2……），写 name（正文里怎么叫它）、quote（头一回写到它那句）、by。同名不一定是同一样，看头回那句和现在在哪。一样东西一个号；一组东西（「借据、纸条和表」）分开声明、分开记，分不开就不记去向。",
+  "- 上面有【这一章上次定稿时新记的东西】的：本章还写到其中哪样，就在 newItems 里照样声明它，tag 写那个 P 号（P1），不要另发 N 号。",
+  "- items 只记正文明写的去向，一处一条：此刻在哪写 op = at；被挪了（转手、放进、拿出、捡到、带走）写 op = move，正文写了从哪来就填 from；丢了、被拿走不知去向写 op = gone、gone = lost；毁了、用光了写 gone = destroyed，note 一句话说怎么没的。正文清点某样东西里面有什么写 op = census，members 列里面那几样；正文明说「只有」「就剩」「别的没了」「空了」才写 complete: true，没明说就不写。",
+  "- 去处 to、from 写成 {\"person\":\"正文里对这个人的称呼\"}（谁拿着、揣着、放在他随身的包里）、{\"place\":\"地方原样的字\"}、{\"inside\":\"I3\"}（在另一样东西里面）；正文明说不知道在哪了，to 写 \"unknown\"。",
+  "- seq：全章按故事里发生的先后给每条 items 编号 1、2、3……（不是正文写的先后：倒叙里先写、后发生的照发生排）；正文没说清谁先谁后的几条写同一个号。同一句里挪了几次就记几条。",
+  "- 指东西的地方都可以写成 {\"item\":\"I3\",\"as\":\"本章正文怎么叫它\"}（主体的叫法写在这条的 as），照正文原样抄；不写就不写。",
+  "- 每条 newItems、items 都写 by：叙述直接写的写 \"narration\"；人物嘴里说的写 \"claim\"，再加 speaker（正文里对说话人的称呼）。梦里、回忆里的照常记，算不算现状由代码按 segments 定。",
+  "- 【现在有效的事实】里有说某样东西去向的旧事实（F 号），本章写到这样东西在哪：那条只说这一样的，这条 items 填 replaces（[\"F2\"]）；一句里还说了别的东西的，填 overlaps，不填 replaces。清点的成员写成 {\"item\":\"I3\",\"overlaps\":[\"F5\"]}。",
   "",
   "threads：线索——悬念（question）、人物的打算或待办（intent）、主角的目标（goal）。",
   "- op = open 新开：只给正文还没解开、后文需要一个揭晓或回收时刻的问题，以及正文明确留下的后续行动、新立的目标。写 type、title（像个标题，跨章能认出来）、note（本章怎么引出的）、quote。",
@@ -125,8 +136,8 @@ export const KEEPER_SPEC: readonly string[] = [
   "- 报 advance 之前先想一遍：它是不是其实已经做完、已经揭晓了？是就报 close，别让它一直挂着。判断待办做没做完，只看那个动作本身：正文写到动作做成了（问过了、找到了、交出去了、打开了），就算完成；做完之后冒出的新问题另开一条。",
   "- 揭晓、了结是某个人物嘴里说的，照样报，加 speaker（写法同 facts）；梦里、回忆里的照样报，代码按推进记、留给作者看。",
   "",
-  "没有的类就给空数组或省略。只输出一个 JSON 对象，键为 summary、time、segments、presence、facts、threads，形如：",
-  '{"summary":{"text":"…","quote":"…"},"time":{"start":{"offset":{"unit":"day","min":1,"max":1},"basis":"judged","quote":"…"},"dayChanges":[{"offset":{"unit":"day","min":1,"max":1},"quote":"…"}],"timeOfDay":"清晨"},"segments":[{"frame":"past","firstQuote":"…","lastQuote":"…","when":{"offset":{"unit":"year","max":-3}}}],"presence":[{"name":"…","nameUsed":"…","viewpoint":true,"quote":"…"},{"name":"…","nameUsed":"那人","generic":true,"quote":"…"}],"facts":[{"nature":"state","subject":"…","attribute":"…","value":"…","text":"…","quote":"…"},{"nature":"hard","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","speaker":"…"}],"threads":[{"op":"open","type":"question","title":"…","note":"…","quote":"…"},{"op":"advance","thread":"T2","note":"…","quote":"…"}]}',
+  "没有的类就给空数组或省略。只输出一个 JSON 对象，键为 summary、time、segments、presence、facts、newItems、items、threads，形如：",
+  '{"summary":{"text":"…","quote":"…"},"time":{"start":{"offset":{"unit":"day","min":1,"max":1},"basis":"judged","quote":"…"},"dayChanges":[{"offset":{"unit":"day","min":1,"max":1},"quote":"…"}],"timeOfDay":"清晨"},"segments":[{"frame":"past","firstQuote":"…","lastQuote":"…","when":{"offset":{"unit":"year","max":-3}}}],"presence":[{"name":"…","nameUsed":"…","viewpoint":true,"quote":"…"},{"name":"…","nameUsed":"那人","generic":true,"quote":"…"}],"facts":[{"nature":"state","subject":"…","attribute":"…","value":"…","text":"…","quote":"…"},{"nature":"hard","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","speaker":"…"},{"nature":"hard","item":"N1","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","source":"narration"}],"newItems":[{"tag":"N1","name":"…","by":"narration","quote":"…"}],"items":[{"seq":1,"item":"I2","as":"…","op":"move","from":{"person":"…"},"to":{"inside":"N1"},"by":"narration","quote":"…"},{"seq":2,"item":"N1","op":"census","members":["I2"],"complete":true,"by":"narration","quote":"…"}],"threads":[{"op":"open","type":"question","title":"…","note":"…","quote":"…"},{"op":"advance","thread":"T2","note":"…","quote":"…"}]}',
   "不要 Markdown、不要解释、不要多余文字。",
 ];
 
@@ -138,6 +149,8 @@ export interface KeeperInput {
   readonly before: BookProjection;
   /** 重定稿：这一章上次定稿时开的线索（本章还在开就沿用编号）。 */
   readonly reopenable?: readonly ReopenableThread[];
+  /** 重定稿：这一章上次定稿时新记的东西（本章还写到就沿用编号）。 */
+  readonly reopenItems?: readonly ReopenableItem[];
   readonly callModel: BrainCallModel;
   /** 笔记存放的根目录；缺省就是书目录（考卷传临时目录，不动书）。 */
   readonly notesRoot?: string;
@@ -171,6 +184,7 @@ export type KeeperOutcome =
       readonly parsed: KeeperParseResult;
       readonly omittedThreads: number;
       readonly omittedFacts: number;
+      readonly omittedItems: number;
       readonly quoteRepair?: QuoteRepair;
     })
   | (KeeperCommon & {
@@ -355,7 +369,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   }
   const extra = { ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   const cards = await readCards(input.projectDir).catch(() => undefined);
-  const context = buildKeeperContext(input.before, input.draft, input.reopenable, cards);
+  const context = buildKeeperContext(input.before, input.draft, input.reopenable, cards, input.reopenItems);
   const task = buildKeeperTask(input.chapter, input.draft, context.text, await previousEnding(input.projectDir, input.before, input.chapter));
   let text: string;
   try {
@@ -377,6 +391,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     parsed: settleTime(withOriginalQuotes(dated, input.draft), input.draft),
     omittedThreads: context.omittedThreads,
     omittedFacts: context.omittedFacts,
+    omittedItems: context.omittedItems,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
     ...extra,
   };
@@ -881,11 +896,15 @@ function repairLabel(entry: EntryInput): string {
       return entry.op === "open" ? `新开线索「${entry.title ?? entry.note}」：${entry.note}` : `${entry.op === "close" ? "收口" : "推进"}：${entry.note}`;
     case "presence":
       return `出场人物：${entry.name}（原句里必须有「${entry.nameUsed}」这几个字）`;
+    case "item":
+      return entry.op === "appear" ? `新东西「${entry.name ?? ""}」头一回写到它那句` : `东西${entry.item?.mention ? `「${entry.item.mention}」` : ""}的去向（${ITEM_OP_LABELS[entry.op]}）`;
     case "time":
     case "day":
       return "时间";
   }
 }
+
+const ITEM_OP_LABELS = { at: "此刻在哪", move: "被挪了", gone: "丢了 / 毁了", census: "清点" } as const;
 
 /** 补点时一条最多点几句（要挨着）。 */
 export const QUOTE_REPAIR_UNITS = 2;

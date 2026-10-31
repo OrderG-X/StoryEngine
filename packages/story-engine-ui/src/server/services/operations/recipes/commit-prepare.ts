@@ -19,6 +19,7 @@ import { join } from "node:path";
 import {
   chapterCommit,
   chapterTextPath,
+  itemShortfall,
   ledgerComplete,
   readCardsOrLegacy,
   readChapterLedgerFile,
@@ -245,13 +246,19 @@ type Choices = { readonly excluded: readonly number[]; readonly optedIn: readonl
 
 /**
  * 补摘原句那一次没成、那几条因此没记：账记成 partial，写明缺哪几类（核不上原句拒收的照旧算记全了）。
- * 梗概、时间一章只有一条：最后交的条目里有了（作者在清单上填了天数）就不算缺。
+ * 梗概、时间一章只有一条：最后交的条目里有了（作者在清单上填了天数）就不算缺；缺的几类都补上了就不算没记全。
+ * 东西的条目没记上（核不上也算：引用它的、按它算的去向都可能缺）：再缺东西那类，和核心定稿时同一个合法（P3b 设计 2.4）。
  */
 function shortfallOf(preview: CommitPreview, entries: readonly EntryInput[]): LedgerShortfall | undefined {
+  return itemShortfall(quoteShortfallOf(preview, entries), preview.itemMissing ?? []);
+}
+
+function quoteShortfallOf(preview: CommitPreview, entries: readonly EntryInput[]): LedgerShortfall | undefined {
   if (!preview.quoteRepair?.failed) return undefined;
   const has = new Set(entries.map((entry) => entry.kind));
-  const missing = preview.missingKinds?.filter((kind) => !((kind === "time" || kind === "summary") && has.has(kind)));
-  return { status: "partial", reasonCodes: ["quote_repair_failed"], ...(missing && missing.length > 0 ? { missingKinds: missing } : {}) };
+  if (!preview.missingKinds) return { status: "partial", reasonCodes: ["quote_repair_failed"] };
+  const missing = preview.missingKinds.filter((kind) => !((kind === "time" || kind === "summary") && has.has(kind)));
+  return missing.length > 0 ? { status: "partial", reasonCodes: ["quote_repair_failed"], missingKinds: missing } : undefined;
 }
 
 /** 照票定稿：预览之后正文改过、书变过都不定，说哪样变了。定完照盘上的账算回执。 */

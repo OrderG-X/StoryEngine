@@ -1,7 +1,8 @@
 import { selectEffectiveFacts } from "./fact-selection.js";
 import { selectRelevant } from "@actalk/story-core";
 import { describeErrorBriefly } from "../book/project-store.js";
-import { readStoryViews, type StoryViews } from "../book/story-views.js";
+import { itemsWhere } from "../book/item-views.js";
+import { projectionBefore, readStoryViews, type StoryViews } from "../book/story-views.js";
 import type { ArcGoal, NarrativeThread, TimelineEvent } from "../book/types.js";
 import { buildSettingPack, EMPTY_BIBLE, mentionedIn, type SettingPack } from "./setting-pack.js";
 
@@ -21,6 +22,13 @@ export interface WritingContextPack {
     readonly mustCarryThreads: readonly string[];
     readonly arcGoalFocus: readonly string[];
     readonly establishedFacts: readonly string[];
+    /**
+     * 东西在哪（写作版本 P3b 第 4 节）：本章相关的东西每样一行——现在在哪（哪章、原句）、里面有什么、此后没核全、人物说的单列。
+     * 没有相关的就不给。写东西在谁手里、放在哪照这里，别照旧事实猜。
+     */
+    readonly itemsWhere?: readonly string[];
+    /** 旧记法里一句说了好几样、没逐样对齐的事实：其中哪几样以「东西在哪」为准。 */
+    readonly legacyItemFacts?: readonly string[];
   };
   readonly hardConstraints: readonly string[];
   /**
@@ -111,8 +119,9 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     .filter((event) => event.chapter < input.chapter)
     .sort((a, b) => a.chapter - b.chapter || a.id.localeCompare(b.id))
     .slice(-Math.max(1, Math.min(input.maxTimelineEvents ?? PACK_TIMELINE_EXCERPT, PACK_TIMELINE_EXCERPT)));
+  // 旧记法里没逐样对齐的不当已确立事实（它说的那几样东西已按新记法写了去向），单放一小节。
   const establishedFacts = selectEffectiveFacts({
-    facts: factLedger?.facts ?? [],
+    facts: (factLedger?.facts ?? []).filter((fact) => !fact.unaligned),
     chapter: input.chapter,
     relevantNames,
     // 接本章方向：不含人名但与本章要写的内容相关的硬设定也优先（洞#9）。
@@ -120,6 +129,10 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     ...(input.continuityText ? { continuityText: input.continuityText } : {}),
     ...(input.retrievalTerms && input.retrievalTerms.length > 0 ? { retrievalTerms: input.retrievalTerms } : {}),
   }).facts;
+  const before = views ? projectionBefore(views, input.chapter) : undefined;
+  const items = before
+    ? itemsWhere(before, [chapterGoal, input.continuityText ?? "", ...(input.retrievalTerms ?? [])], relevantNames)
+    : undefined;
   // 本章地点：章纲定的、或作者方向里点到名字的地点卡（取最长的名字，防「南门」抢「南门菜场」）。
   const directedPlace = [...bible.places]
     .filter((entry) => (input.plannedLocation && [entry.card.name, ...entry.card.aliases].includes(input.plannedLocation))
@@ -138,6 +151,8 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       mustCarryThreads: selectedThreads.map(formatThread),
       arcGoalFocus: selectedGoals.map(formatArcGoal),
       establishedFacts,
+      ...(items && items.lines.length > 0 ? { itemsWhere: items.lines } : {}),
+      ...(items && items.legacyFacts.length > 0 ? { legacyItemFacts: items.legacyFacts } : {}),
     },
     hardConstraints: buildHardConstraints({
       isOpeningChapter: input.chapter <= 1,
@@ -145,6 +160,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       bans: setting.rules.bans,
       establishedFacts,
       mustHitBeats: input.mustHitBeats ?? [],
+      hasItems: (items?.lines.length ?? 0) > 0,
     }),
     readFailures,
   };
@@ -168,6 +184,7 @@ function buildHardConstraints(input: {
   readonly bans: readonly string[];
   readonly establishedFacts: readonly string[];
   readonly mustHitBeats: readonly string[];
+  readonly hasItems?: boolean;
 }): readonly string[] {
   const mustHit = input.mustHitBeats.map((beat) => beat.trim()).filter(Boolean);
   return unique([
@@ -183,6 +200,7 @@ function buildHardConstraints(input: {
     input.bans.length > 0 ? `一定不要写：${input.bans.join("；")}。` : undefined,
     "设定里写着还没揭开、不能说破的，本章不要揭开，也不要让不该知道的人知道。",
     input.establishedFacts.length > 0 ? `不得改写或否认以下已确立事实：${input.establishedFacts.slice(0, 12).join("；")}。` : undefined,
+    input.hasItems ? "关键物件此刻在谁手里、放在哪，照 itemsWhere（东西在哪）接着写；那里写着「拿不准」「没核全」「没核实」的，别写成确定的。" : undefined,
     "设定本里没有的人、地点、物件、组织，不要凭空写成要紧的；需要时模糊处理。",
     "不要让主角突然开挂。",
     "不要把世界规矩一次性写成设定说明书。",

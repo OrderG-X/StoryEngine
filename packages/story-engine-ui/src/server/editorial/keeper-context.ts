@@ -1,8 +1,9 @@
 /**
  * 记账员的上下文（重构 P3）：全部从投影确定性地拼，不读旧文件、不问模型。
  *
- * 四段：人物（已确立名字 + 别称）、开着的线索（T 短号）、现在有效的事实（F 短号）、最近的时间表；
- * 重定稿时多一段：这一章上次定稿开的线索（R 短号，本章还在开就沿用编号）。
+ * 五段：人物（已确立名字 + 别称）、开着的线索（T 短号）、现在有效的事实（F 短号）、已有的东西（I 短号，P3b；东西的特征事实
+ * 挂在各自那行下面，也是 F 短号）、最近的时间表；重定稿时多两段：这一章上次定稿开的线索（R 短号）、新记的东西（P 短号），
+ * 本章还写到就沿用编号。
  * 短号只在这一次调用里有效，由 handles 换回真编号；模型交回来的短号对不上就当指向不存在的东西。
  *
  * 事实只列 hard / state，选取规则是精确的字符串出现与否（不是语义判断）：
@@ -11,6 +12,10 @@
  *  3. 超过 MAX_PROMPT_FACTS 条，先留第 1 类，再按记下的章从新到旧截断，如实写「另有 x 条没列」。
  *  没列的分两种报：按规则本来就不列的（主体没出现、也不是最近记的）只告诉模型；超了上限截掉的才算
  *  「没看全」（omittedFacts），定稿预览如实提醒作者。
+ *
+ * 东西（P3b 设计 3.1）全书不超过 MAX_PROMPT_ITEMS 样就全列；多了才挑（同样是精确的字符串出现与否）：本章正文出现了它某个叫法的、
+ * 拿着它的人的名字在本章出现的、最近 ITEM_RECENT_CHAPTERS 章动过的，再带上装着它们的；同名的整组留、不拆开截。
+ * 截掉的如实写「另有 N 样没列」（omittedItems）。
  */
 import {
   nameKey,
@@ -19,14 +24,19 @@ import {
   timelineTable,
   timelineText,
   type BookProjection,
+  type LedgerEntry,
   type FactView,
+  type ItemView,
   type SettingCardsFile,
 } from "@actalk/story-core";
+import { itemFacts, itemLine, itemTexts, pickItems } from "../book/item-views.js";
 
 export const MAX_PROMPT_THREADS = 200;
 export const MAX_PROMPT_FACTS = 120;
 export const RECENT_FACT_CHAPTERS = 3;
 export const PROMPT_TIMELINE_CHAPTERS = 10;
+export const MAX_PROMPT_ITEMS = 40;
+export const ITEM_RECENT_CHAPTERS = 3;
 
 export interface KeeperContext {
   /** 拼好的上下文段，直接接在本章正文后面。 */
@@ -37,11 +47,17 @@ export interface KeeperContext {
   readonly factHandles: ReadonlyMap<string, string>;
   /** 「R2」→ 这一章上次定稿时开的线索真编号（重定稿才有）。 */
   readonly reopenHandles: ReadonlyMap<string, string>;
-  /** 「T3」→ 线索标题、「F7」→ 事实内容（模型在说明里提了短号时换成名字给作者看）。 */
+  /** 「I3」→ 东西真编号。 */
+  readonly itemHandles: ReadonlyMap<string, string>;
+  /** 「P2」→ 这一章上次定稿时新记的东西真编号（重定稿才有）。 */
+  readonly reopenItemHandles: ReadonlyMap<string, string>;
+  /** 「T3」→ 线索标题、「F7」→ 事实内容、「I3」「P2」→ 东西名字（模型在说明里提了短号时换成名字给作者看）。 */
   readonly handleNames: ReadonlyMap<string, string>;
   readonly omittedThreads: number;
   /** 和本章有关、但超了上限没列给记账员的事实条数（按规则本来就不列的不算）。 */
   readonly omittedFacts: number;
+  /** 东西太多、按规则挑剩下没列的样数。 */
+  readonly omittedItems: number;
 }
 
 const THREAD_TYPE_LABELS = { question: "悬念", intent: "打算", goal: "目标" } as const;
@@ -137,9 +153,10 @@ function mentionedSubjects(projection: BookProjection, draft: string): Set<strin
 }
 
 function factSection(projection: BookProjection, draft: string, handles: Map<string, string>, names: Map<string, string>): { text: string; omitted: number } {
+  const label = itemTexts(projection.items).label;
   const live = projection.facts.filter(
     (fact): fact is FactView & { subjectKey: string } =>
-      fact.status === "current" && (fact.nature === "hard" || fact.nature === "state") && fact.subjectKey !== undefined,
+      fact.status === "current" && (fact.nature === "hard" || fact.nature === "state") && fact.subjectKey !== undefined && fact.item === undefined,
   );
   if (live.length === 0) return { text: "", omitted: 0 };
   const mentioned = mentionedSubjects(projection, draft);
@@ -162,16 +179,80 @@ function factSection(projection: BookProjection, draft: string, handles: Map<str
     names.set(handle, fact.text);
     const nature = fact.nature === "hard" ? "不会变" : "会变";
     const head = fact.attribute && fact.value !== undefined ? `${fact.subject} · ${fact.attribute}：${fact.value}` : fact.text;
-    return `${handle} ${head}（第 ${fact.chapter} 章，${nature}）`;
+    // 旧记法里一句说了好几样、其中几样已按新记法记了：那几样以【已有的东西】为准。
+    const aligned = fact.unaligned?.length ? `；其中${fact.unaligned.map(label).join("、")}已按【已有的东西】记` : "";
+    return `${handle} ${head}（第 ${fact.chapter} 章，${nature}${aligned}）`;
   });
   const more = [
     omitted > 0 ? `\n（另有 ${omitted} 条和本章有关的事实，太多没列出）` : "",
     unrelated > 0 ? `\n（另有 ${unrelated} 条有效的事实，主体没在本章出现，没列出）` : "",
   ].join("");
   return {
-    text: `【现在有效的事实（本章明写推翻其中某条时，replaces 填它的编号）】\n${lines.join("\n")}${more}`,
+    text: `【现在有效的事实（本章明写推翻其中某条时，replaces 填它的编号；说东西去向的旧记法事实见 items 的 replaces / overlaps）】\n${lines.join("\n")}${more}`,
     omitted,
   };
+}
+
+/** 这一章上次定稿时新写到的一样东西（重定稿时给记账员对照）。 */
+export interface ReopenableItem {
+  readonly item: string;
+  readonly name: string;
+  readonly quote?: string;
+}
+
+/** 重定稿：这一章上次记下的条目里头回写到的那几样（编号、名字、头回那句；同一编号取头一条）。 */
+export function reopenableItems(previous: readonly LedgerEntry[]): ReopenableItem[] {
+  const seen = new Set<string>();
+  return previous.flatMap((entry) => {
+    if (entry.kind !== "item" || entry.op !== "appear" || seen.has(entry.itemRef.id)) return [];
+    seen.add(entry.itemRef.id);
+    return [{ item: entry.itemRef.id, name: entry.itemRef.mention ?? "", ...(entry.evidence[0]?.quote ? { quote: entry.evidence[0].quote } : {}) }];
+  });
+}
+
+function itemSection(
+  projection: BookProjection,
+  draft: string,
+  handles: Map<string, string>,
+  factHandles: Map<string, string>,
+  names: Map<string, string>,
+): { text: string; omitted: number } {
+  // 全书不超过上限全列；多了按本章正文的字、拿着它的人、最近动过的挑，带上装着它们的，同名整组留。
+  const { picked, omitted } = pickItems(projection, { texts: [draft], recentChapters: ITEM_RECENT_CHAPTERS, listAllUpTo: MAX_PROMPT_ITEMS });
+  if (picked.length === 0) return { text: "", omitted: 0 };
+  const texts = itemTexts(projection.items);
+  const facts = itemFacts(projection);
+  let factNo = factHandles.size;
+  const lines = picked.flatMap((item, index) => {
+    const handle = `I${index + 1}`;
+    handles.set(handle, item.id);
+    names.set(handle, texts.label(item.id));
+    const first = item.firstSeen ? ` · 头回：第 ${item.firstSeen.chapter} 章${item.firstSeen.quote ? `「${item.firstSeen.quote}」` : ""}` : "";
+    const head = `${handle} ${itemLine(item, texts)}${item.card ? " · 设定卡上有" : ""}${first}`;
+    const under = (facts.get(item.id) ?? []).map((fact) => {
+      const factHandle = `F${(factNo += 1)}`;
+      factHandles.set(factHandle, fact.id);
+      names.set(factHandle, fact.text);
+      return `   ${factHandle} ${fact.attribute ?? ""}：${fact.value ?? fact.text}（第 ${fact.chapter} 章，${fact.nature === "hard" ? "不会变" : "会变"}）`;
+    });
+    return [head, ...under];
+  });
+  const more = omitted > 0 ? `\n（另有 ${omitted} 样东西没列：本章正文没出现它们的叫法、拿着它们的人也没出现、最近 ${ITEM_RECENT_CHAPTERS} 章没动过。本章写到的东西这里找不到的，当新的写进 newItems）` : "";
+  return {
+    text: `【已有的东西（本章写到的是其中哪样就写 I 号；同名不一定是同一样，看头回那句和现在在哪）】\n${lines.join("\n")}${more}`,
+    omitted,
+  };
+}
+
+function reopenItemSection(reopenable: readonly ReopenableItem[], handles: Map<string, string>, names: Map<string, string>): string {
+  if (reopenable.length === 0) return "";
+  const lines = reopenable.map((item, index) => {
+    const handle = `P${index + 1}`;
+    handles.set(handle, item.item);
+    names.set(handle, item.name);
+    return `${handle} ${item.name}${item.quote ? `「${item.quote}」` : ""}`;
+  });
+  return `【这一章上次定稿时新记的东西（正文改过、这次重新记账；后文可能还用着）：本章正文还写到的，照样在 newItems 里声明，tag 写这里的 P 号；本章已经没写到的不报】\n${lines.join("\n")}`;
 }
 
 function timelineSection(projection: BookProjection): string {
@@ -180,28 +261,39 @@ function timelineSection(projection: BookProjection): string {
   return `【前文的时间（最近 ${rows.length} 章；照表对，不要自己推算故事第几天）】\n${timelineText(rows)}`;
 }
 
-/** projection 应是「算到上一章」的投影；draft 是本章正文；reopenable = 重定稿时这一章上次开的线索；cards = 设定卡（没有就不列卡上的人）。 */
+/**
+ * projection 应是「算到上一章」的投影；draft 是本章正文；reopenable = 重定稿时这一章上次开的线索；cards = 设定卡（没有就不列卡上的人）；
+ * reopenItems = 重定稿时这一章上次新记的东西。
+ */
 export function buildKeeperContext(
   projection: BookProjection,
   draft: string,
   reopenable: readonly ReopenableThread[] = [],
   cards?: SettingCardsFile,
+  reopenItems: readonly ReopenableItem[] = [],
 ): KeeperContext {
   const threadHandles = new Map<string, string>();
   const factHandles = new Map<string, string>();
   const reopenHandles = new Map<string, string>();
+  const itemHandles = new Map<string, string>();
+  const reopenItemHandles = new Map<string, string>();
   const handleNames = new Map<string, string>();
   const threads = threadSection(projection, threadHandles, handleNames);
   const reopen = reopenSection(reopenable, reopenHandles, handleNames);
   const facts = factSection(projection, draft, factHandles, handleNames);
-  const sections = [castSection(projection), cardCastSection(projection, cards), threads.text, reopen, facts.text, timelineSection(projection)].filter((part) => part.length > 0);
+  const items = itemSection(projection, draft, itemHandles, factHandles, handleNames);
+  const reopenItemsText = reopenItemSection(reopenItems, reopenItemHandles, handleNames);
+  const sections = [castSection(projection), cardCastSection(projection, cards), threads.text, reopen, facts.text, items.text, reopenItemsText, timelineSection(projection)].filter((part) => part.length > 0);
   return {
     text: sections.join("\n\n"),
     threadHandles,
     factHandles,
     reopenHandles,
+    itemHandles,
+    reopenItemHandles,
     handleNames,
     omittedThreads: threads.omitted,
     omittedFacts: facts.omitted,
+    omittedItems: items.omitted,
   };
 }

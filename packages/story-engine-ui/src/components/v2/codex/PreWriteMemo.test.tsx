@@ -19,6 +19,7 @@ const memo: Memo = {
   ],
   moreThreads: 2,
   changes: [{ subject: "记录纸", attribute: "在哪", value: "床底木箱", chapter: 8, quote: "塞回床板底下" }],
+  items: [{ name: "钥匙", text: "孟叔拿着 → 在许微兜里", chapter: 8, quote: "钥匙落进许微兜里" }],
 };
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -64,6 +65,9 @@ describe("写前备忘", () => {
     expect((screen.getByRole("button", { name: /父亲怎么失踪的/u }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /记录纸 · 在哪：床底木箱/u }));
     expect(onJump).toHaveBeenLastCalledWith(8, "塞回床板底下");
+    // 东西挪了（P3b）：点了回那句。
+    fireEvent.click(screen.getByRole("button", { name: /钥匙：孟叔拿着 → 在许微兜里/u }));
+    expect(onJump).toHaveBeenLastCalledWith(8, "钥匙落进许微兜里");
   });
 
   it("前面一章都没定稿：什么都不显示；第 1 章不去读", async () => {

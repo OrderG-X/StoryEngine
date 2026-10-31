@@ -9,7 +9,7 @@
  *
  * 只摆、不猜：投影里没有的东西（老格式的冲突、地点……）不编。读的路径不写盘、不拿锁。
  */
-import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, rightsOf, scopeOf, timelineTable, type BibleView, type BookProjection, type ChapterLedger, type ThreadView, type TimelineRow } from "@actalk/story-core";
+import { bibleView, nameKey, parseDraftFile, presenceName, project, readBookSnapshot, readChapterText, readLegacyCards, rightsOf, scopeOf, timelineTable, type BibleView, type BookProjection, type BookSnapshot, type ChapterLedger, type ThreadView, type TimelineRow } from "@actalk/story-core";
 import type { ArcGoal, ArcGoalPool, FactEntry, FactLedger, NarrativeThread, ThreadPool, TimelineEvent } from "./types.js";
 
 export interface LedgerViews {
@@ -24,6 +24,8 @@ export interface LedgerViews {
 
 export interface StoryViews extends LedgerViews {
   readonly bible: BibleView;
+  /** 算这份的快照：要「写第 N 章那会儿」的样子（重写前面的章时东西在哪）从它重算到 N-1 章。 */
+  readonly snapshot?: BookSnapshot;
 }
 
 /** 读真相、算投影、摆成读者要的几样，连同设定视图（还没有 cards.json 的老书现从老格式文件拼一份，同核心 readBible）。 */
@@ -32,7 +34,15 @@ export async function readStoryViews(projectDir: string): Promise<StoryViews> {
   const projection = project(snapshot);
   const cards = snapshot.cards ?? (await readLegacyCards(projectDir, new Date().toISOString())).file;
   const titles = await readChapterTitles(projectDir, projection.chapters.map((chapter) => chapter.chapter));
-  return { ...storyViewsOf(projection, snapshot.ledgers, titles), bible: bibleView(projection, cards) };
+  return { ...storyViewsOf(projection, snapshot.ledgers, titles), bible: bibleView(projection, cards), snapshot };
+}
+
+/**
+ * 写第 chapter 章那会儿的投影（只算到前一章）：书只写到前一章就是这份；重写前面的章从快照重算。没有快照又要往回算 = undefined（不拿后文冒充）。
+ */
+export function projectionBefore(views: Pick<StoryViews, "projection" | "snapshot">, chapter: number): BookProjection | undefined {
+  if (views.projection.upTo < chapter) return views.projection;
+  return views.snapshot ? project(views.snapshot, { upTo: chapter - 1 }) : undefined;
 }
 
 /** 章节文件的章名（核心 parseDraftFile：第一行非空行是一级章名行）。 */
@@ -95,6 +105,8 @@ export function storyViewsOf(projection: BookProjection, ledgers: readonly Chapt
           kind: fact.nature,
           ...(scope ? { scope } : {}),
           ...(conflict !== "sure" ? { conflict } : {}),
+          ...(fact.item !== undefined ? { subjectId: fact.item } : {}),
+          ...(fact.unaligned && fact.unaligned.length > 0 ? { unaligned: fact.unaligned } : {}),
         };
       }),
   };

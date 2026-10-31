@@ -60,6 +60,15 @@ export function summarizeStateOverview(overview: StateOverview): string {
     lines.push(`天数要作者看：${checks.map((check) => `第 ${check.chapter} 章${check.text}`).join("；")}（作者在 AI 栏「不急的事」里能直接点；他跟你说了是哪天就交 change_ledger 的 day，说以他定的为准、星期就照写的留着就交 keepDay；星期写错了是正文的事，请他改正文）。`);
   }
 
+  const items = overview.items;
+  if (items) {
+    lines.push(
+      `东西在哪（账里共 ${items.total} 样${items.issues > 0 ? `，${items.issues} 处对不上要作者看` : ""}）：` +
+        (items.lines.length > 0 ? `\n${items.lines.map((line) => `- ${line}`).join("\n")}` : "这一章没有相关的。") +
+        (items.omitted > 0 ? `\n（另有 ${items.omitted} 样和这一章不相关，没列）` : ""),
+    );
+  }
+
   const lastEvent = overview.storyStatus.lastTimelineEvent;
   if (lastEvent) {
     lines.push(`最近时间线：${lastEvent}`);

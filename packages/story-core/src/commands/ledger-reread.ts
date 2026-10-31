@@ -8,13 +8,15 @@ import { z } from "zod";
 import { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readChapterText } from "../store/book.js";
 import { chapterLedgerPath } from "../store/paths.js";
-import { buildChapterLedger, type ChapterCommitResult } from "./chapter-commit.js";
+import { buildChapterLedger, itemShortfall, type ChapterCommitResult } from "./chapter-commit.js";
 import { fail } from "./runner.js";
 import type { WriteCommandSpec } from "./types.js";
 
 export const LedgerRereadArgs = z.object({
   chapter: z.number().int().min(1),
   entries: z.array(EntryInput),
+  /** 记账员交来的东西条目有没记上的（解析掉的、核不上的、等作者看没记的）：这章缺哪几类（P3b 设计 2.4）。 */
+  itemMissing: z.array(z.enum(["item", "fact"])).min(1).optional(),
 });
 export type LedgerRereadArgs = z.infer<typeof LedgerRereadArgs>;
 
@@ -34,7 +36,15 @@ export const ledgerReread: WriteCommandSpec<LedgerRereadArgs, LedgerRereadResult
   async plan(context, args) {
     const [text, previous] = await Promise.all([readChapterText(context.bookDir, args.chapter), readChapterLedger(context.bookDir, args.chapter)]);
     if (text === undefined || previous === undefined) return fail("not_committed", `第 ${args.chapter} 章还没定稿，没有可重记的账。`);
-    const built = await buildChapterLedger(context.bookDir, { chapter: args.chapter, text, entries: args.entries, now: context.now, origin: "reread" });
+    const shortfall = itemShortfall(undefined, args.itemMissing ?? []);
+    const built = await buildChapterLedger(context.bookDir, {
+      chapter: args.chapter,
+      text,
+      entries: args.entries,
+      now: context.now,
+      origin: "reread",
+      ...(shortfall ? { shortfall } : {}),
+    });
     if (!built.ok) return built;
     return {
       label: `通读记账：第 ${args.chapter} 章`,

@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { newCanonStatement, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
-import { AiMark, closeAfter, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
+import { AiMark, closeAfter, ConfirmButton, FieldList, FieldValue, InlineEdit, ItemWhere, LedgerNotes, type FieldItem } from "./bibleEdit.js";
 import { Avatar, PageHead, PresenceStrip, RelationGraph, Sec, Skeleton, firstGlyph } from "./bibleVisual.js";
 import { scrollBehavior } from "../../../stores/motionStore.js";
 
@@ -123,6 +123,7 @@ export function BibleBook(props: BibleBookProps) {
       {props.cat === "chars" ? <CardsPage ctx={ctx} kind="character" entries={ctx.bible.characters} /> : null}
       {props.cat === "relations" ? <RelationsPage ctx={ctx} /> : null}
       {props.cat === "items" ? <CardsPage ctx={ctx} kind="item" entries={ctx.bible.items} /> : null}
+      {props.cat === "items" ? <LedgerItems ctx={ctx} /> : null}
       {props.cat === "places" ? <CardsPage ctx={ctx} kind="place" entries={ctx.bible.places} /> : null}
       {props.cat === "uncarded" ? <UncardedPage ctx={ctx} /> : null}
     </section>
@@ -651,10 +652,49 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
               </ul>
             </div>
           ) : null}
+          {card.kind === "item" ? <ItemWhere view={ctx.bible.itemTexts?.[card.id]} {...(ctx.onJump ? { onJump: ctx.onJump } : {})} /> : null}
           <LedgerNotes appearances={entry.appearances} fixed={entry.fixed} now={entry.now} total={ctx.total} {...(ctx.onJump ? { onJump: ctx.onJump } : {})} />
         </div>
       ) : null}
     </article>
+  );
+}
+
+/** 物品页下面：账里按编号记的、没建卡的东西（P3b）。只列、不建卡：同名的不一定是同一样，要并成一样在右边跟 AI 说。 */
+function LedgerItems({ ctx }: { readonly ctx: PageContext }) {
+  const entries = ctx.bible.ledgerItems.filter((entry) => !entry.skipped);
+  const [open, setOpen] = useState<string | null>(null);
+  if (entries.length === 0) return null;
+  return (
+    <div className="se-bk-cards">
+      <Sec title="账里的东西（没建卡）" count={entries.length} />
+      <ul className="se-bk-grid">
+        {entries.map((entry) => {
+          const view = ctx.bible.itemTexts?.[entry.item.id];
+          const name = view?.name ?? entry.item.name ?? "一样东西";
+          const isOpen = open === entry.item.id;
+          return (
+            <li key={entry.item.id} className={isOpen ? "is-open" : undefined}>
+              <article className={`se-bk-card is-uncarded${isOpen ? " is-open" : ""}`}>
+                <button type="button" className="se-bk-card-head" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : entry.item.id)}>
+                  <span className="se-bk-av is-ghost" aria-hidden="true">{firstGlyph(name)}</span>
+                  <span className="se-bk-card-id">
+                    <span className="se-bk-card-title"><span className="se-bk-name">{name}</span></span>
+                    <span className="se-bk-peek">{view?.now ?? "正文还没写过它在哪"}</span>
+                  </span>
+                </button>
+                {isOpen ? (
+                  <div className="se-bk-card-body">
+                    <ItemWhere view={view} {...(ctx.onJump ? { onJump: ctx.onJump } : {})} />
+                    <LedgerNotes fixed={entry.fixed} now={entry.now} total={ctx.total} {...(ctx.onJump ? { onJump: ctx.onJump } : {})} />
+                  </div>
+                ) : null}
+              </article>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

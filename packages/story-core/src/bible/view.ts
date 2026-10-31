@@ -18,6 +18,8 @@ export interface BibleFact {
   readonly value: string;
   readonly chapter: number;
   readonly quote?: string;
+  /** 物品卡上按名字认来的旧记法事实（P3b 之前记的，没按编号对上这样东西）：界面标「旧记法」。 */
+  readonly legacy?: true;
 }
 
 export interface BibleAppearances {
@@ -99,7 +101,7 @@ function namesOf(card: Card): string[] {
   return [card.name, ...card.aliases];
 }
 
-function factsOf(subject: SubjectView | undefined, facts: ReadonlyMap<string, FactView>): { now: BibleFact[]; fixed: BibleFact[] } {
+function factsOf(subject: SubjectView | undefined, facts: ReadonlyMap<string, FactView>, markLegacy = false): { now: BibleFact[]; fixed: BibleFact[] } {
   const now: BibleFact[] = [];
   const fixed: BibleFact[] = [];
   for (const attribute of subject?.attributes ?? []) {
@@ -111,6 +113,7 @@ function factsOf(subject: SubjectView | undefined, facts: ReadonlyMap<string, Fa
         value: fact.value ?? fact.text,
         chapter: fact.chapter,
         ...(fact.quote ? { quote: fact.quote } : {}),
+        ...(markLegacy && subject?.item === undefined ? { legacy: true as const } : {}),
       };
       (attribute.nature === "state" ? now : fixed).push(item);
     }
@@ -136,9 +139,9 @@ function mergedMember(members: readonly CastMember[]): CastMember | undefined {
 }
 
 /** 几个主体的账并在一张卡上：定下的都留；现状同一方面几个主体都有的，只留最近一章记的那个主体的。 */
-function mergedFacts(subjects: readonly SubjectView[], facts: ReadonlyMap<string, FactView>): { now: BibleFact[]; fixed: BibleFact[] } {
-  if (subjects.length <= 1) return factsOf(subjects[0], facts);
-  const parts = subjects.map((subject) => factsOf(subject, facts));
+function mergedFacts(subjects: readonly SubjectView[], facts: ReadonlyMap<string, FactView>, markLegacy = false): { now: BibleFact[]; fixed: BibleFact[] } {
+  if (subjects.length <= 1) return factsOf(subjects[0], facts, markLegacy);
+  const parts = subjects.map((subject) => factsOf(subject, facts, markLegacy));
   const latest = new Map<string, { chapter: number; part: number }>();
   parts.forEach((part, index) => {
     for (const fact of part.now) {
@@ -198,7 +201,7 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
       .filter((item): item is { relation: SettingCardsFile["relations"][number]; other: Card } => item.other !== undefined)
       .map(({ relation, other }) => ({ id: relation.id, other: other.name, label: relation.label, by: relation.by }));
     const appearances = appearancesOf(mergedMember(members));
-    return { card, ledgerAliases, ...(appearances ? { appearances } : {}), ...mergedFacts(subjects, facts), relations, ...(item ? { item } : {}) };
+    return { card, ledgerAliases, ...(appearances ? { appearances } : {}), ...mergedFacts(subjects, facts, card.kind === "item"), relations, ...(item ? { item } : {}) };
   };
 
   const entries = cards.cards.map(entryOf);

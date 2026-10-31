@@ -18,6 +18,7 @@ import {
   classifyForReview,
   declarationOf,
   declarationsOf,
+  itemRefsOf,
   knownEntries,
   ledgerOf,
   locateQuote,
@@ -41,6 +42,9 @@ import {
   type DayRange,
   type EntryInput,
   type EntryKind,
+  type ItemInput,
+  type ItemPlaceInput,
+  type ItemRefInput,
   type LedgerEntry,
   type ReviewReason,
   type LedgerScene,
@@ -51,6 +55,8 @@ import {
   type TimeOffset,
   type TruthBasis,
 } from "@actalk/story-core";
+import { itemTexts, type ItemTexts } from "../book/item-views.js";
+import { reopenableItems } from "./keeper-context.js";
 import type { KeeperDrop } from "./keeper-parse.js";
 import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";
@@ -123,8 +129,17 @@ export interface CommitPreview {
   readonly time: PreviewTime;
   /** 重定稿：这章上次开的、后文还接着的线索，这次没记上、上次的原句也没了（定稿后它们没了开头）。 */
   readonly lostThreads?: readonly string[];
+  /**
+   * 重定稿：这章上次头回写到的、后文还用着的东西，这次没认上、上次那句原句也没了。proved = 后文还有它自己的记录
+   * （首见挪到后面那章）；没有 = 后文只是装在它里面、清点里有它，定稿后那几处没了出处，要作者看。
+   */
+  readonly lostItems?: readonly { readonly name: string; readonly proved: boolean }[];
   readonly omittedThreads: number;
   readonly omittedFacts: number;
+  /** 东西太多、按规则挑剩下没列给记账员的样数。 */
+  readonly omittedItems?: number;
+  /** 有东西的条目没记上（核不上、格式不对）：这章东西那类（和连带的事实）记成没记全（P3b 设计 2.4）。 */
+  readonly itemMissing?: readonly EntryKind[];
   /** 第一遍有原句对不上、请记账员重摘过一次（几条、救回几条）。 */
   readonly quoteRepair?: QuoteRepair;
   /** 补摘那一步没成、因此没记上的条目是哪几类（定稿时账记成「没记全」、写明缺这几类）；没成却一条都没拒 = 不给，当全部没记全。 */
@@ -209,8 +224,60 @@ function timeEntryLabel(entry: TimeInput): string {
 const dayInputText = (entry: DayInput): string =>
   entry.dayEnd !== undefined && entry.dayEnd > entry.day ? `故事第 ${entry.day} 天到第 ${entry.dayEnd} 天` : `故事第 ${entry.day} 天`;
 
-function entryLabel(entry: EntryInput, before: BookProjection): string {
+const PERSON_SAID = (source: { readonly kind: string; readonly speaker?: string } | undefined): string =>
+  source?.kind === "character_claim" ? `（${source.speaker ?? "人物"}说的）` : "";
+
+/** 本批里指一样东西：已有的用它的名字（换了叫法带上「= 原来那样」），本批新写到的用 newItems 的名字。 */
+function itemRefLabel(ref: ItemRefInput | undefined, texts: ItemTexts, batch: ReadonlyMap<string, string>): string {
+  if (!ref) return "一样东西";
+  if ("tag" in ref) return ref.mention ?? batch.get(ref.tag) ?? "一样东西";
+  const name = texts.label(ref.id);
+  return ref.mention && ref.mention !== texts.byId.get(ref.id)?.name ? `${ref.mention}（= ${name}）` : name;
+}
+
+function itemPlaceLabel(place: ItemPlaceInput, texts: ItemTexts, batch: ReadonlyMap<string, string>): string {
+  switch (place.kind) {
+    case "person":
+      return `${place.name}拿着`;
+    case "place":
+      return `在${place.text}`;
+    case "inside":
+      return `在${itemRefLabel(place.item, texts, batch)}里`;
+    case "unknown":
+      return "不知道在哪了";
+  }
+}
+
+/** 清单上东西的一行：「借据 → 铁盒里」「铁盒：清点只剩两件细工具（正文明说）」「账本那页：丢了」。 */
+function itemEntryLabel(entry: ItemInput, before: BookProjection, batch: ReadonlyMap<string, string>): string {
+  const texts = itemTexts(before.items);
+  const said = PERSON_SAID(entry.source);
+  if (entry.op === "appear") return `新东西${said}：${entry.name ?? "一样东西"}`;
+  const subject = itemRefLabel(entry.item, texts, batch);
+  switch (entry.op) {
+    case "at":
+      return `${subject}${said}：${entry.to ? itemPlaceLabel(entry.to, texts, batch) : "在哪没写"}`;
+    case "move":
+      return `${subject}${said}：${entry.from ? `${itemPlaceLabel(entry.from, texts, batch)} → ` : "→ "}${entry.to ? itemPlaceLabel(entry.to, texts, batch) : "去哪没写"}`;
+    case "gone":
+      return `${subject}${said}：${entry.gone === "destroyed" ? "毁了" : "丢了"}${entry.note ? `（${entry.note}）` : ""}`;
+    case "census": {
+      const members = (entry.members ?? []).map((member) => itemRefLabel(member, texts, batch));
+      if (entry.complete) return `${subject}${said}：清点${members.length > 0 ? `只有${members.join("、")}` : "空了"}（正文明说）`;
+      return `${subject}${said}：里面有${members.join("、")}（没说只有这些）`;
+    }
+  }
+}
+
+/** 本批 newItems 的标签 → 名字（清单上指本章新东西时用）。 */
+export function batchItemNames(entries: readonly EntryInput[]): ReadonlyMap<string, string> {
+  return new Map(entries.flatMap((entry) => (entry.kind === "item" && entry.op === "appear" && entry.tag && entry.name ? [[entry.tag, entry.name] as const] : [])));
+}
+
+function entryLabel(entry: EntryInput, before: BookProjection, batch: ReadonlyMap<string, string> = new Map()): string {
   switch (entry.kind) {
+    case "item":
+      return itemEntryLabel(entry, before, batch);
     case "summary":
       return `梗概：${entry.text}`;
     case "time":
@@ -222,6 +289,8 @@ function entryLabel(entry: EntryInput, before: BookProjection): string {
       return `出场：${entry.name}${alias}${entry.viewpoint ? "，视角人物" : ""}`;
     }
     case "fact":
+      // 东西的特征带上是哪样（同名的有区分）。
+      if (entry.item) return `事实（${NATURE_LABELS[entry.nature]}${PERSON_SAID(entry.source) ? `，${entry.source?.kind === "character_claim" ? (entry.source.speaker ?? "人物") : ""}说的` : ""}）：${itemRefLabel(entry.item, itemTexts(before.items), batch)} · ${entry.text}`;
       // 人物嘴里说的单独标出来：不顶替现状，作者一眼看得出（设计第 3 节）。
       return entry.source?.kind === "character_claim"
         ? `事实（${entry.source.speaker ?? "人物"}说的）：${entry.text}`
@@ -418,6 +487,52 @@ function keepLastOpens(
   return { accepted, rejected: checked.rejected.filter((item) => !folded.has(item)), lost };
 }
 
+/**
+ * 重定稿时这章上次头回写到的东西别丢（P3b 设计 3.3，和线索同一套）：记账员这次写明了 P 号的就沿用；没写、但后文还用着它的，
+ * 上次那条头回写到的原句还在就照上次的记；原句也没了，如实告诉作者（后文还有它自己的记录 = 首见挪后；没有 = 那几处没了出处）。
+ */
+function keepLastAppears(
+  snapshot: BookSnapshot,
+  chapter: number,
+  previous: readonly LedgerEntry[],
+  checked: { readonly accepted: Accepted; readonly rejected: Rejected },
+  text: string,
+  before: BookProjection,
+): { readonly accepted: Accepted; readonly lost: readonly { readonly name: string; readonly proved: boolean }[] } {
+  const lastAppears = reopenableItems(previous);
+  const covered = new Set(checked.accepted.flatMap(({ entry }) => (entry.kind === "item" && entry.op === "appear" && entry.reuse ? [entry.reuse] : [])));
+  // 后文怎么用着它：用到（任何位置）/ 自己的记录（主体是它的条目、事实）。设定卡、拆出它的裁定也算它还在。
+  const used = new Set<string>();
+  const proved = new Set<string>([...(snapshot.cards?.cards ?? []).filter((card) => card.kind === "item").map((card) => card.id)]);
+  for (const ledger of snapshot.ledgers) {
+    if (ledger.chapter <= chapter) continue;
+    for (const entry of ledger.entries) {
+      if (entry.kind === "item") {
+        for (const { at, ref } of itemRefsOf(entry)) {
+          used.add(ref.id);
+          if (at === "item") proved.add(ref.id);
+        }
+      }
+      if (entry.kind === "fact" && entry.subjectRef?.id !== undefined) {
+        used.add(entry.subjectRef.id);
+        proved.add(entry.subjectRef.id);
+      }
+    }
+  }
+  let nextIndex = Math.max(-1, ...checked.accepted.map((item) => item.index), ...checked.rejected.map((item) => item.index)) + 1;
+  const accepted = [...checked.accepted];
+  const lost: { name: string; proved: boolean }[] = [];
+  for (const last of lastAppears) {
+    if (covered.has(last.item) || !used.has(last.item)) continue;
+    const declared = previous.find((entry) => entry.kind === "item" && entry.op === "appear" && entry.itemRef.id === last.item);
+    const lastDeclared = declared ? declarationOf(declared) : undefined;
+    const kept = lastDeclared ? checkEntries([lastDeclared], text, before).accepted[0]?.entry : undefined;
+    if (kept) accepted.push({ index: nextIndex++, entry: kept });
+    else lost.push({ name: last.name || "一样东西", proved: proved.has(last.item) });
+  }
+  return { accepted, lost };
+}
+
 /** 时间声明里的原句：开头那句、换天那句、段的首末句。 */
 function timeQuotes(time: TimeInput): string[] {
   return [
@@ -576,12 +691,14 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     .flatMap((entry) => (entry.kind === "thread" && entry.op === "open"
       ? [{ thread: threadOf(entry), type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
       : []));
+  const reopenItems = reopenableItems(record.entries);
   const keeper = await runLedgerKeeper({
     projectDir: input.bookDir,
     chapter: input.chapter,
     draft: input.text,
     before,
     ...(reopenable.length > 0 ? { reopenable } : {}),
+    ...(reopenItems.length > 0 ? { reopenItems } : {}),
     callModel: input.callModel,
     ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
     ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
@@ -595,11 +712,19 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const checked = checkEntries(keeper.parsed.entries, input.text, before);
   const recommit = committed.includes(input.chapter);
   const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
-  const withAuthorDay = recommit ? keepAuthorDay(record, opens?.accepted ?? checked.accepted) : checked.accepted;
+  const appears = recommit ? keepLastAppears(snapshot, input.chapter, previous, opens ?? checked, input.text, before) : undefined;
+  const withAuthorDay = recommit ? keepAuthorDay(record, appears?.accepted ?? opens?.accepted ?? checked.accepted) : checked.accepted;
   // 读不全上次记账员记的时间（老的账待记）：不比，照这次的记。
   const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before, await timeText(input.bookDir, input.chapter, record)) : undefined;
   const accepted = kept?.accepted ?? withAuthorDay;
   const rejected = opens?.rejected ?? checked.rejected;
+  // 有东西的条目没记上（核不上、格式不对的整条丢）：这章东西那类没记全；带东西的事实再缺事实（设计 2.4）。
+  const itemMissing = new Set<EntryKind>();
+  for (const { entry } of rejected) {
+    if (entry.kind === "item") itemMissing.add("item");
+    if (entry.kind === "fact" && entry.item) itemMissing.add("item").add("fact");
+  }
+  for (const drop of keeper.parsed.drops) if (drop.kind) itemMissing.add("item").add(drop.kind);
   const missingKinds = keeper.quoteRepair?.failed
     ? [...new Set(rejected.filter((item) => item.reason === "quote_not_in_text").map((item): EntryKind => (item.entry.kind === "day" ? "time" : item.entry.kind)))]
     : [];
@@ -612,10 +737,11 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const resolve = subjectResolver(before);
   const later = recommit ? laterThreadTouches(snapshot.ledgers, input.chapter) : new Map<string, readonly number[]>();
   const optIn = (item: ClassifiedEntry): boolean => touchesHardFact(item, before) || closesLaterThread(item, later);
+  const batch = batchItemNames(keeper.parsed.entries);
   const toItem = (item: ClassifiedEntry): CommitItem => ({
     index: position.get(item.index) ?? -1,
     kind: item.entry.kind,
-    label: entryLabel(item.entry, before),
+    label: entryLabel(item.entry, before, batch),
     ...(entryQuote(item.entry) ? { quote: entryQuote(item.entry) } : {}),
     reasons: reasonTexts(item, before, resolve, later),
     optIn: optIn(item),
@@ -639,14 +765,17 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     review: plan.review.map(toItem),
     auto: mergeSameNote(plan.auto, toItem, before),
     notRecorded: [
-      ...rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before), reason: item.message })),
+      ...rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before, batch), reason: item.message })),
       ...keeper.parsed.drops.map((drop) => ({ code: "parse", label: dropLabel(drop), reason: drop.reason })),
     ],
     adjusted: keeper.parsed.adjusted.map((drop) => ({ code: "adjusted", label: dropLabel(drop), reason: drop.reason })),
     time: previewTimeOf(time, entries, plan.timeMissing, kept?.sinceLast, input.chapter),
     ...(opens && opens.lost.length > 0 ? { lostThreads: opens.lost } : {}),
+    ...(appears && appears.lost.length > 0 ? { lostItems: appears.lost } : {}),
     omittedThreads: keeper.omittedThreads,
     omittedFacts: keeper.omittedFacts,
+    ...(keeper.omittedItems > 0 ? { omittedItems: keeper.omittedItems } : {}),
+    ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing] } : {}),
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
     ...(missingKinds.length > 0 ? { missingKinds } : {}),
     ...extra,
