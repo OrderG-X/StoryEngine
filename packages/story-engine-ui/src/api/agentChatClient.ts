@@ -7,6 +7,7 @@
  *   - tool-result  { toolCallId, toolName, output }         → onToolResult({ toolName, overview, refreshScope, snapshotId })
  *   - tool-error   { toolCallId, toolName, error, retryable } → onToolError({ toolCallId, toolName, message, retryable })
  *   - operation    { type: snapshot|record, operation } / { type: live, opId, event } → onOperation / onOperationProgress（写作版本 P2a）
+ *   - card         { type: "continuity", check }            → onInspectCards（写完那遍核过的账，服务端从核账记忆出）
  *   - error        { error, retryable, reason }             → onError(message, retryable, reason)
  *   - done         { finishReason? }                        → onDone()
  *
@@ -650,8 +651,10 @@ export interface AgentChatHandlers {
   readonly onToolResult: (info: AgentToolResult) => void;
   /** 这一轮交上的操作（写作版本 P2a）：每次记录变了发一份（先一份当前的）。 */
   readonly onOperation?: (operation: OperationViewData) => void;
+  /** 服务端直接给的检查结果卡（写完那遍核过的账）：和检查做完挂的卡同一套。 */
+  readonly onInspectCards?: (inspect: InspectCardsData) => void;
   /** 操作的一句进度（「核账员在读第 3 章」）。 */
-  readonly onOperationProgress?: (info: { readonly opId: string; readonly text: string }) => void;
+  readonly onOperationProgress?:(info: { readonly opId: string; readonly text: string }) => void;
   /** 操作的步骤开始、正文流（写稿时正文逐字进稿纸）。 */
   readonly onOperationLive?: (info: { readonly opId: string; readonly event: Exclude<OperationLiveData, { readonly type: "progress" }> }) => void;
   /** 工具内部抛错：携带 toolCallId/toolName，让上层把对应步骤/卡片收尾为 failed，再 append 错误。 */
@@ -828,6 +831,11 @@ export async function streamAgentChat(
           }
           const operation = readOperationView(parsed.operation);
           if (operation) handlers.onOperation?.(operation);
+          return;
+        }
+        case "card": {
+          const inspect = typeof parsed.type === "string" ? readInspectCards(parsed.type, parsed.check) : undefined;
+          if (inspect) handlers.onInspectCards?.(inspect);
           return;
         }
         case "tool-error":

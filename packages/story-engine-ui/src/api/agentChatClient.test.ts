@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readStoredOperationAction, streamAgentChat, type OperationViewData } from "./agentChatClient.js";
 
@@ -332,6 +335,38 @@ describe("streamAgentChat", () => {
     const { revisited: _ignored, ...plain } = bad;
     expect(views[0]).toMatchObject({ opId: OP_ID, mode: "continuity", chapter: 8, what: "核账·第 8 章", state: "succeeded", origin: { kind: "chat", messageId: "user-1" } });
     expect(views[0]?.inspect).toEqual({ continuityCheck: { chapter: 8, sure: [], maybe: [twice, plain], earlierOpen: [old] }, checkedVersion: "abc123" });
+  });
+
+  it("写完那遍核过的账（card 事件）→ onInspectCards 带核账卡和查的版本；没查成、认不出的不给", async () => {
+    const issue = { quote: "鼾声换了个调", earlierQuote: "小屋只有一间", earlierChapter: 2, reason: "没有里屋" };
+    const got: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      frame("card", { type: "continuity", check: { ok: true, chapter: 9, source: "draft", checkedVersion: "v9", sure: [issue], maybe: [], failures: [] } }),
+      frame("card", { type: "continuity", check: { ok: false, chapter: 9, sure: [], maybe: [], failures: ["没跑成"] } }),
+      frame("card", { type: "whatever", check: { ok: true, chapter: 9, sure: [], maybe: [] } }),
+      frame("done", {}),
+    ])));
+    await streamAgentChat({ projectPath: "/tmp/p", messages: [{ role: "user", content: "写第 9 章" }] }, { ...noopHandlers(), onInspectCards: (inspect) => { got.push(inspect); } });
+    expect(got).toEqual([{ continuityCheck: { chapter: 9, sure: [issue], maybe: [] }, checkedVersion: "v9" }]);
+  });
+
+  it("服务端发的每种事件前端都接（别再发一种没人收的）", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const serverDir = join(here, "../server");
+    const sent = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith(".ts") && !entry.name.includes(".test.")) {
+          for (const match of readFileSync(path, "utf-8").matchAll(/sendEvent\("([a-z-]+)"/gu)) sent.add(match[1]!);
+        }
+      }
+    };
+    walk(serverDir);
+    const client = readFileSync(join(here, "agentChatClient.ts"), "utf-8");
+    expect(sent.size).toBeGreaterThan(5);
+    expect([...sent].filter((event) => !client.includes(`case "${event}":`))).toEqual([]);
   });
 
   it("硬伤检查 / 内容审阅 / 查 AI 味做完 → 各自的结果卡字段；查的是定稿时不带版本", async () => {

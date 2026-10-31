@@ -827,3 +827,17 @@ describe("settleUnfinishedAgentTurn（A-5 「停止」收尾结算）", () => {
     expect(message.toolSteps![0].status).toBe("running");
   });
 });
+
+describe("写完那遍核过的账（服务端直接给的核账卡）", () => {
+  it("挂核账卡（带查的版本），稿纸和「核账」那步照它算；再来一份换掉不叠", () => {
+    const issue = { quote: "鼾声换了个调", earlierQuote: "小屋只有一间", earlierChapter: 2, reason: "没有里屋" };
+    let msg = project([
+      { type: "text-delta", text: "第 9 章写好了。" },
+      { type: "inspect", inspect: { continuityCheck: { chapter: 9, sure: [issue], maybe: [] }, checkedVersion: "v9" } },
+    ]);
+    expect(cardOf(msg, "continuity")).toEqual({ type: "continuity", check: { chapter: 9, sure: [issue], maybe: [] }, checkedVersion: "v9" });
+    msg = projectAgentEvent(msg, { type: "inspect", inspect: { continuityCheck: { chapter: 9, sure: [], maybe: [] }, checkedVersion: "v10" } });
+    expect(msg.cards?.filter((card) => card.type === "continuity")).toHaveLength(1);
+    expect(cardOf(msg, "continuity")?.checkedVersion).toBe("v10");
+  });
+});
