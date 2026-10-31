@@ -5,7 +5,7 @@ import { checkEntries, ledgerOf, project, splitUnits, type ChapterLedger, type E
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
-import { droppedItemRefs, nameHandles, parseKeeperOutput } from "./keeper-parse.js";
+import { droppedItemRefs, nameHandles, parseItemPatch, parseKeeperOutput } from "./keeper-parse.js";
 import { buildChapterEndTask, buildKeeperTask, endingByWorld, endingWeekday, endsAtNight, KEEPER_SPEC, LEDGER_ROLE, nightIssue, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
@@ -385,6 +385,35 @@ describe("记账员交回的账单", () => {
       expect(droppedItemRefs(vague!.drops)).toBeUndefined();
       expect(droppedItemRefs(parse(["坏的"])!.drops)).toBeUndefined();
     });
+
+    it("从哪来认不出、写成不知道：当没写、这条照记；此刻在哪又写了从哪来：按挪了记（P3b 评测：一条从哪来写空了整条丢，那样东西从这章起在哪不一定）", () => {
+      const parsed = parse([
+        { seq: 1, item: "I1", op: "move", from: {}, to: { person: "乙" }, by: "narration", quote: "x" },
+        { seq: 2, item: "I2", op: "move", from: "unknown", to: { place: "桌上" }, by: "narration", quote: "y" },
+        { seq: 3, item: "I1", op: "at", from: { person: "乙" }, to: { place: "柜里" }, by: "narration", quote: "z" },
+      ]);
+      expect(parsed?.drops).toEqual([]);
+      expect(parsed?.entries).toEqual([
+        expect.objectContaining({ op: "move", item: { id: "i1-1" }, to: { kind: "person", name: "乙" } }),
+        expect.objectContaining({ op: "move", item: { id: "i1-2" }, to: { kind: "place", text: "桌上" } }),
+        expect.objectContaining({ op: "move", item: { id: "i1-1" }, from: { kind: "person", name: "乙" }, to: { kind: "place", text: "柜里" } }),
+      ]);
+      expect(parsed?.entries.slice(0, 2).some((entry) => "from" in entry)).toBe(false);
+      expect(parsed?.adjusted.map((item) => item.where)).toEqual(["items 第 1 条.from", "items 第 2 条.from", "items 第 3 条"]);
+    });
+
+    it("重写那一问交回来的：items 带 fix 的才算重写；newItems 照收", () => {
+      const patch = parseItemPatch(JSON.stringify({
+        newItems: [{ tag: "N9", name: "铁盒", by: "narration", quote: "一个铁盒" }],
+        items: [
+          { fix: 2, seq: 4, item: "I1", op: "move", to: { inside: "N9" }, by: "narration", quote: "放进铁盒" },
+          { seq: 5, item: "I2", op: "at", to: { place: "桌上" }, by: "narration", quote: "没写 fix" },
+        ],
+      }), itemHandles);
+      expect(patch?.appears).toEqual([expect.objectContaining({ op: "appear", tag: "N9", name: "铁盒" })]);
+      expect(patch?.items).toEqual([{ fix: 2, entry: expect.objectContaining({ op: "move", to: { kind: "inside", item: { tag: "N9" } } }) }]);
+      expect(parseItemPatch("好的", itemHandles)).toBeUndefined();
+    });
   });
 });
 
@@ -425,6 +454,85 @@ describe("记账员跑一章", () => {
       const failed = await runLedgerKeeper({ projectDir: book, chapter: 2, draft: "老周", before, callModel: async () => { throw new Error("429 太忙"); } });
       expect(failed).toMatchObject({ ok: false, reason: expect.stringContaining("429 太忙") });
       expect(await runLedgerKeeper({ projectDir: book, chapter: 2, draft: "  ", before, callModel: async () => "" })).toMatchObject({ ok: false });
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("东西条目写坏了：同一段对话里请它只重写这几条，重写好的换上、丢掉的那条不再算没记上；只差声明的补上声明就行；重写失败照第一遍交", async () => {
+    const book = await makeHomeTempDir("keeper-items-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。老周没有拦她。");
+      await mkdir(join(book, "ledger"), { recursive: true });
+      await writeFile(join(book, "ledger/cards.json"), JSON.stringify(sampleCards()));
+      const before = sampleBook();
+      const draft = "# 第2章\n\n格子里放着一个铁盒。她把账本放回铁盒里。钥匙收进了裤兜。";
+      const first = JSON.stringify({
+        summary: { text: "取盒", quote: "格子里放着一个铁盒" },
+        newItems: [
+          { tag: "N1", name: "铁盒", by: "narration", quote: "格子里放着一个铁盒" },
+          { tag: "N2", name: "账本", by: "narration", quote: "她把账本放回铁盒里" },
+        ],
+        items: [
+          // 1：此刻在哪没写去处（核心不收）；2：去处写了好几种（解析时丢）；3：装进了没声明的 N3（只差声明）。
+          { seq: 1, item: "N1", op: "at", by: "narration", quote: "格子里放着一个铁盒" },
+          { seq: 2, item: "N2", op: "move", to: { inside: "N1", person: "她" }, by: "narration", quote: "她把账本放回铁盒里" },
+          { seq: 3, item: "N3", op: "move", to: { person: "她" }, by: "narration", quote: "钥匙收进了裤兜" },
+        ],
+      });
+      const run = (repair: (messages: readonly BrainMessage[]) => Promise<string>) => {
+        const calls: BrainMessage[][] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book,
+          chapter: 2,
+          draft,
+          before,
+          maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            calls.push([...messages]);
+            if (!options.json) return "笔记";
+            return messages.at(-1)?.content.includes("东西的记录没记上") ? repair(messages) : first;
+          },
+        });
+        return { calls, outcome };
+      };
+      const fixed = run(async () => JSON.stringify({
+        newItems: [{ tag: "N3", name: "钥匙", by: "narration", quote: "钥匙收进了裤兜" }, { tag: "N1", name: "重声明的铁盒", by: "narration", quote: "格子里放着一个铁盒" }],
+        items: [
+          { fix: 1, seq: 1, item: "N1", op: "at", to: { place: "格子里" }, by: "narration", quote: "格子里放着一个铁盒" },
+          // 第 2 条是钥匙那条：写成 2 却说的是铁盒，不认（不能顶掉钥匙那条）。
+          { fix: 2, seq: 3, item: "N1", op: "at", to: { place: "裤兜" }, by: "narration", quote: "钥匙收进了裤兜" },
+          { fix: 3, seq: 2, item: "N2", op: "move", to: { inside: "N1" }, by: "narration", quote: "她把账本放回铁盒里" },
+          { fix: 9, seq: 4, item: "N1", op: "at", to: { place: "多交的" }, by: "narration", quote: "x" },
+        ],
+      }));
+      const ok = await fixed.outcome;
+      expect(ok).toMatchObject({ ok: true, itemRepair: { asked: 3, fixed: 3 } });
+      const ask = fixed.calls.at(-1) ?? [];
+      expect(ask.at(-2)).toMatchObject({ role: "assistant", content: first });
+      expect(ask.at(-1)?.content).toContain("1. N1：东西的去向没记上：此刻在哪只写去处\n   原句：格子里放着一个铁盒");
+      expect(ask.at(-1)?.content).toContain("3. items 第 2 条：去处：去处写了好几种，这条没记\n   你写的：{");
+      if (ok.ok) {
+        expect(ok.parsed.drops).toEqual([]);
+        const items = ok.parsed.entries.filter((entry) => entry.kind === "item");
+        expect(items.map((entry) => (entry.kind === "item" ? `${entry.op}:${entry.tag ?? ("tag" in (entry.item ?? {}) ? (entry.item as { tag: string }).tag : "")}:${JSON.stringify(entry.to ?? null)}` : ""))).toEqual([
+          "appear:N1:null",
+          "appear:N2:null",
+          "appear:N3:null",
+          'at:N1:{"kind":"place","text":"格子里"}',
+          'move:N2:{"kind":"inside","item":{"tag":"N1"}}',
+          'move:N3:{"kind":"person","name":"她"}',
+        ]);
+        // 第 1 条、第 3 条重写了，第 2 条（钥匙）补上声明就核得过。
+        expect(ask.at(-1)?.content).toContain("2. N3：东西的去向没记上：指的东西前文没有、本章也没记上");
+      }
+      const thrown = await run(async () => { throw new Error("429 太忙"); }).outcome;
+      expect(thrown).toMatchObject({ ok: true, itemRepair: { asked: 3, fixed: 0, failed: expect.stringContaining("429") } });
+      if (thrown.ok) expect(thrown.parsed.drops.map((drop) => drop.where)).toEqual(["items 第 2 条"]);
+      // 重写了还是坏的：不算，照第一遍的交。
+      const still = await run(async () => JSON.stringify({ items: [{ fix: 1, seq: 1, item: "N1", op: "at", by: "narration", quote: "格子里放着一个铁盒" }] })).outcome;
+      expect(still).toMatchObject({ ok: true, itemRepair: { asked: 3, fixed: 0 } });
     } finally {
       await rm(book, { recursive: true, force: true });
     }

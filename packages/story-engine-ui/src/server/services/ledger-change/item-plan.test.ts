@@ -100,6 +100,6 @@ describe("改账：东西", () => {
     expect((await plan({ op: "itemState", query: "信", chapter: 2, where: { person: "甲", place: "抽屉" } })).notDone).toEqual(["去处只能说一种"]);
     expect((await plan({ op: "itemState", query: "信", chapter: 2 })).notDone[0]).toContain("它在哪？说一种");
     expect((await plan({ op: "itemRetract", query: "信" })).notDone).toEqual(["「信」是第几章那条记错了？"]);
-    expect((await plan({ op: "itemState", query: "烟斗", chapter: 2, where: { person: "甲" } })).notDone).toEqual(["账里没找到叫「烟斗」的东西"]);
+    expect((await plan({ op: "itemState", query: "烟斗", chapter: 2, where: { person: "甲" } })).notDone).toEqual(["账里没找到叫「烟斗」的东西（要记它，先在设定本给它建一张物品卡）"]);
   });
 });

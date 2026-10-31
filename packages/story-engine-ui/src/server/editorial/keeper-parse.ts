@@ -561,6 +561,7 @@ function parseItems(
   entries: EntryInput[],
   drop: (where: string, reason: string, name?: string, kind?: EntryKind, items?: readonly ItemRefInput[]) => void,
   adjusted: KeeperDrop[],
+  onItem?: (entry: EntryInput, raw: Raw) => void,
 ): void {
   // 新写到的东西没记上：只是这一样没进账（指着它的条目核心按「本章没记上」不收，各自算缺哪几样），别的东西不受影响。
   for (const [index, raw] of asList(root.newItems).entries()) {
@@ -614,9 +615,19 @@ function parseItems(
     for (const key of ["to", "from"] as const) {
       if (raw[key] === undefined || raw[key] === null || raw[key] === "") continue;
       const place = placeOf(raw[key], handles, item, (reason) => adjusted.push({ where: `${where}.${key}`, reason }));
-      if (typeof place === "string") broken ??= `${key === "to" ? "去处" : "从哪来"}：${place}`;
+      // 从哪来只是正文写了才带的旁证：认不出、写成不知道都当没写（多塞的退化字段），这条照记。
+      if (key === "from" && (typeof place === "string" || place.kind === "unknown")) {
+        adjusted.push({ where: `${where}.from`, reason: typeof place === "string" ? `从哪来${place}，当没写` : "从哪来写的不知道，当没写" });
+        continue;
+      }
+      if (typeof place === "string") broken ??= `去处：${place}`;
       // 丢了 / 毁了再写「去处不知道」是多塞的（丢了本来就不知道在哪）：不当去处。
       else if (!(op === "gone" && key === "to" && place.kind === "unknown")) entry[key] = place;
+    }
+    // 「此刻在哪」又写了从哪来：写的就是挪过来，按挪了记。
+    if (entry.op === "at" && entry.from && entry.to) {
+      entry.op = "move";
+      adjusted.push({ where, reason: "此刻在哪又写了从哪来，按挪了记" });
     }
     if (op === "gone") {
       const gone = GONE[str(raw.gone)?.toLowerCase() ?? ""];
@@ -642,7 +653,42 @@ function parseItems(
       continue;
     }
     entries.push(entry);
+    onItem?.(entry, raw);
   }
+}
+
+/**
+ * 重写东西条目那一问交回来的（ledger-keeper 的 repairItems）：newItems 照第一遍的规矩收；items 每条带 fix（重写的是第几处）。
+ * 解析不了 → undefined。
+ */
+export function parseItemPatch(text: string, handles: KeeperHandles): {
+  readonly appears: readonly EntryInput[];
+  readonly items: readonly { readonly entry: EntryInput; readonly fix: number }[];
+} | undefined {
+  const root = extractJsonObject(text);
+  if (!root) return undefined;
+  const entries: EntryInput[] = [];
+  const fixes = new Map<EntryInput, number>();
+  parseItems(root, handles, entries, () => undefined, [], (entry, raw) => {
+    const fix = integer(raw.fix);
+    if (fix !== undefined) fixes.set(entry, fix);
+  });
+  return {
+    appears: entries.filter((entry) => entry.kind === "item" && entry.op === "appear"),
+    items: entries.flatMap((entry) => {
+      const fix = fixes.get(entry);
+      return fix === undefined ? [] : [{ entry, fix }];
+    }),
+  };
+}
+
+/** 第一遍交的 JSON 里某条原样（重写那一问给记账员看自己写的）：「items 第 3 条」→ root.items[2]。 */
+export function rawKeeperEntry(text: string, where: string): unknown {
+  // 不猜白名单：自家格式
+  const match = /^(newItems|items) 第 (\d+) 条$/u.exec(where);
+  if (!match) return undefined;
+  const root = extractJsonObject(text);
+  return root ? asList(root[match[1] as string])[Number(match[2]) - 1] : undefined;
 }
 
 /** 短号指的那样东西叫什么（I / P 号认得才有；N 号看本批 newItems）。 */

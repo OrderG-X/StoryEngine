@@ -27,6 +27,7 @@ import {
   type ChapterTime,
   type DayRange,
   type EntryInput,
+  type ItemRefInput,
   type SegmentInput,
   type TextUnit,
   type TimeInput,
@@ -37,7 +38,7 @@ import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableItem, type ReopenableThread } from "./keeper-context.js";
-import { extractJsonObject, flag, parseChapterEnd, parseKeeperOutput, relativeOf, type KeeperParseResult } from "./keeper-parse.js";
+import { extractJsonObject, flag, parseChapterEnd, parseItemPatch, parseKeeperOutput, rawKeeperEntry, relativeOf, type KeeperHandles, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -70,8 +71,8 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
-/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 5;
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 重写东西条目一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 6;
 
 /** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
 const IN_CHAPTER_BOUNDARY =
@@ -121,7 +122,7 @@ export const KEEPER_SPEC: readonly string[] = [
   "- 本章写到的东西：是上面【已有的东西】里哪一样就写它的 I 号；那里没有、或拿不准是不是那一样的，当新的，在 newItems 里声明 N 号（N1、N2……），写 name（正文里一个叫法，挑最能把它和别的同类东西分开的那个：正文写着颜色、材料、主人这类分别的就带上；不加括号、不列别名；别的叫法写在各条的 as 里）、quote（头一回写到它那句）、by。同名不一定是同一样，看头回那句和现在在哪。一样东西一个号；一组东西（「借据、纸条和表」）分开声明、分开记，分不开就不记去向。items、members、inside 里用到的每个 N 号都要在 newItems 里声明，没声明的那条整条不收。",
   "- 上面有【这一章上次定稿时新记的东西】的：本章还写到其中哪样，就在 newItems 里照样声明它，tag 写那个 P 号（P1），不要另发 N 号。",
   "- items 只记正文明写的去向，一处一条：此刻在哪写 op = at；被挪了（转手、放进、拿出、捡到、带走）写 op = move，正文写了从哪来就填 from；丢了、被拿走不知去向写 op = gone、gone = lost；毁了、用光了写 gone = destroyed，note 一句话说怎么没的。正文清点某样东西里面有什么写 op = census，members 把正文列的每一样都写上（一样一个号，头回出现的先声明，quote 可以就写清点那句）；正文明说「只有」「就剩」「别的没了」「空了」、而且 members 一样不少才写 complete: true，没明说或列不全就不写。",
-  "- 去处 to、from 写成 {\"person\":\"正文里对这个人的称呼\"}（谁拿着、揣着、放在他随身的包里）、{\"place\":\"地方原样的字\"}、{\"inside\":\"I3\"}（在另一样东西里面）；正文明说不知道在哪了，to 写 \"unknown\"。",
+  "- 去处 to、from 写成 {\"person\":\"正文里对这个人的称呼\"}（谁拿着、揣着、放在他随身的包里）、{\"place\":\"地方原样的字\"}、{\"inside\":\"I3\"}（在另一样东西里面）；正文明说不知道在哪了，to 写 \"unknown\"。to 是东西落到了哪儿：放到桌上、柜里、地上的写那个地方或那样东西，不写动手放的人；拿在手里、揣在身上的才写那个人。",
   "- seq：全章按故事里发生的先后给每条 items 编号 1、2、3……（不是正文写的先后：倒叙里先写、后发生的照发生排）；正文没说清谁先谁后的几条写同一个号。同一句里挪了几次就记几条。",
   "- 指东西的地方都可以写成 {\"item\":\"I3\",\"as\":\"本章正文怎么叫它\"}（主体的叫法写在这条的 as），照正文原样抄；不写就不写。",
   "- 每条 newItems、items 都写 by：叙述直接写的写 \"narration\"（「他把钥匙揣回兜里」是叙述，哪怕这句前后有人在说话；quote 抄叙述那段）；只有人物嘴里说的才写 \"claim\"，再加 speaker（正文里对说话人的称呼）。梦里、回忆里的照常记，算不算现状由代码按 segments 定。",
@@ -186,6 +187,8 @@ export type KeeperOutcome =
       readonly omittedFacts: number;
       readonly omittedItems: number;
       readonly quoteRepair?: QuoteRepair;
+      /** 东西条目写坏了、请记账员重写的那一问（和补摘原句同一种记法）。 */
+      readonly itemRepair?: QuoteRepair;
     })
   | (KeeperCommon & {
       readonly ok: false;
@@ -382,7 +385,8 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const parsed = parseKeeperOutput(text, context);
   if (!parsed) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
   const conversation: BrainMessage[] = [...window, { role: "user", content: task }, { role: "assistant", content: text }];
-  const repaired = await repairQuotes(parsed, input, conversation);
+  const rewritten = await repairItems(parsed, text, context, input, conversation);
+  const repaired = await repairQuotes(rewritten.parsed, input, conversation);
   const ended = await askChapterEnd(repaired.parsed, input, conversation);
   const nights = await recheckNight(ended, input, conversation);
   const dated = await recheckWeekday(nights, input, conversation);
@@ -393,6 +397,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     omittedFacts: context.omittedFacts,
     omittedItems: context.omittedItems,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
+    ...(rewritten.repair ? { itemRepair: rewritten.repair } : {}),
     ...extra,
   };
 }
@@ -510,6 +515,123 @@ function wholeChapterSegment(time: TimeInput, draft: string): TimeInput {
   if (time.start !== "unknown" || (time.segments ?? []).length === 0) return time;
   const { start: _start, sameDay: _sameDay, dayChanges: _dayChanges, ...rest } = time;
   return timeDeclarationProblem(rest, chapterSource(0, draft)) === undefined ? rest : time;
+}
+
+/** 一次最多重写几条东西条目。 */
+export const ITEM_REPAIR_MAX = 8;
+
+/** 要重写的一处：第一遍收进来了、核心不收的那条（index），或解析时就整条丢了的那条（drop）。 */
+type ItemProblem =
+  | { readonly kind: "entry"; readonly index: number; readonly label: string; readonly quote: string; readonly handle?: string }
+  | { readonly kind: "drop"; readonly drop: KeeperParseResult["drops"][number]; readonly raw: unknown };
+
+/**
+ * 东西条目写坏了（结构不对、指了没声明的号、解析时整条丢了）：一条没记上，这样东西从这章起就「在哪不一定」，
+ * 后面每章写手都拿不到准话（P3b 评测：约四分之一的章丢一条）。在同一段对话里请记账员只重写这几条，
+ * 交回来的照第一遍同一套解析、同一个核对；重写好的换上，没重写好的照第一遍的交（定稿清单如实列）。原句不对的交给后面补摘。
+ */
+async function repairItems(
+  parsed: KeeperParseResult,
+  firstReply: string,
+  handles: KeeperHandles,
+  input: KeeperInput,
+  conversation: readonly BrainMessage[],
+): Promise<{ parsed: KeeperParseResult; repair?: QuoteRepair }> {
+  const fixable = new Set(["shape", "unknown_item", "unknown_fact"]);
+  const problems: ItemProblem[] = [
+    ...checkEntries(parsed.entries, input.draft, input.before).rejected
+      .filter((item) => item.entry.kind === "item" && fixable.has(item.reason))
+      .map((item): ItemProblem => {
+        const subject = item.entry.kind === "item" ? (item.entry.op === "appear" ? (item.entry.tag ? { tag: item.entry.tag } : undefined) : item.entry.item) : undefined;
+        const handle = subject ? ("tag" in subject ? subject.tag : [...(handles.itemHandles ?? [])].find(([, id]) => id === subject.id)?.[0]) : undefined;
+        return { kind: "entry", index: item.index, label: item.message, quote: "quote" in item.entry ? item.entry.quote : "", ...(handle ? { handle } : {}) };
+      }),
+    ...parsed.drops
+      .filter((drop) => drop.kind === "item" && rawKeeperEntry(firstReply, drop.where) !== undefined)
+      .map((drop): ItemProblem => ({ kind: "drop", drop, raw: rawKeeperEntry(firstReply, drop.where) })),
+  ].slice(0, ITEM_REPAIR_MAX);
+  if (problems.length === 0) return { parsed };
+  const asked = problems.length;
+  let reply: string;
+  try {
+    reply = await withStep("记账员重写东西条目", () => input.callModel([...conversation, { role: "user", content: buildItemRepairTask(problems) }], { json: true }));
+  } catch (error) {
+    rethrowIfStopped(error);
+    return { parsed, repair: { asked, fixed: 0, failed: modelFailureText(error) } };
+  }
+  input.onRawOutput?.(reply);
+  const patch = parseItemPatch(reply, handles);
+  if (!patch) return { parsed, repair: { asked, fixed: 0, failed: "重写交回来的不是 JSON" } };
+  // 先拿掉要重写的那几条，换上交回来的（新声明的东西只收第一遍没声明过的标签），再整批核一遍。
+  const replaced = new Set(problems.flatMap((problem) => (problem.kind === "entry" ? [problem.index] : [])));
+  const declared = new Set(parsed.entries.flatMap((entry) => (entry.kind === "item" && entry.op === "appear" && entry.tag ? [entry.tag] : [])));
+  const appears = patch.appears.filter((entry) => entry.kind === "item" && entry.tag !== undefined && !declared.has(entry.tag));
+  // 只认写明重写的是第几条、而且说的就是那一样的（编号写错了的不认，免得顶掉别的条目）。
+  const items = patch.items.filter((item) => {
+    const problem = problems[item.fix - 1];
+    const subject = problem ? problemSubject(problem, parsed.entries) : undefined;
+    return problem !== undefined && (subject === undefined || (item.entry.kind === "item" && item.entry.item !== undefined && sameItem(item.entry.item, subject)));
+  });
+  const base = parsed.entries.filter((_, index) => !replaced.has(index));
+  const candidate = [...base, ...appears, ...items.map((item) => item.entry)];
+  const rejected = new Map(checkEntries(candidate, input.draft, input.before).rejected.map((item) => [item.index, item.reason]));
+  // 原句对不上的不算没重写好：后面补摘那一步接着补。
+  const usable = (index: number): boolean => !rejected.has(index) || rejected.get(index) === "quote_not_in_text";
+  const good = items.filter((_, at) => usable(base.length + appears.length + at));
+  const fixedProblems = new Set(good.map((item) => item.fix));
+  // 只补了声明（指的那样本章新写到、第一遍忘了声明）：原来那条不用重写，补上声明就核得过。
+  const restored = problems.flatMap((problem, at) => (problem.kind === "entry" && !fixedProblems.has(at + 1) ? [{ at: at + 1, entry: parsed.entries[problem.index] as EntryInput }] : []));
+  const withRestored = [...base, ...appears, ...good.map((item) => item.entry), ...restored.map((item) => item.entry)];
+  const rechecked = new Map(checkEntries(withRestored, input.draft, input.before).rejected.map((item) => [item.index, item.reason]));
+  const offset = base.length + appears.length + good.length;
+  restored.forEach((item, at) => {
+    const reason = rechecked.get(offset + at);
+    if (reason === undefined || reason === "quote_not_in_text") fixedProblems.add(item.at);
+  });
+  const fixedDrops = new Set(problems.flatMap((problem, at) => (problem.kind === "drop" && fixedProblems.has(at + 1) ? [problem.drop] : [])));
+  // 新声明的东西只在有条目用得上时才留（没用上的声明不进账，免得多出一样只露过面的）。
+  const used = new Set([...good.map((item) => item.entry), ...restored.map((item) => item.entry)].flatMap((entry) => itemTagsOf(entry)));
+  const entries = [...base, ...appears.filter((entry) => entry.kind === "item" && used.has(entry.tag ?? "")), ...good.map((item) => item.entry), ...restored.map((item) => item.entry)];
+  return {
+    parsed: { ...parsed, entries, drops: parsed.drops.filter((drop) => !fixedDrops.has(drop)) },
+    repair: { asked, fixed: fixedProblems.size },
+  };
+}
+
+/** 要重写的那条说的是哪一样（认得出才有）。 */
+function problemSubject(problem: ItemProblem, entries: readonly EntryInput[]): ItemRefInput | undefined {
+  if (problem.kind === "drop") return problem.drop.items?.[0];
+  const entry = entries[problem.index];
+  if (entry?.kind !== "item") return undefined;
+  return entry.op === "appear" ? (entry.tag ? { tag: entry.tag } : undefined) : entry.item;
+}
+
+const sameItem = (a: ItemRefInput, b: ItemRefInput): boolean => ("id" in a ? "id" in b && a.id === b.id : "tag" in b && a.tag === b.tag);
+
+/** 一条东西条目用到的本章新标签（主体、装在哪样里面、从哪来、清点成员）。 */
+function itemTagsOf(entry: EntryInput): string[] {
+  if (entry.kind !== "item") return [];
+  const refs = [entry.item, entry.to?.kind === "inside" ? entry.to.item : undefined, entry.from?.kind === "inside" ? entry.from.item : undefined, ...(entry.members ?? [])];
+  return refs.flatMap((ref) => (ref && "tag" in ref ? [ref.tag] : []));
+}
+
+/** 重写东西条目那条 user 消息（单测也用）。 */
+export function buildItemRepairTask(problems: readonly ItemProblem[]): string {
+  const lines = problems.map((problem, index) =>
+    problem.kind === "entry"
+      ? `${index + 1}. ${problem.handle ? `${problem.handle}：` : ""}${problem.label}${problem.quote ? `\n   原句：${problem.quote}` : ""}`
+      : `${index + 1}. ${problem.drop.where}${problem.drop.name ? `（${problem.drop.name}）` : ""}：${problem.drop.reason}\n   你写的：${JSON.stringify(problem.raw)}`,
+  );
+  return [
+    "你刚交的账单里，下面几条东西的记录没记上（写法不对）：",
+    ...lines,
+    "",
+    "请只重写这几条，别的不用重交。规矩和前面一样：at 只写 to；move 写 to，正文写了从哪来才写 from；丢了 / 毁了写 op = gone 和 gone，不写 to；清点写 members。" +
+      "用到的本章新东西要在 newItems 里声明（前面声明过的不用再声明）；只是忘了声明的，补上声明就行，那条不用重写。正文实在没写清它在哪的，那条就不交。",
+    "每条 items 加 fix：写它重写的是上面第几条。",
+    "",
+    '只交 JSON：{"newItems":[{"tag":"N5","name":"…","by":"narration","quote":"…"}],"items":[{"fix":1,"seq":3,"item":"I2","op":"move","to":{"person":"…"},"by":"narration","quote":"…"}]}',
+  ].join("\n");
 }
 
 /** 一次最多补摘几条（再多说明这份账单整体不靠谱，不值得再花一次长调用）。 */

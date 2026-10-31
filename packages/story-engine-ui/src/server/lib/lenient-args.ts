@@ -51,15 +51,8 @@ function toBlankUndefined(value: unknown): unknown {
 
 // 枚举宽容：trim + 小写，吃下 "Add"/" REMOVE "/" major " 这类大小写/空白变体（枚举 canonical 值须为小写）。
 // 空串/空白 → undefined（交给 optional）；非空原样小写交给 z.enum 校验，不在枚举内仍如实拒。
-function toEnumLike(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  const trimmed = value.trim();
-  if (trimmed === "") return undefined;
-  return trimmed.toLowerCase();
-}
-
-// 大小写不敏感枚举（canonical 值含 camelCase 时用，如 category 的 characterRelationships/writingRules）：
-// 把输入按 trim + 小写 与 canonical 值逐一比对，命中则归一回**原 canonical 大小写**；空→undefined；不命中原样交 z.enum 拒。
+// 大小写不敏感枚举：把输入按 trim + 小写 与合法值逐一比对，命中则归一回**原来的大小写**（itemState、keepDay 这类 camelCase 也认）；
+// 空→undefined；不命中原样交 z.enum 拒。
 function makeEnumValueCoercer(canonicalValues: readonly string[]) {
   return (value: unknown): unknown => {
     if (typeof value !== "string") return value;
@@ -147,8 +140,13 @@ export function positiveIntLike(value: unknown): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-/** 枚举宽容（trim + 小写）。枚举 canonical 值须为小写；空串→undefined。 */
-export const coerceEnum = <T extends z.ZodType>(base: T) => z.preprocess(toEnumLike, base);
-/** 大小写不敏感枚举（canonical 含 camelCase 时用）：按 canonical 值大小写不敏感匹配并归一回 canonical。 */
-export const coerceEnumValues = <T extends z.ZodType>(canonicalValues: readonly string[], base: T) =>
-  z.preprocess(makeEnumValueCoercer(canonicalValues), base);
+/** z.enum（可包一层 optional / nullable）的合法值；别的类型在模块加载时就报错，免得接错了静默全拒。 */
+function enumOptionsOf(schema: z.ZodType): readonly string[] {
+  let current: z.ZodType = schema;
+  while (current instanceof z.ZodOptional || current instanceof z.ZodNullable) current = current.unwrap() as z.ZodType;
+  if (!(current instanceof z.ZodEnum)) throw new Error("coerceEnum 只接 z.enum（可包 optional / nullable）");
+  return current.options.filter((option): option is string => typeof option === "string");
+}
+
+/** 枚举宽容：trim、大小写不敏感，归一回合法值原来的大小写；空串→undefined。合法值从 base 里取。 */
+export const coerceEnum = <T extends z.ZodType>(base: T) => z.preprocess(makeEnumValueCoercer(enumOptionsOf(base)), base);

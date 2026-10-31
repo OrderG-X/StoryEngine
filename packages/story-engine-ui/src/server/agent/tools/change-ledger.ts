@@ -23,7 +23,8 @@ const changeSchema = z.object({
       "天数：day=改已定稿某章是故事第几天（chapter + day；作者说了到第几天才给 dayEnd）；keepDay=作者定的天数和记下的对不上时以作者定的为准（chapter；作者明说了才用）。" +
       "梗概：summary=改写已定稿某章的梗概（chapter + text，text 是整条新梗概）。" +
       "东西（东西在哪见 read_state_overview）：itemMerge=这几样是同一样（groups，每组第一样留下）；itemSplit=第几章写的那样其实是另一样（query 原来那样 + chapter + text 新名字，targetText 可用原句几个字只拆那一处）；" +
-      "itemRetract=第几章记它的某条去向记错了（query + chapter，那章记了几条时 targetText 给那句原话里的几个字）；itemState=作者定它到第几章末在哪（query + chapter + where，或 members + complete 说里面有什么）。",
+      "itemRetract=第几章记它的某条去向记错了（query + chapter，那章记了几条时 targetText 给那句原话里的几个字）；itemState=作者定它到第几章末在哪（query + chapter + where，或 members + complete 说里面有什么）。" +
+      "这四种只认账里已有的东西（read_state_overview 列的）；账里没有的先用 change_settings 建物品卡，下一条消息再定在哪。",
   )),
   id: blankToUndefined(z.string().optional().describe("事实或线索的编号（read_state_overview 里取）。别念给作者听。")),
   chapter: coerceNumber(z.number().int().positive().optional().describe(

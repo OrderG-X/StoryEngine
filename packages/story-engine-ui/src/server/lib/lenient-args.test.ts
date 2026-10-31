@@ -5,7 +5,6 @@ import {
   blankToUndefined,
   coerceBoolean,
   coerceEnum,
-  coerceEnumValues,
   coerceJsonArray,
   coerceJsonObject,
   coerceNumber,
@@ -122,7 +121,7 @@ describe("lenient-args 宽容层（治模型把 tool-call 参数全发成字符�
     });
   });
 
-  describe("coerceEnum（trim + 小写，宽容大小写/空白；空串→undefined）", () => {
+  describe("coerceEnum（trim、大小写不敏感；空串→undefined）", () => {
     const s = coerceEnum(z.enum(["add", "remove", "supersede"]).optional());
     it('"Add"/" REMOVE "/"supersede" → 小写匹配', () => {
       expect(s.parse("Add")).toBe("add");
@@ -185,9 +184,9 @@ describe("lenient-args 宽容层（治模型把 tool-call 参数全发成字符�
     expect(js.required ?? []).not.toContain("chapter");
   });
 
-  describe("coerceEnumValues（camelCase 枚举大小写不敏感 → 归一回 canonical，如 category）", () => {
+  describe("coerceEnum 认 camelCase 合法值（itemState、keepDay 曾被转小写后全拒）", () => {
     const CATS = ["characters", "characterRelationships", "writingRules", "world"] as const;
-    const s = coerceEnumValues(CATS, z.enum(CATS).optional());
+    const s = coerceEnum(z.enum(CATS).optional());
     it('"WritingRules"/"writingrules"/" CharacterRelationships " → 归一回 canonical 大小写', () => {
       expect(s.parse("WritingRules")).toBe("writingRules");
       expect(s.parse("writingrules")).toBe("writingRules");
@@ -197,6 +196,10 @@ describe("lenient-args 宽容层（治模型把 tool-call 参数全发成字符�
     it('空串→undefined；不在枚举内 → 如实拒', () => {
       expect(s.parse("")).toBeUndefined();
       expect(s.safeParse("bogus").success).toBe(false);
+    });
+    it("原样的 camelCase 照过；接的不是 z.enum 当场报错", () => {
+      expect(s.parse("characterRelationships")).toBe("characterRelationships");
+      expect(() => coerceEnum(z.string())).toThrow();
     });
   });
 

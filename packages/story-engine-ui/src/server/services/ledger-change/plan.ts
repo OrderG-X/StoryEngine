@@ -113,7 +113,7 @@ function findItem(view: BookProjection, ref: string, texts: ItemTexts):
   const exact = view.items.filter((item) => names(item).includes(key));
   const found = exact.length > 0 ? exact : view.items.filter((item) => names(item).some((name) => name.includes(key)));
   if (found.length === 1) return { ok: true, item: found[0] as ItemView };
-  if (found.length === 0) return { ok: false, code: "not_found", reason: `账里没找到叫${quoteText(trimmed)}的东西。` };
+  if (found.length === 0) return { ok: false, code: "not_found", reason: `账里没找到叫${quoteText(trimmed)}的东西（要记它，先在设定本给它建一张物品卡）。` };
   const shown = found.slice(0, 5).map((item) => `「${texts.label(item.id)}」`).join("、");
   return { ok: false, code: "ambiguous", reason: `${quoteText(trimmed)}对得上 ${found.length} 样东西：${shown}${found.length > 5 ? " 等" : ""}，请说清是哪一样。` };
 }
