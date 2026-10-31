@@ -3,6 +3,7 @@
  * 在做：一行带呼吸点 + 最新一句进度；停着：为什么停 +「接着做」「不要了」；结束了：这一轮的话里说过结论就不再显示，
  * 后台做完、重开才收到的照实写一句结论。字都是服务端给的（what / stateText / conclusion），界面不自己拼。
  */
+import { checkedOtherBody, type CheckedBody } from "../../../lib/body-hash.js";
 import { useState } from "react";
 import { newCanonStatement, type AgentUserAction } from "../../../api/agentChatClient.js";
 import type { OperationCardData } from "../../../type-defs/workspace.js";
@@ -17,16 +18,16 @@ export function runningOperationCaption(op: OperationCardData | undefined): stri
 }
 
 /**
- * 检查结果是不是查完之后稿子又改过了：同一章，作者眼前有没存的字，或盘上那版不是查的那版。
+ * 检查结果是不是查完之后稿子又改过了：同一章，作者眼前有没存的字，或盘上那版的正文不是查的那份（`checkedOtherBody`）。
  * 没有对着工作稿查（checkedVersion 不是字符串）、眼前不是这一章、眼前没稿（定稿后清掉了）都不算。
  */
 export function checkedBeforeEdit(
-  checkedVersion: string | null | undefined,
+  checked: CheckedBody,
   inspectedChapter: number | undefined,
-  paper: { readonly chapter: number; readonly baseVersion: string | null; readonly dirty: boolean },
+  paper: { readonly chapter: number; readonly baseVersion: string | null; readonly savedBody: string; readonly dirty: boolean },
 ): boolean {
-  if (typeof checkedVersion !== "string" || inspectedChapter !== paper.chapter) return false;
-  return paper.dirty || (paper.baseVersion !== null && paper.baseVersion !== checkedVersion);
+  if (typeof checked.checkedVersion !== "string" || inspectedChapter !== paper.chapter) return false;
+  return paper.dirty || (paper.baseVersion !== null && checkedOtherBody(checked, paper));
 }
 
 /** 点卡上按钮：echo＝对话里「你：…」那句（选择卡照按钮上的字回显）。 */

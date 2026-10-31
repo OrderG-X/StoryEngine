@@ -107,7 +107,8 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   }).selected.slice(0, 4);
   // 「最近时间线事件」按【章号】取最近 N 条，不按磁盘顺序（2026-09-15 审计 P1-7）；排序键与
   // context-gateway.selectRecentTimelineEvents 同口径。本包是受保护段，只留极小摘要。
-  const recentTimelineEvents = [...timelineEvents]
+  const recentTimelineEvents = timelineEvents
+    .filter((event) => event.chapter < input.chapter)
     .sort((a, b) => a.chapter - b.chapter || a.id.localeCompare(b.id))
     .slice(-Math.max(1, Math.min(input.maxTimelineEvents ?? PACK_TIMELINE_EXCERPT, PACK_TIMELINE_EXCERPT)));
   const establishedFacts = selectEffectiveFacts({

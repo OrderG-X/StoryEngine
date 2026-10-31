@@ -408,13 +408,17 @@ export interface RewriteChoiceData {
 export type OperationStateData = "queued" | "running" | "waiting_author" | "paused" | "succeeded" | "failed" | "cancelled" | "obsolete";
 const OPERATION_STATES: readonly OperationStateData[] = ["queued", "running", "waiting_author", "paused", "succeeded", "failed", "cancelled", "obsolete"];
 
-/** 检查做完的结果卡（按检查种类映射回原来的卡片字段）。checkedVersion＝查的是工作稿哪一版（查定稿时没有）。 */
+/**
+ * 检查做完的结果卡（按检查种类映射回原来的卡片字段）。checkedVersion＝查的是工作稿哪一版、checkedBodyHash＝那份正文的指纹
+ * （查定稿时都没有；「核过后改过稿」按正文指纹比）。
+ */
 export interface InspectCardsData {
   readonly continuityCheck?: ContinuityCheckView;
   readonly qualityReport?: QualityCardReport;
   readonly draftReview?: DraftReviewView;
   readonly aiFlavorReport?: AiFlavorReport;
   readonly checkedVersion?: string;
+  readonly checkedBodyHash?: string;
 }
 
 /** 一次操作给界面看的样子（服务端 operationView 的子集，防御解析）。中文说法（what / stateText）都是服务端给的。 */
@@ -1024,7 +1028,10 @@ function readCanonResult(body: unknown): CanonResultData | undefined {
  */
 export function readInspectCards(mode: string, value: unknown): InspectCardsData | undefined {
   if (!isRecord(value)) return undefined;
-  const checkedVersion = value.source === "draft" && typeof value.checkedVersion === "string" && value.checkedVersion ? { checkedVersion: value.checkedVersion } : {};
+  const fromDraft = value.source === "draft" && typeof value.checkedVersion === "string" && value.checkedVersion;
+  const checkedVersion = fromDraft
+    ? { checkedVersion: value.checkedVersion as string, ...(typeof value.checkedBodyHash === "string" && value.checkedBodyHash ? { checkedBodyHash: value.checkedBodyHash } : {}) }
+    : {};
   switch (mode) {
     case "continuity": {
       if (value.ok === false || typeof value.chapter !== "number" || (!Array.isArray(value.sure) && !Array.isArray(value.maybe))) return undefined;

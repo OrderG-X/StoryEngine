@@ -65,6 +65,7 @@ import {
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
 import { checkedBeforeEdit, OperationCard, runningOperationCaption } from "./OperationCard.js";
+import type { CheckedBody } from "../../../lib/body-hash.js";
 import { isDraftDirty, useDraftStore } from "../../../stores/draftStore.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { openCommitSheet } from "../../../workspace/commitSheet.js";
@@ -875,6 +876,7 @@ function MessageBubbles({
   // 检查结果查的是工作稿哪一版（P2a 第 10 轮第 4 条）：稿纸上这一章之后又改过，卡上说一句（hooks 放在最前面，下面有提前返回）。
   const paperChapter = useDraftStore((state) => state.chapter);
   const paperVersion = useDraftStore((state) => state.baseVersion);
+  const paperSavedBody = useDraftStore((state) => state.savedBody);
   const paperDirty = useDraftStore((state) => isDraftDirty(state));
   if (message.role === "system") {
     // 操作历史里点的恢复：记一行，之前那轮的「下一步」到这儿为止（见 utils/restoreNote.ts）。
@@ -941,8 +943,8 @@ function MessageBubbles({
     .filter((card) => card.type !== "status-notes" && card.type !== "error")
     .sort((a, b) => CARD_ORDER.indexOf(a.type) - CARD_ORDER.indexOf(b.type));
   const inspectedChapter = cardOf(message, "operation")?.op.chapter;
-  const withStaleNote = (key: string, checkedVersion: string | null | undefined, node: ReactNode) => (
-    checkedBeforeEdit(checkedVersion, inspectedChapter, { chapter: paperChapter, baseVersion: paperVersion, dirty: paperDirty })
+  const withStaleNote = (key: string, checked: CheckedBody, node: ReactNode) => (
+    checkedBeforeEdit(checked, inspectedChapter, { chapter: paperChapter, baseVersion: paperVersion, savedBody: paperSavedBody, dirty: paperDirty })
       ? <Fragment key={key}><p className="se-card-stale">查完之后稿子改过了，这是改之前的结果。</p>{node}</Fragment>
       : node
   );
@@ -950,7 +952,7 @@ function MessageBubbles({
     switch (card.type) {
       case "ai-flavor":
         // 去 AI 味体检卡：随这条消息走（不再钉底部）。已改的违规标「已改 ✓」、与左侧正文黄高亮联动。
-        return withStaleNote(card.type, card.checkedVersion,
+        return withStaleNote(card.type, card,
           <AiFlavorCard
             key={card.type}
             report={card.report}
@@ -963,7 +965,7 @@ function MessageBubbles({
         );
       case "draft-review":
         // AI 审稿问题清单卡：点「改这处」=给 agent 发改写意图（chat 驱动·唯一控制面），由 agent 先 read_draft 定位再 revise。
-        return withStaleNote(card.type, card.checkedVersion,
+        return withStaleNote(card.type, card,
           <DraftReviewCard
             key={card.type}
             report={card.review}
@@ -985,7 +987,7 @@ function MessageBubbles({
         );
       case "quality":
         // 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。
-        return withStaleNote(card.type, card.checkedVersion, <QualityCheckCard key={card.type} report={card.report} />);
+        return withStaleNote(card.type, card, <QualityCheckCard key={card.type} report={card.report} />);
       case "commit-preview":
         // 定稿清单卡（R3）：定稿的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。
         return (

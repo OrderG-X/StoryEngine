@@ -62,11 +62,10 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       const card = cardFromContinuity(value.check);
       if (!card || card.type !== "continuity") return undefined;
       const dismissed = readStringList(Array.isArray(value.dismissed) ? value.dismissed : []).slice(0, 200);
-      const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
       return {
         ...card,
         ...(dismissed.length > 0 ? { dismissed } : {}),
-        ...(checkedVersion !== undefined ? { checkedVersion } : {}),
+        ...checkedVersionOf(value),
       };
     }
     case "quality":
@@ -106,10 +105,11 @@ function readMessageCard(value: unknown): MessageCard | undefined {
   }
 }
 
-/** 结果卡记下的「查的是工作稿哪一版」（null＝没法比，查定稿时没有）。 */
-function checkedVersionOf(value: Record<string, unknown>): { readonly checkedVersion?: string | null } {
+/** 结果卡记下的「查的是工作稿哪一版」（null＝没法比，查定稿时没有）和那份正文的指纹（P3b 起才有）。 */
+function checkedVersionOf(value: Record<string, unknown>): { readonly checkedVersion?: string | null; readonly checkedBodyHash?: string } {
   const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
-  return checkedVersion !== undefined ? { checkedVersion } : {};
+  const checkedBodyHash = readString(value.checkedBodyHash);
+  return { ...(checkedVersion !== undefined ? { checkedVersion } : {}), ...(checkedBodyHash ? { checkedBodyHash } : {}) };
 }
 
 const OPERATION_STATES: readonly OperationCardData["state"][] = ["queued", "running", "waiting_author", "paused", "succeeded", "failed", "cancelled", "obsolete"];

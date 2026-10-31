@@ -6,6 +6,7 @@
  * - 只读：不改正文、不写账本；核账只写核账记忆（按内容键的缓存）。
  */
 import { parseDraftFile, readChapterPaper, readDraftState } from "@actalk/story-core";
+import { bodyHash } from "../../lib/body-hash.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 import { checkDraftBeforeCommit, type CommitQualityReport } from "../writing/commit-quality-check.js";
 import { refineQualityReport, type RefinedQualityReport } from "../writing/quality-report-refine.js";
@@ -66,10 +67,15 @@ export interface CheckedFrom {
   readonly source: "draft" | "committed" | null;
   /** 查的是工作稿哪一版；查的是定稿时没有。 */
   readonly checkedVersion?: string;
+  /** 查的那份工作稿正文的指纹（`lib/body-hash.ts`）：「核过后改没改稿」按它比，撤销定稿换了代次、字没变不算改过。查定稿时没有。 */
+  readonly checkedBodyHash?: string;
 }
 
 function checkedFrom(frozen: FrozenChapterText): CheckedFrom {
-  return { source: frozen.source, ...(frozen.version !== undefined ? { checkedVersion: frozen.version } : {}) };
+  return {
+    source: frozen.source,
+    ...(frozen.version !== undefined ? { checkedVersion: frozen.version, checkedBodyHash: bodyHash(frozen.body) } : {}),
+  };
 }
 
 /* ------------------------------------------------------------------ */

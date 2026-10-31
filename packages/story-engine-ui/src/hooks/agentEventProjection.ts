@@ -402,7 +402,10 @@ function withChangeEffects(message: ChapterMessage, view: OperationViewData): Ch
 
 /** 检查结果 → 卡（和 P2a 前四个检查工具的卡同一套）。 */
 function inspectCards(inspect: InspectCardsData): readonly MessageCard[] {
-  const version = inspect.checkedVersion !== undefined ? { checkedVersion: inspect.checkedVersion } : {};
+  const version = {
+    ...(inspect.checkedVersion !== undefined ? { checkedVersion: inspect.checkedVersion } : {}),
+    ...(inspect.checkedBodyHash !== undefined ? { checkedBodyHash: inspect.checkedBodyHash } : {}),
+  };
   return [
     ...(inspect.continuityCheck ? [{ type: "continuity" as const, check: inspect.continuityCheck, ...version }] : []),
     ...(inspect.qualityReport ? [{ type: "quality" as const, report: inspect.qualityReport, ...version }] : []),

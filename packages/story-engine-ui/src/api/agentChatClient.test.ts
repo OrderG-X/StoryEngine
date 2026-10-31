@@ -330,11 +330,11 @@ describe("streamAgentChat", () => {
     const bad = { quote: "她走了", earlierQuote: "她没走", earlierChapter: 7, reason: "去留", revisited: { from: 3 } };
     const old = { quote: "走了五年", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年", againstSetting: { label: "人物卡" } };
     const { views } = await collectOperations([
-      frame("operation", { type: "record", operation: opView("continuity", { ok: true, chapter: 8, source: "draft", checkedVersion: "abc123", sure: [], maybe: [twice, bad], earlierOpen: [old], failures: [], summary: "核了" }) }),
+      frame("operation", { type: "record", operation: opView("continuity", { ok: true, chapter: 8, source: "draft", checkedVersion: "abc123", checkedBodyHash: "0a1b2c3d", sure: [], maybe: [twice, bad], earlierOpen: [old], failures: [], summary: "核了" }) }),
     ]);
     const { revisited: _ignored, ...plain } = bad;
     expect(views[0]).toMatchObject({ opId: OP_ID, mode: "continuity", chapter: 8, what: "核账·第 8 章", state: "succeeded", origin: { kind: "chat", messageId: "user-1" } });
-    expect(views[0]?.inspect).toEqual({ continuityCheck: { chapter: 8, sure: [], maybe: [twice, plain], earlierOpen: [old] }, checkedVersion: "abc123" });
+    expect(views[0]?.inspect).toEqual({ continuityCheck: { chapter: 8, sure: [], maybe: [twice, plain], earlierOpen: [old] }, checkedVersion: "abc123", checkedBodyHash: "0a1b2c3d" });
   });
 
   it("写完那遍核过的账（card 事件）→ onInspectCards 带核账卡和查的版本；没查成、认不出的不给", async () => {

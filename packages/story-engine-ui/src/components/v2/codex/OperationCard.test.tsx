@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { bodyHash } from "../../../lib/body-hash.js";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -163,18 +164,25 @@ describe("runningOperationCaption", () => {
 });
 
 describe("checkedBeforeEdit", () => {
-  const paper = { chapter: 3, baseVersion: "v1", dirty: false };
+  const paper = { chapter: 3, baseVersion: "v1", savedBody: "正文。", dirty: false };
+  const v1 = { checkedVersion: "v1" };
   it("同一章：盘上换了版、或有没存的字，就是查完之后改过了", () => {
-    expect(checkedBeforeEdit("v1", 3, paper)).toBe(false);
-    expect(checkedBeforeEdit("v1", 3, { ...paper, baseVersion: "v2" })).toBe(true);
-    expect(checkedBeforeEdit("v1", 3, { ...paper, dirty: true })).toBe(true);
-    expect(checkedBeforeEdit("v1", 3, { ...paper, baseVersion: null, dirty: true })).toBe(true);
+    expect(checkedBeforeEdit(v1, 3, paper)).toBe(false);
+    expect(checkedBeforeEdit(v1, 3, { ...paper, baseVersion: "v2" })).toBe(true);
+    expect(checkedBeforeEdit(v1, 3, { ...paper, dirty: true })).toBe(true);
+    expect(checkedBeforeEdit(v1, 3, { ...paper, baseVersion: null, dirty: true })).toBe(true);
+  });
+  it("卡上有正文指纹：按正文比，撤销定稿换了版本号、字没变不算改过", () => {
+    const hashed = { checkedVersion: "v1", checkedBodyHash: bodyHash("正文。") };
+    expect(checkedBeforeEdit(hashed, 3, { ...paper, baseVersion: "v2" })).toBe(false);
+    expect(checkedBeforeEdit(hashed, 3, { ...paper, baseVersion: "v2", savedBody: "改过的正文。" })).toBe(true);
+    expect(checkedBeforeEdit(hashed, 3, { ...paper, baseVersion: "v2", dirty: true })).toBe(true);
   });
   it("没对着工作稿查、不是眼前这一章、眼前没稿：不算", () => {
-    expect(checkedBeforeEdit(undefined, 3, { ...paper, baseVersion: "v2" })).toBe(false);
-    expect(checkedBeforeEdit(null, 3, { ...paper, baseVersion: "v2" })).toBe(false);
-    expect(checkedBeforeEdit("v1", 4, { ...paper, baseVersion: "v2" })).toBe(false);
-    expect(checkedBeforeEdit("v1", undefined, { ...paper, baseVersion: "v2" })).toBe(false);
-    expect(checkedBeforeEdit("v1", 3, { ...paper, baseVersion: null })).toBe(false);
+    expect(checkedBeforeEdit({}, 3, { ...paper, baseVersion: "v2" })).toBe(false);
+    expect(checkedBeforeEdit({ checkedVersion: null }, 3, { ...paper, baseVersion: "v2" })).toBe(false);
+    expect(checkedBeforeEdit(v1, 4, { ...paper, baseVersion: "v2" })).toBe(false);
+    expect(checkedBeforeEdit(v1, undefined, { ...paper, baseVersion: "v2" })).toBe(false);
+    expect(checkedBeforeEdit(v1, 3, { ...paper, baseVersion: null })).toBe(false);
   });
 });

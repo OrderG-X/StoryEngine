@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { draftSave, parseDraftFile, readDraftState, runCommand } from "@actalk/story-core";
+import { bodyHash } from "../../lib/body-hash.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -221,6 +222,23 @@ describe("查完稿子又改过（Astra P2a 第 10 轮第 4 条）", () => {
     await finishOperationTurn({ record: await stored(same.opId), projectDir: book, sendEvent: quiet.sendEvent, scrubber: scrubber() });
     expect(quiet.text()).toBe("第 1 章硬伤检查：没有硬伤。");
     await expect(readOp({ opId: same.opId })).resolves.not.toHaveProperty("draftChanged");
+  });
+
+  it("撤销定稿换了版本号、正文一字没变（带正文指纹）：不标改稿前；正文变了照标", async () => {
+    const before = (await readDraftState(book, 1)).version;
+    expect(await runCommand(book, draftSave, { chapter: 1, body: "他推开门。", baseVersion: before, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
+    const file = (await readDraftState(book, 1)).file!;
+    const body = parseDraftFile(file.text).body;
+    fakeInspect({ result: { schema: "operation-result/1", summary: "第 1 章硬伤检查：没有硬伤。", body: { source: "draft", checkedVersion: "撤销前的版本号", checkedBodyHash: bodyHash(body) } } });
+    const same = await submitted("quality", 1);
+    await __drainOperationsForTests();
+    await expect(readOp({ opId: same.opId })).resolves.not.toHaveProperty("draftChanged");
+
+    __resetRecipesForTests();
+    fakeInspect({ result: { schema: "operation-result/1", summary: "第 1 章硬伤检查：没有硬伤。", body: { source: "draft", checkedVersion: file.version, checkedBodyHash: bodyHash(`${body}多一句。`) } } });
+    const other = await submitted("quality", 1);
+    await __drainOperationsForTests();
+    await expect(readOp({ opId: other.opId })).resolves.toMatchObject({ ok: true, draftChanged: true });
   });
 });
 
