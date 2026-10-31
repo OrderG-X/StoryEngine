@@ -14,6 +14,7 @@ import { coerceNumber } from "../../lib/lenient-args.js";
 import { readStoryViews } from "../../book/story-views.js";
 import { readCharacterNameById, resolveEntityLabels, resolveSemanticSummaryLabels } from "../../writing/presence/entity-labels.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { modelFailureText } from "../../lib/ai-errors.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe(
@@ -124,7 +125,7 @@ export const readTimelineTool = createTool({
       return { ok: true as const, events, summary };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { ok: false as const, events: [], summary: `读时间线没成：${message}`, error: message };
+      return { ok: false as const, events: [], summary: `读时间线没成：${modelFailureText(err)}`, error: message };
     }
   },
 });

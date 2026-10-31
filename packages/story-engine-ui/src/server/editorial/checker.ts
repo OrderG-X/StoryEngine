@@ -634,7 +634,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
   } catch (error) {
     rethrowIfStopped(error);
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成（上一稿的问题照带）。
-    return { failure: `核账员读前文没成：${error instanceof Error ? error.message : String(error)}` };
+    return { failure: `核账员读前文没成：${modelFailureText(error)}` };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   // R7.3 设定本进核账：人物卡 / 地点 / 资产 / 世界规则拼一份「设定」对照材料，三遍和自复核都带上。
@@ -1043,7 +1043,7 @@ export async function checkPlanByReader(input: {
     }
   } catch (error) {
     rethrowIfStopped(error);
-    return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
+    return { problems: [], failures: [`核账员读前文没成：${modelFailureText(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.plan.chapter);
   try {

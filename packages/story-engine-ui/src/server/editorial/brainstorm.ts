@@ -17,6 +17,7 @@ import { buildColdReaderWindow, coldPausedNote, ensureReaderWindow, type BrainCa
 import { readerWaitingHandlers } from "./reader-progress.js";
 import { PLANNER_ROLE } from "./planner.js";
 import { CHECKER_ROLE, parsePlanProblems } from "./checker.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 
 /** 出几种走法。 */
 export const BRAINSTORM_OPTIONS = 3;
@@ -299,7 +300,7 @@ export async function proposeDirections(input: DirectionsInput & {
     plannerWindow = await readerWindow({ ...windowInput(input), role: PLANNER_ROLE, callModel: input.callPlanner });
   } catch (error) {
     rethrowIfStopped(error);
-    return { ok: false, reason: `章纲员读前文没成：${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, reason: `章纲员读前文没成：${modelFailureText(error)}` };
   }
   if (plannerWindow.cold) input.onCold?.("planner");
 

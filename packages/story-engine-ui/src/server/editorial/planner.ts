@@ -26,6 +26,7 @@ import {
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { readPoint, type PlanProblem } from "./checker.js";
+import { modelFailureText } from "../lib/ai-errors.js";
 
 export const PLANNER_ROLE: ReaderRole = {
   id: "planner",
@@ -178,7 +179,7 @@ export async function planChapterByPlanner(input: {
     }
   } catch (error) {
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没拟成。
-    return { ok: false, reason: `章纲员读前文没成：${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, reason: `章纲员读前文没成：${modelFailureText(error)}` };
   }
   // 材料里只留账本状态（开着的线索 / 已确立事实 / 人物年龄 / 受保护的秘密）：全书原文它已经读过了。
   const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
@@ -326,7 +327,7 @@ export async function revisePlanByPlanner(input: {
       window = ready.messages;
     }
   } catch (error) {
-    return { ok: false, reason: `章纲员读前文没成：${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, reason: `章纲员读前文没成：${modelFailureText(error)}` };
   }
   let raw: Record<string, unknown>;
   try {

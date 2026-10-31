@@ -26,6 +26,7 @@ import { submitReaderBackfill } from "../../../lib/reader-backfill.js";
 import { coded } from "../../draft-change/steps.js";
 import { MAX_DECISIONS_PER_CHANGE, planLedgerRequests, readLedgerRequest, type LedgerChangeRequest } from "../../ledger-change/plan.js";
 import type { OperationResult, Recipe } from "../executor.js";
+import { modelFailureText } from "../../../lib/ai-errors.js";
 
 export const LEDGER_CHANGE_KIND = "ledger.change";
 /** 改账停下等作者点的按钮（种类给界面认卡，号给回显认是哪个按钮）。 */
@@ -226,7 +227,7 @@ export function createLedgerChangeRecipe(deps: LedgerChangeDeps = DEFAULT_DEPS):
           return { missing: notes.missing };
         } catch (error) {
           rethrowIfStopped(error);
-          throw coded("notes_failed", `记账员读前文没成：${error instanceof Error ? error.message : String(error)}`);
+          throw coded("notes_failed", `记账员读前文没成：${modelFailureText(error)}`);
         }
       });
       ctx.progress("记账员在理开着的线索");
