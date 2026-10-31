@@ -811,7 +811,7 @@ describe("记账员跑一章", () => {
     }
   });
 
-  it("时间核不上的原句怎么落：开头 → 说不出隔多久；换天 → 不附那句；段 → 不记；整章是段却对不上 → 整条时间没记上", () => {
+  it("时间核不上的原句怎么落：开头 → 说不出隔多久；换天 → 不附那句；段 → 不记；整章是段却对不上 → 整条时间没记上；整章是段又写开头说不出 → 开头不记", () => {
     const draft = "她在旅馆住下。她梦见了海。第二天早上，她七点就上了山。";
     const base = { drops: [], adjusted: [] };
     const time = {
@@ -833,6 +833,13 @@ describe("记账员跑一章", () => {
     const whole = settleTime({ ...base, entries: [{ kind: "time", review: "auto", segments: [{ frame: "past", firstQuote: "那年", lastQuote: "那年" }] }] }, draft);
     expect(whole.entries).toEqual([]);
     expect(whole.drops.map((drop) => drop.where)).toEqual(["segments 第 1 段", "time"]);
+    // 段盖住整章又写了开头说不出：开头、同一天不记（整章是梦）；段没盖住整章、开头写了隔几天的照旧。
+    const dream = { kind: "time" as const, review: "auto" as const, start: "unknown" as const, sameDay: true, timeOfDay: "深夜", segments: [{ frame: "other" as const, firstQuote: "她在旅馆住下", lastQuote: "她七点就上了山" }] };
+    expect(settleTime({ ...base, entries: [dream] }, draft)).toEqual({ ...base, entries: [{ kind: "time", review: "auto", timeOfDay: "深夜", segments: dream.segments }] });
+    const part = { ...dream, segments: [{ frame: "other" as const, firstQuote: "她梦见了海", lastQuote: "她梦见了海" }] };
+    expect(settleTime({ ...base, entries: [part] }, draft)).toEqual({ ...base, entries: [part] });
+    const dated = { ...dream, start: time.start };
+    expect(settleTime({ ...base, entries: [dated] }, draft)).toEqual({ ...base, entries: [dated] });
   });
 
   it("上一个当下章：往前跳过整章是回忆、梦的章；没记上时间的章不跳", () => {

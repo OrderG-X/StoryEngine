@@ -21,6 +21,7 @@ import {
   quoteInText,
   readCards,
   splitUnits,
+  timeDeclarationProblem,
   type BookProjection,
   type BoundaryOffsets,
   type ChapterTime,
@@ -444,13 +445,21 @@ function slotLabel(time: TimeInput, slot: TimeSlot): { readonly label: string; r
  *  - 换天那句对不上 → 换天照记、不附那句（章末照算，哪句开始是新的一天不知道，设计 2.2）；
  *  - 段对不回句子 → 那段不记（如实说，段里的事按当下记了）；整章是段的，整条时间没记上。
  * 都在清单「改过的」「没记上的」里如实说。
+ * 段盖住了整章、本章开头又写了「说不出隔多久」：整章是梦、回忆，开头那条是多写的（P3a 评测：整章梦记成段又带一条开头不知道，
+ * 投影按「写了开头 = 在当下线上」算，后面每章断链）——不记开头和章末（整章是段时本来就不写，设计第 4 节）。
  */
 export function settleTime(parsed: KeeperParseResult, draft: string): KeeperParseResult {
   const index = parsed.entries.findIndex((entry) => entry.kind === "time");
-  const found = index >= 0 ? parsed.entries[index] : undefined;
-  if (!found || found.kind !== "time") return parsed;
+  const declared = index >= 0 ? parsed.entries[index] : undefined;
+  if (!declared || declared.kind !== "time") return parsed;
+  const found = wholeChapterSegment(declared, draft);
   const slots = timeSlotsToRepair(found, draft);
-  if (slots.length === 0) return parsed;
+  if (slots.length === 0) {
+    if (found === declared) return parsed;
+    const entries = [...parsed.entries];
+    entries[index] = found;
+    return { ...parsed, entries };
+  }
   const adjusted = [...parsed.adjusted];
   const drops = [...parsed.drops];
   let time: TimeInput = found;
@@ -479,6 +488,13 @@ export function settleTime(parsed: KeeperParseResult, draft: string): KeeperPars
     drops.push({ where: "time", reason: "整章是回忆、梦这类段，但段对不上正文，本章时间没记上" });
   } else entries[index] = time;
   return { ...parsed, entries, adjusted, drops };
+}
+
+/** 段盖住整章（不写开头也是合法的一份时间声明）、开头写的是说不出：去掉开头、同一天、换天。 */
+function wholeChapterSegment(time: TimeInput, draft: string): TimeInput {
+  if (time.start !== "unknown" || (time.segments ?? []).length === 0) return time;
+  const { start: _start, sameDay: _sameDay, dayChanges: _dayChanges, ...rest } = time;
+  return timeDeclarationProblem(rest, chapterSource(0, draft)) === undefined ? rest : time;
 }
 
 /** 一次最多补摘几条（再多说明这份账单整体不靠谱，不值得再花一次长调用）。 */
