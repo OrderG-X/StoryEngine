@@ -159,21 +159,23 @@ export interface PickItemsOptions {
   readonly recentChapters: number;
   /** 全书不超过这么多样就全列（记账员要认全）；不给 = 只列相关的。 */
   readonly listAllUpTo?: number;
-  /**
-   * 最多列几样：相关的里先留叫法写到的，再留拿着它的人出场的，再留最近动过的（装着它们的、同名的排最后）；
-   * 相关的不够这么多，拿不相关的补满（最后一次写到它在哪越晚越先），久没动的东西别从读的人眼里消失。
-   */
+  /** 相关的最多列几样：先留叫法写到的，再留拿着它的人出场的，再留最近动过的（装着它们的、同名的排最后）。 */
   readonly max?: number;
+  /**
+   * 再拿几样不相关的补上（最后一次写到它在哪越晚越先）：久没动的东西别从读的人眼里消失。补上的记在 brief 里，
+   * 读的人那行只写现在在哪、不带原句（省字）。
+   */
+  readonly fill?: number;
 }
 
 /**
  * 本章相关的东西（记账员、写手、章纲员同一套挑法，P3b 设计 3.1 / 第 4 节）：叫法在本章的字里出现、拿着它的人出场、最近几章动过；
  * 再带上装着它们的（往外找到头）和同名的整组（同名不一定是同一样，要一起看）。
  */
-export function pickItems(projection: Pick<BookProjection, "items" | "cast" | "upTo">, options: PickItemsOptions): { picked: ItemView[]; omitted: number } {
+export function pickItems(projection: Pick<BookProjection, "items" | "cast" | "upTo">, options: PickItemsOptions): { picked: ItemView[]; brief: ReadonlySet<string>; omitted: number } {
   // 悬空的（账里没有存在证明，设计 3.3）不当它在：读的人、记账员都不列。
   const all = projection.items.filter((item) => !item.dangling);
-  if (options.listAllUpTo !== undefined && all.length <= options.listAllUpTo) return { picked: [...all], omitted: 0 };
+  if (options.listAllUpTo !== undefined && all.length <= options.listAllUpTo) return { picked: [...all], brief: new Set(), omitted: 0 };
   // 不猜白名单：找原句（叫法在本章字里原样出现）
   const text = normalizeForQuote(options.texts.join("\n"));
   const appears = (name: string): boolean => {
@@ -206,13 +208,14 @@ export function pickItems(projection: Pick<BookProjection, "items" | "cast" | "u
   if (options.max !== undefined && kept.length > options.max) {
     const top = new Set([...kept].sort((a, b) => (rank.get(b.id) ?? 0) - (rank.get(a.id) ?? 0) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).slice(0, options.max).map((item) => item.id));
     kept = kept.filter((item) => top.has(item.id));
-  } else if (options.max !== undefined && kept.length < options.max) {
-    const lastWrite = (item: ItemView): number => item.history.at(-1)?.chapter ?? item.firstSeen?.chapter ?? 0;
-    const rest = all.filter((item) => !rank.has(item.id)).sort((a, b) => lastWrite(b) - lastWrite(a) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-    const fill = new Set(rest.slice(0, options.max - kept.length).map((item) => item.id));
-    kept = all.filter((item) => rank.has(item.id) || fill.has(item.id));
   }
-  return { picked: kept, omitted: all.length - kept.length };
+  const keptIds = new Set(kept.map((item) => item.id));
+  const lastWrite = (item: ItemView): number => item.history.at(-1)?.chapter ?? item.firstSeen?.chapter ?? 0;
+  const brief = new Set(
+    all.filter((item) => !keptIds.has(item.id)).sort((a, b) => lastWrite(b) - lastWrite(a) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).slice(0, options.fill ?? 0).map((item) => item.id),
+  );
+  const picked = all.filter((item) => keptIds.has(item.id) || brief.has(item.id));
+  return { picked, brief, omitted: all.length - picked.length };
 }
 
 /** 写手、章纲员的「东西在哪」：本章相关的每样一行，加上旧记法里没逐样对齐、又说到这几样的事实。 */
@@ -222,20 +225,21 @@ export interface ItemsWhere {
   readonly omitted: number;
 }
 
-/** 写手最多看几样东西、几条没对齐的旧事实。 */
+/** 写手最多看几样相关的东西（带原句）、再补几样不相关的（只写在哪）、几条没对齐的旧事实。 */
 export const WRITER_MAX_ITEMS = 20;
+export const WRITER_BRIEF_ITEMS = 20;
 const WRITER_MAX_LEGACY_FACTS = 8;
 const WRITER_RECENT_CHAPTERS = 3;
 
 export function itemsWhere(projection: Pick<BookProjection, "items" | "cast" | "upTo" | "facts">, texts: readonly string[], people: readonly string[]): ItemsWhere {
-  const { picked, omitted } = pickItems(projection, { texts, people, recentChapters: WRITER_RECENT_CHAPTERS, max: WRITER_MAX_ITEMS });
+  const { picked, brief, omitted } = pickItems(projection, { texts, people, recentChapters: WRITER_RECENT_CHAPTERS, max: WRITER_MAX_ITEMS, fill: WRITER_BRIEF_ITEMS });
   const names = itemTexts(projection.items);
   const ids = new Set(picked.map((item) => item.id));
   const legacyFacts = projection.facts
     .filter((fact) => fact.status === "current" && (fact.unaligned ?? []).some((item) => ids.has(item)))
     .slice(-WRITER_MAX_LEGACY_FACTS)
     .map((fact) => unalignedText(fact, names));
-  return { lines: picked.map((item) => writerItemLine(item, names)), legacyFacts, omitted };
+  return { lines: picked.map((item) => (brief.has(item.id) ? itemLine(item, names) : writerItemLine(item, names))), legacyFacts, omitted };
 }
 
 function stepPlaceText(place: ItemStep["to"], texts: ItemTexts): string {

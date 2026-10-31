@@ -163,9 +163,21 @@ describe("单列的说法什么时候列", () => {
 describe("挑给读的人的东西", () => {
   const item = (id: string, name: string, chapter: number) => ({ id, name, mentions: [name], mergedFrom: [], history: [{ chapter, entry: `c${chapter}-1`, op: "at", seq: 1, to: { kind: "place", text: "桌上" }, scope: { frame: "present", source: "narration" } }], asides: [], inside: [], now: { kind: "known", place: { kind: "place", text: "桌上" }, chapter, entry: `c${chapter}-1` } }) as never;
   const projection = { upTo: 10, cast: [], items: [item("a", "表", 1), item("b", "伞", 2), item("c", "镜子", 9), item("d", "钥匙", 4), item("e", "信", 3)] };
-  it("相关的不够上限：拿久没写到的补满，后写到的先补；够了就只留相关的", () => {
-    expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1, max: 3 }).picked.map((x: { id: string }) => x.id)).toEqual(["c", "d", "e"]);
+  it("相关的按上限留；再拿不相关的补几样（后写到的先补），补上的记在 brief 里", () => {
+    const filled = pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1, max: 3, fill: 2 });
+    expect(filled.picked.map((x: { id: string }) => x.id)).toEqual(["c", "d", "e"]);
+    expect([...filled.brief]).toEqual(["d", "e"]);
+    expect(filled.omitted).toBe(2);
     expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1, max: 1 }).picked.map((x: { id: string }) => x.id)).toEqual(["c"]);
     expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1 }).picked.map((x: { id: string }) => x.id)).toEqual(["c"]);
+  });
+
+  it("写手那份：相关的带原句，补上的只写在哪", () => {
+    const withQuote = (id: string, name: string, chapter: number) => {
+      const base = item(id, name, chapter) as unknown as { history: { quote?: string }[] };
+      return { ...base, history: base.history.map((step) => ({ ...step, quote: `${name}放在桌上` })) } as never;
+    };
+    const where = itemsWhere({ ...projection, facts: [], items: [withQuote("c", "镜子", 9), withQuote("d", "钥匙", 4)] } as never, ["他照了照镜子"], []);
+    expect(where.lines).toEqual(["镜子 · 现在：在桌上，第 9 章 · 原句「镜子放在桌上」", "钥匙 · 现在：在桌上，第 4 章"]);
   });
 });
