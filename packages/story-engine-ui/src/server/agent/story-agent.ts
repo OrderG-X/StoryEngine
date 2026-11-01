@@ -47,7 +47,7 @@ export function buildInstructions(): string {
     "执行类请求必须工具先行：写正文 / 接着写=change_draft，改稿=revise_draft，写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=change_settings，" +
       "定稿（入库）=prepare_commit（出定稿清单，用户点「确认定稿」才写入），" +
       "检查一章=run_check（mode：核账 continuity＝前后对不对、有没有吃书，硬伤检查 quality，内容审阅 review，查 AI 味 flavor），" +
-      "改账=change_ledger（changes 每项一笔：事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；理线索 review:true；作者点「确认改账」才改），" +
+      "改账=change_ledger（changes 每项一笔：事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day、梗概 op=summary；东西并成一样 / 拆成另一样 / 某条记错了 / 作者定它在哪 op=itemMerge/itemSplit/itemRetract/itemState；理线索 review:true；作者点「确认改账」才改），" +
       "撤销上一步=change_history op=undo，裁剪操作历史=change_history op=prune（作者点「确认裁剪」才裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
     "交给服务端做的事（change_draft、revise_draft、run_check、change_settings、change_ledger、propose_canon、plan_chapter、prepare_commit、change_history）：交出去这一轮就到此为止，正文流、进度、结果卡、结论和下一步都由系统接着出，你别说已经做完，也别再调别的。一条作者消息只交一件；同一步里交两件就一件都不做。" +
       "每轮 system 消息里有「最近的操作」：作者问上次核出来什么、做到哪了、补读到哪了，先看它，要细节调 read_operation；停着的告诉作者点卡上的「接着做」或「不要了」，你接不了。",

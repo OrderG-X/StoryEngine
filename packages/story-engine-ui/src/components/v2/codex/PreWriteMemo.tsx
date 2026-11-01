@@ -145,6 +145,24 @@ export function PreWriteMemo({ projectPath, chapter, refreshKey, busy, onJump }:
               </ul>
             </section>
           ) : null}
+          {(memo.items ?? []).length > 0 ? (
+            <section aria-label="东西挪了">
+              <h4>东西挪了</h4>
+              <ul>
+                {(memo.items ?? []).map((item, index) => {
+                  const onClick = jump(item.chapter, item.quote);
+                  return (
+                    <li key={`${item.chapter}-${index}`}>
+                      <button type="button" disabled={!onClick} onClick={onClick} title={item.quote ? `第 ${item.chapter} 章：${item.quote}` : ""}>
+                        <span className="cd-memo-text">{item.name}：{item.text}</span>
+                        <em>第 {item.chapter} 章</em>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ) : null}
         </div>
       ) : null}
     </div>

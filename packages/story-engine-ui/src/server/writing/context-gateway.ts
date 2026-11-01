@@ -220,7 +220,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       excludeChapters: [input.chapter - 1],
     }).catch((error) => { trackReadFailure("旧章原文")(error); return [] as readonly EarlierPassage[]; })
     : [];
-  const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
+  const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.chapter, input.maxTimelineEvents);
   const storyContinuity = buildStoryContinuityContext(timelineEvents);
   // 线索账没记全的章不数进「多少章没动」（和核心投影同一把尺子）。
   const threadUnknown = threadUnknownChapters(views?.projection.chapters ?? []);
@@ -591,10 +591,12 @@ function compactTimelineEventForWriter(event: TimelineEvent): Record<string, unk
   };
 }
 
-function selectRecentTimelineEvents(events: readonly TimelineEvent[], maxTimelineEvents: number | undefined): readonly TimelineEvent[] {
+/** 本章之前最近几章的事（重写中间某章时，后面章的事还没发生，不给写手当「最近发生的」）。 */
+function selectRecentTimelineEvents(events: readonly TimelineEvent[], chapter: number, maxTimelineEvents: number | undefined): readonly TimelineEvent[] {
   const limit = Math.max(0, Math.trunc(maxTimelineEvents ?? 5));
   if (limit === 0) return [];
-  return [...events]
+  return events
+    .filter((event) => event.chapter < chapter)
     .sort((left, right) => right.chapter - left.chapter || right.id.localeCompare(left.id))
     .slice(0, limit)
     .reverse();

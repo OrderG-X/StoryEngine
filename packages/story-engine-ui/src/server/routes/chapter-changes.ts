@@ -5,6 +5,7 @@
  * 不带 chapter＝最近定稿的那章。全部是名字和原句，不出 id。
  */
 import { projectBook, timelineTable, type BookProjection, type FactView } from "@actalk/story-core";
+import { chapterItemMoves, type ItemMoveLine } from "../book/item-views.js";
 import { storySpanText } from "../book/story-timeline.js";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
@@ -46,6 +47,8 @@ export interface ChapterChanges {
   readonly newCast: readonly { readonly name: string; readonly quote?: string }[];
   readonly threads: readonly ChapterChangeThread[];
   readonly facts: readonly ChapterChangeFact[];
+  /** 东西挪了（写作版本 P3b）：「借据：沈知秋拿着 → 在铁盒里」。 */
+  readonly items: readonly ItemMoveLine[];
 }
 
 /** 不是叙述当下说的事实，标一个短说法。 */
@@ -71,7 +74,7 @@ const THREAD_ORDER: Record<ChapterChangeThread["op"], number> = { open: 0, advan
 
 /** 投影 → 某章的改动；这章没定稿（投影里没有）返回 undefined。 */
 export function toChapterChanges(
-  projection: Pick<BookProjection, "chapters" | "facts" | "threads" | "cast">,
+  projection: Pick<BookProjection, "chapters" | "facts" | "threads" | "cast" | "items">,
   chapter?: number,
 ): ChapterChanges | undefined {
   const target = chapter ?? projection.chapters.at(-1)?.chapter;
@@ -117,6 +120,7 @@ export function toChapterChanges(
     newCast,
     threads,
     facts,
+    items: chapterItemMoves(projection, target),
   };
 }
 

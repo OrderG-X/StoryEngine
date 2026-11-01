@@ -80,7 +80,7 @@ describe("GET /api/pre-write-memo", () => {
   it("写第 1 章：前面没有定稿的章，备忘是空的", async () => {
     const projectDir = await bookWithTwoChapters();
     const memo = (await getMemo(projectDir, "1")).payload.memo as PreWriteMemo;
-    expect(memo).toEqual({ chapter: 1, threads: [], moreThreads: 0, changes: [] });
+    expect(memo).toEqual({ chapter: 1, threads: [], moreThreads: 0, changes: [], items: [] });
   });
 
   it("章号不是正整数：如实说没说清，不瞎算", async () => {

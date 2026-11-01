@@ -14,6 +14,8 @@ import { readMessageRefFromContext, readProjectDirFromContext } from "../request
 import { receiptOf, type SubmitReceipt } from "./op-tools.js";
 
 const groupList = z.array(z.union([z.string(), z.array(z.string())]));
+// 只有一条时模型常直接给一个字符串：也认（请求读回时按一条算）。
+const factRefList = coerceJsonArray(z.union([z.array(z.string()), z.string()]).optional());
 
 const changeSchema = z.object({
   // 模型无关：枚举大小写宽容（模型常传 "Add"/"REMOVE"）。
@@ -21,7 +23,11 @@ const changeSchema = z.object({
     "事实：add 补记；update 改写（id 或 targetText + text）；remove 删掉记错的（id 或 targetText）；supersede=某事实从某章起不再成立（id 或 targetText + chapter）。" +
       "线索：resolve=记为已收（query 或 id）；group=归并讲同一件事的几条（groups）；importance=定大伏笔 / 小线索（id 或 query + importance）。" +
       "天数：day=改已定稿某章是故事第几天（chapter + day；作者说了到第几天才给 dayEnd）；keepDay=作者定的天数和记下的对不上时以作者定的为准（chapter；作者明说了才用）。" +
-      "梗概：summary=改写已定稿某章的梗概（chapter + text，text 是整条新梗概）。",
+      "梗概：summary=改写已定稿某章的梗概（chapter + text，text 是整条新梗概）。" +
+      "东西（东西在哪见 read_state_overview）：itemMerge=这几样是同一样（groups，每组第一样留下）；itemSplit=第几章写的那样其实是另一样（query 原来那样 + chapter + text 新名字，targetText 可用原句几个字只拆那一处）；" +
+      "itemRetract=第几章记它的某条去向记错了（query + chapter，那章记了几条时 targetText 给那句原话里的几个字）；itemState=作者定它到第几章末在哪（query + chapter + where，或 members + complete 说里面有什么；" +
+      "作者说老记录里它的去向以这回为准的，带上那几条事实：只说这一样的放 replaces、一句说了好几样的放 overlaps）。" +
+      "这四种只认账里已有的东西（read_state_overview 列的）；账里没有的先用 change_settings 建物品卡，下一条消息再定在哪。",
   )),
   id: blankToUndefined(z.string().optional().describe("事实或线索的编号（read_state_overview 里取）。别念给作者听。")),
   chapter: coerceNumber(z.number().int().positive().optional().describe(
@@ -40,8 +46,21 @@ const changeSchema = z.object({
   day: coerceNumber(z.number().int().positive().optional().describe("day：这一章是故事第几天。")),
   dayEnd: coerceNumber(z.number().int().positive().optional().describe("day：作者说的这一章到故事第几天。只说了开头就不给（结尾按这章里换天推）；作者说就这一天，给和 day 一样。")),
   groups: coerceJsonArray(groupList.optional().describe(
-    "group：几组线索（标题或编号），每组第一条留下、其余并进去，如 [[\"钟为什么停\",\"钟楼的钟停了\"]]。只有一组也可以直接给一个数组。",
+    "group：几组线索（标题或编号），每组第一条留下、其余并进去，如 [[\"钟为什么停\",\"钟楼的钟停了\"]]。只有一组也可以直接给一个数组。itemMerge 同样，给的是东西的名字。",
   )),
+  where: z.object({
+    person: blankToUndefined(z.string().optional().describe("谁拿着（人名）")),
+    place: blankToUndefined(z.string().optional().describe("在哪个地方（原样）")),
+    inside: blankToUndefined(z.string().optional().describe("在哪样东西里面（东西名字）")),
+    unknown: coerceBoolean(z.boolean().optional().describe("true=不知道在哪了")),
+    gone: coerceEnum(z.enum(["lost", "destroyed"]).optional().describe("lost=丢了 / 被拿走不知去向；destroyed=毁了 / 用光了")),
+  }).optional().describe("itemState：它在哪，只给一种。"),
+  members: coerceJsonArray(z.array(z.union([z.string(), z.object({ name: z.string(), replaces: factRefList, overlaps: factRefList })])).optional().describe(
+    "itemState 清点：里面有哪几样（东西名字）；空数组 + complete=true 是空了。某样要对齐老记录的写成 {name, replaces / overlaps}。",
+  )),
+  replaces: factRefList.describe("itemState：老记录里只说这一样东西去向的事实（编号或原话），以这回定的为准、顶掉。"),
+  overlaps: factRefList.describe("itemState：老记录里一句说了好几样、其中有它的事实（编号或原话），那条留着、只标它以这回定的为准。"),
+  complete: coerceBoolean(z.boolean().optional().describe("itemState 清点：作者说「只有这些」才 true。")),
 });
 
 const inputSchema = z.object({
@@ -62,13 +81,13 @@ function normalizeGroups(value: Change["groups"]): string[][] {
 
 const normalizeChange = (change: Change): Record<string, unknown> => {
   const { groups, ...rest } = change;
-  return { ...Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)), ...(change.op === "group" ? { groups: normalizeGroups(groups) } : {}) };
+  return { ...Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)), ...(change.op === "group" || change.op === "itemMerge" ? { groups: normalizeGroups(groups) } : {}) };
 };
 
 export const changeLedgerTool = createTool({
   id: "change_ledger",
   description:
-    "改账（事实的补记 / 改写 / 删掉 / 标不再成立；线索的记为已收 / 归并 / 定大小；已定稿某章的故事天数、梗概），或理一遍开着的线索（review）。" +
+    "改账（事实的补记 / 改写 / 删掉 / 标不再成立；线索的记为已收 / 归并 / 定大小；已定稿某章的故事天数、梗概；东西的并 / 拆 / 记错了 / 定在哪），或理一遍开着的线索（review）。" +
     "改账是作者的决定：交出去不会马上改，服务端算好要改的几笔、给作者出「确认改账」卡，作者点了才记（改前存档、可撤销）。" +
     "作者一句话里要改几处就一次交几项 changes。只在作者明说要改账、理线索时调；作者没说过的决定不要替作者做。" +
     "交出去服务端就按固定步骤做，这一轮到此为止：要改的哪几笔、要作者点的卡都由系统接着说，你不用再说，绝不说『已改好』。一条作者消息只交一件事。",

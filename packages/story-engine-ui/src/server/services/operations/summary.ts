@@ -4,7 +4,8 @@
  *
  * 只读操作记录（不触发补读、不拿锁、不写盘）。后台补读只列没结束的（在补、停着等作者），做完的不占位置。
  */
-import { readDraftState } from "@actalk/story-core";
+import { parseDraftFile, readDraftState } from "@actalk/story-core";
+import { bodyHash } from "../../../lib/body-hash.js";
 import { isTerminal, listOperations, type OperationRecord } from "../../lib/operations/store.js";
 import { BACKFILL_KIND } from "../../lib/reader-backfill.js";
 import { operationChapter, operationView, type OperationView } from "./view.js";
@@ -42,11 +43,14 @@ export interface OperationSummary {
  */
 export async function checkedDraftChanged(bookDir: string, record: OperationRecord): Promise<boolean> {
   if (record.kind !== "inspect.run" || record.state !== "succeeded") return false;
-  const body = (record.result as { readonly body?: { readonly source?: unknown; readonly checkedVersion?: unknown } } | undefined)?.body;
+  const body = (record.result as { readonly body?: { readonly source?: unknown; readonly checkedVersion?: unknown; readonly checkedBodyHash?: unknown } } | undefined)?.body;
   const chapter = operationChapter(record);
   if (body?.source !== "draft" || typeof body.checkedVersion !== "string" || chapter === undefined) return false;
   const current = await readDraftState(bookDir, chapter).catch(() => undefined);
-  return current !== undefined && current.version !== body.checkedVersion;
+  if (current === undefined) return false;
+  // 按字比：撤销定稿、整本恢复换了代次，字没变不算改过。P3b 之前的记录没有正文指纹，照旧按版本号比。
+  if (typeof body.checkedBodyHash === "string") return current.file === undefined || bodyHash(parseDraftFile(current.file.text).body) !== body.checkedBodyHash;
+  return current.version !== body.checkedVersion;
 }
 
 /** 这本书最近几次操作（新的在前）。读不到操作目录就是空的。 */

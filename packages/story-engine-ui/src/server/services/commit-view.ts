@@ -239,8 +239,24 @@ export function checklistView(preview: CommitPreview, extraNotes: readonly strin
   if (preview.lostThreads && preview.lostThreads.length > 0) {
     notes.push(`这章原来开的${preview.lostThreads.slice(0, 3).map((title) => `「${title}」`).join("")}这次没记上，后文还接着它；定稿后它就没了开头`);
   }
-  if (preview.omittedThreads > 0 || preview.omittedFacts > 0) {
-    notes.push(`前文太长，记账员这次没看全（另有 ${preview.omittedThreads} 条线索、${preview.omittedFacts} 条事实没列给它）`);
+  for (const item of (preview.lostItems ?? []).slice(0, 3)) {
+    notes.push(item.proved
+      ? `这章原来写到的「${item.name}」这次没认上，后文还用着它：定稿后它从后面那章才算头回出现`
+      : `这章原来写到的「${item.name}」这次没认上，后文只在装着它、清点它的地方提到：定稿后那几处用不上它（那次清点不再当完整、装进它里面的去向记成不知道），要看一下`);
+  }
+  const itemIssues = preview.itemIssues ?? [];
+  if (itemIssues.length > 0) notes.push(`东西可能对不上：${itemIssues.slice(0, 3).join("；")}${itemIssues.length > 3 ? `；还有 ${itemIssues.length - 3} 处` : ""}`);
+  if (preview.itemMissing?.includes("item")) {
+    notes.push(preview.itemMissingRefs ? "东西有几条没记上，说到的那几样这章起的去向会记成没核全" : "东西有几条没记上，这章东西的去向会记成没记全");
+  }
+  const omittedItems = preview.omittedItems ?? 0;
+  if (preview.omittedThreads > 0 || preview.omittedFacts > 0 || omittedItems > 0) {
+    const omitted = [
+      ...(preview.omittedThreads > 0 ? [`${preview.omittedThreads} 条线索`] : []),
+      ...(preview.omittedFacts > 0 ? [`${preview.omittedFacts} 条事实`] : []),
+      ...(omittedItems > 0 ? [`${omittedItems} 样东西`] : []),
+    ];
+    notes.push(`前文太长，记账员这次没看全（另有 ${omitted.join("、")}没列给它）`);
   }
   if (preview.cold) {
     const raw = preview.cold.rawFrom > 0 ? `加第 ${preview.cold.rawFrom}～${preview.cold.rawTo} 章原文` : "";
@@ -324,7 +340,11 @@ export function supersededCommitView(chapter: number, result: ChapterCommitResul
 }
 
 /** 照盘上刚写好的账算回执卡的条数，和条数之外要提的几句（新人物、出场满几章没卡、线索积多了）。 */
-async function ledgerReportOf(projectDir: string, chapter: number, notRecorded: number): Promise<{ readonly report: CommitLedgerReport; readonly notes: readonly string[]; readonly escalated: boolean }> {
+async function ledgerReportOf(
+  projectDir: string,
+  chapter: number,
+  notRecorded: number,
+): Promise<{ readonly report: CommitLedgerReport; readonly notes: readonly string[]; readonly escalated: boolean; readonly reasonCodes: readonly string[] }> {
   const ledger = await readChapterLedger(projectDir, chapter);
   const entries = ledger?.entries ?? [];
   const count = (predicate: (entry: (typeof entries)[number]) => boolean): number => entries.filter(predicate).length;
@@ -362,24 +382,35 @@ async function ledgerReportOf(projectDir: string, chapter: number, notRecorded: 
     ...(recurring.length > 0 ? [`${recurring.map((name) => `「${name}」`).join("、")}已经出场 ${RECURRING_UNCARDED_THRESHOLD} 章了，还没有人物卡。`] : []),
     ...(openThreadsHintDue(openBefore, openThreads) ? [`另外，开着的线索已积到 ${openThreads} 条——有讲同一件事的可以说「归并线索」。`] : []),
   ];
-  return { report, notes, escalated: openThreads >= THREAD_STALE_ESCALATION_THRESHOLD };
+  return { report, notes, escalated: openThreads >= THREAD_STALE_ESCALATION_THRESHOLD, reasonCodes: ledger?.coverage.reasonCodes ?? [] };
 }
 
 const rejectedNote = (rejected: ChapterCommitResult["rejected"]): readonly string[] =>
   rejected.length > 0 ? [`有 ${rejected.length} 条没记上：${rejected.slice(0, 3).map((item) => item.message).join("；")}。`] : [];
 const orphanedNote = (orphaned: readonly string[]): readonly string[] =>
   orphaned.length > 0 ? [`换账后有 ${orphaned.length} 条线索后文还在推进、这章却不再开它：${orphaned.slice(0, 3).map((title) => `「${title}」`).join("")}，要看一下。`] : [];
+const orphanedItemsNote = (orphaned: readonly string[]): readonly string[] =>
+  orphaned.length > 0
+    ? [`换账后有 ${orphaned.length} 样东西后文还用着、这章却不再写它头回出现：${orphaned.slice(0, 3).map((name) => `「${name || "一样东西"}」`).join("")}，要看一下。`]
+    : [];
+
+/** 账没记全的原因（账单 coverage 里自家的原因码；认不得的说中性的）。 */
+const PARTIAL_REASONS: Readonly<Record<string, string>> = { quote_repair_failed: "补摘原句那一步没成", item_rejected: "东西有几条没记上" };
+function partialReasonText(codes: readonly string[]): string {
+  const known = [...new Set(codes.flatMap((code) => (PARTIAL_REASONS[code] ? [PARTIAL_REASONS[code]] : [])))];
+  return known.length > 0 ? known.join("、") : "有几条没记上";
+}
 
 /** 定稿成了：照定稿后的账算回执（读的是盘上刚写好的）。账待记 / 没记全的如实说，回执卡上给「补记账」。 */
 export async function commitDoneView(projectDir: string, chapter: number, text: string, result: ChapterCommitResult): Promise<CommitDone> {
-  const { report, notes, escalated } = await ledgerReportOf(projectDir, chapter, result.rejected.length);
+  const { report, notes, escalated, reasonCodes } = await ledgerReportOf(projectDir, chapter, result.rejected.length);
   const head = report.ledger.status === "pending"
     ? `第 ${chapter} 章正文定了，账还没记上；回头点「补记账」补上。`
     : report.ledger.status === "partial"
-      ? `第 ${chapter} 章已定稿，账没记全（补摘原句那一步没成）；回头可以点「补记账」补全。`
+      ? `第 ${chapter} 章已定稿，账没记全（${partialReasonText(reasonCodes)}）；回头可以点「补记账」补全。`
       : `第 ${chapter} 章已定稿${result.recommitted ? "（换掉了原来的账）" : ""}。`;
   // 记了几条在定稿回执卡上，这里不复述（重构 P6：一回合一句结论）；撤销在定稿回执卡上。
-  const parts = [head, ...rejectedNote(result.rejected), ...orphanedNote(result.orphanedThreads), ...notes];
+  const parts = [head, ...rejectedNote(result.rejected), ...orphanedNote(result.orphanedThreads), ...orphanedItemsNote(result.orphanedItems), ...notes];
   const title = markdownTitle(text);
   return {
     report,
@@ -392,12 +423,12 @@ export async function commitDoneView(projectDir: string, chapter: number, text: 
 
 /** 补账成了：照补上的账算回执（正文没动，稿纸不重新载入）。 */
 export async function fillDoneView(projectDir: string, chapter: number, result: LedgerCompleteResult): Promise<CommitDone> {
-  const { report: counted, notes, escalated } = await ledgerReportOf(projectDir, chapter, result.rejected.length);
+  const { report: counted, notes, escalated, reasonCodes } = await ledgerReportOf(projectDir, chapter, result.rejected.length);
   const report: CommitLedgerReport = { ...counted, fill: true };
-  const head = result.ledgerStatus === "partial" ? `第 ${chapter} 章的账补了，还是没记全（补摘原句那一步没成）。` : `第 ${chapter} 章的账补上了。`;
+  const head = result.ledgerStatus === "partial" ? `第 ${chapter} 章的账补了，还是没记全（${partialReasonText(reasonCodes)}）。` : `第 ${chapter} 章的账补上了。`;
   return {
     report,
-    summary: [head, ...rejectedNote(result.rejected), ...orphanedNote(result.orphanedThreads), ...notes].join(" "),
+    summary: [head, ...rejectedNote(result.rejected), ...orphanedNote(result.orphanedThreads), ...orphanedItemsNote(result.orphanedItems), ...notes].join(" "),
     ...(escalated ? { threadMaintenanceHint: "escalated" as const } : {}),
   };
 }

@@ -6,6 +6,7 @@
  *     body: { projectPath, ops, requestId }。requestId 是这次点击的幂等键：网络重发、连点两次只改一次。
  */
 import { CardOps, readBible } from "@actalk/story-core";
+import { itemTextViews } from "../book/item-views.js";
 import { writeCards } from "../lib/card-write.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { guardProjectPath, readJsonBody, readString, writeJson, type MiddlewareStack } from "../lib/project-io.js";
@@ -29,8 +30,9 @@ export function registerBibleRoutes(middlewares: MiddlewareStack): void {
           return;
         }
         if (!guardProjectPath(res, projectDir)) return;
-        const { bible } = await readBible(projectDir);
-        writeJson(res, 200, { ok: true, bible });
+        const { bible, projection } = await readBible(projectDir);
+        // 东西的去向在这里出好字（编号换名字、同名带区分，和写手、对话 AI 同一套说法）。
+        writeJson(res, 200, { ok: true, bible: { ...bible, itemTexts: itemTextViews(projection) } });
         return;
       }
 

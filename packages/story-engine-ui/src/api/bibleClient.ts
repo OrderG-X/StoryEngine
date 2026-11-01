@@ -2,9 +2,14 @@
  * 设定本（重构 P9）：GET /api/bible 读设定视图（设定卡 + 账里记的），POST /api/cards 作者改设定卡。
  * 读不到、改不成都如实给原因，不吞。
  */
-import type { BibleView, CardOp } from "@actalk/story-core";
+import type { BibleView as CoreBibleView, CardOp } from "@actalk/story-core";
+import type { ItemTextView } from "../server/book/item-views.js";
 
-export type { BibleAppearances, BibleEntry, Card, BibleFact, BibleRelationView, BibleView, CardAuthor, CardField, CardKind, CardOp, UncardedEntry, WritingRules } from "@actalk/story-core";
+export type { BibleAppearances, BibleEntry, Card, BibleFact, BibleRelationView, CardAuthor, CardField, CardKind, CardOp, LedgerItemEntry, UncardedEntry, WritingRules } from "@actalk/story-core";
+export type { ItemTextView } from "../server/book/item-views.js";
+
+/** 设定视图 + 东西的去向（服务端出好的字，按东西编号；老服务端没给就没有）。 */
+export type BibleView = CoreBibleView & { readonly itemTexts?: Readonly<Record<string, ItemTextView>> };
 
 export type BibleResult = { readonly ok: true; readonly bible: BibleView } | { readonly ok: false; readonly error: string };
 

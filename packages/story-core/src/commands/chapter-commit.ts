@@ -8,15 +8,19 @@
  *
  * 重定稿同一章：整份账单换掉。编号照 ledger/identity.ts 沿用（同一条事实、同一条线索编号不变，旧号不挪给别的条目），
  * 后文对它们的推进、推翻才接得上；上次开的线索这次没了、后文又引用过它的，结果里如实列出。
+ * 东西（P3b 设计 2.4、3.3）：东西条目（含主体是东西的事实）有没收的，这章东西那类就算没记全（partial，missingKinds 含 item）；
+ * 上次头回写到的东西这次没认上、后文还用着它的，结果里如实列出。
  */
 import { z } from "zod";
-import { EntryInput, EntryKind, threadOf, type ChapterLedger, type LedgerStatus } from "../schema/ledger.js";
+import { EntryInput, EntryKind, ItemRefInput, itemRefsOf, threadOf, type ChapterLedger, type LedgerStatus } from "../schema/ledger.js";
 import { chapterSource, newLedger, storeEntry } from "../ledger/entries.js";
 import { assignIds, previousOf } from "../ledger/identity.js";
-import { readAllLedgers, readChapterLedgerFile, readDecisions, sha256 } from "../store/book.js";
+import { readAllLedgers, readCards, readChapterLedgerFile, readDecisions, sha256 } from "../store/book.js";
 import { chapterLedgerPath, chapterTextPath } from "../store/paths.js";
 import { project } from "../projection/project.js";
-import { checkEntries, type RejectedEntry } from "../review/check.js";
+import { checkEntries, itemRefsOfInput, type RejectedEntry } from "../review/check.js";
+import { refsOfDecision } from "../history/references.js";
+import type { AuthorDecision } from "../schema/decisions.js";
 import { fail } from "./runner.js";
 import type { CommandFailure, WriteCommandSpec } from "./types.js";
 
@@ -25,11 +29,13 @@ const reasonCode = z.string().regex(/^[a-z][a-z0-9_]*$/u);
 /**
  * 账没记全时交的：pending = 账待记（条目必须空）；partial = 记账员有一步没成、记了一部分。原因用代码。
  * missingKinds（partial）：哪几类因此没记全；不给 = 不知道缺哪类，读的时候当全部没记全（missingKindsOf）。
+ * missingItems（缺东西那类时）：只缺这几样（没记上的条目都认得出指哪几样）；不给 = 整章东西当没记全（itemGapOf）。
  */
 export const LedgerShortfall = z.object({
   status: z.enum(["pending", "partial"]),
   reasonCodes: z.array(reasonCode).min(1),
   missingKinds: z.array(EntryKind).min(1).optional(),
+  missingItems: z.array(ItemRefInput).optional(),
 });
 export type LedgerShortfall = z.infer<typeof LedgerShortfall>;
 
@@ -59,6 +65,8 @@ export interface ChapterCommitResult {
   readonly recommitted: boolean;
   /** 重定稿后不见了、但后文引用过的线索标题（后文的推进现在没有来处，要作者看）。 */
   readonly orphanedThreads: readonly string[];
+  /** 重定稿后这章上次头回写到、这次没认上，后文还用着的东西名字（后文接着它的现在没有出处，要作者看）。 */
+  readonly orphanedItems: readonly string[];
 }
 
 /** 一章新账单拼好了（还没写盘）。 */
@@ -68,6 +76,7 @@ export interface BuiltChapterLedger {
   readonly rejected: ChapterCommitResult["rejected"];
   readonly previous: ChapterLedger | undefined;
   readonly orphanedThreads: readonly string[];
+  readonly orphanedItems: readonly string[];
   /** 记上的条数（一条声明算一条：时间存成几条也算一条）。 */
   readonly recorded: number;
 }
@@ -92,9 +101,14 @@ export async function buildChapterLedger(
 ): Promise<BuiltChapterLedger | CommandFailure> {
   const pending = input.shortfall?.status === "pending";
   if (pending && input.entries.length > 0) return fail("bad_args", "账待记的定稿不该带条目。");
-  const [ledgers, decisions, file] = await Promise.all([readAllLedgers(bookDir), readDecisions(bookDir), readChapterLedgerFile(bookDir, input.chapter)]);
+  const [ledgers, decisions, file, cards] = await Promise.all([
+    readAllLedgers(bookDir),
+    readDecisions(bookDir),
+    readChapterLedgerFile(bookDir, input.chapter),
+    readCards(bookDir),
+  ]);
   const previous = file?.ledger;
-  const before = project({ ledgers: ledgers.filter((ledger) => ledger.chapter < input.chapter), decisions });
+  const before = project({ ledgers: ledgers.filter((ledger) => ledger.chapter < input.chapter), decisions, ...(cards ? { cards } : {}) });
   const checked = pending ? { accepted: [], rejected: [] } : checkEntries(input.entries, input.text, before);
   const accepted = checked.accepted.map((item) => item.entry);
   const source = chapterSource(input.chapter, input.text);
@@ -103,6 +117,14 @@ export async function buildChapterLedger(
   const entries = stored.flatMap((item) => item.entries);
   const scenes = stored.flatMap((item) => item.scenes);
   const carried = previousOf(previous, file?.sha256);
+  // 东西条目有没收的：这章东西那类没记全（引用它的、按它算的去向都可能缺），不当记全了；带东西的事实没收再缺事实。
+  const itemMissing = new Set<"item" | "fact">();
+  for (const { entry } of checked.rejected) {
+    if (entry.kind === "item") itemMissing.add("item");
+    if (entry.kind === "fact" && entry.item !== undefined) itemMissing.add("item").add("fact");
+  }
+  const shortfall = itemShortfall(input.shortfall, [...itemMissing], missingItemRefs(checked.rejected.map((item) => item.entry)));
+  const missingItems = shortfall?.status === "partial" && shortfall.missingKinds?.includes("item") ? storedMissingItems(shortfall.missingItems, assigned.itemTags, input.entries) : undefined;
 
   const ledger = newLedger({
     chapter: input.chapter,
@@ -111,11 +133,12 @@ export async function buildChapterLedger(
     origin: input.origin,
     entries,
     scenes,
-    status: input.shortfall?.status ?? "ready",
+    status: shortfall?.status ?? "ready",
     coverage: {
       rejectedCount: checked.rejected.length,
-      reasonCodes: [...(input.shortfall?.reasonCodes ?? [])],
-      ...(input.shortfall?.status === "partial" && input.shortfall.missingKinds ? { missingKinds: [...new Set(input.shortfall.missingKinds)] } : {}),
+      reasonCodes: [...(shortfall?.reasonCodes ?? [])],
+      ...(shortfall?.status === "partial" && shortfall.missingKinds ? { missingKinds: [...new Set(shortfall.missingKinds)] } : {}),
+      ...(missingItems ? { missingItems } : {}),
     },
     ...(input.acceptedBasis ? { acceptedBasis: input.acceptedBasis } : {}),
     ...(carried ? { previous: carried } : {}),
@@ -136,14 +159,86 @@ export async function buildChapterLedger(
     }
   }
 
+  // 上次头回写到的东西这次没认上，后文还用着它（任何位置，作者裁定也算）：如实列出来。
+  const lostItems = new Set(assigned.droppedItems.map((entry) => entry.itemRef.id));
+  const orphanedItems: string[] = [];
+  if (lostItems.size > 0) {
+    const used = new Set<string>(decisionItemIds(decisions).filter((id) => lostItems.has(id)));
+    for (const later of ledgers) {
+      if (later.chapter <= input.chapter) continue;
+      for (const entry of later.entries) {
+        if (entry.kind === "item") for (const { ref } of itemRefsOf(entry)) if (lostItems.has(ref.id)) used.add(ref.id);
+        if (entry.kind === "fact" && entry.subjectRef?.id !== undefined && lostItems.has(entry.subjectRef.id)) used.add(entry.subjectRef.id);
+      }
+    }
+    for (const entry of assigned.droppedItems) if (used.has(entry.itemRef.id)) orphanedItems.push(entry.itemRef.mention ?? "");
+  }
+
   return {
     ok: true,
     ledger: ledger.data,
     rejected: checked.rejected.map(({ index, reason, message }) => ({ index, reason, message })),
     previous,
     orphanedThreads,
+    orphanedItems,
     recorded: checked.accepted.length,
   };
+}
+
+/** 作者裁定指着的东西（合并、拆开、定在哪、装进 / 清点的、改事实挂着的）。 */
+export const decisionItemIds = (decisions: readonly AuthorDecision[]): string[] =>
+  decisions.flatMap((decision) => refsOfDecision(decision).flatMap((ref) => (ref.kind === "item" ? [ref.id] : [])));
+
+/**
+ * 东西条目有没收的时这章记到什么程度：本来记全了 → 没记全、缺这几类；本来就没记全且写明了缺哪几类 → 加上这几类；
+ * 没写明缺哪几类（当全部）、账待记的照旧。items：缺东西那类时只缺这几样（不给 = 整章东西），和原来写明的合起来，有一边是整章就是整章。
+ */
+export function itemShortfall(shortfall: LedgerShortfall | undefined, missing: readonly EntryKind[], items?: readonly ItemRefInput[]): LedgerShortfall | undefined {
+  if (missing.length === 0) return shortfall;
+  if (shortfall?.status === "pending" || (shortfall && !shortfall.missingKinds)) return shortfall;
+  const had = shortfall?.missingKinds?.includes("item") === true;
+  const before = had ? (shortfall?.missingItems ?? "all") : [];
+  const adding = missing.includes("item") ? (items ?? "all") : [];
+  const scope = before === "all" || adding === "all" ? undefined : [...before, ...adding];
+  const kinds = [...new Set([...(shortfall?.missingKinds ?? []), ...missing])];
+  return {
+    status: "partial",
+    reasonCodes: [...new Set([...(shortfall?.reasonCodes ?? []), "item_rejected"])],
+    missingKinds: kinds,
+    ...(scope && kinds.includes("item") ? { missingItems: scope } : {}),
+  };
+}
+
+/**
+ * 没记上的这几条缺的是哪几样东西（P3b 设计 2.4）：每条都认得出指哪几样 → 那几样（本章新写到、没认上的那样不算：它没进账，别的东西不受影响）；
+ * 有一条说不出指哪样 → undefined（整章东西当没记全）。不是东西、不带东西的条目不算。
+ */
+export function missingItemRefs(entries: readonly EntryInput[]): ItemRefInput[] | undefined {
+  const out: ItemRefInput[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "item" && entry.op === "appear") continue;
+    if (entry.kind !== "item" && !(entry.kind === "fact" && entry.item)) continue;
+    const refs = itemRefsOfInput(entry);
+    if (refs.length === 0) return undefined;
+    for (const ref of refs) out.push("id" in ref ? { id: ref.id } : { tag: ref.tag });
+  }
+  return out;
+}
+
+/**
+ * 只缺哪几样落到账上的编号：本批标签换成发的号；标签是本批写到、没认上的那样 → 不算（它没进账）；
+ * 标签本批没写到（说不出指哪样）→ undefined（整章东西当没记全）。前文的编号原样存，读的时候认不得同样当整章。
+ */
+function storedMissingItems(refs: readonly ItemRefInput[] | undefined, itemTags: ReadonlyMap<string, string>, entries: readonly EntryInput[]): string[] | undefined {
+  if (!refs) return undefined;
+  const declared = new Set(entries.flatMap((entry) => (entry.kind === "item" && entry.op === "appear" && entry.tag ? [entry.tag] : [])));
+  const out = new Set<string>();
+  for (const ref of refs) {
+    if ("id" in ref) out.add(ref.id);
+    else if (itemTags.has(ref.tag)) out.add(itemTags.get(ref.tag) as string);
+    else if (!declared.has(ref.tag)) return undefined;
+  }
+  return [...out].sort();
 }
 
 export const chapterCommit: WriteCommandSpec<ChapterCommitArgs, ChapterCommitResult> = {
@@ -179,6 +274,7 @@ export const chapterCommit: WriteCommandSpec<ChapterCommitArgs, ChapterCommitRes
         rejected: built.rejected,
         recommitted: built.previous !== undefined,
         orphanedThreads: built.orphanedThreads,
+        orphanedItems: built.orphanedItems,
       },
     };
   },

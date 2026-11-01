@@ -416,6 +416,58 @@ describe("撤销核引用：基准按引用者自己接着的那一刻", () => {
     expect(await applyRevert("B", await revert("B"))).toMatchObject({ ok: true });
   });
 
+  describe("东西（P3b 设计 2.8、第 6 节第 14 条）", () => {
+    const narration = { kind: "narration" };
+    const appearOf = (chapter: number, n: number, tag: string, name: string) => ({ id: `c${chapter}-${n}`, kind: "item", review: "auto", op: "appear", tag, name, quote: quote(chapter), source: narration });
+    const itemOf = (chapter: number, n: number, op: string, seq: number, item: unknown, rest: Record<string, unknown>) => ({ id: `c${chapter}-${n}`, kind: "item", review: "auto", op, seq, item, quote: quote(chapter), source: narration, ...rest });
+    const decisions = (list: unknown[]) => [{ path: DECISIONS_PATH, content: JSON.stringify({ schema: "author-decisions/1", decisions: list }) }];
+
+    it("撤掉唯一证明铁盒存在的那章、后文还有东西装在铁盒里 → 拒；后文还有铁盒自己的条目 → 照撤，首见挪到后面那章", async () => {
+      await write("A", chapter(1, [appearOf(1, 1, "N1", "铁盒")]));
+      await write("B", chapter(2, [appearOf(2, 1, "N1", "表"), itemOf(2, 2, "move", 1, { tag: "N1" }, { to: { kind: "inside", item: { id: "i1-1" } } })]));
+      const blocked = await planRevert(book, { opId: "A" }, git);
+      expect(blocked).toMatchObject({ ok: false, code: "referenced" });
+      expect(!blocked.ok && blocked.message).toContain("第 2 章的账");
+
+      await write("C", chapter(3, [itemOf(3, 1, "at", 1, { id: "i1-1" }, { to: { kind: "place", text: "床底下" } })]));
+      await write("B2", [{ path: chapterLedgerPath(2), content: ledgerText(2, [appearOf(2, 1, "N1", "表"), itemOf(2, 2, "at", 1, { tag: "N1" }, { to: { kind: "person", name: "林青" } })]) }]);
+      expect(await applyRevert("A", await revert("A"))).toMatchObject({ ok: true });
+      const view = project(await readBookSnapshot(book));
+      expect(view.items.find((item) => item.id === "i1-1")?.firstSeen).toMatchObject({ chapter: 3 });
+    });
+
+    it("撤掉 item.state 生效的那章（东西在别章还在）→ 拒", async () => {
+      await write("P", chapter(1, [appearOf(1, 1, "N1", "铁盒")]));
+      await write("A", chapter(3, []));
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+      await write("D", decisions([{ id: "d-1", at: "x", type: "item.state", item: "i1-1", chapter: 3, state: { kind: "gone", gone: "lost" } }]));
+      const blocked = await planRevert(book, { opId: "A" }, git);
+      expect(blocked).toMatchObject({ ok: false, code: "referenced" });
+      expect(!blocked.ok && blocked.message).toContain("你记的裁定");
+    });
+
+    it("去处里的人按名字解析链：撤掉立别名「阿青 → 林青」的那张卡，后章「表在阿青手里」的持有人会变 → 拒", async () => {
+      const card = { id: "k-1", kind: "character" as const, name: "林青", aliases: ["阿青"], fields: [], by: "author" as const, at: "x" };
+      await write("A", [{ path: CARDS_PATH, content: JSON.stringify({ ...emptySettingCards(), cards: [card] }) }]);
+      await write("B", chapter(2, [appearOf(2, 1, "N1", "表"), itemOf(2, 2, "at", 1, { tag: "N1" }, { to: { kind: "person", name: "阿青" } })]));
+      expect(await planRevert(book, { opId: "A" }, git)).toMatchObject({ ok: false, code: "referenced" });
+    });
+
+    it("已忽略的东西告警：撤掉之后它点名的条目回到重记前的内容 → 拒", async () => {
+      const ch1 = [appearOf(1, 1, "N1", "铁盒"), appearOf(1, 2, "N2", "信"), itemOf(1, 3, "census", 1, { tag: "N1" }, { members: [{ tag: "N2" }], complete: true })];
+      const takeOut = (holder: string) => [appearOf(2, 1, "N1", "表"), itemOf(2, 2, "move", 1, { tag: "N1" }, { to: { kind: "person", name: holder }, from: { kind: "inside", item: { id: "i1-1" } } })];
+      await write("P", [...chapter(1, ch1), ...chapter(2, takeOut("林青"))]);
+      await write("A", [{ path: chapterLedgerPath(2), content: ledgerText(2, takeOut("沈青")) }]);
+      const issue = project(await readBookSnapshot(book)).itemIssues[0];
+      expect(issue).toMatchObject({ kind: "not-in-census" });
+      expect((await planRevert(book, { opId: "A" }, git)).ok).toBe(true);
+      await write("D", decisions([{ id: "d-1", at: "x", type: "issue.dismiss", issue: issue!.key }]));
+      const blocked = await planRevert(book, { opId: "A" }, git);
+      expect(blocked).toMatchObject({ ok: false, code: "referenced" });
+      expect(!blocked.ok && blocked.message).toContain("你记的裁定");
+    });
+  });
+
   it("这次操作之后写的引用者按现在核：后来新写的一章接着被撤的那条 → 拒", async () => {
     await write("P", chapter(1, [open(1, 1, "铜钥匙")]));
     await write("A", [{ path: chapterLedgerPath(1), content: ledgerText(1, [open(1, 1, "铁钥匙")]) }]);
@@ -669,6 +721,12 @@ describe("引用表按 schema 穷举", () => {
       timeOf(2, 3, { segments: [{ frame: "past", firstQuote: "前天夜里起了雾", lastQuote: "前天夜里起了雾", when: { offset: days(-2) } }] }),
     ],
     presence: [{ id: "e", kind: "presence", review: "auto", name: "林青", nameUsed: "阿青", quote: "q" }],
+    // 头回写到、主体不引；装在里面、清点成员引东西；去处里的人按名字；顶掉旧记法的引事实。
+    item: [
+      { id: "i1", kind: "item", review: "auto", op: "appear", tag: "N1", name: "铁盒", quote: "q" },
+      { id: "i2", kind: "item", review: "auto", op: "move", seq: 1, item: { id: "i1-1" }, from: { kind: "person", name: "林青" }, to: { kind: "inside", item: { tag: "N1" } }, quote: "q", source: { kind: "narration" }, replaces: ["c1-1"] },
+      { id: "i3", kind: "item", review: "auto", op: "census", seq: 2, item: { tag: "N1" }, members: [{ id: "i1-1" }, { id: "i1-2", overlaps: ["c1-2"] }], complete: true, quote: "q", source: { kind: "narration" } },
+    ],
   };
   const expected: Record<string, string[][]> = {
     summary: [[]],
@@ -677,6 +735,7 @@ describe("引用表按 schema 穷举", () => {
     // 作者定的天数不接谁；记账员记的开头接着前一个当下章，换天、本章开头之后的回忆只相对本章；整章是回忆的那段接着前一个当下章。
     time: [[], ["previous"], [], [], ["previous"]],
     presence: [["name"]],
+    item: [[], ["fact", "item", "name"], ["fact", "item", "item"]],
   };
   const decisions: Record<string, unknown> = {
     "thread.merge": { type: "thread.merge", from: ["t1"], into: "t2" },
@@ -688,6 +747,10 @@ describe("引用表按 schema 穷举", () => {
     "fact.assert": { type: "fact.assert", chapter: 3, nature: "state", subject: "林青", attribute: "伤", value: "好了", text: "好了", corrects: "c1-1" },
     "chapter.day": { type: "chapter.day", chapter: 3, day: 4 },
     "chapter.summary": { type: "chapter.summary", chapter: 3, text: "梗概" },
+    "item.merge": { type: "item.merge", from: ["i2-1"], into: "i1-1" },
+    "item.split": { type: "item.split", item: "i1-1", refs: [{ entry: "c3-2", at: "member", index: 0 }, { entry: "c3-2", at: "item" }], name: "另一块表" },
+    "item.retract": { type: "item.retract", entry: "c3-2" },
+    "item.state": { type: "item.state", item: "i1-1", chapter: 3, state: { kind: "at", to: { kind: "inside", ref: { id: "i1-2" } } }, overlaps: ["c1-2"] },
   };
   const decisionKinds: Record<string, string[]> = {
     "thread.merge": ["thread", "thread"],
@@ -699,6 +762,10 @@ describe("引用表按 schema 穷举", () => {
     "fact.assert": ["fact", "chapter", "name"],
     "chapter.day": ["chapter"],
     "chapter.summary": ["chapter"],
+    "item.merge": ["item", "item"],
+    "item.split": ["item", "itemEntry"],
+    "item.retract": ["itemEntry"],
+    "item.state": ["item", "chapter", "item", "fact"],
   };
 
   it("账单每种条目都有样例、出该出的引用（含时间的相对 / 绝对两种）", () => {

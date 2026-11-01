@@ -70,8 +70,10 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
 
     // 瘦身后不再带老设定的大块（设定本内容走设定视图 / read_foundation）。
     expect(Object.keys(overview).sort()).toEqual([
-      "arcGoals", "characters", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
+      "arcGoals", "characters", "items", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
     ]);
+    // 设定卡上那一样东西也算账里的东西（P3b）：正文还没写过它在哪，和这一章不相关就不列。
+    expect(overview.items).toMatchObject({ total: 1, issues: 0 });
     expect(Object.keys(overview.storyStatus).sort()).toEqual(["currentObjective", "lastTimelineEvent"]);
 
     // 老的「归并 / 删除已禁用」开关不再给：对话 AI 照着它跟作者说「归并是禁用的」，其实 manage_ledger 能归并（长篇实跑）。

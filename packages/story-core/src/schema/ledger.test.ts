@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CHAPTER_LEDGER_SCHEMA, ChapterLedger, UNITS_VERSION } from "./ledger.js";
+import { CHAPTER_LEDGER_SCHEMA, ChapterLedger, ITEM_MODEL, TIME_MODEL, UNITS_VERSION, itemGapOf } from "./ledger.js";
+import { itemShortfall } from "../commands/chapter-commit.js";
 
 const base = {
   schema: CHAPTER_LEDGER_SCHEMA,
@@ -60,5 +61,38 @@ describe("章节账单格式（v2）", () => {
     expect(ok([], { status: "pending" })).toBe(true);
     expect(ok([{ ...fact, ...proof("老周把机芯卖了") }], { status: "pending" })).toBe(false);
     expect(ok([], { scenes: [{ id: "s1", units: { from: 1, to: 2 }, order: 0, timeRefs: [] }] })).toBe(false);
+  });
+});
+
+describe("东西账只缺哪几样（P3b 设计 2.4）", () => {
+  const coverage = (extra: Record<string, unknown>) => ({ ...base.coverage, ...extra });
+  const models = { timeModel: TIME_MODEL, itemModel: ITEM_MODEL };
+  it("只能记在东西那类没记全的新记法账上", () => {
+    expect(ok([], { ...models, status: "partial", coverage: coverage({ missingKinds: ["item"], missingItems: ["i1-1"] }) })).toBe(true);
+    expect(ok([], { ...models, status: "partial", coverage: coverage({ missingKinds: ["item"], missingItems: [] }) })).toBe(true);
+    expect(ok([], { ...models, coverage: coverage({ missingItems: ["i1-1"] }) })).toBe(false);
+    expect(ok([], { ...models, status: "partial", coverage: coverage({ missingKinds: ["fact"], missingItems: ["i1-1"] }) })).toBe(false);
+    expect(ok([], { status: "partial", coverage: coverage({ missingKinds: ["item"], missingItems: ["i1-1"] }) })).toBe(false);
+  });
+
+  it("itemGapOf：记全 / 整章 / 只那几样", () => {
+    const ledger = (status: "ready" | "partial" | "pending", extra: Record<string, unknown> = {}, oldModel = false) => ({ status, coverage: coverage(extra), ...(oldModel ? {} : { itemModel: ITEM_MODEL }) }) as never;
+    expect(itemGapOf(ledger("ready"))).toBe("none");
+    expect(itemGapOf(ledger("ready", {}, true))).toBe("all");
+    expect(itemGapOf(ledger("pending"))).toBe("all");
+    expect(itemGapOf(ledger("partial", { missingKinds: ["fact"] }))).toBe("none");
+    expect(itemGapOf(ledger("partial", { missingKinds: ["item"] }))).toBe("all");
+    expect(itemGapOf(ledger("partial", { missingKinds: ["item"], missingItems: ["i1-1"] }))).toEqual(["i1-1"]);
+  });
+
+  it("itemShortfall 合起来：两边都写明就并上；有一边是整章就是整章；账待记照旧", () => {
+    const scoped = { status: "partial" as const, reasonCodes: ["quote_repair_failed"], missingKinds: ["item" as const], missingItems: [{ id: "i1-1" }] };
+    expect(itemShortfall(undefined, ["item"], [{ id: "i1-2" }])).toEqual({ status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"], missingItems: [{ id: "i1-2" }] });
+    expect(itemShortfall(undefined, ["item"])).toEqual({ status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"] });
+    expect(itemShortfall(scoped, ["item"], [{ tag: "N1" }])?.missingItems).toEqual([{ id: "i1-1" }, { tag: "N1" }]);
+    expect(itemShortfall(scoped, ["item"])?.missingItems).toBeUndefined();
+    expect(itemShortfall({ ...scoped, missingKinds: ["summary"], missingItems: undefined }, ["item", "fact"], [{ id: "i1-2" }])).toMatchObject({ missingKinds: ["summary", "item", "fact"], missingItems: [{ id: "i1-2" }] });
+    expect(itemShortfall({ status: "pending", reasonCodes: ["keeper_failed"] }, ["item"], [{ id: "i1-2" }])).toEqual({ status: "pending", reasonCodes: ["keeper_failed"] });
+    expect(itemShortfall(scoped, [])).toBe(scoped);
   });
 });

@@ -4,7 +4,8 @@ import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
 import { bigramSimilarity, DEFAULT_STALE_AFTER, idleChaptersBetween, LedgerNeedsUpgradeError, threadUnknownChapters, listChapterTexts, listLegacyRecoveryNotices, readBible, selectRelevant, type BibleView, type LegacyRecoveryNotice } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
-import { readStoryViews } from "./story-views.js";
+import { itemsWhere } from "./item-views.js";
+import { projectionBefore, readStoryViews } from "./story-views.js";
 import { timeChecksOf, type TimeCheck } from "./story-timeline.js";
 import type {
   ArcGoal,
@@ -79,6 +80,11 @@ export interface StateOverview {
   readonly ledgerShort?: readonly { readonly chapter: number; readonly status: "pending" | "partial" }[];
   /** 天数要作者看一下的章（导入时记成作者定的待确认、换天规矩改了不知道了、作者定的和记下的对不上）。没有就不带。 */
   readonly timeChecks?: readonly TimeCheck[];
+  /**
+   * 东西在哪（写作版本 P3b）：到这一章为止、和这一章相关的（这章出场的人拿着的、最近几章动过的），最多 20 样，每样一行；
+   * total = 账里一共几样，issues = 投影报的东西矛盾条数。账里没有东西就不带。
+   */
+  readonly items?: { readonly total: number; readonly lines: readonly string[]; readonly omitted: number; readonly issues: number };
   readonly uiHints: {
     readonly warnings: readonly string[];
   };
@@ -207,6 +213,9 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     chapter.origin !== "import" && chapter.ledgerStatus !== "ready" ? [{ chapter: chapter.chapter, status: chapter.ledgerStatus }] : []
   ));
   const timeChecks = views ? timeChecksOf(views.projection) : [];
+  const itemsAsOf = views && currentChapter !== null ? projectionBefore(views, currentChapter + 1) : views?.projection;
+  const present = itemsAsOf?.chapters.filter((chapter) => chapter.chapter <= (currentChapter ?? Infinity)).at(-1)?.present ?? [];
+  const items = itemsAsOf && itemsAsOf.items.length > 0 ? { ...itemsWhere(itemsAsOf, [], present), total: itemsAsOf.items.filter((item) => !item.dangling).length, issues: itemsAsOf.itemIssues.length } : undefined;
 
   return {
     project: {
@@ -268,6 +277,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     setting: settingOf(bible),
     ...(ledgerShort.length > 0 ? { ledgerShort } : {}),
     ...(timeChecks.length > 0 ? { timeChecks } : {}),
+    ...(items ? { items: { total: items.total, lines: items.lines, omitted: items.omitted, issues: items.issues } } : {}),
     uiHints: {
       warnings: [
         ...buildWarnings({ threadPool, arcGoalPool, cleanupVisibleCount }),

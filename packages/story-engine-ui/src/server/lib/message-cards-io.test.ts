@@ -74,5 +74,6 @@ describe("消息卡读回：操作卡（写作版本 P2a）", () => {
     expect(readMessageCards([{ type: "quality", report: { blocking: [] }, checkedVersion: "v3" }])).toEqual([{ type: "quality", report: { blocking: [] }, checkedVersion: "v3" }]);
     expect(readMessageCards([{ type: "draft-review", review: { issues: [] }, checkedVersion: null }])).toEqual([{ type: "draft-review", review: { issues: [] }, checkedVersion: null }]);
     expect(readMessageCards([{ type: "ai-flavor", report: { violations: [] }, checkedVersion: 5 }])).toEqual([{ type: "ai-flavor", report: { violations: [] } }]);
+    expect(readMessageCards([{ type: "quality", report: { blocking: [] }, checkedVersion: "v3", checkedBodyHash: "0a1b2c3d" }])).toEqual([{ type: "quality", report: { blocking: [] }, checkedVersion: "v3", checkedBodyHash: "0a1b2c3d" }]);
   });
 });

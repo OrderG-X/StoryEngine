@@ -42,10 +42,28 @@ export {
   SceneFrame,
   SegmentInput,
   TIME_MODEL,
+  ITEM_MODEL,
+  ItemEntry,
+  ItemGone,
+  ItemInput,
+  ItemOp,
+  ItemPlace,
+  ItemPlaceInput,
+  ItemRef,
+  ItemRefInput,
+  CensusMember,
+  CensusMemberInput,
+  itemLinksOf,
+  itemReplacesOf,
+  type ItemLinkAt,
   UNITS_VERSION,
   declaredQuotes,
+  factItemOf,
+  itemRefsOf,
+  type ItemRefAt,
   entryQuote,
   entryShapeProblem,
+  itemGapOf,
   missingKindsOf,
   presenceName,
   storedShapeProblem,
@@ -58,9 +76,11 @@ export {
 export {
   chapterEndTimeId,
   chapterSource,
+  bornItems,
   declarationOf,
   declarationsOf,
   EMPTY_COVERAGE,
+  storedItemRef,
   evidenceFor,
   ledgerOf,
   locateQuote,
@@ -80,8 +100,8 @@ export {
   type StoredDeclaration,
 } from "./ledger/entries.js";
 export { isLedgerV1, LEDGER_V1_SCHEMA, upgradeLedgerV1, type UpgradeResult } from "./ledger/migrate-v1.js";
-export { assignIds, carriedTime, entryKey, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
-export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
+export { assignIds, carriedTime, entryKey, knownAppears, knownEntries, knownOpens, previousOf, type AssignedIds } from "./ledger/identity.js";
+export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput, ItemPosition, ItemStateRuling, itemStateLinksOf } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {
   CANON_MAX,
@@ -138,6 +158,7 @@ export {
   type BibleRelation,
   type BibleRelationView,
   type BibleView,
+  type LedgerItemEntry,
   type UncardedEntry,
 } from "./bible/view.js";
 export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
@@ -258,6 +279,21 @@ export {
 } from "./projection/time.js";
 export { boundaryText, dayLabel, daysText, offsetText, relativeDaysText, segmentText } from "./projection/time-text.js";
 export { frameOf, lowerConflict, rightsOf, scopeOf, type ConflictLevel, type EntryFrame, type EntryRights, type EntryScope } from "./projection/scope.js";
+export {
+  itemResolver,
+  projectItems,
+  splitItemId,
+  type CensusView,
+  type ItemIssueKind,
+  type ItemIssueView,
+  type ItemNow,
+  type ItemPlaceView,
+  type ItemProjection,
+  type ItemSettled,
+  type ItemStep,
+  type ItemUncertainReason,
+  type ItemView,
+} from "./projection/items.js";
 export { legacyTimeOf, legacyTimelineRow, LEGACY_TIME_BASIS, type LegacyTimeOutcome, type LegacyTimeRow } from "./import/legacy-time.js";
 export type * from "./projection/types.js";
 export {
@@ -294,11 +330,11 @@ export {
   type PaceReport,
 } from "./projection/pace.js";
 
-export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
+export { checkEntries, itemRefsOfInput, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
 export { fail, opCommandKey, readCommandReceipt, runCommand, withSettledBook } from "./commands/runner.js";
-export { buildChapterLedger, chapterCommit, ChapterCommitArgs, LedgerShortfall, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { buildChapterLedger, chapterCommit, ChapterCommitArgs, decisionItemIds, itemShortfall, LedgerShortfall, missingItemRefs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { ledgerComplete, LedgerCompleteArgs, type LedgerCompleteResult } from "./commands/ledger-complete.js";
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";

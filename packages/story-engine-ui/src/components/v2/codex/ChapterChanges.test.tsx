@@ -20,6 +20,10 @@ const CHANGES: Changes = {
     { text: "汇款每季一张", auto: false, later: "retracted" },
     { subject: "林舟", text: "林舟成了表行老板", quote: "他梦见自己成了表行老板", auto: false, scope: "梦里" },
   ],
+  items: [
+    { name: "借据", text: "沈知秋拿着 → 在铁盒里", chapter: 12, quote: "把借据塞进铁盒" },
+    { name: "借据", text: "毁了", chapter: 12, scope: "老周说的" },
+  ],
 };
 
 function mockFetch(body: unknown) {
@@ -48,6 +52,9 @@ describe("设定本「这章改了什么」（重构 P6 第 6 步）", () => {
     expect(screen.getByText("线索7")).toBeTruthy();
     expect(screen.getByRole("button", { name: "‹ 第 11 章" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /第 13 章/u })).toBeNull();
+    // 东西挪了（P3b）：人物说的标谁说的、不改现在在哪。
+    expect(screen.getByText("东西挪了")).toBeTruthy();
+    expect(screen.getByText("老周说的").getAttribute("title")).toBe("记着，不改现在在哪");
   });
 
   it("账没记全 / 还没记上：如实说，不说「这章没变」；记上的照列（P2b）", async () => {
@@ -59,7 +66,7 @@ describe("设定本「这章改了什么」（重构 P6 第 6 步）", () => {
     mockFetch({ ok: true, changes: { chapter: 12, chapters: [12], ledgerShort: "partial", present: ["林舟"], newCast: [], threads: [], facts: [] } });
     render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map()} />);
     expect(await screen.findByText("这章的账没记全。")).toBeTruthy();
-    expect(screen.queryByText("这章定稿时没记下新的人、线索和事。")).toBeNull();
+    expect(screen.queryByText("这章定稿时没记下新的人、线索、事和东西。")).toBeNull();
     cleanup();
     mockFetch({ ok: true, changes: { chapter: 12, chapters: [12], ledgerShort: "pending", present: [], newCast: [], threads: [], facts: [] } });
     render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map()} />);

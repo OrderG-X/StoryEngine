@@ -13,6 +13,9 @@
  * 本章开头相对前一个当下章结尾（可负、可区间、可按两种换天规矩各记一份）、整章同一天、章里各次换天（带新一天开头那句）、
  * 不在当下线上的段（回忆 / 梦这类，句子范围 + 段的时间）。没有 `timeModel` 的是旧账（P2b 及更早、迁来的、老书导入的），
  * 格子照 P2b 的老规矩，投影只拿它「推定」。
+ * 东西（写作版本 P3b，设计 docs/rebuild/写作版本-P3b-设计.md 第 2 节）：P3b 起新记的账带 `itemModel: 1`——一样东西一个编号，
+ * 头一回写到（appear）、此刻在哪（at）、被挪了（move）、丢了 / 毁了（gone）、清点里面有什么（census）各记一条，全章按 seq 排先后。
+ * 东西在哪不再记成事实；东西的特征照旧是事实，主体带东西编号（subjectRef.id）。没有 `itemModel` 的章东西是旧记法（事实里写的）。
  * 读的一方经这里的几个小函数取（entryQuote、subjectOf、presenceName、threadOf），不各写各的。
  * 条目编号只在系统内部用，绝不直接给作者看。
  */
@@ -24,6 +27,9 @@ export const UNITS_VERSION = 1 as const;
 /** P3 起新记的账的时间格式（设计 2.1）：带它的账才算「已识别」，没带的是旧账、只推定。 */
 export const TIME_MODEL = 2 as const;
 export type TimeModel = typeof TIME_MODEL;
+/** P3b 起新记的账的东西格式（设计 2.9）：带它的章东西按编号记，没带的是旧记法。 */
+export const ITEM_MODEL = 1 as const;
+export type ItemModel = typeof ITEM_MODEL;
 
 const text = z.string().trim().min(1);
 const id = text;
@@ -75,7 +81,7 @@ export type DayBoundary = z.infer<typeof DayBoundary>;
 export const SceneFrame = z.enum(["past", "other"]);
 export type SceneFrame = z.infer<typeof SceneFrame>;
 
-export const EntryKind = z.enum(["summary", "fact", "thread", "time", "presence"]);
+export const EntryKind = z.enum(["summary", "fact", "thread", "time", "presence", "item"]);
 export type EntryKind = z.infer<typeof EntryKind>;
 
 /** 正文里第几句到第几句（含两头，`text/units.ts` 的编号）。 */
@@ -92,6 +98,39 @@ export const DeclaredSource = z.discriminatedUnion("kind", [
 ]);
 export type DeclaredSource = z.infer<typeof DeclaredSource>;
 
+/** 东西的条目做什么（设计 2.2）：appear 头一回写到；at 此刻在哪；move 被挪了；gone 丢了 / 毁了；census 清点里面有什么。 */
+export const ItemOp = z.enum(["appear", "at", "move", "gone", "census"]);
+export type ItemOp = z.infer<typeof ItemOp>;
+/** lost = 丢了 / 被拿走不知去向；destroyed = 毁了 / 用光了。 */
+export const ItemGone = z.enum(["lost", "destroyed"]);
+export type ItemGone = z.infer<typeof ItemGone>;
+/** 声明里指一样东西：已有的（编号），或本批里 appear 声明的（标签）。mention = 本章正文里这处怎么叫它（原样）。 */
+export const ItemRefInput = z.union([
+  z.object({ id, mention: text.optional() }).strict(),
+  z.object({ tag: text, mention: text.optional() }).strict(),
+]);
+export type ItemRefInput = z.infer<typeof ItemRefInput>;
+/** 给一样东西定了新去处时关联的旧记法事实（设计 2.6），关联的就是那一样。 */
+export const itemLinks = {
+  /** 顶掉旧记法里只说这一样东西去向的事实（那几条的 id）。 */
+  replaces: z.array(id).min(1).optional(),
+  /** 旧记法里一句说了好几样、其中有它的事实（不顶掉，只记「没逐样对齐」）。 */
+  overlaps: z.array(id).min(1).optional(),
+};
+/** 清点里的一样：指哪样，加上它自己的旧记法关联（只在清点里出现的东西也能对齐）。 */
+export const CensusMemberInput = z.union([
+  z.object({ id, mention: text.optional(), ...itemLinks }).strict(),
+  z.object({ tag: text, mention: text.optional(), ...itemLinks }).strict(),
+]);
+export type CensusMemberInput = z.infer<typeof CensusMemberInput>;
+/** 去处：谁拿着（正文里对他的称呼）/ 地方（原样的字）/ 在另一样东西里面 / 正文明说不知道在哪了（只用在 to）。 */
+export const ItemPlaceInput = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("person"), name: text }),
+  z.object({ kind: z.literal("place"), text }),
+  z.object({ kind: z.literal("inside"), item: ItemRefInput }),
+  z.object({ kind: z.literal("unknown") }),
+]);
+export type ItemPlaceInput = z.infer<typeof ItemPlaceInput>;
 export const SummaryInput = z.object({ kind: z.literal("summary"), ...declared, text, quote: text });
 export const FactInput = z.object({
   kind: z.literal("fact"),
@@ -107,6 +146,8 @@ export const FactInput = z.object({
   /** 本章明写推翻了前文哪些事实（那几条的 id）。不会变的事实只能这样作废。 */
   replaces: z.array(id).min(1).optional(),
   source: DeclaredSource.optional(),
+  /** 主体是一样东西（P3b）：指哪样（编号，或本批 appear 的标签）。subject 照旧写名字（给人看）。 */
+  item: ItemRefInput.optional(),
 });
 /** 新开的线索可以带上本章上次定稿时的编号（重定稿时沿用，后文的推进才接得上）；推进、收口必须带。 */
 export const ThreadInput = z.object({
@@ -175,7 +216,33 @@ export const PresenceInput = z.object({
   generic: z.boolean().optional(),
   quote: text,
 });
-export const EntryInput = z.discriminatedUnion("kind", [SummaryInput, FactInput, ThreadInput, TimeInput, DayInput, PresenceInput]);
+/**
+ * 一条东西的声明（设计 2.3、2.4）。appear：tag（本批标签）+ name（正文里怎么叫它），重定稿认上次那样的带 reuse（上次的编号）；
+ * 其余：item 指哪样、seq 故事里发生的先后（正整数；同一个号 = 正文没说清这几条谁先谁后）。source 都必填（叙述 / 人物说的）。
+ */
+export const ItemInput = z.object({
+  kind: z.literal("item"),
+  ...declared,
+  op: ItemOp,
+  tag: text.optional(),
+  name: text.optional(),
+  reuse: id.optional(),
+  item: ItemRefInput.optional(),
+  seq: z.number().int().min(1).optional(),
+  to: ItemPlaceInput.optional(),
+  from: ItemPlaceInput.optional(),
+  gone: ItemGone.optional(),
+  note: text.optional(),
+  members: z.array(CensusMemberInput).optional(),
+  complete: z.boolean().optional(),
+  quote: text,
+  source: DeclaredSource.optional(),
+  /** at / move / gone：主体的旧记法关联（设计 2.6）；清点的写在各成员上。 */
+  ...itemLinks,
+});
+export type ItemInput = z.infer<typeof ItemInput>;
+
+export const EntryInput = z.discriminatedUnion("kind", [SummaryInput, FactInput, ThreadInput, TimeInput, DayInput, PresenceInput, ItemInput]);
 
 export type SummaryInput = z.infer<typeof SummaryInput>;
 export type FactInput = z.infer<typeof FactInput>;
@@ -238,7 +305,46 @@ export function entryShapeProblem(entry: EntryInput): string | undefined {
       return timeInputProblem(entry);
     case "day":
       return entry.dayEnd !== undefined && entry.dayEnd < entry.day ? "结尾那天不能比开头早" : undefined;
+    case "item":
+      return itemInputProblem(entry);
     default:
+      return undefined;
+  }
+}
+
+const sameItemRef = (a: ItemRefInput, b: ItemRefInput): boolean => ("id" in a ? "id" in b && a.id === b.id : "tag" in b && a.tag === b.tag);
+
+/** 一条东西声明自己的结构（设计 2.2）：各种 op 该有的格子、不该有的格子。引用闭合、seq 不重在整批核（checkEntries）。 */
+function itemInputProblem(entry: ItemInput): string | undefined {
+  if (!entry.source) return "东西要写清是叙述还是人物说的";
+  if (entry.op === "appear") {
+    if (!entry.tag || !entry.name) return "新写到的东西要有标签和名字";
+    if (entry.item || entry.seq !== undefined || entry.to || entry.from || entry.gone || entry.members || entry.complete !== undefined || entry.replaces || entry.overlaps) return "新写到的东西只写它叫什么、哪句";
+    return undefined;
+  }
+  if (!entry.item) return "要写清是哪样东西";
+  if (entry.tag || entry.name || entry.reuse) return "只有新写到的东西才有标签、名字";
+  if (entry.seq === undefined) return "东西的去向要排先后";
+  const item = entry.item;
+  if (entry.from?.kind === "unknown") return "从哪来不能是不知道";
+  for (const place of [entry.to, entry.from]) if (place?.kind === "inside" && sameItemRef(place.item, item)) return "东西不能装在自己里面";
+  if ((entry.replaces || entry.overlaps) && entry.op === "census") return "清点的旧记法关联写在各成员上";
+  if (entry.op !== "census" && entry.members?.some((member) => member.replaces || member.overlaps)) return "只有清点的成员带旧记法关联";
+  switch (entry.op) {
+    case "at":
+      if (!entry.to || entry.from || entry.gone || entry.members || entry.complete !== undefined) return "此刻在哪只写去处";
+      return undefined;
+    case "move":
+      if (!entry.to || entry.gone || entry.members || entry.complete !== undefined) return "挪了要写去处";
+      return undefined;
+    case "gone":
+      if (!entry.gone) return "丢了 / 毁了要写是哪种";
+      if (entry.to || entry.members || entry.complete !== undefined) return "丢了 / 毁了不再写去处、清点";
+      return undefined;
+    case "census":
+      if (!entry.members || entry.to || entry.from || entry.gone) return "清点要列里面有什么";
+      if (entry.members.length === 0 && entry.complete !== true) return "清点没列东西就得是正文明说空了";
+      if (entry.members.some((member) => sameItemRef(member, item))) return "清点里不能有它自己";
       return undefined;
   }
 }
@@ -397,13 +503,42 @@ export const PresenceEntry = z.object({
   viewpoint: z.boolean().optional(),
   generic: z.boolean().optional(),
 });
-export const LedgerEntry = z.discriminatedUnion("kind", [SummaryEntry, FactEntry, ThreadEntry, TimeEntry, PresenceEntry]);
+/** 账单里指一样东西：编号必有；mention = 本章正文这处怎么叫它（有才记）。 */
+export const ItemRef = z.object({ id, mention: text.optional() });
+export type ItemRef = z.infer<typeof ItemRef>;
+/** 清点里的一样（带它自己的旧记法关联）。 */
+export const CensusMember = ItemRef.extend(itemLinks);
+export type CensusMember = z.infer<typeof CensusMember>;
+export const ItemPlace = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("person"), ref: EntityRef }),
+  z.object({ kind: z.literal("place"), text }),
+  z.object({ kind: z.literal("inside"), ref: ItemRef }),
+  z.object({ kind: z.literal("unknown") }),
+]);
+export type ItemPlace = z.infer<typeof ItemPlace>;
+/** 东西的一条（设计 2.2）。appear 的 itemRef.mention 是它的名字；别的 op 都有 seq。 */
+export const ItemEntry = z.object({
+  kind: z.literal("item"),
+  ...common,
+  op: ItemOp,
+  itemRef: ItemRef,
+  seq: z.number().int().min(1).optional(),
+  to: ItemPlace.optional(),
+  from: ItemPlace.optional(),
+  gone: ItemGone.optional(),
+  note: text.optional(),
+  members: z.array(CensusMember).optional(),
+  complete: z.boolean().optional(),
+  ...itemLinks,
+});
+export const LedgerEntry = z.discriminatedUnion("kind", [SummaryEntry, FactEntry, ThreadEntry, TimeEntry, PresenceEntry, ItemEntry]);
 
 export type SummaryEntry = z.infer<typeof SummaryEntry>;
 export type FactEntry = z.infer<typeof FactEntry>;
 export type ThreadEntry = z.infer<typeof ThreadEntry>;
 export type TimeEntry = z.infer<typeof TimeEntry>;
 export type PresenceEntry = z.infer<typeof PresenceEntry>;
+export type ItemEntry = z.infer<typeof ItemEntry>;
 export type LedgerEntry = z.infer<typeof LedgerEntry>;
 
 // —— 读条目的几个小函数（读的一方都经这里，不各写各的） ——
@@ -416,6 +551,35 @@ export const subjectOf = (entry: FactEntry): string | undefined => entry.subject
 export const presenceName = (entry: PresenceEntry): string => entry.entityRef.mention;
 /** 线索动作指的是哪条线索。 */
 export const threadOf = (entry: ThreadEntry): string => entry.threadRef.id;
+/** 事实的主体是哪样东西（P3b 起记的东西特征带编号）；不是东西 = undefined。 */
+export const factItemOf = (entry: FactEntry): string | undefined => entry.subjectRef?.id;
+/** 一条东西条目里用到的每样东西（编号）和用在哪：subject 主体、to / from 装在它里面、member 清点里有它（下标）。 */
+export type ItemRefAt = { readonly at: "item" | "to" | "from" | "member"; readonly index?: number; readonly ref: ItemRef };
+/** 一条东西条目里关联的旧记法事实，逐样：主体（at / move / gone）、清点的每个成员。 */
+export interface ItemLinkAt {
+  readonly at: "item" | "member";
+  readonly index?: number;
+  readonly ref: ItemRef;
+  readonly replaces: readonly string[];
+  readonly overlaps: readonly string[];
+}
+export function itemLinksOf(entry: ItemEntry): readonly ItemLinkAt[] {
+  const out: ItemLinkAt[] = [];
+  if (entry.replaces || entry.overlaps) out.push({ at: "item", ref: entry.itemRef, replaces: entry.replaces ?? [], overlaps: entry.overlaps ?? [] });
+  (entry.members ?? []).forEach((ref, index) => {
+    if (ref.replaces || ref.overlaps) out.push({ at: "member", index, ref, replaces: ref.replaces ?? [], overlaps: ref.overlaps ?? [] });
+  });
+  return out;
+}
+/** 这条东西条目推翻了哪些旧事实（含成员上的）。 */
+export const itemReplacesOf = (entry: ItemEntry): readonly string[] => itemLinksOf(entry).flatMap((link) => link.replaces);
+export function itemRefsOf(entry: ItemEntry): readonly ItemRefAt[] {
+  const out: ItemRefAt[] = [{ at: "item", ref: entry.itemRef }];
+  if (entry.to?.kind === "inside") out.push({ at: "to", ref: entry.to.ref });
+  if (entry.from?.kind === "inside") out.push({ at: "from", ref: entry.from.ref });
+  (entry.members ?? []).forEach((ref, index) => out.push({ at: "member", index, ref }));
+  return out;
+}
 
 /** 一条存着的条目的结构问题（和 entryShapeProblem 同一套规矩，加上时间关系的格子）。timeModel = 账单的时间格式（缺 = 旧账）。 */
 export function storedShapeProblem(entry: LedgerEntry, timeModel?: TimeModel): string | undefined {
@@ -429,6 +593,8 @@ export function storedShapeProblem(entry: LedgerEntry, timeModel?: TimeModel): s
     case "thread":
       if (entry.op === "open" && (!entry.type || !entry.title)) return "新开的线索必须有类型和标题";
       return entry.transition === "unknown" ? undefined : "线索动作的变更关系只记 unknown";
+    case "item":
+      return itemEntryProblem(entry);
     case "time":
       if (entry.transition !== "unknown") return "时间的变更关系只记 unknown";
       if (entry.calendarId !== undefined) return "历法还不用";
@@ -439,12 +605,40 @@ export function storedShapeProblem(entry: LedgerEntry, timeModel?: TimeModel): s
   }
 }
 
-/** 来源：旧账一律 unknown；人物说的要有说话人、只用在事实和线索；作者裁定只用在作者定的天数。 */
+/** 存着的东西条目（和 itemInputProblem 同一套规矩）：各 op 的格子、seq、变更关系、不装自己。 */
+function itemEntryProblem(entry: ItemEntry): string | undefined {
+  if ((entry.transition === "change") !== (itemReplacesOf(entry).length > 0)) return "明写推翻前文的才是 change，且要写清推翻哪几条";
+  const self = entry.itemRef.id;
+  if (entry.source.kind === "unknown" || entry.source.kind === "author_ruling") return "东西要写清是叙述还是人物说的";
+  if (entry.op === "appear") {
+    if (!entry.itemRef.mention) return "新写到的东西要有名字";
+    if (entry.seq !== undefined || entry.to || entry.from || entry.gone || entry.members || entry.complete !== undefined || entry.replaces || entry.overlaps) return "新写到的东西只写它叫什么、哪句";
+    return undefined;
+  }
+  if (entry.seq === undefined) return "东西的去向要排先后";
+  if (entry.from?.kind === "unknown") return "从哪来不能是不知道";
+  for (const place of [entry.to, entry.from]) if (place?.kind === "inside" && place.ref.id === self) return "东西不能装在自己里面";
+  switch (entry.op) {
+    case "at":
+      return !entry.to || entry.from || entry.gone || entry.members || entry.complete !== undefined ? "此刻在哪只写去处" : undefined;
+    case "move":
+      return !entry.to || entry.gone || entry.members || entry.complete !== undefined ? "挪了要写去处" : undefined;
+    case "gone":
+      if (!entry.gone) return "丢了 / 毁了要写是哪种";
+      return entry.to || entry.members || entry.complete !== undefined ? "丢了 / 毁了不再写去处、清点" : undefined;
+    case "census":
+      if (!entry.members || entry.to || entry.from || entry.gone || entry.replaces || entry.overlaps) return "清点要列里面有什么";
+      if (entry.members.length === 0 && entry.complete !== true) return "清点没列东西就得是正文明说空了";
+      return entry.members.some((member) => member.id === self) ? "清点里不能有它自己" : undefined;
+  }
+}
+
+/** 来源：旧账一律 unknown；人物说的要有说话人、只用在事实、线索、东西上；作者裁定只用在作者定的天数。 */
 function sourceProblem(entry: LedgerEntry, timeModel: TimeModel | undefined): string | undefined {
   const { kind } = entry.source;
   if (kind === "unknown") return undefined;
   if (timeModel !== TIME_MODEL) return "旧账的来源只记 unknown";
-  if (kind === "character_claim") return entry.kind === "fact" || entry.kind === "thread" ? undefined : "人物说的只用在事实、线索上";
+  if (kind === "character_claim") return entry.kind === "fact" || entry.kind === "thread" || entry.kind === "item" ? undefined : "人物说的只用在事实、线索、东西上";
   if (kind === "author_ruling") return entry.kind === "time" && entry.basis === "author" ? undefined : "作者裁定只用在作者定的天数上";
   return entry.kind === "time" ? "时间不标叙述来源" : undefined;
 }
@@ -534,12 +728,17 @@ export type LedgerOrigin = z.infer<typeof LedgerOrigin>;
 export const LedgerStatus = z.enum(["pending", "partial", "ready"]);
 export type LedgerStatus = z.infer<typeof LedgerStatus>;
 
-/** 账记到什么程度：哪几类明确没记、核不上被拒了几条、为什么（代码）、哪几句没覆盖。 */
+/**
+ * 账记到什么程度：哪几类明确没记、核不上被拒了几条、为什么（代码）、哪几句没覆盖。
+ * missingItems：东西那类没记全只缺这几样（没记上的条目都认得出说的是哪几样；空 = 没记上的只是本章新写到、没进账的东西）；
+ * 不给 = 不知道缺哪几样，整章东西当没记全。
+ */
 export const LedgerCoverage = z.object({
   missingKinds: z.array(EntryKind),
   rejectedCount: z.number().int().min(0),
   reasonCodes: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/u)),
   omittedUnits: z.array(UnitRange),
+  missingItems: z.array(id).optional(),
 });
 export type LedgerCoverage = z.infer<typeof LedgerCoverage>;
 
@@ -659,6 +858,25 @@ function timeLayoutIssues(ledger: { readonly timeModel?: TimeModel; readonly ent
   return issues;
 }
 
+/** 一章里东西条目之间（设计 2.4）：只在新记法的章；一样东西一章最多一条 appear（同一个 seq 是合法的「先后没说清」）。 */
+function itemLayoutIssues(ledger: { readonly itemModel?: ItemModel; readonly timeModel?: TimeModel; readonly status: LedgerStatus; readonly coverage: LedgerCoverage; readonly entries: readonly LedgerEntry[] }): Issue[] {
+  const issues: Issue[] = [];
+  if (ledger.coverage.missingItems && (ledger.status !== "partial" || !ledger.coverage.missingKinds.includes("item") || ledger.itemModel !== ITEM_MODEL)) {
+    issues.push({ path: ["coverage", "missingItems"], message: "只缺哪几样东西只能记在东西那类没记全的新记法账上" });
+  }
+  const appeared = new Set<string>();
+  ledger.entries.forEach((entry, index) => {
+    if (entry.kind === "fact" && entry.subjectRef?.id !== undefined && ledger.itemModel !== ITEM_MODEL) issues.push({ path: ["entries", index], message: "旧记法的章事实不带东西编号" });
+    if (entry.kind !== "item") return;
+    if (ledger.itemModel !== ITEM_MODEL || ledger.timeModel !== TIME_MODEL) issues.push({ path: ["entries", index], message: "旧记法的章没有东西条目" });
+    if (entry.op === "appear") {
+      if (appeared.has(entry.itemRef.id)) issues.push({ path: ["entries", index], message: "一样东西一章只头回写到一次" });
+      appeared.add(entry.itemRef.id);
+    }
+  });
+  return issues;
+}
+
 export const ChapterLedger = z
   .object({
     schema: z.literal(CHAPTER_LEDGER_SCHEMA),
@@ -674,6 +892,8 @@ export const ChapterLedger = z
     unitsVersion: z.literal(UNITS_VERSION),
     /** P3 起新记的账带 2；缺 = 旧账（设计 2.1、2.7）。 */
     timeModel: z.literal(TIME_MODEL).optional(),
+    /** P3b 起新记的账带 1；缺 = 这章东西是旧记法（P3b 设计 2.9）。 */
+    itemModel: z.literal(ITEM_MODEL).optional(),
     scenes: z.array(LedgerScene),
     entries: z.array(LedgerEntry),
     previous: LedgerPrevious.optional(),
@@ -693,6 +913,7 @@ export const ChapterLedger = z
     });
     if (summaries > 1) ctx.addIssue({ code: "custom", path: ["entries"], message: "一章只能有一条梗概" });
     for (const issue of timeLayoutIssues(ledger)) ctx.addIssue({ code: "custom", ...issue });
+    for (const issue of itemLayoutIssues(ledger)) ctx.addIssue({ code: "custom", ...issue });
   });
 export type ChapterLedger = z.infer<typeof ChapterLedger>;
 
@@ -704,4 +925,14 @@ export function missingKindsOf(ledger: Pick<ChapterLedger, "status" | "coverage"
   if (ledger.status === "ready") return [];
   if (ledger.status === "partial" && ledger.coverage.missingKinds.length > 0) return ledger.coverage.missingKinds;
   return EntryKind.options;
+}
+
+/**
+ * 这章东西账缺到什么程度（P3b 设计 2.4）：none = 记全了；all = 整章东西都可能缺（旧记法、账待记、没写明缺哪几样）；
+ * 否则是只缺的那几样东西的编号（没记上的条目都认得出说的是哪几样）。
+ */
+export function itemGapOf(ledger: Pick<ChapterLedger, "status" | "coverage" | "itemModel">): "none" | "all" | readonly string[] {
+  if (ledger.itemModel !== ITEM_MODEL) return "all";
+  if (!missingKindsOf(ledger).includes("item")) return "none";
+  return ledger.status === "partial" && ledger.coverage.missingItems ? ledger.coverage.missingItems : "all";
 }

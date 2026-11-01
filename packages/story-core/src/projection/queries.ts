@@ -342,6 +342,8 @@ export function preWriteMemo(projection: BookProjection, chapter: number): PreWr
     .filter((fact) =>
       fact.nature === "state"
       && fact.status === "current"
+      // 旧记法里没逐样对齐的（说到的几样东西已按新记法写了去向）不当现状列：东西挪了服务端从东西账另列。
+      && fact.unaligned === undefined
       && fact.chapter <= upTo
       && fact.chapter > upTo - PRE_WRITE_RECENT_CHAPTERS
       && fact.subject !== undefined && fact.attribute !== undefined && fact.value !== undefined)

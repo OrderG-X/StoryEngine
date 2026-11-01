@@ -8,13 +8,50 @@
  * - 其余发新号，从认得的旧号里最大的序号往后排：被裁定作废的、被后文 replaces 引着的旧号空着，不落到别的条目头上。
  * - 新账的 carry = 上一份账单的条目 ∪ 它的 carry：连着几次重记（中间账待记也一样）旧号都还占着。
  *   时间另带最近一份记了时间的账单那一套（条目、段、时间格式），账待记那份照它读回上次的时间（出口复核 R6）。
+ * - 东西（P3b 设计 3.3）：本章头回写到的东西只认记账员写明的上次编号（reuse，它拿到这章上次新记的东西和编号），
+ *   别的都发新号「i{章}-{n}」，从认得的旧号里最大的往后排（旧号照样占着，carry 里的旧去向不复活）。
+ *   东西条目同一条的键里，东西一律换成编号再比（本批标签换成这次发的号）。
  */
-import { missingKindsOf, threadOf, type ChapterLedger, type EntryInput, type LedgerCarryTime, type LedgerEntry, type LedgerPrevious, type ThreadEntry, type TimeEntry } from "../schema/ledger.js";
+import {
+  missingKindsOf,
+  threadOf,
+  type ChapterLedger,
+  type EntryInput,
+  type ItemEntry,
+  type ItemPlaceInput,
+  type ItemRefInput,
+  type LedgerCarryTime,
+  type LedgerEntry,
+  type LedgerPrevious,
+  type ThreadEntry,
+  type TimeEntry,
+} from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
-import { dayDeclarationOf, declarationOf, timeDeclarationOf, type EntryIds } from "./entries.js";
+import { bornItems, dayDeclarationOf, declarationOf, timeDeclarationOf, type EntryIds } from "./entries.js";
 
-/** 判断「同一条」的键：只认写法完全一样，不猜意思（新开线索连写明的线索号一起比：没写旧号的不和任何旧条目同号）。 */
-export function entryKey(entry: EntryInput): string {
+/** 声明里的东西换成编号（标签按 tags 换；换不上就是标签原样，不和任何旧条目同号）。 */
+type ItemIdOf = (ref: ItemRefInput) => string;
+const literalItem: ItemIdOf = (ref) => ("id" in ref ? ref.id : `#${ref.tag}`);
+
+const placeKey = (place: ItemPlaceInput | undefined, itemId: ItemIdOf): string => {
+  if (!place) return "";
+  switch (place.kind) {
+    case "person":
+      return `p:${nameKey(place.name)}`;
+    case "place":
+      return `l:${nameKey(place.text)}`;
+    case "inside":
+      return `i:${itemId(place.item)}`;
+    case "unknown":
+      return "u";
+  }
+};
+
+/**
+ * 判断「同一条」的键：只认写法完全一样，不猜意思（新开线索连写明的线索号一起比：没写旧号的不和任何旧条目同号）。
+ * 东西一律换成编号再比（itemId；缺省标签原样）；东西条目不比先后号和原句（前面多记一条、换了附哪句，说的还是那件事）。
+ */
+export function entryKey(entry: EntryInput, itemId: ItemIdOf = literalItem): string {
   switch (entry.kind) {
     case "summary":
       return "summary";
@@ -32,7 +69,21 @@ export function entryKey(entry: EntryInput): string {
         nameKey(entry.attribute ?? ""),
         nameKey(entry.value ?? ""),
         entry.nature === "event" ? nameKey(entry.text) : "",
+        entry.item ? itemId(entry.item) : "",
       ].join("|");
+    case "item":
+      return entry.op === "appear"
+        ? `item|appear|${itemId({ tag: entry.tag ?? "" })}`
+        : [
+          "item",
+          entry.op,
+          entry.item ? itemId(entry.item) : "",
+          placeKey(entry.to, itemId),
+          placeKey(entry.from, itemId),
+          entry.gone ?? "",
+          (entry.members ?? []).map((member) => [itemId(member), ...(member.replaces ?? []), "~", ...(member.overlaps ?? [])].join(" ")).join(","),
+          entry.complete === undefined ? "" : String(entry.complete),
+        ].join("|");
     case "thread":
       return entry.op === "open"
         ? `thread|open|${entry.thread ?? ""}|${nameKey(entry.title ?? "")}`
@@ -102,11 +153,25 @@ function maxSeq(ids: Iterable<string>, prefix: string): number {
   return max;
 }
 
+/** 认得的旧条目里本章头回写到的东西（同一编号留最近那版）。 */
+export function knownAppears(previous: ChapterLedger | undefined): readonly ItemEntry[] {
+  const seen = new Set<string>();
+  return knownEntries(previous).flatMap((entry) => {
+    if (entry.kind !== "item" || entry.op !== "appear" || seen.has(entry.itemRef.id)) return [];
+    seen.add(entry.itemRef.id);
+    return [entry];
+  });
+}
+
 export interface AssignedIds {
   /** 和交来的条目一一对应。 */
   readonly ids: readonly EntryIds[];
   /** 认得的旧开线索里这次没沿用的线索号（后文还接着它的要如实说）。 */
   readonly droppedOpens: readonly ThreadEntry[];
+  /** 认得的、本章上次头回写到的东西这次没认上的（后文还用着它的要如实说）。 */
+  readonly droppedItems: readonly ItemEntry[];
+  /** 本批东西标签 → 发的东西编号。 */
+  readonly itemTags: ReadonlyMap<string, string>;
 }
 
 /** 给一章这次要记的条目分配编号（重记时照认得的旧条目沿用）。 */
@@ -118,29 +183,56 @@ export function assignIds(chapter: number, previous: ChapterLedger | undefined, 
   const day = dayDeclarationOf({ entries: known, ...(previous?.timeModel ? { timeModel: previous.timeModel } : {}) });
   if (time) idByKey.set("time", time.id);
   if (day) idByKey.set("day", day.id);
+  // 旧条目读回声明时，本章头回写到的东西写成标签（标签就是编号）：键里换回编号。
+  const knownBorn = bornItems(known);
+  const knownItemId: ItemIdOf = (ref) => ("id" in ref ? ref.id : knownBorn.has(ref.tag) ? ref.tag : `#${ref.tag}`);
   for (const entry of known) {
-    const declared = declarationOf(entry);
-    if (declared && !idByKey.has(entryKey(declared))) idByKey.set(entryKey(declared), entry.id);
+    const declared = declarationOf(entry, knownBorn);
+    if (declared && !idByKey.has(entryKey(declared, knownItemId))) idByKey.set(entryKey(declared, knownItemId), entry.id);
   }
   const opens = knownOpens(previous);
   const openThreadIds = new Set(opens.map(threadOf));
+  const appears = knownAppears(previous);
+  const appearIds = new Set(appears.map((entry) => entry.itemRef.id));
 
   const entryPrefix = `c${chapter}-`;
   const threadPrefix = `t${chapter}-`;
+  const itemPrefix = `i${chapter}-`;
   let nextEntry = maxSeq(known.map((entry) => entry.id), entryPrefix);
   let nextThread = maxSeq(openThreadIds, threadPrefix);
+  let nextItem = maxSeq(known.flatMap((entry) => (entry.kind === "item" ? [entry.itemRef.id] : [])), itemPrefix);
+  // 先给本章头回写到的东西发号（别的条目、事实里的标签都换成它）。
+  const usedItems = new Set<string>();
+  const itemTags = new Map<string, string>();
+  const itemOf = new Map<number, string>();
+  entries.forEach((entry, index) => {
+    if (entry.kind !== "item" || entry.op !== "appear" || !entry.tag || itemTags.has(entry.tag)) return;
+    const keep = entry.reuse && appearIds.has(entry.reuse) && !usedItems.has(entry.reuse) ? entry.reuse : undefined;
+    const item = keep ?? `${itemPrefix}${(nextItem += 1)}`;
+    usedItems.add(item);
+    itemTags.set(entry.tag, item);
+    itemOf.set(index, item);
+  });
+  const newItemId: ItemIdOf = (ref) => ("id" in ref ? ref.id : (itemTags.get(ref.tag) ?? `#${ref.tag}`));
   const usedIds = new Set<string>();
   const usedThreads = new Set<string>();
-  const ids = entries.map((entry): EntryIds => {
-    const key = entryKey(entry);
+  const ids = entries.map((entry, index): EntryIds => {
+    const key = entryKey(entry, newItemId);
     const reuse = idByKey.get(key);
     const id = reuse && !usedIds.has(reuse) ? reuse : `${entryPrefix}${(nextEntry += 1)}`;
     usedIds.add(id);
+    const item = itemOf.get(index);
+    if (entry.kind === "item" || (entry.kind === "fact" && entry.item)) return { id, ...(item ? { item } : {}), itemTags };
     if (entry.kind !== "thread" || entry.op !== "open") return { id };
     const keep = entry.thread && openThreadIds.has(entry.thread) && !usedThreads.has(entry.thread) ? entry.thread : undefined;
     const thread = keep ?? `${threadPrefix}${(nextThread += 1)}`;
     usedThreads.add(thread);
     return { id, thread };
   });
-  return { ids, droppedOpens: opens.filter((entry) => !usedThreads.has(threadOf(entry))) };
+  return {
+    ids,
+    droppedOpens: opens.filter((entry) => !usedThreads.has(threadOf(entry))),
+    droppedItems: appears.filter((entry) => !usedItems.has(entry.itemRef.id)),
+    itemTags,
+  };
 }

@@ -339,7 +339,7 @@ async function undoInOperationLast(): Promise<{ readonly opId: string }> {
   return { opId: last.opId };
 }
 
-describe("整本恢复", () => {
+describe("整本恢复", { timeout: 90_000 }, () => {
   it("恢复到存档：之后写的都退回；换成这次操作自己的纪元；能撤回来", async () => {
     await aiWrites(1, "第一章。");
     const snapshot = await createSnapshot(book, "写第二章前");

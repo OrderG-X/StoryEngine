@@ -76,6 +76,10 @@ export interface FactEntry {
   readonly scope?: string;
   /** 和它对不上能报多确定（核心权限表：来源 × 段）；none = 梦里、回忆里的，不拿来对账。缺省 = sure。 */
   readonly conflict?: "maybe" | "none";
+  /** 写作版本 P3b：主体是一样东西（投影里的东西编号）。正文里那个数说的是哪一样拿不到绑定，数字核对不核它。 */
+  readonly subjectId?: string;
+  /** 旧记法里一句说了好几样、其中这几样已按新记法写了去向：不当已确立事实，单放「没逐样对齐」。 */
+  readonly unaligned?: readonly string[];
 }
 
 export interface FactLedger {

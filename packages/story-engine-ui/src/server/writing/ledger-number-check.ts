@@ -136,6 +136,8 @@ function bareSubject(subject: string | undefined): string | undefined {
  */
 function factInForce(fact: FactEntry, chapter: number): boolean {
   if (!(fact.chapter < chapter)) return false;
+  // 主体是东西的不核（P3b 第 4 节）：正文里那个数说的是哪一样，没有对着这版正文的绑定，交核账员读原文。
+  if (fact.subjectId !== undefined) return false;
   if (fact.supersededByChapter !== undefined && fact.supersededByChapter <= chapter) return false;
   // 梦里、回忆里的不是现状，不拿来对账（写作版本 P3a 第 3 节）。
   return fact.kind === "hard" && fact.conflict !== "none";

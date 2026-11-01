@@ -92,13 +92,13 @@ export type MessageCard =
    * 核账（check_continuity）。dismissed＝作者点过「不是问题」的条目（continuityItemKey），对话卡和稿纸划线共用；
    * checkedVersion＝结果到时稿纸的版本号（核的是这一版），稿纸版本变了就是「核过后改过稿」。
    */
-  | { readonly type: "continuity"; readonly check: ContinuityCheckData; readonly dismissed?: readonly string[]; readonly checkedVersion?: string | null }
+  | { readonly type: "continuity"; readonly check: ContinuityCheckData; readonly dismissed?: readonly string[]; readonly checkedVersion?: string | null; readonly checkedBodyHash?: string }
   /** 内容审阅问题清单。checkedVersion＝审的是工作稿哪一版（审定稿时没有），和核账卡同一口径。 */
-  | { readonly type: "draft-review"; readonly review: DraftReviewView; readonly checkedVersion?: string | null }
+  | { readonly type: "draft-review"; readonly review: DraftReviewView; readonly checkedVersion?: string | null; readonly checkedBodyHash?: string }
   /** 硬伤检查。 */
-  | { readonly type: "quality"; readonly report: QualityCardReport; readonly checkedVersion?: string | null }
+  | { readonly type: "quality"; readonly report: QualityCardReport; readonly checkedVersion?: string | null; readonly checkedBodyHash?: string }
   /** 机器腔体检；fixedIds＝已点「改掉这句」改成功的几条。 */
-  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[]; readonly checkedVersion?: string | null }
+  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[]; readonly checkedVersion?: string | null; readonly checkedBodyHash?: string }
   /** 一次操作（写作版本 P2a：对话里、按钮交上的检查）：在做到哪、停着为什么停、能点什么。做完的结果另挂一张卡。 */
   | { readonly type: "operation"; readonly op: OperationCardData }
   /** AI 提的「下一步」选项（suggest_next_steps）。 */

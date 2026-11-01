@@ -55,7 +55,7 @@ export interface ImportBuild {
 /** 老数据里的一条（老事实沿用老编号；线索的老编号在 thread 上）。时间是旧账格式（storeLegacyTime）。 */
 type Draft = (Exclude<EntryDraft, { readonly kind: "time" | "day" }> | (LegacyTimeDraft & { readonly kind: "time" })) & { readonly id?: string };
 
-const SECTION_ORDER: Record<EntryKind, number> = { summary: 0, time: 1, presence: 2, fact: 3, thread: 4 };
+const SECTION_ORDER: Record<EntryKind, number> = { summary: 0, time: 1, presence: 2, fact: 3, thread: 4, item: 5 };
 const THREAD_OP_ORDER = { open: 0, advance: 1, close: 2 } as const;
 
 export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, string>, committedAt: string): ImportBuild {

@@ -54,6 +54,7 @@ function bibleView(over: Partial<BibleView> = {}): BibleView {
       { name: "旧邮局", aliases: [], character: false, now: [], fixed: [] },
     ],
     canon: [],
+    ledgerItems: [],
     protagonist: "林澈",
     ...over,
   };
@@ -407,5 +408,45 @@ describe("设定本派生的名单（搜索、⌘K、@、名字速览）", () =>
       relations: [{ id: "r-1", other: "许微", label: "旧同学", by: "ai" }],
     })] }));
     expect(lin).toEqual({ name: "林澈", terms: ["林澈", "小林"], protagonist: false, lines: ["身份：邮差"], relations: ["和许微：旧同学"], now: ["在哪：灯塔"] });
+  });
+});
+
+describe("设定本：东西的去向（写作版本 P3b）", () => {
+  const ledgerItem = { id: "i2-1", mentions: ["借据"], name: "借据", mergedFrom: [], history: [], asides: [], inside: [] };
+  const withItems = (): BibleView => ({
+    ...bibleView({
+      items: [entry({ id: "k-9", kind: "item", name: "铁盒", fields: [] }, { fixed: [{ attribute: "在哪", value: "樟木箱", chapter: 1, legacy: true }] })],
+      ledgerItems: [{ item: ledgerItem, now: [], fixed: [] }],
+    }),
+    itemTexts: {
+      "k-9": {
+        name: "铁盒",
+        now: "在樟木箱里，第 1 章",
+        contents: "第 3 章清点过，之后的挪动都记着：现在里面只有借据",
+        steps: [
+          { chapter: 1, text: "头回写到", quote: "她把铁盒放进樟木箱" },
+          { chapter: 2, text: "毁了", quote: "老周说铁盒早烧了", scope: "老周说的" },
+        ],
+      },
+      "i2-1": { name: "借据", now: "在铁盒里，第 2 章", steps: [{ chapter: 2, text: "沈知秋拿着 → 在铁盒里", quote: "把借据塞进铁盒" }] },
+    },
+  });
+
+  it("物品卡上有去向：现在、里面、小时间线（人物说的标出来），点章号回原句；按名字认的旧事实标「旧记法」", () => {
+    const { onJump } = renderBook("items", { bible: withItems(), focusName: "铁盒" });
+    expect(screen.getByText("在樟木箱里，第 1 章")).toBeTruthy();
+    expect(screen.getByText("第 3 章清点过，之后的挪动都记着：现在里面只有借据")).toBeTruthy();
+    expect(screen.getByText("老周说的").getAttribute("title")).toBe("记着，不改现在在哪");
+    expect(screen.getByText("旧记法")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "第 2 章" }));
+    expect(onJump).toHaveBeenCalledWith(2, "老周说铁盒早烧了");
+  });
+
+  it("没建卡的东西列在物品页下面，点开看去向；不给建卡按钮（同名不一定是同一样）", () => {
+    renderBook("items", { bible: withItems() });
+    expect(screen.getByText("账里的东西（没建卡）")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /借据/u }));
+    expect(screen.getByText("沈知秋拿着 → 在铁盒里")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "建物品卡" })).toBeNull();
   });
 });

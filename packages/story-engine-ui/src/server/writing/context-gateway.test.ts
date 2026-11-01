@@ -93,6 +93,14 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(pack.setting.cast.map((brief) => brief.name)).toEqual(["林婉清"]);
   });
 
+  it("重写中间某章：「最近发生的事」只取本章之前的章，后面章的事不给", async () => {
+    const projectDir = await createFixtureProject();
+    const envelope = await buildWriterContext({ projectDir, chapter: 5, chapterGoal: "重写这一章。", maxTimelineEvents: 5 });
+    const picked = envelope.trace.selectedTimelineEvents;
+    expect(picked.length).toBeGreaterThan(0);
+    expect(picked.every((id) => Number(/^ch(\d+)-/u.exec(id)?.[1]) < 5)).toBe(true);
+  });
+
   it("builds a continuity section from recent semantic timeline summaries", async () => {
     const projectDir = await createFixtureProject();
 

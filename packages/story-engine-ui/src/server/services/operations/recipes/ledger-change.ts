@@ -9,7 +9,7 @@
  * - 作者在线索板 / 梗概上直接点的（author，只认按钮）：`plan` → `apply`，不再停下问。
  * 改前存档、可撤销。
  */
-import { decisionRecord, projectBook, type BasisChange, type CommandReceipt, type DecisionInput, type TruthBasis } from "@actalk/story-core";
+import { decisionRecord, project, projectBook, readBookSnapshot, type BasisChange, type CommandReceipt, type DecisionInput, type TruthBasis } from "@actalk/story-core";
 import { itOrThem, shortChapters, shortChaptersText, type ShortChapter } from "../../../book/ledger-short.js";
 import { describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, coldPausedNote, LEDGER_ROLE, reviewOpenThreads, type BrainCallModel, type ThreadReviewOutcome } from "../../../editorial/index.js";
@@ -105,9 +105,10 @@ export function readLedgerChangeParams(origin: string, raw: unknown, mode: strin
 /** 先取依据再读投影：读的中途账变了，确认时对不上，照样作废。 */
 async function planChanges(bookDir: string, changes: readonly LedgerChangeRequest[], notDone: readonly string[]): Promise<LedgerPlan> {
   const basis = await readTruthBasisForWork(bookDir);
-  const view = await projectBook(bookDir);
+  const snapshot = await readBookSnapshot(bookDir);
+  const view = project(snapshot);
   if (view.chapters.length === 0) throw coded("no_chapters", "还没有定稿的章，账本是空的；先定稿一章再改账。");
-  const planned = planLedgerRequests(view, changes);
+  const planned = planLedgerRequests(view, changes, snapshot.ledgers);
   return { decisions: planned.decisions, lines: planned.lines, notDone: [...notDone, ...planned.notDone], basis };
 }
 

@@ -2,13 +2,33 @@
  * 改账的规划（写作版本 P2a 片 3B，从 agent/ledger-decisions.ts 挪来）：一次改账请求翻成裁定草案。
  * 只算草案、不写盘；作者点「确认改账」才由 ledger.change 操作按作者档记下（见 recipes/ledger-change.ts）。
  */
-import { DecisionInput, isExact, nameKey, type BookProjection, type FactView, type ThreadView } from "@actalk/story-core";
+import {
+  DecisionInput,
+  isExact,
+  nameKey,
+  normalizeForQuote,
+  type BookProjection,
+  type ChapterLedger,
+  type FactView,
+  type ItemPlace,
+  type ItemPosition,
+  type ItemStateRuling,
+  type ItemView,
+  type LedgerEntry,
+  type ThreadView,
+} from "@actalk/story-core";
+import { itemTexts, stepText, type ItemTexts } from "../../book/item-views.js";
 import { storySpanText, WEEKDAY_NAMES } from "../../book/story-timeline.js";
 
 /** 一次最多改几条（卡上摆得下、看得清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
+/** 作者一次清点最多列几样（完整清点拆不开，超了如实说，不截）。 */
+export const MAX_CENSUS_MEMBERS = 100;
 
-export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "keepDay", "summary"] as const;
+export const LEDGER_OPS = [
+  "add", "update", "remove", "supersede", "resolve", "group", "importance", "day", "keepDay", "summary",
+  "itemMerge", "itemSplit", "itemRetract", "itemState",
+] as const;
 export type LedgerEditOp = (typeof LEDGER_OPS)[number];
 
 export interface LedgerChangeRequest {
@@ -28,6 +48,33 @@ export interface LedgerChangeRequest {
   /** day：这一章是故事第几天（到第几天）。 */
   readonly day?: number;
   readonly dayEnd?: number;
+  /** itemState：到这一章末这样东西在哪 / 丢了毁了 / 里面是什么（只给一种）。 */
+  readonly where?: ItemWhereRequest;
+  /** itemState 清点：里面有哪几样（名字；各自可带对齐的旧记录）；complete = 作者说「只有这些」。 */
+  readonly members?: readonly ItemMemberRequest[];
+  readonly complete?: boolean;
+  /**
+   * itemState 在哪 / 丢了毁了：旧记法里说它去向的事实（编号或原话），以作者这回定的为准（设计 2.6）。
+   * replaces = 只说这一样的那条（顶掉）；overlaps = 一句里说了好几样的那条（留着，只标它以这里为准）。
+   */
+  readonly replaces?: readonly string[];
+  readonly overlaps?: readonly string[];
+}
+
+/** 清点里的一样：名字，和它对齐的旧记录（同 replaces / overlaps）。 */
+export interface ItemMemberRequest {
+  readonly name: string;
+  readonly replaces?: readonly string[];
+  readonly overlaps?: readonly string[];
+}
+
+/** 作者说的去处：谁拿着 / 在哪个地方 / 在哪样东西里面 / 不知道在哪了 / 丢了、毁了。 */
+export interface ItemWhereRequest {
+  readonly person?: string;
+  readonly place?: string;
+  readonly inside?: string;
+  readonly unknown?: boolean;
+  readonly gone?: "lost" | "destroyed";
 }
 
 export type LedgerPlanOutcome =
@@ -63,6 +110,122 @@ const findFact = (view: BookProjection, ref: string) =>
 const findThread = (view: BookProjection, ref: string, includeClosed = true) =>
   lookup(view.threads.filter((thread) => includeClosed || thread.status !== "closed"), ref, (thread) => thread.id, (thread) => thread.title, "线索");
 
+/**
+ * 按编号或名字找东西（叫法也认）：同名几样如实列出来让作者点明（「第 2 章的『表』、第 3 章的『表』」），不猜是哪样（P3b 设计 2.7）。
+ */
+function findItem(view: BookProjection, ref: string, texts: ItemTexts):
+  | { readonly ok: true; readonly item: ItemView }
+  | { readonly ok: false; readonly code: string; readonly reason: string } {
+  const trimmed = ref.trim();
+  const byId = view.items.find((item) => item.id === trimmed || item.mergedFrom.includes(trimmed));
+  if (byId) return { ok: true, item: byId };
+  const key = nameKey(trimmed);
+  if (!key) return { ok: false, code: "missing_target", reason: "没说是哪样东西。" };
+  // 同名的认带区分的那个说法（「表（「甲手里攥着…」那件）」，概况、上次的候选里给的就是它）。
+  const labelled = view.items.filter((item) => nameKey(texts.label(item.id)) === key);
+  if (labelled.length === 1) return { ok: true, item: labelled[0] as ItemView };
+  const names = (item: ItemView): string[] => [...(item.name ? [item.name] : []), ...item.mentions].map(nameKey);
+  const exact = view.items.filter((item) => names(item).includes(key));
+  const found = exact.length > 0 ? exact : view.items.filter((item) => names(item).some((name) => name.includes(key)));
+  if (found.length === 1) return { ok: true, item: found[0] as ItemView };
+  if (found.length === 0) return { ok: false, code: "not_found", reason: `账里没找到叫${quoteText(trimmed)}的东西（要记它，先在设定本给它建一张物品卡）。` };
+  const shown = found.slice(0, 5).map((item) => `「${texts.label(item.id)}」`).join("、");
+  return { ok: false, code: "ambiguous", reason: `${quoteText(trimmed)}对得上 ${found.length} 样东西：${shown}${found.length > 5 ? " 等" : ""}，请说清是哪一样。` };
+}
+
+type ItemFactLinks = { replaces?: string[]; overlaps?: string[] };
+
+/**
+ * 作者说旧记录里它的去向以这回定的为准：按编号或原话找那几条事实（对上多条如实问），只认这一章或更早的（设计 2.6 作者那一支）。
+ * 一条事实只说这一样还是一句说了好几样，由作者（经对话 AI）说明，代码不拆。
+ */
+function itemFactLinks(view: BookProjection, request: { readonly replaces?: readonly string[]; readonly overlaps?: readonly string[] }, chapter: number, label: string):
+  | { readonly ok: true; readonly links: ItemFactLinks; readonly said: readonly string[] }
+  | { readonly ok: false; readonly code: string; readonly reason: string } {
+  const links: ItemFactLinks = {};
+  const said: string[] = [];
+  for (const key of ["replaces", "overlaps"] as const) {
+    for (const ref of request[key] ?? []) {
+      const found = findFact(view, ref);
+      if (!found.ok) return found;
+      const fact = found.item;
+      if (fact.chapter > chapter) return { ok: false, code: "later_fact", reason: `${quoteText(fact.text)}记在第 ${fact.chapter} 章，比第 ${chapter} 章晚，没法拿第 ${chapter} 章末的样子去顶它。` };
+      const other = key === "replaces" ? links.overlaps : links.replaces;
+      if (other?.includes(fact.id)) return { ok: false, code: "conflict", reason: `${quoteText(fact.text)}不能既整条顶掉、又留着只标「${label}」，请说是哪一种。` };
+      const list = (links[key] ??= []);
+      if (list.includes(fact.id)) continue;
+      list.push(fact.id);
+      said.push(key === "replaces"
+        ? `第 ${fact.chapter} 章的旧记录${quoteText(fact.text)}以这回定的为准，不再算`
+        : `第 ${fact.chapter} 章的旧记录${quoteText(fact.text)}留着，其中「${label}」的去向以这回定的为准`);
+    }
+  }
+  return { ok: true, links, said };
+}
+
+const mergeLinks = (a: ItemFactLinks, b: ItemFactLinks): ItemFactLinks => {
+  const out: ItemFactLinks = {};
+  for (const key of ["replaces", "overlaps"] as const) {
+    const ids = [...new Set([...(a[key] ?? []), ...(b[key] ?? [])])];
+    if (ids.length > 0) out[key] = ids;
+  }
+  return out;
+};
+
+/** 本章东西条目的原句里有没有这几个字（找原句）。 */
+const quoteHas = (quote: string | undefined, text: string | undefined): boolean =>
+  !text || (quote !== undefined && normalizeForQuote(quote).includes(normalizeForQuote(text)));
+
+const entryQuote = (entry: LedgerEntry): string | undefined => entry.evidence[0]?.quote;
+
+/**
+ * 某章账里说到这样东西的每个位置（拆开用）：它自己的条目（主体、清点成员）、别的东西装在 / 从它里面、它的特征事实。
+ * 只认投影里现在算它的那几处（并进来的编号也算），已经拆走的不算。
+ */
+function itemPositions(view: BookProjection, ledgers: readonly ChapterLedger[], item: ItemView, chapter: number, quote?: string): ItemPosition[] {
+  const ids = new Set([item.id, ...item.mergedFrom]);
+  const entries = new Map((ledgers.find((ledger) => ledger.chapter === chapter)?.entries ?? []).map((entry) => [entry.id, entry] as const));
+  const out: ItemPosition[] = [];
+  const add = (position: ItemPosition): void => {
+    if (!out.some((known) => known.entry === position.entry && known.at === position.at && known.index === position.index)) out.push(position);
+  };
+  for (const step of [...item.history, ...item.asides]) {
+    const entry = step.chapter === chapter ? entries.get(step.entry) : undefined;
+    if (entry?.kind !== "item" || !quoteHas(entryQuote(entry), quote)) continue;
+    if (ids.has(entry.itemRef.id)) add({ entry: entry.id, at: "item" });
+    (entry.members ?? []).forEach((member, index) => {
+      if (ids.has(member.id)) add({ entry: entry.id, at: "member", index });
+    });
+  }
+  for (const other of view.items) {
+    for (const step of [...other.history, ...other.asides]) {
+      const entry = step.chapter === chapter ? entries.get(step.entry) : undefined;
+      if (entry?.kind !== "item" || !quoteHas(entryQuote(entry), quote)) continue;
+      if (step.to?.kind === "inside" && step.to.item === item.id && entry.to?.kind === "inside" && ids.has(entry.to.ref.id)) add({ entry: entry.id, at: "to" });
+      if (step.from?.kind === "inside" && step.from.item === item.id && entry.from?.kind === "inside" && ids.has(entry.from.ref.id)) add({ entry: entry.id, at: "from" });
+    }
+  }
+  for (const fact of view.facts) {
+    if (fact.item === item.id && fact.chapter === chapter && fact.status !== "retracted" && quoteHas(fact.quote, quote)) add({ entry: fact.id, at: "subject" });
+  }
+  return out;
+}
+
+function itemPlaceOf(view: BookProjection, where: ItemWhereRequest, texts: ItemTexts):
+  | { readonly ok: true; readonly state: ItemStateRuling; readonly text: string }
+  | { readonly ok: false; readonly code: string; readonly reason: string } {
+  const given = [where.person, where.place, where.inside, where.unknown ? "unknown" : undefined, where.gone].filter((value) => value !== undefined);
+  if (given.length !== 1) return { ok: false, code: "missing_where", reason: given.length === 0 ? "它在哪？说一种：谁拿着、在哪个地方、在哪样东西里面、不知道在哪了、丢了或毁了。" : "去处只能说一种。" };
+  if (where.gone) return { ok: true, state: { kind: "gone", gone: where.gone }, text: where.gone === "lost" ? "丢了" : "毁了" };
+  if (where.unknown) return { ok: true, state: { kind: "at", to: { kind: "unknown" } }, text: "不知道在哪了" };
+  if (where.person) return { ok: true, state: { kind: "at", to: { kind: "person", ref: { mention: where.person } } }, text: `${where.person}拿着` };
+  if (where.place) return { ok: true, state: { kind: "at", to: { kind: "place", text: where.place } }, text: `在${where.place}` };
+  const container = findItem(view, where.inside ?? "", texts);
+  if (!container.ok) return container;
+  const to: ItemPlace = { kind: "inside", ref: { id: container.item.id } };
+  return { ok: true, state: { kind: "at", to }, text: `在${texts.label(container.item.id)}里` };
+}
+
 function fail(code: string, reason: string): LedgerPlanOutcome {
   return { ok: false, code, reason };
 }
@@ -74,10 +237,114 @@ function proposal(decisions: DecisionInput[], lines: string[]): LedgerPlanOutcom
 /**
  * 一次改账请求翻成裁定（在一份投影上算，不写盘）。指向的事实 / 线索按编号或原话查准，查不准如实说、列候选，绝不猜。
  */
-export function planOnView(view: BookProjection, request: LedgerChangeRequest): LedgerPlanOutcome {
+export function planOnView(view: BookProjection, request: LedgerChangeRequest, ledgers: readonly ChapterLedger[] = []): LedgerPlanOutcome {
   const latest = view.upTo;
 
   switch (request.op) {
+    case "itemMerge": {
+      const texts = itemTexts(view.items);
+      const groups = (request.groups ?? []).filter((group) => group.length > 0);
+      if (groups.length === 0) return fail("missing_target", "要把哪几样当成同一样？第一样留下，其余并进去。");
+      const decisions: DecisionInput[] = [];
+      const lines: string[] = [];
+      for (const group of groups) {
+        const resolved: ItemView[] = [];
+        for (const ref of group) {
+          const found = findItem(view, ref, texts);
+          if (!found.ok) return fail(found.code, found.reason);
+          if (!resolved.some((item) => item.id === found.item.id)) resolved.push(found.item);
+        }
+        const [into, ...from] = resolved;
+        if (!into || from.length === 0) return fail("too_few", "至少要两样不同的东西才能并成一样。");
+        decisions.push({ type: "item.merge", from: from.map((item) => item.id), into: into.id });
+        lines.push(`把${from.map((item) => `「${texts.label(item.id)}」`).join("")}并进「${texts.label(into.id)}」（账里写它的地方都算同一样）`);
+      }
+      return proposal(decisions, lines);
+    }
+    case "itemSplit": {
+      const texts = itemTexts(view.items);
+      const found = findItem(view, request.query ?? request.id ?? "", texts);
+      if (!found.ok) return fail(found.code, found.reason);
+      const name = request.text?.trim();
+      if (!name) return fail("missing_text", "拆出来的那样叫什么？");
+      if (request.chapter === undefined) return fail("missing_chapter", `是第几章写的「${texts.label(found.item.id)}」其实是另一样？`);
+      const refs = itemPositions(view, ledgers, found.item, request.chapter, request.targetText);
+      if (refs.length === 0) return fail("not_found", `第 ${request.chapter} 章的账里没有「${texts.label(found.item.id)}」${request.targetText ? `、原句带${quoteText(request.targetText)}` : ""}的记录。`);
+      return proposal(
+        [{ type: "item.split", item: found.item.id, refs, name }],
+        [`第 ${request.chapter} 章写的「${texts.label(found.item.id)}」（${refs.length} 处）不是那一样，另记成「${name}」`],
+      );
+    }
+    case "itemRetract": {
+      const texts = itemTexts(view.items);
+      const found = findItem(view, request.query ?? request.id ?? "", texts);
+      if (!found.ok) return fail(found.code, found.reason);
+      if (request.chapter === undefined) return fail("missing_chapter", `「${texts.label(found.item.id)}」是第几章那条记错了？`);
+      const ids = new Set([found.item.id, ...found.item.mergedFrom]);
+      const ledger = ledgers.find((item) => item.chapter === request.chapter);
+      const steps = [...found.item.history, ...found.item.asides].filter((step) => {
+        if (step.chapter !== request.chapter || step.op === "appear") return false;
+        const entry = ledger?.entries.find((item) => item.id === step.entry);
+        return entry?.kind === "item" && ids.has(entry.itemRef.id) && quoteHas(step.quote, request.targetText);
+      });
+      const unique = steps.filter((step, index) => steps.findIndex((other) => other.entry === step.entry) === index);
+      if (unique.length === 0) return fail("not_found", `第 ${request.chapter} 章没记过「${texts.label(found.item.id)}」${request.targetText ? `原句带${quoteText(request.targetText)}` : ""}的去向。`);
+      if (unique.length > 1) {
+        const shown = unique.slice(0, 5).map((step) => `${stepText(step, texts)}${step.quote ? quoteText(step.quote, 20) : ""}`).join("；");
+        return fail("ambiguous", `第 ${request.chapter} 章记了「${texts.label(found.item.id)}」${unique.length} 条：${shown}，请说是哪一条（说那句原话里的几个字）。`);
+      }
+      const step = unique[0]!;
+      return proposal(
+        [{ type: "item.retract", entry: step.entry }],
+        [`第 ${request.chapter} 章「${texts.label(found.item.id)}：${stepText(step, texts)}」这条记错了，不算`],
+      );
+    }
+    case "itemState": {
+      const texts = itemTexts(view.items);
+      const found = findItem(view, request.query ?? request.id ?? "", texts);
+      if (!found.ok) return fail(found.code, found.reason);
+      const chapter = request.chapter ?? latest;
+      if (!view.chapters.some((item) => item.chapter === chapter)) return fail("unknown_chapter", `第 ${chapter} 章还没定稿，东西在哪定稿时记。`);
+      let state: ItemStateRuling;
+      let said: string;
+      let own: ItemFactLinks = {};
+      const aligned: string[] = [];
+      if (request.members) {
+        if (request.members.length > MAX_CENSUS_MEMBERS) return fail("too_many", `一次清点最多列 ${MAX_CENSUS_MEMBERS} 样，这次列了 ${request.members.length} 样。`);
+        const members: { id: string; replaces?: string[]; overlaps?: string[] }[] = [];
+        for (const ref of request.members) {
+          const member = findItem(view, ref.name, texts);
+          if (!member.ok) return fail(member.code, member.reason);
+          const links = itemFactLinks(view, ref, chapter, texts.label(member.item.id));
+          if (!links.ok) return fail(links.code, links.reason);
+          aligned.push(...links.said);
+          const existing = members.find((item) => item.id === member.item.id);
+          const merged = mergeLinks(existing ?? {}, links.links);
+          // 同一样写了两遍、两遍对同一条旧记录给的说法不一样：如实问，不合成两种都要。
+          const both = merged.replaces?.find((id) => merged.overlaps?.includes(id));
+          if (both !== undefined) return fail("conflict", `${quoteText(view.facts.find((fact) => fact.id === both)?.text ?? "那条旧记录")}不能既整条顶掉、又留着只标「${texts.label(member.item.id)}」，请说是哪一种。`);
+          if (existing) Object.assign(existing, merged);
+          else members.push({ id: member.item.id, ...merged });
+        }
+        const complete = request.complete === true;
+        state = { kind: "census", members, complete };
+        const listed = members.map((member) => texts.label(member.id)).join("、");
+        said = complete ? (members.length > 0 ? `里面只有${listed}` : "里面空了") : `里面有${listed}（没说只有这些）`;
+      } else {
+        const where = itemPlaceOf(view, request.where ?? {}, texts);
+        if (!where.ok) return fail(where.code, where.reason);
+        state = where.state;
+        said = where.text;
+        const links = itemFactLinks(view, request, chapter, texts.label(found.item.id));
+        if (!links.ok) return fail(links.code, links.reason);
+        own = links.links;
+        aligned.push(...links.said);
+      }
+      return proposal(
+        [{ type: "item.state", item: found.item.id, chapter, state, ...own }],
+        [`到第 ${chapter} 章末，「${texts.label(found.item.id)}」${said}（以你定的为准）${aligned.length > 0 ? `；${aligned.join("；")}` : ""}`],
+      );
+    }
     case "add": {
       if (!request.text?.trim()) return fail("missing_text", "要记的事实是什么？请说一句具体可核对的话。");
       const chapter = request.chapter ?? latest;
@@ -110,6 +377,8 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest): 
           ...(structured ? { subject: old.subject, attribute: old.attribute, value: request.value?.trim() || old.value } : {}),
           text: request.text.trim(),
           corrects: old.id,
+          // 说的是一样东西：改后的那条还挂在那样东西上，不按名字重新认（同名两样分不开，设计 2.7）。
+          ...(old.item !== undefined && old.subject ? { subject: old.subject, subjectId: old.item } : {}),
         } as DecisionInput],
         [`把第 ${old.chapter} 章的事实${quoteText(old.text)}改成${quoteText(request.text, 60)}`],
       );
@@ -225,7 +494,7 @@ export function planOnView(view: BookProjection, request: LedgerChangeRequest): 
 
 
 /** 一批改账请求一起算：各条的裁定、给作者看的话接起来；算不成的如实列进「没改成」（同一条裁定只记一次）。 */
-export function planLedgerRequests(view: BookProjection, requests: readonly LedgerChangeRequest[]): {
+export function planLedgerRequests(view: BookProjection, requests: readonly LedgerChangeRequest[], ledgers: readonly ChapterLedger[] = []): {
   readonly decisions: readonly DecisionInput[];
   readonly lines: readonly string[];
   readonly notDone: readonly string[];
@@ -235,7 +504,7 @@ export function planLedgerRequests(view: BookProjection, requests: readonly Ledg
   const notDone: string[] = [];
   const seen = new Set<string>();
   for (const request of requests) {
-    const planned = planOnView(view, request);
+    const planned = planOnView(view, request, ledgers);
     if (!planned.ok) {
       notDone.push(planned.reason.endsWith("。") ? planned.reason.slice(0, -1) : planned.reason);
       continue;
@@ -277,6 +546,44 @@ const text = (value: unknown): string | undefined => (typeof value === "string" 
 const positive = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
 const oneOf = <T extends string>(items: readonly T[], value: unknown): T | undefined => items.find((item) => item === value);
 
+const GONE = ["lost", "destroyed"] as const;
+
+/** 对齐的旧记录：编号或原话的列表（只给一条时直接写一个字符串也认）。 */
+function factRefs(value: Record<string, unknown>): { replaces?: string[]; overlaps?: string[] } {
+  const out: { replaces?: string[]; overlaps?: string[] } = {};
+  for (const key of ["replaces", "overlaps"] as const) {
+    const raw = value[key];
+    const list = (Array.isArray(raw) ? raw : [raw]).map(text).filter((item): item is string => item !== undefined);
+    if (list.length > 0) out[key] = [...new Set(list)];
+  }
+  return out;
+}
+
+function itemStateFields(value: Record<string, unknown>): Record<string, unknown> {
+  const raw = typeof value.where === "object" && value.where !== null && !Array.isArray(value.where) ? (value.where as Record<string, unknown>) : {};
+  const where = Object.fromEntries(Object.entries({
+    person: text(raw.person),
+    place: text(raw.place),
+    inside: text(raw.inside),
+    unknown: raw.unknown === true ? true : undefined,
+    gone: oneOf(GONE, raw.gone),
+  }).filter(([, item]) => item !== undefined));
+  // 成员：名字，或 { name, replaces, overlaps }；空字符串当没写，写了别的样子留个空名字，planOnView 如实说没说是哪样（不悄悄少列一样）。
+  const members = Array.isArray(value.members)
+    ? value.members.flatMap((member): ItemMemberRequest[] => {
+      if (typeof member === "string") return text(member) ? [{ name: text(member) as string }] : [];
+      const record = typeof member === "object" && member !== null && !Array.isArray(member) ? (member as Record<string, unknown>) : {};
+      return [{ name: text(record.name) ?? "", ...factRefs(record) }];
+    })
+    : undefined;
+  return {
+    ...(Object.keys(where).length > 0 ? { where } : {}),
+    ...(members ? { members } : {}),
+    ...(value.complete === true ? { complete: true } : {}),
+    ...factRefs(value),
+  };
+}
+
 /** 一条改账请求读回来（交来的参数、记录里存的）：op 不认识是 undefined；别的字段形状不对就当没给（planOnView 如实说缺什么）。 */
 export function readLedgerRequest(raw: unknown): LedgerChangeRequest | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
@@ -302,7 +609,8 @@ export function readLedgerRequest(raw: unknown): LedgerChangeRequest | undefined
     value: text(value.value),
     day: positive(value.day),
     dayEnd: positive(value.dayEnd),
-    ...(op === "group" ? { groups } : {}),
+    ...(op === "group" || op === "itemMerge" ? { groups } : {}),
+    ...(op === "itemState" ? itemStateFields(value) : {}),
   };
   return { op, ...Object.fromEntries(Object.entries(fields).filter(([, item]) => item !== undefined)) } as LedgerChangeRequest;
 }

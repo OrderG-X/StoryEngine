@@ -4,6 +4,7 @@
  *
  * 核账结果取当前会话里这一章最新的那张核账卡（对话卡和稿纸划线共用一份，作者点「不是问题」两边一起变）。
  */
+import { checkedOtherBody } from "../lib/body-hash.js";
 import type { ChapterMessage, ContinuityCheckData, ContinuityCheckItemData } from "../type-defs/workspace.js";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -65,6 +66,7 @@ export interface ContinuityResult {
   /** 核账之后定论改齐时改掉的条目键（见 settledContinuityKeys）。 */
   readonly settled?: readonly string[];
   readonly checkedVersion?: string | null;
+  readonly checkedBodyHash?: string;
 }
 
 type SettledEdit = { readonly chapter: number; readonly from: string };
@@ -138,6 +140,7 @@ export function latestContinuityResult(messages: readonly ChapterMessage[], chap
       dismissed: card.dismissed ?? [],
       ...(settled.length > 0 ? { settled } : {}),
       ...(card.checkedVersion !== undefined ? { checkedVersion: card.checkedVersion } : {}),
+      ...(card.checkedBodyHash !== undefined ? { checkedBodyHash: card.checkedBodyHash } : {}),
     };
   }
   return null;
@@ -195,9 +198,10 @@ export function chapterProgress(input: {
     : { done: true, text: short > 0 ? `写了 ${words.toLocaleString()} 字 · 比目标少 ${short.toLocaleString()} 字` : `写了 ${words.toLocaleString()} 字` };
 
   const open = result ? openContinuityItems(result) : { sure: [], maybe: [] };
-  // 结果到的那一版之后稿子又变了（作者改了、AI 改了，或还有没存的字）＝核过后改过稿。定稿了就以定稿为准。
+  // 结果到的那一版之后稿子又变了（作者改了、AI 改了，或还有没存的字）＝核过后改过稿；按正文比，撤销定稿换了版本号、字没变不算。
+  // 定稿了就以定稿为准。
   const stale = Boolean(result) && !committed
-    && (result!.checkedVersion !== undefined && (result!.checkedVersion !== paper.baseVersion || isDraftDirty(paper)));
+    && (result!.checkedVersion !== undefined && (checkedOtherBody(result!, paper) || isDraftDirty(paper)));
   const checkState: CheckState = stage === "empty" || !result ? "none" : stale ? "stale" : open.sure.length > 0 ? "issues" : "clean";
   const check = committed ? {
     // 已定稿的章不再要求核账；定稿前核出来的那几处作者已经看过（改了或认了），不再标红催。

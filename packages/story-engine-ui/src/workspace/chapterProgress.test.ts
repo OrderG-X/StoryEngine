@@ -1,3 +1,4 @@
+import { bodyHash } from "../lib/body-hash.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ChapterMessage, ContinuityCheckData, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
@@ -80,6 +81,17 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
     expect(moved.check).toMatchObject({ state: "stale", done: false, text: "核过后改过稿" });
     expect(moved.primary).toEqual({ kind: "continuity", label: "再核一遍" });
     const dirty = chapterProgress({ paper: paper({ body: `${BODY}又写一句。` }), result: result(), targetWords: null });
+    expect(dirty.check.state).toBe("stale");
+  });
+
+  it("撤销定稿 / 整本恢复：版本号换了、正文一字没变，不说「核过后改过稿」；正文变了照说", () => {
+    const withHash = result({ checkedBodyHash: bodyHash(BODY) });
+    const undone = chapterProgress({ paper: paper({ baseVersion: "v2" }), result: withHash, targetWords: null });
+    expect(undone.check.state).toBe("issues");
+    const edited = `${BODY}又写一句。`;
+    const changed = chapterProgress({ paper: paper({ baseVersion: "v3", body: edited, savedBody: edited }), result: withHash, targetWords: null });
+    expect(changed.check).toMatchObject({ state: "stale", text: "核过后改过稿" });
+    const dirty = chapterProgress({ paper: paper({ body: edited }), result: withHash, targetWords: null });
     expect(dirty.check.state).toBe("stale");
   });
 

@@ -31,7 +31,7 @@ const CH2 = "# 第2章 · 外乡人\n\n第二天上午，外乡人又来了。�
 function fakeModel(ledger: unknown): BrainCallModel {
   return async (messages) => {
     const last = messages.at(-1)?.content ?? "";
-    return last.includes("交这一章的账单") ? JSON.stringify(ledger) : "笔记：老周＝周守义。";
+    return (last.includes("交这一章的账单") || last.includes("只记本章东西的去向")) ? JSON.stringify(ledger) : "笔记：老周＝周守义。";
   };
 }
 
@@ -213,7 +213,7 @@ describe("定稿编排", () => {
     const asked: string[] = [];
     const keeper: BrainCallModel = async (messages) => {
       const last = messages.at(-1)?.content ?? "";
-      if (!last.includes("交这一章的账单")) return "笔记：老周＝周守义。";
+      if (!(last.includes("交这一章的账单") || last.includes("只记本章东西的去向"))) return "笔记：老周＝周守义。";
       asked.push(last);
       // 换了个说法（标题对不上上次的），但填了上次的编号。
       return JSON.stringify({ threads: [{ op: "open", type: "question", title: "钟停在三点十五的缘故", thread: "r1", note: "钟停了", quote: "钟为什么偏偏停在这个时刻" }] });
@@ -449,7 +449,7 @@ describe("定稿编排", () => {
       const outcome = await runCommand(book, chapterCommit, { chapter: 1, text: first, entries: [{ kind: "day", review: "author", day, dayEnd: day }] }, { caller: "author", idempotencyKey: `day-${day}` });
       expect(outcome.ok).toBe(true);
     };
-    const model: BrainCallModel = async (messages) => messages.at(-1)!.content.includes("交这一章的账单")
+    const model: BrainCallModel = async (messages) => (messages.at(-1)!.content.includes("交这一章的账单") || messages.at(-1)!.content.includes("只记本章东西的去向"))
       ? JSON.stringify({ time: { start: { offset: 1, basis: "text", quote: "第二天上午" }, sameDay: true } })
       : "老张回家。";
     await commitDay(1);
