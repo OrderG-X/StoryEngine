@@ -61,7 +61,8 @@ function settledText(settled: ItemSettled, texts: ItemTexts): string {
     case "known":
       return placeText(settled.place, texts);
     case "gone":
-      return `${settled.gone === "lost" ? "丢了" : "毁了"}${settled.note ? `（${settled.note}）` : ""}`;
+      // 丢了 = 不知去向（设计 2.2）：写明不知道在哪，免得读的人当成落在了哪儿。
+      return `${settled.gone === "lost" ? "丢了，不知道在哪" : "毁了"}${settled.note ? `（${settled.note}）` : ""}`;
     case "unknown":
       return "不知道在哪了";
   }
@@ -116,14 +117,14 @@ export function asideText(item: ItemView, texts: ItemTexts): string | undefined 
   return `${who}（第 ${last.chapter} 章，没核实）`;
 }
 
-/** 一样东西的一行（不含编号）：名字 · 现在 · 里面 · 没核全 · 单列的说法。 */
-export function itemLine(item: ItemView, texts: ItemTexts): string {
+/** 一样东西的一行（不含编号）：名字 · 现在 · 里面 · 没核全 · 单列的说法。`chapterGap: false` = 整章没记全那句另外并成一行说，这里不写。 */
+export function itemLine(item: ItemView, texts: ItemTexts, chapterGap = true): string {
   const now = nowText(item.now, texts);
   const parts = [
     `${texts.label(item.id)}${item.mentions.length > 1 ? `（又叫：${item.mentions.filter((mention) => mention !== item.name).join("、")}）` : ""}`,
     now ? `现在：${now}` : "正文还没写过它在哪",
     contentsText(item, texts),
-    unverifiedText(item),
+    chapterGap || item.unverifiedBy !== "chapter" ? unverifiedText(item) : undefined,
     asideText(item, texts),
   ];
   return parts.filter((part): part is string => part !== undefined).join(" · ");
@@ -152,9 +153,9 @@ export function nowQuote(item: ItemView): string | undefined {
 }
 
 /** 写手、章纲员看的一行：名字 · 现在（哪章）· 里面 · 没核全 · 单列的说法 · 现在那句原句。 */
-export function writerItemLine(item: ItemView, texts: ItemTexts): string {
+export function writerItemLine(item: ItemView, texts: ItemTexts, chapterGap = true): string {
   const quote = nowQuote(item);
-  return `${itemLine(item, texts)}${quote ? ` · 原句「${quote}」` : ""}`;
+  return `${itemLine(item, texts, chapterGap)}${quote ? ` · 原句「${quote}」` : ""}`;
 }
 
 export interface PickItemsOptions {
@@ -232,21 +233,60 @@ export interface ItemsWhere {
   readonly omitted: number;
 }
 
-/** 写手最多看几样相关的东西（带原句）、再补几样不相关的（只写在哪）、几条没对齐的旧事实。 */
+/**
+ * 写手最多看几样相关的东西（上一章动过的带原句）、几样不相关但有话要说的（拿不准、清点、没核全、单列的说法，一样一行）、
+ * 其余只写在哪的按地方并成一行（一样只占一个名字）、几条没对齐的旧事实。
+ */
 export const WRITER_MAX_ITEMS = 20;
-export const WRITER_BRIEF_ITEMS = 20;
+export const WRITER_BRIEF_ITEMS = 10;
+export const WRITER_PLAIN_ITEMS = 80;
 const WRITER_MAX_LEGACY_FACTS = 8;
 const WRITER_RECENT_CHAPTERS = 3;
+const WRITER_QUOTE_CHAPTERS = 1;
+
+/** 不相关的东西里，只用说「在哪」的（确定在哪、没清点、没核全的事、没有单列的说法）。 */
+function plainPlace(item: ItemView, texts: ItemTexts): string | undefined {
+  if (item.now?.kind !== "known" || item.census || item.inside.length > 0 || item.unverifiedSince !== undefined || asideText(item, texts)) return undefined;
+  return placeText(item.now.place, texts);
+}
 
 export function itemsWhere(projection: Pick<BookProjection, "items" | "cast" | "upTo" | "facts">, texts: readonly string[], people: readonly string[]): ItemsWhere {
-  const { picked, brief, omitted } = pickItems(projection, { texts, people, recentChapters: WRITER_RECENT_CHAPTERS, max: WRITER_MAX_ITEMS, fill: WRITER_BRIEF_ITEMS });
+  // 不相关的全拿来（最后一次写到它在哪越晚越先），下面分成有话要说的和只写在哪的，各有上限。
+  const { picked, brief } = pickItems(projection, { texts, people, recentChapters: WRITER_RECENT_CHAPTERS, max: WRITER_MAX_ITEMS, fill: Number.MAX_SAFE_INTEGER });
   const names = itemTexts(projection.items);
-  const ids = new Set(picked.map((item) => item.id));
+  const relevant = picked.filter((item) => !brief.has(item.id));
+  const rest = projection.items.filter((item) => brief.has(item.id)).sort((a, b) => (b.history.at(-1)?.chapter ?? 0) - (a.history.at(-1)?.chapter ?? 0));
+  const plain = new Map<string, string[]>();
+  let plainCount = 0;
+  const noted: ItemView[] = [];
+  for (const item of rest) {
+    const place = plainPlace(item, names);
+    if (place !== undefined && plainCount < WRITER_PLAIN_ITEMS) {
+      plain.set(place, [...(plain.get(place) ?? []), names.label(item.id)]);
+      plainCount += 1;
+    } else if (place === undefined && noted.length < WRITER_BRIEF_ITEMS) noted.push(item);
+  }
+  const shown = new Set([...relevant, ...noted].map((item) => item.id));
+  const ids = new Set([...shown, ...rest.filter((item) => plainPlace(item, names) !== undefined).slice(0, WRITER_PLAIN_ITEMS).map((item) => item.id)]);
   const legacyFacts = projection.facts
     .filter((fact) => fact.status === "current" && (fact.unaligned ?? []).some((item) => ids.has(item)))
     .slice(-WRITER_MAX_LEGACY_FACTS)
     .map((fact) => unalignedText(fact, names));
-  return { lines: picked.map((item) => (brief.has(item.id) ? itemLine(item, names) : writerItemLine(item, names))), legacyFacts, omitted };
+  const all = projection.items.filter((item) => !item.dangling).length;
+  const listed = projection.items.filter((item) => shown.has(item.id));
+  // 整章没记全那句一样东西写一遍太占字：按从哪章起并成一行，点名是哪几样。
+  const gaps = new Map<number, string[]>();
+  for (const item of listed) if (item.unverifiedBy === "chapter" && item.unverifiedSince !== undefined) gaps.set(item.unverifiedSince, [...(gaps.get(item.unverifiedSince) ?? []), names.label(item.id)]);
+  return {
+    lines: [
+      // 原句只给上一章动过的（接着写最用得上），更早的只写在哪，省字。
+      ...listed.map((item) => (noted.includes(item) || (item.now?.chapter ?? 0) < projection.upTo - WRITER_QUOTE_CHAPTERS + 1 ? itemLine(item, names, false) : writerItemLine(item, names, false))),
+      ...[...plain].map(([place, labels]) => `${place}：${labels.join("、")}`),
+      ...[...gaps].sort(([a], [b]) => a - b).map(([since, labels]) => `第 ${since} 章起东西账没记全，这几样之后挪没挪不知道：${labels.join("、")}`),
+    ],
+    legacyFacts,
+    omitted: all - ids.size,
+  };
 }
 
 function stepPlaceText(place: ItemStep["to"], texts: ItemTexts): string {

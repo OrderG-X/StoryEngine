@@ -438,6 +438,55 @@ describe("记账员交回的账单", () => {
 });
 
 describe("记账员跑一章", () => {
+  it("东西另一遍记：按句号取原句；记账员那遍顺手写的东西不收；记东西没成 → 这章东西整类没记上，别的照收", async () => {
+    const book = await makeHomeTempDir("keeper-items-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const draft = "# 第1章\n\n桌上放着一个铁盒。她把铁盒揣进兜里。";
+      const units = splitUnits(draft);
+      const box = units.find((unit) => draft.slice(unit.start, unit.end).includes("揣进兜里"));
+      const main = JSON.stringify({
+        summary: { text: "她拿走铁盒", quote: "她把铁盒揣进兜里" },
+        newItems: [{ tag: "N1", name: "多记的铁盒", by: "narration", quote: "桌上放着一个铁盒" }],
+        items: [{ seq: 1, item: "N1", op: "at", to: { place: "桌上" }, by: "narration", quote: "桌上放着一个铁盒" }],
+      });
+      const items = JSON.stringify({
+        newItems: [{ tag: "N1", name: "铁盒", by: "narration", unit: (box?.id ?? 0) - 1 }],
+        items: [{ seq: 1, item: "N1", op: "move", to: { person: "她" }, by: "narration", unit: box?.id }],
+      });
+      const run = (itemReply: () => Promise<string>) =>
+        runLedgerKeeper({
+          projectDir: book,
+          chapter: 1,
+          draft,
+          before: project({ ledgers: [], decisions: [] }),
+          maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            return messages.at(-1)?.content.includes("只记本章东西的去向") ? itemReply() : main;
+          },
+        });
+      const ok = await run(async () => items);
+      expect(ok.ok).toBe(true);
+      if (!ok.ok) return;
+      const recorded = ok.parsed.entries.filter((entry) => entry.kind === "item");
+      expect(recorded.map((entry) => (entry.kind === "item" ? [entry.op, "quote" in entry ? entry.quote : ""] : []))).toEqual([
+        ["appear", "桌上放着一个铁盒。"],
+        ["move", "她把铁盒揣进兜里。"],
+      ]);
+      const failed = await run(async () => {
+        throw new Error("429 太忙");
+      });
+      expect(failed.ok).toBe(true);
+      if (!failed.ok) return;
+      expect(failed.parsed.entries.some((entry) => entry.kind === "item")).toBe(false);
+      expect(failed.parsed.entries.some((entry) => entry.kind === "summary")).toBe(true);
+      expect(failed.parsed.drops).toContainEqual(expect.objectContaining({ where: "items", kind: "item", reason: expect.stringContaining("记东西没成") }));
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
   it("先补笔记再交账单；坏输出、调用失败都如实说没成，不抛", async () => {
     const book = await makeHomeTempDir("keeper-");
     try {
@@ -459,7 +508,10 @@ describe("记账员跑一章", () => {
         },
       });
       expect(outcome.ok).toBe(true);
-      expect(calls).toHaveLength(2);
+      // 补笔记、交账单、记东西（和交账单并行，只给本章编号正文和东西那几段）。
+      expect(calls).toHaveLength(3);
+      expect(calls[2]).toHaveLength(1);
+      expect(calls[2]?.[0]?.content).toContain("只记本章东西的去向");
       expect(calls[0]?.[0]).toMatchObject({ role: "system", content: LEDGER_ROLE.system });
       const task = calls[1]?.at(-1)?.content ?? "";
       expect(task).toContain("【第 2 章 正文（待定稿");

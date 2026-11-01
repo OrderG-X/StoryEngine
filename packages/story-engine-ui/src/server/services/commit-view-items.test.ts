@@ -16,7 +16,7 @@ const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterC
 const confirmNow = (ticket: PreviewTicket, text: string) =>
   runCommand(book, chapterCommit, { chapter: ticket.chapter, text, entries: commitEntriesOf(ticket, {}) }, { caller: "author", basis: ticket.basis, idempotencyKey: randomUUID() });
 function fakeModel(ledger: unknown): BrainCallModel {
-  return async (messages) => ((messages.at(-1)?.content ?? "").includes("交这一章的账单") ? JSON.stringify(ledger) : "笔记：无。");
+  return async (messages) => (((messages.at(-1)?.content ?? "").includes("交这一章的账单") || (messages.at(-1)?.content ?? "").includes("只记本章东西的去向")) ? JSON.stringify(ledger) : "笔记：无。");
 }
 function expectPreview(outcome: CommitPreview | PrepareFailure): CommitPreview {
   if (!outcome.ok) throw new Error(`${outcome.code} ${outcome.reason}`);

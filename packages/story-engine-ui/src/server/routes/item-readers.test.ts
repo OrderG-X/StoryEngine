@@ -89,7 +89,8 @@ describe("东西在哪：读的人拿到的材料", () => {
     const pack = await buildWritingContextPack({ projectDir: dir, chapter: 4, userDirection: "沈知秋打开铁盒" });
     const lines = pack.continuityFocus.itemsWhere ?? [];
     // 老周那句之后第 3 章叙述又清点到它在铁盒里：人物说的不再列。
-    expect(lines.find((line) => line.startsWith("借据"))).toBe("借据 · 现在：在铁盒里（铁盒在樟木箱里，樟木箱在里屋），第 2 章 · 原句「沈知秋把借据塞进铁盒」");
+    // 原句只给上一章动过的（这里是第 3 章），第 2 章挪的只写在哪。
+    expect(lines.find((line) => line.startsWith("借据"))).toBe("借据 · 现在：在铁盒里（铁盒在樟木箱里，樟木箱在里屋），第 2 章");
     expect(lines.find((line) => line.startsWith("铁盒"))).toContain("第 3 章清点过，之后的挪动都记着：现在里面只有借据");
     expect(pack.continuityFocus.establishedFacts.join("\n")).not.toContain("借据和地契");
     expect(pack.continuityFocus.legacyItemFacts).toEqual(["「借据和地契都在樟木箱底」（第 1 章，旧记法）——其中借据的去向以「东西在哪」为准"]);
@@ -172,12 +173,17 @@ describe("挑给读的人的东西", () => {
     expect(pickItems(projection, { texts: ["他照了照镜子"], recentChapters: 1 }).picked.map((x: { id: string }) => x.id)).toEqual(["c"]);
   });
 
-  it("写手那份：相关的带原句，补上的只写在哪", () => {
+  it("写手那份：相关的带原句，补上的只写在哪、按地方并成一行", () => {
     const withQuote = (id: string, name: string, chapter: number) => {
       const base = item(id, name, chapter) as unknown as { history: { quote?: string }[] };
       return { ...base, history: base.history.map((step) => ({ ...step, quote: `${name}放在桌上` })) } as never;
     };
-    const where = itemsWhere({ ...projection, facts: [], items: [withQuote("c", "镜子", 9), withQuote("d", "钥匙", 4)] } as never, ["他照了照镜子"], []);
-    expect(where.lines).toEqual(["镜子 · 现在：在桌上，第 9 章 · 原句「镜子放在桌上」", "钥匙 · 现在：在桌上，第 4 章"]);
+    const where = itemsWhere({ ...projection, facts: [], items: [withQuote("c", "镜子", 10), withQuote("d", "钥匙", 4)] } as never, ["他照了照镜子"], []);
+    expect(where.lines).toEqual(["镜子 · 现在：在桌上，第 10 章 · 原句「镜子放在桌上」", "在桌上：钥匙"]);
+  });
+  it("写手那份：整章没记全那句并成一行、点名哪几样；不相关的有话要说的（没核全）一样一行、不并进地方那行", () => {
+    const gap = (id: string, name: string, chapter: number) => ({ ...(item(id, name, chapter) as object), unverifiedSince: 5, unverifiedBy: "chapter" }) as never;
+    const where = itemsWhere({ ...projection, facts: [], items: [gap("c", "镜子", 4), gap("d", "钥匙", 3), item("e", "信", 2)] } as never, ["他照了照镜子"], []);
+    expect(where.lines).toEqual(["镜子 · 现在：在桌上，第 4 章", "钥匙 · 现在：在桌上，第 3 章", "在桌上：信", "第 5 章起东西账没记全，这几样之后挪没挪不知道：镜子、钥匙"]);
   });
 });

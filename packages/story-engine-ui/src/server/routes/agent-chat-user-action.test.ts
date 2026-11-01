@@ -38,7 +38,7 @@ import { registerAgentChatRoutes } from "./agent-chat.js";
 const SENTENCE = "林远在会议室外停下脚步，反复掂量手里那份账册的分量，盘算着接下来每一步该怎么走。";
 /** 假记账员：要账单就交一份（原句都在正文里），不连网。 */
 const fakeKeeper: BrainCallModel = async (messages) =>
-  (messages.at(-1)?.content ?? "").includes("交这一章的账单")
+  ((messages.at(-1)?.content ?? "").includes("交这一章的账单") || (messages.at(-1)?.content ?? "").includes("只记本章东西的去向"))
     ? JSON.stringify({
         summary: { text: "林远在会议室外犹豫", quote: "林远在会议室外停下脚步" },
         presence: [{ name: "林远", nameUsed: "林远", viewpoint: true, quote: "林远在会议室外停下脚步" }],
@@ -319,7 +319,7 @@ describe("agent-chat route：定稿回执里的「还没建卡的人」", () => 
 
   /** 第 3 章的假记账员：林远、老周、阿禾（头一回出场）。 */
   const keeper3: BrainCallModel = async (messages) =>
-    (messages.at(-1)?.content ?? "").includes("交这一章的账单")
+    ((messages.at(-1)?.content ?? "").includes("交这一章的账单") || (messages.at(-1)?.content ?? "").includes("只记本章东西的去向"))
       ? JSON.stringify({
           summary: { text: "林远在会议室外犹豫", quote: "林远在会议室外停下脚步" },
           presence: [

@@ -39,8 +39,10 @@ export const MAX_PROMPT_ITEMS = 40;
 export const ITEM_RECENT_CHAPTERS = 3;
 
 export interface KeeperContext {
-  /** 拼好的上下文段，直接接在本章正文后面。 */
+  /** 拼好的上下文段，直接接在本章正文后面（记账员那一遍；东西的去向另一遍记，这里只留【已有的东西】给事实挂 I 号）。 */
   readonly text: string;
+  /** 记东西那一遍的上下文段：人物、现在有效的事实（旧记法去向的 F 号）、已有的东西、上次定稿时新记的东西。 */
+  readonly itemText: string;
   /** 「T3」→ 线索真编号。 */
   readonly threadHandles: ReadonlyMap<string, string>;
   /** 「F7」→ 事实真编号。 */
@@ -283,9 +285,12 @@ export function buildKeeperContext(
   const facts = factSection(projection, draft, factHandles, handleNames);
   const items = itemSection(projection, draft, itemHandles, factHandles, handleNames);
   const reopenItemsText = reopenItemSection(reopenItems, reopenItemHandles, handleNames);
-  const sections = [castSection(projection), cardCastSection(projection, cards), threads.text, reopen, facts.text, items.text, reopenItemsText, timelineSection(projection)].filter((part) => part.length > 0);
+  const cast = [castSection(projection), cardCastSection(projection, cards)];
+  const sections = [...cast, threads.text, reopen, facts.text, items.text, timelineSection(projection)].filter((part) => part.length > 0);
+  const itemSections = [...cast, facts.text, items.text, reopenItemsText].filter((part) => part.length > 0);
   return {
     text: sections.join("\n\n"),
+    itemText: itemSections.join("\n\n"),
     threadHandles,
     factHandles,
     reopenHandles,

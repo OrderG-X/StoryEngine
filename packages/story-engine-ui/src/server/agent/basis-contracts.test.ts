@@ -73,7 +73,7 @@ function ok<T extends { ok: boolean }>(result: T): Extract<T, { ok: true }> {
   expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
   return result as Extract<T, { ok: true }>;
 }
-const model = async (messages: readonly { content: string }[]) => (messages.at(-1)?.content.includes("交这一章的账单") ? "{}" : "笔记。");
+const model = async (messages: readonly { content: string }[]) => ((messages.at(-1)?.content.includes("交这一章的账单") || messages.at(-1)?.content.includes("只记本章东西的去向")) ? "{}" : "笔记。");
 async function seed(text = "# 一\n\n张三回家了。"): Promise<void> {
   ok(await runCommand(book, chapterCommit, { chapter: 1, text, entries: [] }, author("seed")));
   ok(await runCommand(book, cardsImport, {}, author("cards")));
@@ -196,6 +196,8 @@ describe("依据安全契约", () => {
     let sawB = false;
     const preview = ok(await prepareNow({
       bookDir: book, chapter: 2, text, callModel: async (messages) => {
+        // 东西那遍和记账员那遍并行：东西那遍不碰书，只看记账员那遍读到的。
+        if (messages.at(-1)?.content.includes("只记本章东西的去向")) return JSON.stringify({ newItems: [], items: [] });
         if (!messages.at(-1)?.content.includes("交这一章的账单")) return "他是李四。";
         sawB = messages.some((message) => message.content.includes("他叫李四"));
         await restoreForTest(book, saved.id);

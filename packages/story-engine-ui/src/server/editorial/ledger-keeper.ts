@@ -71,8 +71,8 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
-/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 重写东西条目一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 6;
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 记东西一次 + 重写东西条目一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 7;
 
 /** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
 const IN_CHAPTER_BOUNDARY =
@@ -116,17 +116,7 @@ export const KEEPER_SPEC: readonly string[] = [
   "- 这条是某个人物嘴里说的（不是叙述直接写的），加 \"speaker\":\"正文里对说话人的称呼\"；叙述直接写的加 \"source\":\"narration\"；拿不准就都不写。梦里、回忆里的照常记，算不算现状由代码按 segments 定。",
   "- 本章里同一件事只记一条：同一个动作、同一样东西的同一个变化（把钥匙揣进兜里 / 身上多了一把钥匙），不要换个说法再记一条。",
   "- 前文已经记过、本章只是又提了一遍的，不要再记。换了说法、意思一样（「姓张」和「弓长张」），或者只是补了细节、不和前文那条打架的（「信上有落款」和「落款是某某」），也不要在同一个 subject 同一个 attribute 下再记一条——代码会把同一格子的不同 value 当成前后矛盾报给作者。补的是新的一方面，就换一个 attribute 写；只有本章写的和前文那条真的不可能同时成立，才照同一个 attribute 记。",
-  "- 东西在哪、在谁手里不记进 facts，只记 items（见下）。东西不会变的特征（上面写的字、样子、牌子、金额）照样记 facts，加 \"item\":\"I3\"（或 N 号），subject 写它的名字。",
-  "",
-  "newItems、items：东西——正文里能拿、能放、能转手的实物（人、地方、抽象的不算）。",
-  "- 本章写到的东西：是上面【已有的东西】里哪一样就写它的 I 号；那里没有、或拿不准是不是那一样的，当新的，在 newItems 里声明 N 号（N1、N2……），写 name（正文里一个叫法，挑最能把它和别的同类东西分开的那个：正文写着颜色、材料、主人这类分别的就带上；不加括号、不列别名；别的叫法写在各条的 as 里）、quote（头一回写到它那句）、by。同名不一定是同一样，看头回那句和现在在哪。一样东西一个号；一组东西（「借据、纸条和表」）分开声明、分开记，分不开就不记去向。items、members、inside 里用到的每个 N 号都要在 newItems 里声明，没声明的那条整条不收。",
-  "- 上面有【这一章上次定稿时新记的东西】的：本章还写到其中哪样，就在 newItems 里照样声明它，tag 写那个 P 号（P1），不要另发 N 号。",
-  "- items 只记正文明写的去向，一处一条：此刻在哪写 op = at（顺带一句也算：挂在谁腰上、搁在哪儿）；被挪了（转手、放进、拿出、捡到、带走）写 op = move，正文写了从哪来就填 from；丢了、被拿走不知去向写 op = gone、gone = lost（在某处找了没有，只说明它不在那儿，不算丢了，不记）；毁了、用光了写 gone = destroyed，note 一句话说怎么没的。正文清点某样东西里面有什么写 op = census，members 把正文列的每一样都写上（一样一个号，头回出现的先声明，quote 可以就写清点那句）；正文明说「只有」「就剩」「别的没了」「空了」、而且 members 一样不少才写 complete: true，没明说或列不全就不写。",
-  "- 去处 to、from 写成 {\"person\":\"正文里对这个人的称呼\"}（谁拿着、揣着、放在他随身的包里）、{\"place\":\"地方原样的字\"}、{\"inside\":\"I3\"}（在另一样东西里面）；正文明说不知道在哪了，to 写 \"unknown\"。to 是东西落到了哪儿：放到桌上、柜里、地上的写那个地方或那样东西，不写动手放的人；拿在手里、揣在身上的才写那个人。",
-  "- seq：全章按故事里发生的先后给每条 items 编号 1、2、3……（不是正文写的先后：倒叙里先写、后发生的照发生排）；正文没说清谁先谁后的几条写同一个号。同一句里挪了几次就记几条。",
-  "- 指东西的地方都可以写成 {\"item\":\"I3\",\"as\":\"本章正文怎么叫它\"}（主体的叫法写在这条的 as），照正文原样抄；不写就不写。",
-  "- 每条 newItems、items 都写 by：叙述直接写的写 \"narration\"（「他把钥匙揣回兜里」是叙述，哪怕这句前后有人在说话；quote 抄叙述那段）；只有人物嘴里说的才写 \"claim\"，再加 speaker（正文里对说话人的称呼）。梦里、回忆里的照常记，算不算现状由代码按 segments 定。",
-  "- 【现在有效的事实】里有说某样东西去向的旧事实（F 号），本章写到这样东西在哪：那条只说这一样的，这条 items 填 replaces（[\"F2\"]）；一句里还说了别的东西的，填 overlaps，不填 replaces。清点的成员写成 {\"item\":\"I3\",\"overlaps\":[\"F5\"]}。",
+  "- 东西在哪、在谁手里、被谁拿走、丢了毁了都不记进 facts（另有专人逐句记）。东西不会变的特征（上面写的字、样子、牌子、金额）照样记 facts；是【已有的东西】里的，加 \"item\":\"I3\"，subject 写它的名字。",
   "",
   "threads：线索——悬念（question）、人物的打算或待办（intent）、主角的目标（goal）。",
   "- op = open 新开：只给正文还没解开、后文需要一个揭晓或回收时刻的问题，以及正文明确留下的后续行动、新立的目标。写 type、title（像个标题，跨章能认出来）、note（本章怎么引出的）、quote。",
@@ -137,8 +127,31 @@ export const KEEPER_SPEC: readonly string[] = [
   "- 报 advance 之前先想一遍：它是不是其实已经做完、已经揭晓了？是就报 close，别让它一直挂着。判断待办做没做完，只看那个动作本身：正文写到动作做成了（问过了、找到了、交出去了、打开了），就算完成；做完之后冒出的新问题另开一条。",
   "- 揭晓、了结是某个人物嘴里说的，照样报，加 speaker（写法同 facts）；梦里、回忆里的照样报，代码按推进记、留给作者看。",
   "",
-  "没有的类就给空数组或省略。只输出一个 JSON 对象，键为 summary、time、segments、presence、facts、newItems、items、threads，形如：",
-  '{"summary":{"text":"…","quote":"…"},"time":{"start":{"offset":{"unit":"day","min":1,"max":1},"basis":"judged","quote":"…"},"dayChanges":[{"offset":{"unit":"day","min":1,"max":1},"quote":"…"}],"timeOfDay":"清晨"},"segments":[{"frame":"past","firstQuote":"…","lastQuote":"…","when":{"offset":{"unit":"year","max":-3}}}],"presence":[{"name":"…","nameUsed":"…","viewpoint":true,"quote":"…"},{"name":"…","nameUsed":"那人","generic":true,"quote":"…"}],"facts":[{"nature":"state","subject":"…","attribute":"…","value":"…","text":"…","quote":"…"},{"nature":"hard","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","speaker":"…"},{"nature":"hard","item":"N1","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","source":"narration"}],"newItems":[{"tag":"N1","name":"…","by":"narration","quote":"…"}],"items":[{"seq":1,"item":"I2","as":"…","op":"move","from":{"person":"…"},"to":{"inside":"N1"},"by":"narration","quote":"…"},{"seq":2,"item":"N1","op":"census","members":["I2"],"complete":true,"by":"narration","quote":"…"}],"threads":[{"op":"open","type":"question","title":"…","note":"…","quote":"…"},{"op":"advance","thread":"T2","note":"…","quote":"…"}]}',
+  "没有的类就给空数组或省略。只输出一个 JSON 对象，键为 summary、time、segments、presence、facts、threads，形如：",
+  '{"summary":{"text":"…","quote":"…"},"time":{"start":{"offset":{"unit":"day","min":1,"max":1},"basis":"judged","quote":"…"},"dayChanges":[{"offset":{"unit":"day","min":1,"max":1},"quote":"…"}],"timeOfDay":"清晨"},"segments":[{"frame":"past","firstQuote":"…","lastQuote":"…","when":{"offset":{"unit":"year","max":-3}}}],"presence":[{"name":"…","nameUsed":"…","viewpoint":true,"quote":"…"},{"name":"…","nameUsed":"那人","generic":true,"quote":"…"}],"facts":[{"nature":"state","subject":"…","attribute":"…","value":"…","text":"…","quote":"…"},{"nature":"hard","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","speaker":"…"},{"nature":"hard","item":"I1","subject":"…","attribute":"…","value":"…","text":"…","quote":"…","source":"narration"}],"threads":[{"op":"open","type":"question","title":"…","note":"…","quote":"…"},{"op":"advance","thread":"T2","note":"…","quote":"…"}]}',
+  "不要 Markdown、不要解释、不要多余文字。",
+];
+
+/**
+ * 记东西那一遍（P3b 正式批后拆出来，设计 3.4）：和记账员第一遍并行，只看本章编号正文和东西相关的几段，逐句点出东西的去向。
+ * 只点句号、不抄原句（代码按编号取整句）；规矩和原来写在记账员那一遍里的一样。
+ */
+export const ITEM_SPEC: readonly string[] = [
+  "你只管这一章里的东西：正文里能拿、能放、能转手的实物（人、地方、抽象的不算）。逐句读上面的编号正文，把东西的去向一条条记下来。题材中立：只记正文真实写到的，不臆造、不补剧情。",
+  "每条都写 unit：这件事写在第几句（正文前面的编号，一个数）。代码按编号取那一句当原句，不用抄原句。",
+  "",
+  "- 本章写到的东西：是上面【已有的东西】里哪一样就写它的 I 号；那里没有、或拿不准是不是那一样的，当新的，在 newItems 里声明 N 号（N1、N2……），写 name（正文里一个叫法，挑最能把它和别的同类东西分开的那个：正文写着颜色、材料、主人这类分别的就带上；不加括号、不列别名；别的叫法写在各条的 as 里）、unit（头一回写到它那句）、by。同名不一定是同一样，看头回那句和现在在哪。一样东西一个号；一组东西（「借据、纸条和表」）分开声明、分开记，分不开就不记去向。items、members、inside 里用到的每个 N 号都要在 newItems 里声明，没声明的那条整条不收。",
+  "- 上面有【这一章上次定稿时新记的东西】的：本章还写到其中哪样，就在 newItems 里照样声明它，tag 写那个 P 号（P1），不要另发 N 号。",
+  "- items 只记正文明写的去向，一处一条：此刻在哪写 op = at（顺带一句也算：挂在谁腰上、搁在哪儿）；被挪了（转手、放进、拿出、放下、捡到、带走）写 op = move，正文写了从哪来就填 from；丢了、被拿走不知去向写 op = gone、gone = lost（在某处找了没有，只说明它不在那儿，不算丢了，不记）；毁了、用光了写 gone = destroyed，note 一句话说怎么没的。正文清点某样东西里面有什么写 op = census，members 把正文列的每一样都写上（一样一个号，头回出现的先声明，unit 写清点那句）；正文明说「只有」「就剩」「别的没了」「空了」、而且 members 一样不少才写 complete: true，没明说或列不全就不写。",
+  "- 拿起来又放下、揣进去又掏出来的，每一下都记：最后放到哪儿那句尤其不能漏，漏了后文就一直当它还在原处。只是拿在手里看、翻来覆去摆弄、嘴上提一句、没挪地方的，不记。",
+  "- 去处 to、from 写成 {\"person\":\"正文里对这个人的称呼\"}（谁拿着、揣着、放在他随身的包里）、{\"place\":\"地方原样的字\"}、{\"inside\":\"I3\"}（在另一样东西里面）；正文明说不知道在哪了，to 写 \"unknown\"。to 是东西落到了哪儿：放到桌上、柜里、地上的写那个地方或那样东西，不写动手放的人；拿在手里、揣在身上的才写那个人。",
+  "- seq：全章按故事里发生的先后给每条 items 编号 1、2、3……（不是正文写的先后：倒叙里先写、后发生的照发生排）；正文没说清谁先谁后的几条写同一个号。同一句里挪了几次就记几条。",
+  "- 指东西的地方都可以写成 {\"item\":\"I3\",\"as\":\"本章正文怎么叫它\"}（主体的叫法写在这条的 as），照正文原样抄；不写就不写。",
+  "- 每条 newItems、items 都写 by：叙述直接写的写 \"narration\"（「他把钥匙揣回兜里」是叙述，哪怕这句前后有人在说话）；只有人物嘴里说的才写 \"claim\"，再加 speaker（正文里对说话人的称呼）。梦里、回忆里的照常记，算不算现状由代码定。",
+  "- 【现在有效的事实】里有说某样东西去向的旧事实（F 号），本章写到这样东西在哪：那条只说这一样的，这条 items 填 replaces（[\"F2\"]）；一句里还说了别的东西的，填 overlaps，不填 replaces。清点的成员写成 {\"item\":\"I3\",\"overlaps\":[\"F5\"]}。",
+  "",
+  "没有就给空数组。只输出一个 JSON 对象，键为 newItems、items，形如：",
+  '{"newItems":[{"tag":"N1","name":"…","by":"narration","unit":3}],"items":[{"seq":1,"item":"I2","as":"…","op":"move","from":{"person":"…"},"to":{"inside":"N1"},"by":"narration","unit":5},{"seq":2,"item":"N1","op":"census","members":["I2"],"complete":true,"by":"narration","unit":7}]}',
   "不要 Markdown、不要解释、不要多余文字。",
 ];
 
@@ -304,6 +317,32 @@ export function buildKeeperTask(chapter: number, draft: string, contextText: str
     .join("\n\n");
 }
 
+/** 记东西那一遍的 user 消息：编号正文 + 东西相关的几段 + 规矩（单测也用）。 */
+export function buildItemTask(chapter: number, numbered: string, itemText: string): string {
+  return [`【第 ${chapter} 章 正文（每句前面是编号）】\n${numbered}`, itemText, `这一章即将定稿入库，请只记本章东西的去向。\n\n${ITEM_SPEC.join("\n")}`]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+}
+
+/**
+ * 记东西交回来的（第一遍和重写都是）：每条的 unit（第几句）换成那一句原文当 quote，交给原来那套解析和核对。
+ * 编号认不出、又没写 quote 的照留，解析时如实丢（「没写原句」）。不是 JSON 对象 → undefined。
+ */
+export function itemsWithUnitQuotes(text: string, draft: string, units: readonly TextUnit[]): string | undefined {
+  const root = extractJsonObject(text);
+  if (!root) return undefined;
+  const withQuote = (value: unknown): unknown => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const raw = value as Record<string, unknown>;
+    const id = positiveIntLike(Array.isArray(raw.unit) ? raw.unit[0] : raw.unit);
+    const quote = id !== undefined ? quoteOfUnits(draft, units, [id]) : undefined;
+    const { unit: _unit, ...rest } = raw;
+    return quote !== undefined ? { ...rest, quote } : raw;
+  };
+  const list = (value: unknown): unknown => (Array.isArray(value) ? value.map(withQuote) : value);
+  return JSON.stringify({ newItems: list(root.newItems) ?? [], items: list(root.items) ?? [] });
+}
+
 /**
  * 先确保读到第 N-1 章（缺的笔记按顺序补；太多就走冷窗口），再在窗口后面接一条 user 消息要账单。
  * 坏 JSON、调用失败 → ok=false + 原因，不抛。
@@ -374,18 +413,45 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const cards = await readCards(input.projectDir).catch(() => undefined);
   const context = buildKeeperContext(input.before, input.draft, input.reopenable, cards, input.reopenItems);
   const task = buildKeeperTask(input.chapter, input.draft, context.text, await previousEnding(input.projectDir, input.before, input.chapter));
+  // 东西另一遍并行记（只看本章编号正文和东西那几段）：记账员那一遍不再管东西，时间、事实不被挤。
+  const units = splitUnits(input.draft);
+  const itemTask = buildItemTask(input.chapter, numberedText(units), context.itemText);
+  const mainCall = withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
+  const itemCall = withStep("记账员记东西", () => input.callModel([{ role: "user", content: itemTask }], { json: true })).then(
+    (reply) => ({ ok: true as const, reply }),
+    (error: unknown) => {
+      rethrowIfStopped(error);
+      return { ok: false as const, error };
+    },
+  );
   let text: string;
   try {
-    text = await withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
+    text = await mainCall;
   } catch (error) {
+    await itemCall.catch(() => undefined);
     rethrowIfStopped(error);
     return { ok: false, reason: `记账员没交上账单：${modelFailureText(error)}`, cause: error, ...extra };
   }
   input.onRawOutput?.(text);
-  const parsed = parseKeeperOutput(text, context);
-  if (!parsed) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
+  const root = extractJsonObject(text);
+  if (!root) {
+    await itemCall.catch(() => undefined);
+    return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
+  }
+  const itemResult = await itemCall;
+  if (itemResult.ok) input.onRawOutput?.(itemResult.reply);
+  const itemJson = itemResult.ok ? itemsWithUnitQuotes(itemResult.reply, input.draft, units) : undefined;
+  // 东西那遍以它为准：记账员那一遍顺手写的 newItems / items 不收（不然两遍各记一份）。
+  const merged = JSON.stringify({ ...root, newItems: [], items: [], ...(itemJson ? JSON.parse(itemJson) : {}) });
+  const firstPass = parseKeeperOutput(merged, context);
+  if (!firstPass) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
+  // 记东西那遍没成：这章东西整类没记上（定稿清单、投影都照「东西账没记全」如实说），别的照收。
+  const parsed: KeeperParseResult = itemJson
+    ? firstPass
+    : { ...firstPass, drops: [...firstPass.drops, { where: "items", kind: "item", reason: itemResult.ok ? "记东西交回来的不是 JSON" : `记东西没成：${modelFailureText(itemResult.error)}` }] };
   const conversation: BrainMessage[] = [...window, { role: "user", content: task }, { role: "assistant", content: text }];
-  const rewritten = await repairItems(parsed, text, context, input, conversation);
+  const itemConversation: BrainMessage[] = [{ role: "user", content: itemTask }, { role: "assistant", content: itemResult.ok ? itemResult.reply : "" }];
+  const rewritten = itemJson ? await repairItems(parsed, merged, context, input, itemConversation, units) : { parsed };
   const repaired = await repairQuotes(rewritten.parsed, input, conversation);
   const ended = await askChapterEnd(repaired.parsed, input, conversation);
   const nights = await recheckNight(ended, input, conversation);
@@ -536,6 +602,7 @@ async function repairItems(
   handles: KeeperHandles,
   input: KeeperInput,
   conversation: readonly BrainMessage[],
+  units: readonly TextUnit[],
 ): Promise<{ parsed: KeeperParseResult; repair?: QuoteRepair }> {
   const fixable = new Set(["shape", "unknown_item", "unknown_fact"]);
   const problems: ItemProblem[] = [
@@ -560,7 +627,8 @@ async function repairItems(
     return { parsed, repair: { asked, fixed: 0, failed: modelFailureText(error) } };
   }
   input.onRawOutput?.(reply);
-  const patch = parseItemPatch(reply, handles);
+  const unitReply = itemsWithUnitQuotes(reply, input.draft, units);
+  const patch = unitReply ? parseItemPatch(unitReply, handles) : undefined;
   if (!patch) return { parsed, repair: { asked, fixed: 0, failed: "重写交回来的不是 JSON" } };
   // 先拿掉要重写的那几条，换上交回来的（新声明的东西只收第一遍没声明过的标签），再整批核一遍。
   const replaced = new Set(problems.flatMap((problem) => (problem.kind === "entry" ? [problem.index] : [])));
@@ -632,9 +700,9 @@ export function buildItemRepairTask(problems: readonly ItemProblem[]): string {
     "",
     "请只重写这几条，别的不用重交。规矩和前面一样：at 只写 to；move 写 to，正文写了从哪来才写 from；丢了 / 毁了写 op = gone 和 gone，不写 to；清点写 members。" +
       "用到的本章新东西要在 newItems 里声明（前面声明过的不用再声明）；只是忘了声明的，补上声明就行，那条不用重写。正文实在没写清它在哪的，那条就不交。",
-    "每条 items 加 fix：写它重写的是上面第几条。",
+    "每条 items 加 fix：写它重写的是上面第几条；unit 照样写第几句。",
     "",
-    '只交 JSON：{"newItems":[{"tag":"N5","name":"…","by":"narration","quote":"…"}],"items":[{"fix":1,"seq":3,"item":"I2","op":"move","to":{"person":"…"},"by":"narration","quote":"…"}]}',
+    '只交 JSON：{"newItems":[{"tag":"N5","name":"…","by":"narration","unit":3}],"items":[{"fix":1,"seq":3,"item":"I2","op":"move","to":{"person":"…"},"by":"narration","unit":5}]}',
   ].join("\n");
 }
 

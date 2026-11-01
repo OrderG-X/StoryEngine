@@ -121,7 +121,7 @@ let ledger: unknown;
 /** 假记账员：要账单交 ledger，要笔记交笔记。 */
 const fakeModel: BrainCallModel = async (messages) => {
   const last = messages.at(-1)?.content ?? "";
-  if (!last.includes("交这一章的账单")) return "笔记：老周＝周守义。";
+  if (!(last.includes("交这一章的账单") || last.includes("只记本章东西的去向"))) return "笔记：老周＝周守义。";
   if (ledger === undefined) throw new Error("模型没回话");
   return JSON.stringify(ledger);
 };
