@@ -26,9 +26,6 @@ import { IconArrowUp, IconChevronRight, IconClose, IconCopy, IconSparkle, IconSt
 import { useActiveModel } from "./useActiveModel.js";
 import { StepCardCollapsedByDefault } from "./StepCard.js";
 import { activeMentionQuery, buildMentionCandidates, insertMention } from "./composerMention.js";
-import { buildInboxTodos, type InboxTodo } from "./inboxTodos.js";
-import { saveCards } from "../../../api/bibleClient.js";
-import { refreshOverviewNow } from "../../../workspace/refreshOverview.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { resumeBookReread } from "../../../api/client.js";
 import AgentErrorCard from "./AgentErrorCard.js";
@@ -42,19 +39,17 @@ import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
-import { ChapterTodoCard } from "./ChapterTodoCard.js";
-import { settledContinuityByMessage, useChapterProgress } from "../../../workspace/chapterProgress.js";
-import { targetChapterWordsOf } from "./WritingDeskCodex.js";
+import { settledContinuityByMessage } from "../../../workspace/chapterProgress.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, withoutRailDuplicates, type NextStepPrompt } from "./nextStepChoices.js";
 import { newCommitAction, type AgentUserAction } from "../../../api/agentChatClient.js";
 import { summarizeCommitReport } from "../../../utils/commitReportSummary.js";
-import { confirmableCommitPreviewIds, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
+import { supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import { chapterTurns } from "./chapterTurns.js";
-import { foldTurn, processWorthShowing, summarizeProcess, type ProcessFoldStep } from "./processLogFold.js";
+import { foldTurn, summarizeProcess, type ProcessFoldStep } from "./processLogFold.js";
 import {
   formatMessageBlocks,
   formatStepElapsed,
@@ -64,19 +59,16 @@ import {
 } from "./chatRenderShared.js";
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
-import { checkedBeforeEdit, OperationCard, runningOperationCaption } from "./OperationCard.js";
+import { checkedBeforeEdit, OperationCard } from "./OperationCard.js";
 import type { CheckedBody } from "../../../lib/body-hash.js";
 import { isDraftDirty, useDraftStore } from "../../../stores/draftStore.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
-import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useReaderCatchUp, useRefreshWhenRereadDone } from "../../../hooks/useReaderCatchUp.js";
 import { usePresence } from "../../../hooks/usePresence.js";
 
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
-  /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
-  readonly onOpenChapter?: (chapter: number) => void;
   /** @ 提及候选：设定本里的人物和地点（WritingWorkspaceCodex 从设定视图拼好传下来）。 */
   readonly mentionNames?: { readonly characters: readonly string[]; readonly locations: readonly string[] };
   readonly rightOpen: boolean;
@@ -95,20 +87,10 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   readonly modelRefreshKey?: number;
 };
 
-/** 进度行里角色 id → 叫法（和服务端 brain 的角色对应：checker / ledger / planner）。 */
-const READER_ROLE_LABELS: Readonly<Record<string, string>> = {
-  checker: "核账员",
-  ledger: "记账员",
-  planner: "章纲员",
-};
-
 /**
- * 编辑部「在读前文」进度行（R4.3 验收 3.3）：三个角色一行写全，例如
- * 「编辑部在读前文：核账员 34/58 · 记账员 排队 · 章纲员 排队」。在读的带 done/total（分母和核账回执同口径：
- * 共 y 章（已定稿））；还没轮到的或这次没读成的显示「排队」（下一次开书 / 核账会重排）；读完的划掉；
- * 全读完（reading:false）这行消失。数据：开书概况带初值，在读期间 useReaderCatchUp 每 5 秒轮询轻量接口自走。
- * R5.2：核账 / 拟纲 / 记账在等哪个角色当场补笔记，那个角色后面标「（核账在等它读完）」——走的还是这条轮询链路。
- * R6.2：概况刷新的新初值盖过旧轮询快照（同一次打开里后来的补读也显示）；动作等回包期间也轮询，这行不等回包落地就能现出来。
+ * 导入的书在通读记账（P8）那一行：记账没记完时 AI 出稿、核账、定稿都挡着，说一行进度；停下了给「接着记」。
+ * 安静账房（2026-11-03）：编辑部平时在后台读前文（核账员、章纲员），不再报进度——挡住时由那次操作如实说。
+ * 数据：开书概况带初值，在读期间 useReaderCatchUp 每 5 秒轮询轻量接口自走。
  */
 export function ReadersCatchUpNote({ status, onResumeReread, aiMissing = false }: {
   readonly status?: ReaderCatchUpStatus | null;
@@ -152,22 +134,12 @@ export function ReadersCatchUpNote({ status, onResumeReread, aiMissing = false }
       </div>
     );
   }
-  if (!status?.reading) return null;
-  // 只列正在读的角色（排队的、读完的不占字）；三个角色的全貌悬停看。
-  const describe = (role: (typeof status.roles)[number]) => {
-    const label = READER_ROLE_LABELS[role.role] ?? role.role;
-    const finished = !role.reading && role.total > 0 && role.done >= role.total;
-    const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
-    // 导入的书通读记账（P8）：记账员这一行带上还要多久。
-    const etaSuffix = role.role === "ledger" && reread?.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : "";
-    return role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}${etaSuffix}` : `${label} 排队`;
-  };
-  const active = status.roles.filter((role) => role.reading);
+  if (!reread) return null;
   return (
-    <div className="se-checker-reading" role="status" title={`编辑部在读前文：${status.roles.map(describe).join(" · ")}`}>
+    <div className="se-checker-reading" role="status">
       <span className="se-checker-reading-dot" aria-hidden="true" />
       <span className="se-checker-reading-text">
-        编辑部在读前文：{active.length ? active.map(describe).join(" · ") : "排队中"}
+        导入的书在记账：第 {reread.done}/{reread.total} 章{reread.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : ""}
       </span>
     </div>
   );
@@ -289,8 +261,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 账还没记上 / 没记全的章：那章的定稿回执卡上给「补记账」（补上了就不再给）。
   const ledgerShortChapters = useMemo(() => new Set((props.overview?.ledgerShort ?? []).map((item) => item.chapter)), [props.overview?.ledgerShort]);
   useRefreshWhenRereadDone(props.projectPath, readerCatchUp);
-  // 这一章还差什么（顶卡；和稿纸底下的工具条同源）。
-  const chapterProgressNow = useChapterProgress(targetChapterWordsOf(props.overview));
 
   // 智能跟随滚动：贴底才跟新内容滚，翻历史时不打扰。
   const historyRef = useRef<HTMLDivElement>(null);
@@ -316,52 +286,12 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   });
   const mentionOpen = mentionCandidates.length > 0 && mentionDismissedAt !== props.steeringDirection;
   const activeMention = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
-  // 「待处理」收件箱：点「让 AI …」只把一句话放进输入框，发不发由你。
-  const [inboxOpen, setInboxOpen] = useState(false);
-  const inboxTodos = buildInboxTodos({
-    chapters: props.workspace.chapters,
-    overview: props.overview,
-    currentChapterNumber: props.workspace.currentChapter.chapterNumber,
-    rereading: readerCatchUp?.reread !== undefined,
-  });
-  useEffect(() => {
-    if (!inboxOpen) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setInboxOpen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [inboxOpen]);
+  // 把一句话放进输入框（发不发由作者）。
   const prefillComposer = (text: string) => {
     props.onSteeringDirectionChange(text);
-    setInboxOpen(false);
     requestAnimationFrame(() => {
       const el = composerRef.current;
       if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
-    });
-  };
-  // 带 ops 的待办（还没标主角）点了直接改设定本：作者档、可撤销，不经模型；没改成就在这儿如实说。
-  const [inboxError, setInboxError] = useState<string | null>(null);
-  const [inboxSaving, setInboxSaving] = useState(false);
-  const runInboxTodo = (todo: InboxTodo) => {
-    const projectPath = props.projectPath;
-    if (todo.userAction && props.onSendUserAction) {
-      props.onSendUserAction(todo.userAction);
-      setInboxOpen(false);
-      return;
-    }
-    if (!todo.ops || !projectPath) {
-      prefillComposer(todo.prefill);
-      return;
-    }
-    setInboxSaving(true);
-    setInboxError(null);
-    void saveCards(projectPath, todo.ops).then(async (result) => {
-      if (result.ok) {
-        await refreshOverviewNow(projectPath);
-        setInboxOpen(false);
-      } else {
-        setInboxError(result.error);
-      }
-      setInboxSaving(false);
     });
   };
   const pickMention = (label: string) => {
@@ -405,24 +335,15 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
   const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages), Boolean(nextStepPrompt && props.onSendMessage));
   const nextStep = withoutRailDuplicates(nextStepPrompt, railActions.map((action) => action.label));
-  // 能点「确认定稿」的定稿清单（那次定稿还在等作者点，见 commitConfirm.ts）。
-  const confirmablePreviewIds = confirmableCommitPreviewIds(messages);
   // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。
   const undoableCommitId = undoableCommitReportMessageId(messages);
   // 同一章后来又核过的旧核账卡不再给「改这处」（见 commitConfirm.ts）。
   const staleContinuityIds = supersededContinuityMessageIds(messages);
   const settledContinuity = settledContinuityByMessage(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
-  // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   // 「正在思考」胶囊只顶发出去到第一个字回来之前那一下；之后那条回复自己的过程行在跑光、报正在做哪步，不再两处都说。
   const waitingFirstEvent = Boolean(props.chatLoading) && (!lastAssistant || !assistantHasAnything(lastAssistant));
-  // 「建议下一步」是收尾的内部一步，不上字幕。
-  const busyCaption = busy
-    ? runningOperationCaption(lastAssistant ? cardOf(lastAssistant, "operation")?.op : undefined)
-      ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running" && step.toolName !== "suggest_next_steps"))
-      ?? "AI 在忙…"
-    : null;
 
   return (
     <aside className="ai" aria-label="AI 写作助手">
@@ -477,55 +398,12 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         </section>
       ) : null}
 
-      {/* ── 顶卡（P6）：这一章还差什么 + 一个主按钮；下面一行小字是编辑部读前文、不急的事 ── */}
-      <ChapterTodoCard
-        progress={chapterProgressNow}
-        busy={busy}
-        busyCaption={busyCaption}
-        onChapterButton={props.onChapterButton}
-        {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
-      >
-        <ReadersCatchUpNote
-          status={readerCatchUp}
-          aiMissing={Boolean(setupStep)}
-          {...(props.projectPath ? { onResumeReread: () => resumeBookReread(props.projectPath as string) } : {})}
-        />
-        {inboxTodos.length > 0 ? (
-          <div className="se-todo-more">
-            <button
-              type="button"
-              className="se-todo-more-btn"
-              aria-expanded={inboxOpen}
-              onClick={() => setInboxOpen((open) => !open)}
-            >
-              另有 {inboxTodos.length} 件不急的事
-            </button>
-            {inboxOpen ? (
-              <div className="se-inbox-pop" role="dialog" aria-label="不急的事">
-                <div className="se-inbox-h">
-                  <span>这些不急，但别忘了</span>
-                  <button type="button" className="se-icon-btn sm" aria-label="关闭" onClick={() => setInboxOpen(false)}><IconClose size={14} /></button>
-                </div>
-                {inboxTodos.map((todo) => (
-                  <div key={todo.key} className="se-todo">
-                    <div className="se-todo-tx">{todo.title}<span title={todo.sub}>{todo.sub}</span></div>
-                    <button
-                      type="button"
-                      className="se-todo-act"
-                      disabled={todo.userAction && props.onSendUserAction ? busy : todo.ops && props.projectPath ? busy || inboxSaving : !chatEnabled}
-                      title={todo.userAction && props.onSendUserAction ? "直接改账，可在操作历史里撤销" : todo.ops && props.projectPath ? "直接改设定本，可在操作历史里撤销" : `把「${todo.prefill}」放进输入框（不会自动发送）`}
-                      onClick={() => runInboxTodo(todo)}
-                    >
-                      {todo.action}
-                    </button>
-                  </div>
-                ))}
-                {inboxError ? <p className="se-todo-err" role="alert">{inboxError}</p> : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </ChapterTodoCard>
+      {/* ── 导入的书在记账（P8）：挡着 AI 出稿，说一行；停下了给「接着记」。编辑部平时在后台读前文，不报。 ── */}
+      <ReadersCatchUpNote
+        status={readerCatchUp}
+        aiMissing={Boolean(setupStep)}
+        {...(props.projectPath ? { onResumeReread: () => resumeBookReread(props.projectPath as string) } : {})}
+      />
 
       {/* ── 消息流（智能跟随滚动） ── */}
       {/* is-thinking：胶囊在的时候底部留白，免得浮层盖住最后几行。 */}
@@ -589,7 +467,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSendMessage={props.onSendMessage}
             onSendUserAction={props.onSendUserAction}
             onSuggestedAction={props.onSuggestedAction}
-            commitConfirmable={confirmablePreviewIds.has(message.id)}
             commitUndoable={message.id === undoableCommitId}
             ledgerShortChapters={ledgerShortChapters}
             continuitySuperseded={staleContinuityIds.has(message.id)}
@@ -804,17 +681,6 @@ function buildReviseIntent(issue: DraftReviewIssueView): string {
   return `${parts.join("。")}。`;
 }
 
-/** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——出清单时说「正在定稿」会吓人，点了确认才定）。 */
-const RUNNING_STEP_WORDS: Readonly<Record<string, string>> = {
-  "定稿": "出定稿清单",
-};
-
-function runningStepCaption(step: ToolStep | undefined): string | null {
-  if (!step) return null;
-  const label = toolStepLabel(step);
-  return `正在${RUNNING_STEP_WORDS[label] ?? label}…`;
-}
-
 // ─────────────────────────── 消息气泡 ───────────────────────────
 
 function MessageBubbles({
@@ -829,7 +695,6 @@ function MessageBubbles({
   onSendMessage,
   onSendUserAction,
   onSuggestedAction,
-  commitConfirmable = false,
   commitUndoable = false,
   ledgerShortChapters,
   continuitySuperseded = false,
@@ -854,8 +719,6 @@ function MessageBubbles({
   /** 结构化动作直达（核账「改这处」按钮直接改，不经模型）。 */
   readonly onSendUserAction?: (action: AgentUserAction, options?: { readonly echo?: string }) => void;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
-  /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
-  readonly commitConfirmable?: boolean;
   /** 本条的定稿回执是否挂「撤销这次定稿」（最近一次改动就是这次定稿才挂）。 */
   readonly commitUndoable?: boolean;
   /** 账还没记上 / 没记全的章（定稿回执卡上给「补记账」）。 */
@@ -989,18 +852,16 @@ function MessageBubbles({
         // 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。
         return withStaleNote(card.type, card, <QualityCheckCard key={card.type} report={card.report} />);
       case "commit-preview":
-        // 定稿清单卡（R3）：定稿的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。
+        // 定不了的卡（R3）：定稿的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。
         return (
           <CommitPreviewCard
             key={card.type}
             preview={card.preview}
-            confirmable={commitConfirmable}
-            onOpen={() => openCommitSheet(message.id)}
             {...(onSendUserAction ? { onCommitShort: () => onSendUserAction(newCommitAction(card.preview.chapter, { allowShort: true })) } : {})}
           />
         );
       case "commit-report":
-        // 入库 delta 卡：这章正式入库改了哪些角色/伏笔/线索/时间线/主线目标，随消息走。
+        // 定稿回执：定了、账记没记上，能撤、能补账。
         return (
           <CommitDeltaCard
             key={card.type}
@@ -1047,10 +908,8 @@ function MessageBubbles({
           ))}
         </div>
       ) : null}
-      {/* 进行中还没第一步（比如只先来了一条状态说明）也挂这一行「在想…」，别让作者对着不动的消息干等。 */}
-      {(processLive && fold.process.length === 0) || processWorthShowing(fold.process, new Set((message.cards ?? []).map((card) => card.type)), chatLoading && isLiveAssistant)
-        ? <TurnProcess steps={fold.process} live={processLive} />
-        : null}
+      {/* 进行中、答复还没开始写：一行「在想… / 在写稿…」，别让作者对着不动的消息干等；做完不留过程（安静账房：不放日志）。 */}
+      {processLive ? <TurnLive steps={fold.process} /> : null}
       {answerBlocks.length ? (
         <div className="msg-body">
           <MessageBlocksView blocks={answerBlocks} lead />
@@ -1194,75 +1053,12 @@ function toolStepLabel(step: ToolStep): string {
   return uiText(resolveToolStepLabel(step.toolName, step.label), "执行步骤");
 }
 
-/**
- * 一轮的过程：收起时一行（做了哪几样事；没成功的照实标）；进行中报正在做的那步并跑光。
- * 点开按先后列出思考、旁白、每一步工具。
- */
-function TurnProcess({ steps, live }: { readonly steps: readonly ProcessFoldStep[]; readonly live: boolean }) {
-  const [open, setOpen] = useState(false);
-  const summary = summarizeProcess(steps, toolStepLabel, live);
+/** 一轮进行中那一行：正在做哪步（还没到工具就是「在想」），不能点开。 */
+function TurnLive({ steps }: { readonly steps: readonly ProcessFoldStep[] }) {
+  const summary = summarizeProcess(steps, toolStepLabel, true);
   return (
     <div className="step-fold turn-proc">
-      <button type="button" className="step-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className={`step-label${summary.current ? " is-active" : ""}`}>
-          {summary.current ? `${summary.current}…` : summary.label}
-        </span>
-        {summary.failed ? <span className="step-fail">{summary.failed} 步没成功</span> : null}
-        {summary.stopped ? <span className="step-stop">已停止</span> : null}
-        {steps.length ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
-      </button>
-      {open && steps.length ? (
-        <div className="process-log-children">
-          {steps.map((step, index) => {
-            if (step.kind === "reasoning") return <ThinkingDisclosure key={`p-r-${index}`} thinking={step.text.trim()} />;
-            if (step.kind === "narration") return <p key={`p-n-${index}`} className="proc-say">{step.text.trim()}</p>;
-            return <ToolStepRow key={`p-t-${step.step.id}`} step={step.step} />;
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** 过程里的一步工具：名字 + 结果徽标 + 用时（不到 1 秒不报）；有执行详情时可点开看。 */
-function ToolStepRow({ step }: { readonly step: ToolStep }) {
-  const [open, setOpen] = useState(false);
-  const running = step.status === "running";
-  const detail = step.detail?.trim();
-  const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : "";
-  return (
-    <div className="step-fold">
-      <button
-        type="button"
-        className="step-head"
-        onClick={() => { if (detail) setOpen((v) => !v); }}
-        aria-expanded={detail ? open : undefined}
-        disabled={!detail}
-      >
-        <span className={`step-label is-tool${running ? " is-active" : ""}`}>{toolStepLabel(step)}</span>
-        {step.status === "failed" ? <span className="step-fail">没成功</span> : null}
-        {/* 人喊停：中性徽标如实说「已停止」，不走红（不是失败）。 */}
-        {step.status === "stopped" ? <span className="step-stop">已停止</span> : null}
-        {/* 否定裁决（如「暂不可定稿」）：落定徽标，不红不绿。 */}
-        {step.status === "verdict" ? <span className="step-verdict">裁决未过</span> : null}
-        {elapsed ? <span className="tm">{elapsed}</span> : null}
-        {detail ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
-      </button>
-      {open && detail ? <p className="step-detail">{detail}</p> : null}
-    </div>
-  );
-}
-
-/** 思考过程：默认收起一行「思考」；点开看真实推理链。 */
-function ThinkingDisclosure({ thinking }: { readonly thinking: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="step-fold">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="step-head">
-        <span className="step-label">思考</span>
-        <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
-      </button>
-      {open ? <p className="step-detail">{thinking}</p> : null}
+      <span className="step-head"><span className="step-label is-active">{summary.current ?? "在想"}…</span></span>
     </div>
   );
 }

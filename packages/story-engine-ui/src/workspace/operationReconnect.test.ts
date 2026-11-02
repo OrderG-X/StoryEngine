@@ -127,21 +127,21 @@ describe("reconnectOperations", () => {
 
 describe("重开书接着看定稿", () => {
   const OP_C = "op-cccccccccccccccccccc";
-  const checklist = { chapter: 3, canCommit: true };
   const commitView = (overrides: Partial<OperationViewData>): OperationViewData => view(OP_C, { kind: "commit.prepare", mode: undefined, what: "定稿·第 3 章", ...overrides });
 
-  it("还在等作者点的：清单摆回原来那条（能接着点）；关页期间定成了的：挂回执、按盘上重读稿纸和书的状态（只一次）", async () => {
+  it("还在等作者点的：问的卡摆回原来那条（能接着点，不挂定不了的卡）；关页期间定成了的：挂回执、按盘上重读稿纸和书的状态（只一次）", async () => {
     useChatStore.setState({ messages: [{ id: "u1", role: "user", content: "定稿" }, { id: "a1", role: "assistant", content: "" }], activeSessionId: "s1" });
     let push: ((v: OperationViewData) => void) | undefined;
     client.list.mockResolvedValue([commitView({ state: "waiting_author", allowed: [], eventSeq: 3 })]);
     client.follow.mockImplementation(async (_book: string, _opId: string, handlers: { onOperation: (v: OperationViewData) => void }) => {
       push = handlers.onOperation;
-      handlers.onOperation(commitView({ state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } }));
+      handlers.onOperation(commitView({ state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "choice", actionId: "commit-ask", decisions: ["commit"], lines: ["第 3 章定稿？"], choices: [{ decision: "commit", label: "定稿" }] } }));
     });
     reconnectOperations(BOOK);
     await flush();
     const owner = () => useChatStore.getState().messages[1]!;
-    expect(cardOf(owner(), "commit-preview")).toEqual({ type: "commit-preview", preview: checklist, opId: OP_C });
+    expect(cardOf(owner(), "operation")?.op.pending).toMatchObject({ kind: "choice", actionId: "commit-ask" });
+    expect(cardOf(owner(), "commit-preview")).toBeUndefined();
     expect(disk.refreshPaper).not.toHaveBeenCalled();
 
     const done = commitView({ state: "succeeded", allowed: [], eventSeq: 8, commit: { chapter: 3, committed: true, report: { chapter: 3 }, snapshotId: "s-1" } });
@@ -157,11 +157,10 @@ describe("重开书接着看定稿", () => {
   });
 });
 
-describe("作者在卡上接着那一次（点「确认定稿」）", () => {
-  it("这一轮那条一开始就挂上（不带按钮、清单）；接着看的订阅后到的结果、回执都落在这一轮，原来那条只留一行状态", async () => {
+describe("作者在卡上接着那一次（点「定稿」）", () => {
+  it("这一轮那条一开始就挂上（不带按钮）；接着看的订阅后到的结果、回执都落在这一轮，原来那条只留一行状态", async () => {
     const OP_C = "op-cccccccccccccccccccc";
-    const checklist = { chapter: 3, canCommit: true };
-    const waiting = view(OP_C, { kind: "commit.prepare", mode: undefined, what: "定稿·第 3 章", state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } });
+    const waiting = view(OP_C, { kind: "commit.prepare", mode: undefined, what: "定稿·第 3 章", state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "choice", actionId: "commit-ask", decisions: ["commit"], lines: ["第 3 章定稿？"], choices: [{ decision: "commit", label: "定稿" }] } });
     useChatStore.setState({ messages: [{ id: "u1", role: "user", content: "定稿" }, { id: "a1", role: "assistant", content: "" }], activeSessionId: "s1" });
     let push: ((v: OperationViewData) => void) | undefined;
     client.list.mockResolvedValue([waiting]);
@@ -172,7 +171,7 @@ describe("作者在卡上接着那一次（点「确认定稿」）", () => {
     reconnectOperations(BOOK);
     await flush();
 
-    useChatStore.getState().appendMessage({ id: "u2", role: "user", content: "确认定稿第 3 章" });
+    useChatStore.getState().appendMessage({ id: "u2", role: "user", content: "定稿第 3 章" });
     useChatStore.getState().appendMessage({ id: "a2", role: "assistant", content: "" });
     claimOperation(OP_C, "a2");
     const turn = () => useChatStore.getState().messages.find((message) => message.id === "a2")!;
@@ -188,7 +187,6 @@ describe("作者在卡上接着那一次（点「确认定稿」）", () => {
     expect(original().turnSnapshots).toBeUndefined();
     expect(cardOf(original(), "operation")?.op).toMatchObject({ state: "succeeded" });
     expect(cardOf(original(), "operation")?.op.conclusion).toBeUndefined();
-    expect(cardOf(original(), "commit-preview")).toBeDefined();
   });
 });
 

@@ -160,7 +160,7 @@ function weekdayAfter(time: ChapterTime | undefined, offset: number): number | u
   return (((time.weekday + span + offset) % 7) + 7) % 7;
 }
 
-/** 写前备忘里一章那几天：「第 11 天傍晚」「第 5 天到第 6 天」「账待记」「不在当下（回忆（3 年前））」。 */
+/** 写前备忘里一章那几天：「第 11 天傍晚」「第 5 天到第 6 天」「账待记」「不在当下（回忆（3 年前））」；按旧账推的说「大概第 11 天」（给作者看，不说内部来历）。 */
 function memoDaysText(row: TimelineRow): string {
   if (row.ledgerShort === "pending") return "账待记";
   if (row.ledgerShort === "partial") return "账没记全";
@@ -168,7 +168,7 @@ function memoDaysText(row: TimelineRow): string {
   const span = row.presentLine === true ? storySpanText(row) : undefined;
   if (!span) return "哪天不知道";
   const oneDay = isExact(row.start) && sameRange(row.start, row.end);
-  return `${span}${oneDay && row.timeOfDay ? row.timeOfDay : ""}${row.presumed ? "（按旧账推的）" : ""}`;
+  return `${row.presumed ? "大概" : ""}${span}${oneDay && row.timeOfDay ? row.timeOfDay : ""}`;
 }
 
 /**

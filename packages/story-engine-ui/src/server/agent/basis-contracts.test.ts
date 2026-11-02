@@ -43,13 +43,13 @@ import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, resu
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
 import { createBackgroundRereadRecipe } from "../services/operations/recipes/background-reread.js";
-import { COMMIT_CONFIRM_ACTION, COMMIT_PREPARE_KIND, createCommitPrepareRecipe } from "../services/operations/recipes/commit-prepare.js";
+import { COMMIT_PREPARE_KIND, createCommitPrepareRecipe } from "../services/operations/recipes/commit-prepare.js";
 
 /** 照「先取依据、再读材料」的顺序调（第 8 轮复核 V4）：现取一份依据交进去。 */
 const prepareNow = async (input: Omit<PrepareInput, "basis">) => prepareChapterCommit({ ...input, basis: await readTruthBasis(input.bookDir) });
-/** 照票定稿（commit.prepare「确认定稿」那步同一个做法：依据照票核）。 */
+/** 照票定稿（commit.prepare 定稿那步同一个做法：依据照票核）。 */
 const confirmTicket = (ticket: PreviewTicket, text: string) =>
-  runCommand(book, chapterCommit, { chapter: ticket.chapter, text, entries: commitEntriesOf(ticket, {}) }, { caller: "author", basis: ticket.basis });
+  runCommand(book, chapterCommit, { chapter: ticket.chapter, text, entries: commitEntriesOf(ticket) }, { caller: "author", basis: ticket.basis });
 
 let sandbox: string;
 let book: string;
@@ -152,23 +152,24 @@ describe("依据安全契约", () => {
     }
   });
 
-  it("R3 确认定稿后撤销，再点同一个旧「确认定稿」：回放那次的结果，不重新定稿", async () => {
+  it("R3 点「定稿」定了、撤销后再点同一个旧按钮：回放那次的结果，不重新定稿", async () => {
     await seed();
     ok(await runCommand(book, draftSave, { chapter: 2, title: "二", body: "第二天，张三出门了。", baseVersion: null }, { caller: "author" }));
     const snapshot = await createSnapshot(book, "before-ch2");
     __resetOperationStoreForTests();
-    registerRecipe(createCommitPrepareRecipe({ callModel: model, modelProblem: () => undefined }));
+    // 核账员也是假的：什么都没核出来。
+    const reader = async (_messages: readonly { content: string }[], call: { readonly json: boolean }) => (call.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记。");
+    registerRecipe(createCommitPrepareRecipe({ callModel: model, readerCallModel: reader, modelProblem: () => undefined }));
     try {
-      const submitted = await submitOperation(book, { kind: COMMIT_PREPARE_KIND, params: { chapter: 2, allowShort: true }, requestKey: "r3", issuedAt: new Date().toISOString(), origin: { kind: "button" } });
+      // 作者点「定稿」就是授权：一路定完。
+      const press = () => submitOperation(book, { kind: COMMIT_PREPARE_KIND, params: { chapter: 2, allowShort: true }, requestKey: "r3", issuedAt: new Date().toISOString(), origin: { kind: "button" } });
+      const submitted = await press();
       if (!submitted.ok || !("record" in submitted)) throw new Error("没受理");
-      await __drainOperationsForTests();
-      const answer = { actionId: COMMIT_CONFIRM_ACTION, decision: "commit" };
-      ok(await resumeOperation(book, submitted.record.opId, answer));
       await __drainOperationsForTests();
       expect((await projectBook(book)).chapters).toHaveLength(2);
       await restoreForTest(book, snapshot.id);
       expect((await projectBook(book)).chapters).toHaveLength(1);
-      expect(await resumeOperation(book, submitted.record.opId, answer)).toMatchObject({ ok: true, replayed: true });
+      expect(await press()).toMatchObject({ ok: true, existing: true, record: { opId: submitted.record.opId } });
       await __drainOperationsForTests();
       expect((await projectBook(book)).chapters).toHaveLength(1);
     } finally {

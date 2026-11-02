@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolStep } from "../../../api/types.js";
-import { foldTurn, processWorthShowing, summarizeProcess } from "./processLogFold.js";
+import { foldTurn, summarizeProcess } from "./processLogFold.js";
 import type { RenderSegment } from "./messageSegments.js";
 
 function tool(id: string, status: ToolStep["status"] = "completed", toolName = id): ToolStep {
@@ -107,21 +107,5 @@ describe("summarizeProcess：收起那一行", () => {
     expect(summarizeProcess([retried[0]!, retried[1]!], labelOf, false).failed).toBe(1);
     const realFail = [{ kind: "tool" as const, step: tool("改稿1", "failed", "revise_draft") }, retried[2]!];
     expect(summarizeProcess(realFail, labelOf, false).failed).toBe(1);
-  });
-});
-
-describe("processWorthShowing：卡片已经说清的单步不再挂一行", () => {
-  const cards = new Set(["continuity"]);
-  const step = (status: ToolStep["status"]) => [{ kind: "tool" as const, step: tool("c", status, "check_continuity") }];
-  it("只点了核账、做成了、卡在 → 不显示", () => {
-    expect(processWorthShowing(step("completed"), cards, false)).toBe(false);
-  });
-  it("没成功 / 还在跑 / 卡没来 / 不止一步 / 有思考 → 照样显示", () => {
-    expect(processWorthShowing(step("failed"), cards, false)).toBe(true);
-    expect(processWorthShowing(step("completed"), cards, true)).toBe(true);
-    expect(processWorthShowing(step("completed"), new Set(), false)).toBe(true);
-    expect(processWorthShowing([...step("completed"), ...step("completed")], cards, false)).toBe(true);
-    expect(processWorthShowing([{ kind: "reasoning", text: "想" }], cards, false)).toBe(true);
-    expect(processWorthShowing([], cards, false)).toBe(false);
   });
 });

@@ -1,13 +1,12 @@
-import { bodyHash } from "../lib/body-hash.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ChapterMessage, ContinuityCheckData, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
 import { useChatStore } from "../stores/chatStore.js";
 import {
-  chapterProgress,
   continuityItemKey,
   latestContinuityResult,
   openContinuityItems,
+  paperAction,
   settledContinuityByMessage,
   type ContinuityResult,
 } from "./chapterProgress.js";
@@ -18,122 +17,30 @@ const wrongName = { quote: "摊主是个姓王的老师傅。", earlierQuote: "�
 const maybeOne = { quote: "第二天下午", earlierQuote: "次日上午", earlierChapter: 10, reason: "时间可能对不上" };
 const check: ContinuityCheckData = { chapter: 11, sure: [wrongMarket, wrongName], maybe: [maybeOne] };
 
-const paper = (over: Partial<Parameters<typeof chapterProgress>[0]["paper"]> = {}) => ({
-  chapter: 11,
-  body: BODY,
-  committed: null,
-  baseVersion: "v1",
-  savedBody: BODY,
-  title: "",
-  savedTitle: "",
-  streaming: null,
-  ...over,
-});
 const result = (over: Partial<ContinuityResult> = {}): ContinuityResult => ({
   messageId: "m1", check, dismissed: [], checkedVersion: "v1", ...over,
 });
 
-describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
-  it("还没写：主按钮写这一章", () => {
-    const p = chapterProgress({ paper: paper({ body: "", savedBody: "" }), result: null, targetWords: 3000 });
-    expect(p.write).toEqual({ done: false, text: "还没写" });
-    expect(p.primary.kind).toBe("write");
-    expect(p.statusLine).toBe("这一章还没写");
+describe("稿纸底下那一个按钮（安静账房：只留「定稿」）", () => {
+  it("没写没有；写了没定稿、定稿后又改过是「定稿」；已定稿没有，账没记上 / 没记全是「补记账」", () => {
+    expect(paperAction({ paper: { body: "", committed: null } })).toBeUndefined();
+    expect(paperAction({ paper: { body: BODY, committed: null } })).toEqual({ button: "commit", label: "定稿" });
+    expect(paperAction({ paper: { body: `${BODY}又写一句。`, committed: { body: BODY } } })).toEqual({ button: "commit", label: "定稿" });
+    expect(paperAction({ paper: { body: BODY, committed: { body: BODY } } })).toBeUndefined();
+    expect(paperAction({ paper: { body: BODY, committed: { body: BODY } }, ledger: "pending" })).toEqual({ button: "fill", label: "补记账" });
+    expect(paperAction({ paper: { body: BODY, committed: { body: BODY } }, ledger: "partial" })).toEqual({ button: "fill", label: "补记账" });
+    // 没定稿时账的状况不管。
+    expect(paperAction({ paper: { body: BODY, committed: null }, ledger: "pending" })).toEqual({ button: "commit", label: "定稿" });
   });
+});
 
-  it("有稿没核：主按钮核账；字数比目标少照实说", () => {
-    const p = chapterProgress({ paper: paper(), result: null, targetWords: 100 });
-    expect(p.write.done).toBe(true);
-    expect(p.write.text).toMatch(/比目标少/);
-    expect(p.check).toMatchObject({ state: "none", done: false, text: "还没核" });
-    expect(p.primary).toEqual({ kind: "continuity", label: "核账" });
-    expect(p.statusLine).toBe("还没核账");
-  });
-
-  it("核出问题：主按钮「去看那 N 处」，顶卡和工具条数一致", () => {
-    const p = chapterProgress({ paper: paper(), result: result(), targetWords: null });
-    expect(p.check).toMatchObject({ state: "issues", done: true, sure: 2, maybe: 1, text: "有 2 处要你看，1 处可能" });
-    expect(p.primary).toEqual({ kind: "show_issues", label: "去看那 2 处" });
-    expect(p.statusLine).toBe("核过了：2 处对不上，1 处可能");
-  });
-
+describe("还要作者看的条目", () => {
   it("标了不是问题：不再算；模型引的原句不逐字（带……）也照算，不猜作者改没改", () => {
-    const dismissed = chapterProgress({ paper: paper(), result: result({ dismissed: [continuityItemKey(wrongMarket)] }), targetWords: null });
-    expect(dismissed.check.sure).toBe(1);
+    expect(openContinuityItems(result()).sure).toHaveLength(2);
+    expect(openContinuityItems(result({ dismissed: [continuityItemKey(wrongMarket)] })).sure).toEqual([wrongName]);
     const stitched = { ...wrongName, quote: "林舟骑车……老师傅" };
-    const p = chapterProgress({ paper: paper(), result: result({ check: { ...check, sure: [stitched] } }), targetWords: null });
-    expect(p.check.sure).toBe(1);
-  });
-
-  it("确定的都处理掉：主按钮定稿", () => {
-    const p = chapterProgress({
-      paper: paper(),
-      result: result({ dismissed: [continuityItemKey(wrongMarket), continuityItemKey(wrongName)] }),
-      targetWords: null,
-    });
-    expect(p.check.state).toBe("clean");
-    expect(p.primary).toEqual({ kind: "commit", label: "定稿" });
-    expect(p.statusLine).toBe("核过了：没有确定对不上的，1 处可能");
-  });
-
-  it("核过后稿子变了（版本变 / 还有没存的字）：再核一遍", () => {
-    const moved = chapterProgress({ paper: paper({ baseVersion: "v2" }), result: result(), targetWords: null });
-    expect(moved.check).toMatchObject({ state: "stale", done: false, text: "核过后改过稿" });
-    expect(moved.primary).toEqual({ kind: "continuity", label: "再核一遍" });
-    const dirty = chapterProgress({ paper: paper({ body: `${BODY}又写一句。` }), result: result(), targetWords: null });
-    expect(dirty.check.state).toBe("stale");
-  });
-
-  it("撤销定稿 / 整本恢复：版本号换了、正文一字没变，不说「核过后改过稿」；正文变了照说", () => {
-    const withHash = result({ checkedBodyHash: bodyHash(BODY) });
-    const undone = chapterProgress({ paper: paper({ baseVersion: "v2" }), result: withHash, targetWords: null });
-    expect(undone.check.state).toBe("issues");
-    const edited = `${BODY}又写一句。`;
-    const changed = chapterProgress({ paper: paper({ baseVersion: "v3", body: edited, savedBody: edited }), result: withHash, targetWords: null });
-    expect(changed.check).toMatchObject({ state: "stale", text: "核过后改过稿" });
-    const dirty = chapterProgress({ paper: paper({ body: edited }), result: withHash, targetWords: null });
-    expect(dirty.check.state).toBe("stale");
-  });
-
-  it("老卡没记版本：不判「改过稿」", () => {
-    const { checkedVersion: _drop, ...old } = result();
-    const p = chapterProgress({ paper: paper({ baseVersion: "v9" }), result: old, targetWords: null });
-    expect(p.check.state).toBe("issues");
-  });
-
-  it("已定稿：核账不再要求，主按钮写下一章；定稿后又改过照实说", () => {
-    const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null });
-    expect(done.check).toMatchObject({ done: true, text: "—" });
-    expect(done.commit).toEqual({ done: true, text: "已定稿" });
-    expect(done.primary.kind).toBe("write_next");
-    const edited = chapterProgress({ paper: paper({ committed: { body: "旧稿。" } }), result: null, targetWords: null });
-    expect(edited.commit).toEqual({ done: false, text: "定稿后又改过" });
-  });
-
-  it("定稿前核出过问题、作者改完定了：定稿后不再标红催「有 N 处要你看」", () => {
-    const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: result(), targetWords: null });
-    expect(done.check).toMatchObject({ state: "none", done: true, sure: 0, text: "定稿前核过" });
-    expect(done.statusLine).toBe("已定稿");
-  });
-
-  it("已定稿、账没记上 / 没记全：主按钮「补记账」，状态照实说；没定稿时不管", () => {
-    const pending = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, nextChapter: 13, ledger: "pending" });
-    expect(pending.primary).toEqual({ kind: "fill", label: "补记账" });
-    expect(pending.statusLine).toBe("正文定了，账还没记上");
-    expect(pending.commit).toEqual({ done: true, text: "已定稿 · 账待记" });
-    expect(pending.next).toBeUndefined();
-    const partial = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, ledger: "partial" });
-    expect(partial.statusLine).toBe("已定稿，账没记全");
-    const drafting = chapterProgress({ paper: paper(), result: null, targetWords: null, ledger: "pending" });
-    expect(drafting.primary.kind).toBe("continuity");
-  });
-
-  it("已定稿、知道后面第一个没定稿的章：主按钮「去第 N 章」（只换章不出稿）；没定稿时不带", () => {
-    const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, nextChapter: 13 });
-    expect(done.primary).toEqual({ kind: "open_next", label: "去第 13 章" });
-    expect(done.next).toBe(13);
-    const drafting = chapterProgress({ paper: paper(), result: null, targetWords: null, nextChapter: 13 });
-    expect(drafting.next).toBeUndefined();
+    expect(openContinuityItems(result({ check: { ...check, sure: [stitched] } })).sure).toEqual([stitched]);
+    expect(openContinuityItems(result()).maybe).toEqual([maybeOne]);
   });
 });
 

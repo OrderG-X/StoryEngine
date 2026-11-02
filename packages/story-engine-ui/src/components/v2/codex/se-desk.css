@@ -44,6 +44,10 @@
   .se-new-ch:hover:not(:disabled){background:var(--hover);color:var(--text);}
   .se-new-ch:disabled{opacity:.5;cursor:default;}
   .se-ch-foot{flex:none;display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);}
+  /* 操作历史的入口（顶栏不再放）：一个不抢眼的字链接，靠右。 */
+  .se-ch-history{margin-left:auto;border:0;padding:2px 4px;background:none;font:inherit;color:var(--faint);cursor:pointer;border-radius:var(--r-sm);transition:color var(--dur-1) var(--ease-out);}
+  .se-ch-history:hover{color:var(--muted);}
+  .se-ch-history:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px;}
 
   /* 窄窗抽屉：浮在稿纸上，点遮罩或选章后收起 */
   .se-desk-wrap{position:relative;}
@@ -86,8 +90,6 @@
   .codex-desk-bar .cd-tabs{padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--bg);}
   .codex-desk-bar .cd-tabs button{font-size:12px;letter-spacing:0;height:26px;padding:0 12px;border-radius:7px;}
   .codex-desk-bar .cd-tabs button.is-active{color:var(--text);background:var(--surface-2);box-shadow:0 0 0 1px var(--line);font-weight:500;}
-  .codex-desk-bar .cd-reroll{border:1px solid var(--line-strong);background:transparent;color:var(--text);font-size:12px;padding:0 12px;height:28px;}
-  .codex-desk-bar .cd-reroll:hover:not(:disabled){color:var(--text);border-color:var(--line-strong);background:var(--hover);}
 
   /* 字数目标条 */
   .codex-desk-bar .cd-goal{display:inline-flex;align-items:center;gap:8px;}
@@ -156,7 +158,6 @@
   /* 底条：上一章 | 再来一版 | 下一章 */
   /* 两边「上一章 / 下一章」按自身宽度占位，中间工具条在剩下的地方放；放不下时状态那句先省略，按钮不让（2026-10-22：窄屏「定稿」被「下一章」压住）。 */
   .codex-desk-bar-bottom{display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,auto) minmax(max-content,1fr);gap:12px;padding:8px 24px;}
-  .codex-desk-bar-bottom .cd-reroll{margin:0;}
   .codex-desk-bar .cd-nav{
     min-width:0;display:flex;flex-direction:column;gap:1px;padding:4px 10px;border:0;border-radius:8px;background:transparent;
     color:var(--text);font-size:13px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -270,9 +271,6 @@
 
   /* ═══ 稿纸底下的本章动作条（P6）：核账状态一句 + 核账 / 定稿 ═══ */
   .cd-tools{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;}
-  .cd-tools-status{font-size:13px;color:var(--muted);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;min-width:0;flex:0 1 auto;}
-  button.cd-tools-status{border:0;background:none;cursor:pointer;color:var(--danger);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px;}
-  button.cd-tools-status:hover{color:var(--text);}
   .cd-tools-btn{
     height:32px;padding:0 14px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);
     color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap;flex-shrink:0;

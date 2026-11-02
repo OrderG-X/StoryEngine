@@ -1,70 +1,31 @@
 /**
- * 稿纸底下的工具条（重构 P6，草图 ①）：一句核账状态 + 核账 / 定稿（已定稿时是「去第 N 章」）。专注模式也在。
- * 说法和右栏顶卡同源（workspace/chapterProgress），按钮都是现有的结构化动作，不新增绕过对话的路。
+ * 稿纸底下的那一个按钮（安静账房 2026-11-03：只留「定稿」；已定稿、账没记上时是「补记账」）。核账、另写几版、写下一章都在对话里说。
+ * 按钮是现有的结构化动作，不新增绕过对话的路。
  */
-import { STEP_HINTS, type ChapterProgress } from "../../../workspace/chapterProgress.js";
+import { STEP_HINTS, type PaperAction } from "../../../workspace/chapterProgress.js";
 import type { ChapterButton } from "../../../utils/chapterButtons.js";
-import { requestContinuityFocus } from "./ContinuityMarks.js";
 
 export function PaperToolbar({
-  progress,
+  action,
   busy,
   onChapterButton,
-  onOpenChapter,
-  reroll,
 }: {
-  readonly progress: ChapterProgress;
+  readonly action: PaperAction | undefined;
   readonly busy: boolean;
   readonly onChapterButton?: (button: ChapterButton) => void;
-  /** 已定稿时「去第 N 章」：换到那一章。 */
-  readonly onOpenChapter?: (chapter: number) => void;
-  /** 「再来一版」（抽候选稿）：只在还没定稿、有入口时给。 */
-  readonly reroll?: { readonly label: string; readonly onClick: () => void; readonly title: string };
 }) {
-  const { primary, check } = progress;
-  const next = progress.commit.done && primary.kind === "open_next" ? progress.next : undefined;
-  const buttons: { readonly button: ChapterButton; readonly label: string }[] = progress.commit.done
-    ? primary.kind === "fill" ? [{ button: "fill", label: primary.label }] : next !== undefined ? [] : [{ button: "write_next", label: "AI 写下一章" }]
-    : !progress.write.done
-      ? [{ button: "write", label: "AI 写这一章" }]
-      : [
-        { button: "continuity", label: check.state === "none" ? "核账" : "再核一遍" },
-        { button: "commit", label: "定稿" },
-      ];
-  // 主按钮是「去看那 N 处」时，工具条上没有主按钮——状态那句本身就能点。
-  const isPrimary = (button: ChapterButton): boolean => primary.kind === button;
-  const canJump = check.state === "issues" || (check.state === "clean" && check.maybe > 0);
+  if (!action || !onChapterButton) return <span />;
   return (
     <div className="cd-tools" role="toolbar" aria-label="本章动作">
-      {canJump ? (
-        <button type="button" className="cd-tools-status is-link" onClick={requestContinuityFocus} title="在稿纸上看划线的那几句">
-          {progress.statusLine}
-        </button>
-      ) : (
-        <span className="cd-tools-status">{progress.statusLine}</span>
-      )}
-      {reroll ? (
-        <button type="button" className="cd-tools-btn is-quiet" disabled={busy} title={reroll.title} onClick={reroll.onClick}>
-          {reroll.label}
-        </button>
-      ) : null}
-      {next !== undefined && onOpenChapter ? (
-        <button type="button" className="cd-tools-btn is-primary" disabled={busy} onClick={() => onOpenChapter(next)}>
-          {primary.label}
-        </button>
-      ) : null}
-      {onChapterButton ? buttons.map(({ button, label }) => (
-        <button
-          key={button}
-          type="button"
-          className={`cd-tools-btn${isPrimary(button) ? " is-primary" : ""}`}
-          disabled={busy}
-          title={button in STEP_HINTS ? STEP_HINTS[button as keyof typeof STEP_HINTS] : undefined}
-          onClick={() => onChapterButton(button)}
-        >
-          {label}
-        </button>
-      )) : null}
+      <button
+        type="button"
+        className="cd-tools-btn is-primary"
+        disabled={busy}
+        title={STEP_HINTS[action.button]}
+        onClick={() => onChapterButton(action.button)}
+      >
+        {action.label}
+      </button>
     </div>
   );
 }

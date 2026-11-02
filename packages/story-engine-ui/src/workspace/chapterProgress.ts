@@ -1,35 +1,24 @@
 /**
- * 这一章还差什么（重构 P6）：写 / 核账 / 定稿三步走到哪了、下一步按哪个按钮。
- * 稿纸底下的工具条、右栏顶卡都从这里取，说法一处定，两处一致。全部从现有状态算，不另存。
+ * 这一章的核账结果和稿纸底下那一个按钮（安静账房 2026-11-03：底栏只留「定稿」，别的在对话里说）。全部从现有状态算，不另存。
  *
  * 核账结果取当前会话里这一章最新的那张核账卡（对话卡和稿纸划线共用一份，作者点「不是问题」两边一起变）。
  */
-import { checkedOtherBody } from "../lib/body-hash.js";
 import type { ChapterMessage, ContinuityCheckData, ContinuityCheckItemData } from "../type-defs/workspace.js";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { isDraftDirty, paperStage, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
+import { paperStage, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
 import { useChatStore } from "../stores/chatStore.js";
 import { cardOf } from "../utils/messageCards.js";
 import { latestDirections, type ChapterDirections } from "../utils/brainstormCard.js";
-import { nextUncommittedChapter, type ChapterButton } from "../utils/chapterButtons.js";
 import { useBookStore } from "../stores/bookStore.js";
-import { countTextWords } from "../utils/textUtils.js";
 
 export type ContinuityItem = ContinuityCheckItemData;
 
-/**
- * 三步和各按钮的悬停说明（2026-10-22 好上手走查：新作者不知道「核账」「定稿」是干什么的、点了会怎样）。
- * 顶卡、稿纸工具条共用。
- */
+/** 稿纸底下那个按钮的悬停说明（新作者不知道点了会怎样）。 */
 export const STEP_HINTS = {
-  write: "AI 照设定和前文写这一章的工作稿，要几分钟；写之前存档，能撤销。也可以直接在稿纸上自己写。",
-  write_next: "AI 写下一章的工作稿，要几分钟；写之前存档，能撤销。",
-  continuity: "拿这一章对一遍前文和设定，找前后对不上的地方（人名、日子、谁知道什么……）。只看不改。",
-  commit: "这章写完了就定稿：先出一张清单给你过目（这章记进账本的人、事、线索），你点确认才定；能撤销。",
-  fill: "这章定稿时账没记上（或没记全）：照定稿的正文再记一次账，出清单给你过目，你点确认才记；正文不动，能撤销。",
-  show_issues: "在稿纸上看划线的那几句。",
-} as const satisfies Partial<Record<ChapterButton | "show_issues", string>>;
+  commit: "这章写完了就定稿：先对一遍前文，有对不上的才停下给你看；定了能撤销。",
+  fill: "这章定稿时账没记上（或没记全）：照定稿的正文再记一次；正文不动，能撤销。",
+} as const;
 
 /** 一条核账问题的键（「不是问题」按它记）：本章原句 + 前文原句。 */
 export function continuityItemKey(item: Pick<ContinuityItem, "quote" | "earlierQuote">): string {
@@ -158,99 +147,21 @@ export function openContinuityItems(
   return { sure: open(result.check.sure), maybe: open(result.check.maybe) };
 }
 
-export type CheckState = "none" | "clean" | "issues" | "stale";
-/** show_issues＝滚到稿纸上第一条划线；open_next＝已定稿的章去后面第一个没定稿的章（只换章，不出稿）。 */
-export type PrimaryKind = ChapterButton | "show_issues" | "open_next";
-
-export interface ChapterProgress {
-  readonly chapter: number;
-  readonly words: number;
-  readonly write: { readonly done: boolean; readonly text: string };
-  readonly check: { readonly state: CheckState; readonly done: boolean; readonly text: string; readonly sure: number; readonly maybe: number };
-  readonly commit: { readonly done: boolean; readonly text: string };
-  /** 主按钮：顺序取第一个没做完的。 */
-  readonly primary: { readonly kind: PrimaryKind; readonly label: string };
-  /** 工具条左边那一句。 */
-  readonly statusLine: string;
-  /** 已定稿时：后面第一个没定稿的章（「去第 N 章」去这里）。 */
-  readonly next?: number;
+/** 稿纸底下那一个按钮：写了没定稿（或定稿后又改过）是「定稿」；已定稿、账没记上 / 没记全是「补记账」；别的时候没有。 */
+export interface PaperAction {
+  readonly button: "commit" | "fill";
+  readonly label: string;
 }
 
-type PaperInput = Pick<DraftStoreState, "chapter" | "body" | "committed" | "baseVersion" | "savedBody" | "title" | "savedTitle" | "streaming">;
-
-export function chapterProgress(input: {
-  readonly paper: PaperInput;
-  readonly result: ContinuityResult | null;
-  readonly targetWords: number | null;
-  /** 后面第一个没定稿的章（章表算的）；已定稿时主按钮去这一章。 */
-  readonly nextChapter?: number;
-  /** 这章定稿时账没记上（pending）/ 没记全（partial）：已定稿时主按钮是「补记账」。 */
+export function paperAction(input: {
+  readonly paper: Pick<DraftStoreState, "body" | "committed">;
+  /** 这章定稿时账没记上（pending）/ 没记全（partial）。 */
   readonly ledger?: "pending" | "partial";
-}): ChapterProgress {
-  const { paper, result, targetWords } = input;
-  const stage = paperStage(paper);
-  const words = paper.body.trim() ? countTextWords(paper.body) : 0;
-  const committed = stage === "committed";
-
-  const short = targetWords && words < targetWords ? targetWords - words : 0;
-  const write = stage === "empty"
-    ? { done: false, text: "还没写" }
-    : { done: true, text: short > 0 ? `写了 ${words.toLocaleString()} 字 · 比目标少 ${short.toLocaleString()} 字` : `写了 ${words.toLocaleString()} 字` };
-
-  const open = result ? openContinuityItems(result) : { sure: [], maybe: [] };
-  // 结果到的那一版之后稿子又变了（作者改了、AI 改了，或还有没存的字）＝核过后改过稿；按正文比，撤销定稿换了版本号、字没变不算。
-  // 定稿了就以定稿为准。
-  const stale = Boolean(result) && !committed
-    && (result!.checkedVersion !== undefined && (checkedOtherBody(result!, paper) || isDraftDirty(paper)));
-  const checkState: CheckState = stage === "empty" || !result ? "none" : stale ? "stale" : open.sure.length > 0 ? "issues" : "clean";
-  const check = committed ? {
-    // 已定稿的章不再要求核账；定稿前核出来的那几处作者已经看过（改了或认了），不再标红催。
-    state: "none" as const, done: true, sure: 0, maybe: 0, text: result ? "定稿前核过" : "—",
-  } : {
-    state: checkState,
-    done: checkState === "clean" || checkState === "issues",
-    sure: open.sure.length,
-    maybe: open.maybe.length,
-    text: checkState === "none"
-      ? "还没核"
-      : checkState === "stale"
-        ? "核过后改过稿"
-        : checkState === "issues"
-          ? `有 ${open.sure.length} 处要你看${open.maybe.length > 0 ? `，${open.maybe.length} 处可能` : ""}`
-          : open.maybe.length > 0 ? `没发现确定的问题，${open.maybe.length} 处可能` : "没发现问题",
-  };
-
-  const ledgerShort = committed ? input.ledger : undefined;
-  const commit = stage === "committed"
-    ? { done: true, text: ledgerShort === "pending" ? "已定稿 · 账待记" : ledgerShort === "partial" ? "已定稿 · 账没记全" : "已定稿" }
-    : stage === "edited"
-      ? { done: false, text: "定稿后又改过" }
-      : { done: false, text: "还没定稿" };
-
-  const primary: ChapterProgress["primary"] = stage === "empty"
-    ? { kind: "write", label: "AI 写这一章" }
-    : committed
-      // 已定稿：账没记上 / 没记全的先补；不然去后面第一个没定稿的章（那章有稿就接着弄，没稿就在那儿挑走法或写），不在这儿直接出稿。
-      ? ledgerShort ? { kind: "fill", label: "补记账" } : input.nextChapter ? { kind: "open_next", label: `去第 ${input.nextChapter} 章` } : { kind: "write_next", label: "AI 写下一章" }
-      : checkState === "none" || checkState === "stale"
-        ? { kind: "continuity", label: checkState === "stale" ? "再核一遍" : "核账" }
-        : checkState === "issues"
-          ? { kind: "show_issues", label: `去看那 ${open.sure.length} 处` }
-          : { kind: "commit", label: "定稿" };
-
-  const statusLine = stage === "empty"
-    ? "这一章还没写"
-    : committed
-      ? ledgerShort === "pending" ? "正文定了，账还没记上" : ledgerShort === "partial" ? "已定稿，账没记全" : "已定稿"
-      : checkState === "none"
-        ? "还没核账"
-        : checkState === "stale"
-          ? "核过后改过稿，要再核一遍"
-          : checkState === "issues"
-            ? `核过了：${open.sure.length} 处对不上${open.maybe.length > 0 ? `，${open.maybe.length} 处可能` : ""}`
-            : open.maybe.length > 0 ? `核过了：没有确定对不上的，${open.maybe.length} 处可能` : "核过了，没发现对不上的地方";
-
-  return { chapter: paper.chapter, words, write, check, commit, primary, statusLine, ...(committed && input.nextChapter && !ledgerShort ? { next: input.nextChapter } : {}) };
+}): PaperAction | undefined {
+  const stage = paperStage(input.paper);
+  if (stage === "empty") return undefined;
+  if (stage === "committed") return input.ledger ? { button: "fill", label: "补记账" } : undefined;
+  return { button: "commit", label: "定稿" };
 }
 
 /** 组件用：当前会话里这一章最新的核账结果。 */
@@ -265,18 +176,9 @@ export function useChapterDirections(chapter: number): ChapterDirections | undef
   return useMemo(() => latestDirections(messages, chapter), [messages, chapter]);
 }
 
-/** 组件用：稿纸 + 当前会话的核账结果 → 这一章还差什么。 */
-export function useChapterProgress(targetWords: number | null): ChapterProgress {
-  const paper = useDraftStore(useShallow((s) => ({
-    chapter: s.chapter, body: s.body, committed: s.committed, baseVersion: s.baseVersion,
-    savedBody: s.savedBody, title: s.title, savedTitle: s.savedTitle, streaming: s.streaming,
-  })));
-  const result = useContinuityResult(paper.chapter);
-  const chapters = useBookStore((s) => s.workspace.chapters);
-  const nextChapter = useMemo(() => (paper.chapter > 0 ? nextUncommittedChapter(paper.chapter, chapters) : undefined), [paper.chapter, chapters]);
+/** 组件用：稿纸 + 章节账的现状 → 底下那一个按钮。 */
+export function usePaperAction(): PaperAction | undefined {
+  const paper = useDraftStore(useShallow((s) => ({ chapter: s.chapter, body: s.body, committed: s.committed })));
   const ledger = useBookStore((s) => s.currentOverview?.ledgerShort?.find((item) => item.chapter === paper.chapter)?.status);
-  return useMemo(
-    () => chapterProgress({ paper, result, targetWords, ...(nextChapter ? { nextChapter } : {}), ...(ledger ? { ledger } : {}) }),
-    [paper, result, targetWords, nextChapter, ledger],
-  );
+  return useMemo(() => paperAction({ paper, ...(ledger ? { ledger } : {}) }), [paper, ledger]);
 }

@@ -33,21 +33,6 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("挑 AI 稿（片 2D）", () => {
-  it("「AI 另写几版」：交写稿、作者自己挑两版", async () => {
-    useDraftStore.getState().loadPaper(PROJECT, paper(7, "作者的稿。"));
-    const { sent, rerollVersions } = picks();
-    await rerollVersions();
-    expect(sent).toEqual([{ action: expect.objectContaining({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 7, candidates: 2, pick: "author" } }), echo: "第 7 章另写 2 版给我挑" }]);
-  });
-
-  it("已定稿的章不另写，如实说", async () => {
-    useDraftStore.getState().loadPaper(PROJECT, { ...paper(7, "定稿正文。", "定稿正文。"), draft: null });
-    const { sent, rerollVersions } = picks();
-    await rerollVersions();
-    expect(sent).toEqual([]);
-    expect(useNavigationStore.getState().toast).toContain("已定稿");
-  });
-
   it("「用这版」：收起面板，交换上（候选号、指纹、作者眼前那份的版本号）", async () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(7, "作者的稿。"));
     useUiStore.getState().setDraftCandidates([version(7)]);

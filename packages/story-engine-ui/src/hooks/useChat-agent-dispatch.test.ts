@@ -21,7 +21,6 @@ import { cardOf, hasCard } from "../utils/messageCards.js";
 import { draftChoiceAction } from "../utils/workflowHelpers.js";
 import { cancelOperationRequest, listActiveOperations } from "../api/operationsClient.js";
 import { newCommitAction, newDraftAction, newInspectAction, type OperationViewData } from "../api/agentChatClient.js";
-import { useCommitSheet } from "../workspace/commitSheet.js";
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
@@ -879,7 +878,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(isWorkspaceBusy()).toBe(false);
   });
 
-  it("定稿操作：出了清单就打开清单（记下出清单时稿纸的版本）；定成了 → 稿纸按盘上换成已定稿、按盘上的概况刷新、流程态 committed", async () => {
+  it("定稿操作：对话里交的停着问「定稿？」（不挂定不了的卡、流程态不动）；点了定成了 → 稿纸按盘上换成已定稿、按盘上的概况刷新、流程态 committed", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     const overview = makeOverview("Committed");
     mockedFetchStateOverview.mockResolvedValue(overview);
@@ -888,33 +887,60 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
       opId: COMMIT_OP, kind: "commit.prepare", chapter: 3, what: "定稿·第 3 章", state: "running", stateText: "在做",
       allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 1, origin: { kind: "chat", messageId: "user-x" }, ...overrides,
     });
-    const checklist = { chapter: 3, canCommit: true };
     scriptAgentStream((handlers) => {
       handlers.onOperation?.(commitView({}));
-      handlers.onOperation?.(commitView({ state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } }));
+      handlers.onOperation?.(commitView({ state: "waiting_author", allowed: [], eventSeq: 3, pending: { kind: "choice", actionId: "commit-ask", decisions: ["commit"], lines: ["第 3 章定稿？"], choices: [{ decision: "commit", label: "定稿" }] } }));
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
+    const before = useBookStore.getState().workspace.flowStatus;
     await act(async () => { await result.current.handleSendMessage("定稿"); });
 
-    const owner = messages().find((m) => m.role === "assistant" && m.cards?.some((card) => card.type === "commit-preview"));
-    expect(owner).toBeDefined();
-    expect(useCommitSheet.getState().messageId).toBe(owner!.id);
-    expect(useBookStore.getState().workspace.flowStatus).toBe("waiting_commit_confirmation");
+    expect(messages().some((m) => m.cards?.some((card) => card.type === "commit-preview"))).toBe(false);
+    expect(useBookStore.getState().workspace.flowStatus).toBe(before);
 
     scriptAgentStream((handlers) => {
       writeDisk(3, { draft: committedBody, committed: committedBody, title: "夜探祠堂" });
-      handlers.onOperation?.(commitView({ state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 9, commit: { chapter: 3, committed: true, report: { updatedCharacters: [] }, snapshotId: "s-3" } }));
+      handlers.onOperation?.(commitView({ state: "succeeded", stateText: "做完了", allowed: [], eventSeq: 9, commit: { chapter: 3, committed: true, report: { chapter: 3, status: "ready" }, snapshotId: "s-3" } }));
       handlers.onDone();
     });
     await act(async () => {
-      await result.current.handleSendUserAction({ kind: "resume", opId: COMMIT_OP, answer: { actionId: "confirm-commit", decision: "commit" } }, { echo: "确认定稿第 3 章" });
+      await result.current.handleSendUserAction({ kind: "resume", opId: COMMIT_OP, answer: { actionId: "commit-ask", decision: "commit" } }, { echo: "定稿第 3 章" });
     });
 
     await vi.waitFor(() => expect(mockedApplyOverview).toHaveBeenCalledWith(overview, { flowStatus: "committed", chapter: 3 }));
-    expect(messages().some((m) => m.role === "user" && m.content === "确认定稿第 3 章")).toBe(true);
+    expect(messages().some((m) => m.role === "user" && m.content === "定稿第 3 章")).toBe(true);
     await vi.waitFor(() => expect(isPaperCommitted()).toBe(true));
     expect(useDraftStore.getState().committed?.body).toBe(committedBody);
+  });
+
+  it("点「定稿」= 定眼前这一版：先存没存的字，交的时候带上存下的版本号；存不上就不交、如实说", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => handlers.onDone());
+    const { result } = renderHook(() => useChat(buildParams({})));
+    editDraft("第三章原有的工作稿。又写了一句。");
+    await act(async () => { await result.current.handleSendUserAction(newCommitAction(3)); });
+    await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
+    const saved = disk.get(3)!.draft!;
+    expect(saved.body).toBe("第三章原有的工作稿。又写了一句。");
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toMatchObject({ type: "commit.prepare", params: { chapter: 3, draftVersion: saved.version } });
+
+    // 补账不带版本号（正文不动）。
+    mockedStreamAgentChat.mockClear();
+    await act(async () => { await result.current.handleSendUserAction(newCommitAction(3, { fill: true })); });
+    await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toMatchObject({ params: { chapter: 3, fill: true } });
+    expect((mockedStreamAgentChat.mock.calls[0]![0].action as { params: Record<string, unknown> }).params.draftVersion).toBeUndefined();
+
+    // 存不上：不交，对话里不多一句。
+    mockedStreamAgentChat.mockClear();
+    mockedSaveWorkingDraft.mockImplementation(async () => { throw new Error("断网了"); });
+    editDraft("第三章原有的工作稿。又写了一句。再写一句。");
+    const count = messages().length;
+    await act(async () => { await result.current.handleSendUserAction(newCommitAction(3)); });
+    expect(mockedStreamAgentChat).not.toHaveBeenCalled();
+    expect(messages()).toHaveLength(count);
+    expect(useNavigationStore.getState().toast).toContain("没定稿");
   });
 
   it("纯读工具断流：不重读盘、作者的稿子原样", async () => {

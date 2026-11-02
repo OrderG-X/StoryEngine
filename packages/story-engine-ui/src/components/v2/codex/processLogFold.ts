@@ -66,20 +66,6 @@ export function foldTurn(segments: readonly RenderSegment[]): TurnFold {
   return { process, answer };
 }
 
-/**
- * 过程那一行有没有必要显示：只调了一个自带卡片的工具（比如点「核账」按钮）、做成了、没想没说，
- * 卡片已经把事说清，再挂一行「核账」是重复。没成功 / 被停 / 还在跑的照样显示。
- */
-export function processWorthShowing(process: readonly ProcessFoldStep[], cardTypes: ReadonlySet<string>, live: boolean): boolean {
-  if (process.length === 0) return false;
-  if (live || process.length > 1) return true;
-  const only = process[0]!;
-  if (only.kind !== "tool") return true;
-  const card = only.step.toolName ? CARD_OF_TOOL[only.step.toolName] : undefined;
-  const settled = only.step.status === "completed" || only.step.status === "verdict";
-  return !(card && settled && cardTypes.has(card));
-}
-
 export interface ProcessSummary {
   /** 收起时那一行：做了哪几样事。 */
   readonly label: string;

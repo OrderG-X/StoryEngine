@@ -166,8 +166,6 @@ export interface SnapshotEntryDto {
   readonly id: string;
   readonly label: string;
   readonly timestamp: number;
-  /** 这个存档点之后改了什么（已翻成人话，如「正文：第 58 章写入定稿」）；认不出时缺省。 */
-  readonly changes?: readonly string[];
   /** 操作历史筛选分类（服务端按写入方工具名定）；老服务端没给时按「正文改动」。 */
   readonly kind?: "commit" | "draft" | "bible" | "restore";
 }

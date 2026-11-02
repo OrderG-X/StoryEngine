@@ -291,7 +291,6 @@ export function App() {
             },
             onSelectionRewrite: edits.handleSelectionRewrite,
             onSelectionRewriteCustom: edits.handleSelectionRewriteCustom,
-            onReroll: () => void picks.rerollVersions(),
             onApplyCandidate: (candidate) => void picks.adoptVersion(candidate),
             onCloseCandidates: () => useUiStore.getState().setDraftCandidates(null),
             onPendingCandidate: picks.decidePending,

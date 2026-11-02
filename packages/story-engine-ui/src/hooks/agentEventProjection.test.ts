@@ -612,32 +612,29 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
 
 describe("定稿投影（写作版本 P2a 片 4A：定稿是一次操作）", () => {
   const OP = "op-0123456789abcdef0123";
-  const checklist = { chapter: 4, canCommit: true, ledgerChecklist: [{ id: "2", kind: "fact", label: "钥匙放回柜台", removable: true }] };
   const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
     opId: OP, kind: "commit.prepare", chapter: 4, what: "定稿·第 4 章", state: "running", stateText: "在做", allowed: ["cancel"], summary: "", conclusion: "", eventSeq: 2, origin: { kind: "chat" },
     ...overrides,
   });
 
-  it("出了清单等作者点 → 挂定稿清单卡（记着是哪一次）；同一次再来不重挂", () => {
-    const waiting = view({ state: "waiting_author", allowed: [], eventSeq: 4, pending: { kind: "commit", actionId: "confirm-commit", decisions: ["commit"], preview: checklist } });
-    let msg = project([{ type: "operation", operation: view() }]);
+  it("停着问「定稿？」/ 核出对不上 → 不挂定不了的卡（问的卡在操作卡上）", () => {
+    const waiting = view({ state: "waiting_author", allowed: [], eventSeq: 4, pending: { kind: "choice", actionId: "commit-ask", decisions: ["commit"], lines: ["第 4 章定稿？"], choices: [{ decision: "commit", label: "定稿" }] } });
+    const msg = projectAgentEvent(project([{ type: "operation", operation: view() }]), { type: "operation", operation: waiting });
     expect(cardOf(msg, "commit-preview")).toBeUndefined();
-    msg = projectAgentEvent(msg, { type: "operation", operation: waiting });
-    expect(cardOf(msg, "commit-preview")).toEqual({ type: "commit-preview", preview: checklist, opId: OP });
-    const again = projectAgentEvent(msg, { type: "operation", operation: { ...waiting, eventSeq: 5 } });
-    expect(again.cards?.filter((card) => card.type === "commit-preview")).toHaveLength(1);
   });
 
-  it("定不了 → 挂清单卡照实列原因，不挂回执、不记存档点", () => {
-    const blocked = { chapter: 4, canCommit: false, blockingReasons: ["第 4 章还没有工作稿。"] };
-    const msg = project([{ type: "operation", operation: view({ state: "succeeded", allowed: [], commit: { chapter: 4, committed: false, blocked } }) }]);
-    expect(cardOf(msg, "commit-preview")?.preview).toEqual(blocked);
+  it("定不了 → 挂卡照实列原因（记着是哪一次），同一次再来不重挂；不挂回执、不记存档点", () => {
+    const blocked = { chapter: 4, blockingReasons: ["第 4 章还没有工作稿。"] };
+    const done = view({ state: "succeeded", allowed: [], commit: { chapter: 4, committed: false, blocked } });
+    let msg = project([{ type: "operation", operation: done }]);
+    msg = projectAgentEvent(msg, { type: "operation", operation: { ...done, eventSeq: 9 } });
+    expect(msg.cards?.filter((card) => card.type === "commit-preview")).toEqual([{ type: "commit-preview", preview: blocked, opId: OP }]);
     expect(cardOf(msg, "commit-report")).toBeUndefined();
     expect(msg.turnSnapshots).toBeUndefined();
   });
 
   it("定成了 → 挂回执、记下存档点（撤销这次定稿用）、整本重读；同一次只记一次", () => {
-    const report = { updatedCharacters: ["c1"], timelineEventIds: [], updatedHooks: [] };
+    const report = { chapter: 4, status: "ready" };
     const done = view({ state: "succeeded", allowed: [], eventSeq: 7, commit: { chapter: 4, committed: true, report, snapshotId: "s-9" } });
     let msg = project([{ type: "operation", operation: done }]);
     msg = projectAgentEvent(msg, { type: "operation", operation: { ...done, eventSeq: 8 } });

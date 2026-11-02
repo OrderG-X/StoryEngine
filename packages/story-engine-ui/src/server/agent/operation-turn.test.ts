@@ -21,7 +21,7 @@ import { runCheckTool, type SubmitReceipt } from "./tools/op-tools.js";
 import { readOperationTool, type ReadOperationOutput } from "./tools/read-operation.js";
 import type { OperationAction } from "./user-actions.js";
 import { checkChapterAction, commitAction, newDraftAction } from "./next-steps.js";
-import { COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
+import { AUTHOR_CHOICE_KIND, COMMIT_ASK_ACTION, COMMIT_CONFLICTS_ACTION, COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
 import { createDraftChangeRecipe } from "../services/operations/recipes/draft-change.js";
 import { draftAdoptRecipe } from "../services/operations/recipes/draft-candidate.js";
 import { fakeDraftDeps, writerOf } from "../services/operations/recipes/draft-change-kit.js";
@@ -377,8 +377,8 @@ const readOp = (input: Record<string, unknown>) =>
   (readOperationTool as unknown as { execute: (input: unknown, context: ToolExecutionContext) => Promise<ReadOperationOutput> }).execute(input, toolContext());
 
 describe("定稿按钮（commit.prepare）收尾", () => {
-  /** 假的定稿配方：照给的结果收；fail 给了就抛；wait 给了就停着等作者。 */
-  function fakeCommit(options: { readonly body?: Partial<CommitPrepareBody>; readonly fail?: string; readonly wait?: true }): void {
+  /** 假的定稿配方：照给的结果收；fail 给了就抛；wait 给了就停在那张卡上等作者。 */
+  function fakeCommit(options: { readonly body?: Partial<CommitPrepareBody>; readonly fail?: string; readonly wait?: string }): void {
     registerRecipe<{ readonly chapter: number }>({
       kind: COMMIT_PREPARE_KIND,
       version: 1,
@@ -389,8 +389,8 @@ describe("定稿按钮（commit.prepare）收尾", () => {
       async run(ctx) {
         const chapter = ctx.params.chapter;
         if (options.fail) throw new Error(options.fail);
-        if (options.wait) await ctx.waitForAuthor({ actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: { chapter } } });
-        return { schema: "operation-result/1", summary: `第 ${chapter} 章已定稿。`, body: { kind: COMMIT_PREPARE_KIND, chapter, committed: true, ...options.body } };
+        if (options.wait) await ctx.waitForAuthor({ actionId: options.wait, kind: AUTHOR_CHOICE_KIND, decisions: ["commit"], preview: { lines: [], choices: [] } });
+        return { schema: "operation-result/1", summary: `第 ${chapter} 章定稿了。`, body: { kind: COMMIT_PREPARE_KIND, chapter, committed: true, ...options.body } };
       },
       stepBudget: () => 0,
       modelTasks: () => [],
@@ -406,14 +406,13 @@ describe("定稿按钮（commit.prepare）收尾", () => {
     for (const chapter of chapters) await writeFile(join(book, "chapters", `${String(chapter).padStart(4, "0")}.md`), `# 第${chapter}章\n\n正文。\n`, "utf-8");
   };
 
-  it("定稿了：说结论，下一步推荐写前沿章（重定旧章不拽回去）；线索堆积加重档加「归并线索」（不带动作，改账要作者点）", async () => {
-    fakeCommit({ body: { done: { threadMaintenanceHint: "escalated" } as CommitPrepareBody["done"] } });
+  it("定稿了：说结论，下一步只推荐写前沿章（重定旧章不拽回去）", async () => {
+    fakeCommit({ body: { done: { summary: "第 3 章定稿了。" } } });
     await commitFiles([1, 2, 3, 4, 5]);
     const out = await press(3);
-    expect(out.text()).toBe("第 3 章已定稿。");
+    expect(out.text()).toBe("第 3 章定稿了。");
     expect(out.choices()).toEqual([
       expect.objectContaining({ label: "AI 写第 6 章", recommended: true, action: expect.objectContaining({ kind: "new", type: "draft.change", mode: "write", params: { chapter: 6 } }) }),
-      { label: "归并线索", intent: expect.any(String) },
     ]);
   });
 
@@ -425,47 +424,33 @@ describe("定稿按钮（commit.prepare）收尾", () => {
     expect(out.choices()[0]).toMatchObject({ label: "核第 3 章", recommended: true, action: { kind: "new", type: INSPECT_KIND, mode: "continuity", params: { chapter: 3 } } });
   });
 
-  it("定不了：说原因在清单里，不给下一步；清单出来停着：说清单打开了", async () => {
+  it("定不了：说原因在卡上，不给下一步；停着问「定稿？」：说点卡上的「定稿」；核出对不上的停着：说在卡上", async () => {
     fakeCommit({ body: { committed: false } });
     const blocked = await press(1);
-    expect(blocked.text()).toBe("第 1 章现在还定不了，原因在清单里。");
+    expect(blocked.text()).toBe("第 1 章现在还定不了，原因在卡上。");
     expect(blocked.choices()).toEqual([]);
     __resetRecipesForTests();
-    fakeCommit({ wait: true });
-    const waiting = await press(2);
-    expect(waiting.operationStates().at(-1)).toBe("waiting_author");
-    expect(waiting.text()).toBe("第 2 章可以定稿，清单在卡上：点「确认定稿」才定。");
+    fakeCommit({ wait: COMMIT_ASK_ACTION });
+    const asking = await press(2);
+    expect(asking.operationStates().at(-1)).toBe("waiting_author");
+    expect(asking.text()).toBe("第 2 章要定稿的话，点卡上的「定稿」。");
+    __resetRecipesForTests();
+    fakeCommit({ wait: COMMIT_CONFLICTS_ACTION });
+    const conflicts = await press(3);
+    expect(conflicts.operationStates().at(-1)).toBe("waiting_author");
+    expect(conflicts.text()).toBe("第 3 章有几处和前文对不上，在卡上。");
   });
 
   it("先定了正文、账待记：说结论，下一步推荐「补记账」、再给写下一章；补账做完推荐写下一章，没补全给「再补一次」（P2b）", async () => {
-    fakeCommit({ body: { done: { summary: "", report: { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 0, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 0, notRecorded: 0, status: "pending" } } } } });
+    fakeCommit({ body: { done: { summary: "", report: { chapter: 2, status: "pending" } } } });
     await commitFiles([1, 2]);
     const out = await press(2);
     expect(out.choices()[0]).toMatchObject({ label: "补记账", recommended: true, action: { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter: 2, fill: true } } });
     expect(out.choices()[1]).toMatchObject({ label: "AI 写第 3 章" });
     __resetRecipesForTests();
-    fakeCommit({ body: { fill: true, done: { summary: "", report: { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 1, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 0, notRecorded: 0, status: "partial" } } } } });
+    fakeCommit({ body: { fill: true, done: { summary: "", report: { chapter: 2, fill: true, status: "partial" } } } });
     const filled = await press(2);
     expect(filled.choices().map((choice) => choice.label)).toEqual(["再补一次", "AI 写第 3 章"]);
-  });
-
-  it("记账没成停着请作者挑：说一句「在卡上」，不说「可以定稿」", async () => {
-    registerRecipe<{ readonly chapter: number }>({
-      kind: COMMIT_PREPARE_KIND,
-      version: 1,
-      lane: "foreground",
-      async prepare(_bookDir, input) {
-        return { ok: true, params: input.params as { readonly chapter: number }, writeScope: { chapters: [] }, budget: 1 };
-      },
-      async run(ctx) {
-        await ctx.waitForAuthor({ actionId: "ledger-failed", kind: "author_choice", decisions: ["retry", "pending"], preview: { lines: ["没记成"], choices: [] } });
-        return { schema: "operation-result/1", summary: "", body: {} };
-      },
-      stepBudget: () => 0,
-      modelTasks: () => [],
-    });
-    const out = await press(1);
-    expect(out.text()).toBe("第 1 章的账这次没记成，怎么办在卡上。");
   });
 
   it("没做成：说原因，给「再来一次」（新的一次定稿）", async () => {

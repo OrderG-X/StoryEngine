@@ -503,9 +503,7 @@ export type PendingActionData =
   /** 定论查完了等作者点「确认」（服务端 CanonConfirmPreview）：卡上每处能划掉。 */
   | { readonly kind: "canon"; readonly actionId: string; readonly decisions: readonly string[]; readonly card: SettleCardData; readonly summary: string }
   | { readonly kind: "confirm"; readonly what: ConfirmWhat; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly notes: readonly string[] }
-  /** 定稿清单等作者点「确认定稿」（服务端 CommitConfirmPreview）：清单上每行能划掉、天数两栏能改。 */
-  | { readonly kind: "commit"; readonly actionId: string; readonly decisions: readonly string[]; readonly preview: CommitPreviewCardData }
-  /** 停下请作者挑一个（服务端 AuthorChoicePreview，如记账没成的「再记一次」「先定正文、账待记」）：字都是服务端给的。 */
+  /** 停下请作者挑一个（服务端 AuthorChoicePreview，如对话里交的「定稿？」、定稿前核出对不上的「照这样定稿」）：字都是服务端给的。 */
   | { readonly kind: "choice"; readonly actionId: string; readonly decisions: readonly string[]; readonly lines: readonly string[]; readonly choices: AuthorChoicePreview["choices"] };
 
 /** 写稿做完了的结果（服务端 draft.change 结果 body 的子集）。 */
@@ -556,7 +554,6 @@ function editChanges(value: unknown): readonly EditChangeData[] | undefined {
 const REVISE_CONFIRM_KIND = "draft.revise.confirm";
 const CONFIRM_KINDS: Readonly<Record<string, ConfirmWhat>> = { settings_confirm: "settings", ledger_confirm: "ledger", undo_confirm: "undo", prune_confirm: "prune" };
 const CANON_CONFIRM_KIND = "canon_confirm";
-const COMMIT_CONFIRM_KIND = "commit_confirm";
 const AUTHOR_CHOICE_KIND = "author_choice";
 
 function readPendingAction(value: unknown): PendingActionData | undefined {
@@ -571,11 +568,6 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
       const lines = preview ? textList(preview.lines, 60) : undefined;
       if (!lines || decisions.length === 0) continue;
       return { kind: "confirm", what, actionId: item.actionId, decisions, lines, notes: textList(preview!.notes, 20) ?? [] };
-    }
-    if (item.kind === COMMIT_CONFIRM_KIND) {
-      const view = preview ? readCommitPreviewCard(preview.view) : undefined;
-      if (!view || decisions.length === 0) continue;
-      return { kind: "commit", actionId: item.actionId, decisions, preview: view };
     }
     if (item.kind === AUTHOR_CHOICE_KIND) {
       const lines = preview ? textList(preview.lines, 10) : undefined;

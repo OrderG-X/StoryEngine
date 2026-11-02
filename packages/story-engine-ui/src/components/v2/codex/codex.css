@@ -206,15 +206,7 @@
     letter-spacing:.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .3s;}
   .ai-flow-live.is-running{color:var(--accent-hi);animation:aiFlowCaptionPulse 1.8s ease-in-out infinite;}
   @keyframes aiFlowCaptionPulse{0%,100%{opacity:.68;}50%{opacity:1;}}
-  /* B1 本章工具条：进度卡下方一排可点工具（暗金、低调，不抢戏）。 */
-  .chapter-tool-rail{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:8px 4px 2px;}
-  .ctr-btn{appearance:none;cursor:pointer;font-size:11.5px;line-height:1;padding:5px 10px;border-radius:999px;
-    color:var(--muted);background:transparent;border:1px solid var(--line);letter-spacing:.02em;
-    transition:color .18s,border-color .18s,background .18s;}
-  .ctr-btn:hover:not(:disabled){color:var(--accent-hi);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);}
-  .ctr-btn:disabled{opacity:.4;cursor:default;}
-
-  /* 能力快捷条（ChatCapabilityBar）：输入框上方，补全资料 + 整理的散能力入口；复刻 ctr-btn 调性。 */
+  /* 能力快捷条（ChatCapabilityBar）：输入框上方，补全资料 + 整理的散能力入口；暗金、低调，不抢戏。 */
   .cap-bar{margin:6px 4px 4px;}
   .cap-quick{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
   .cap-btn{appearance:none;cursor:pointer;font-size:11.5px;line-height:1;padding:5px 10px;border-radius:999px;
@@ -293,22 +285,9 @@
     border:0;background:transparent;padding:0;cursor:pointer;color:var(--muted);
     font-family:inherit;font-size:12px;line-height:1.5;text-align:left;}
   .step-head:disabled{cursor:default;}
-  .step-kind{position:relative;overflow:hidden;flex:0 0 auto;color:var(--text);font-weight:600;}  /* 「调用工具」=跟「思考过程」同款:白色 + 金光(见下 ::after)。 */
-  .step-sep{color:var(--faint);opacity:.55;flex:0 0 auto;}
   .step-label{position:relative;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
   .step-label.is-tool{color:var(--success);}  /* 工具名=明确的绿色（标记「做了动作」）；思考标签保持中性白。 */
-  .step-fail{color:var(--danger);flex:0 0 auto;}
-  /* 已停止徽标（人喊停，不是失败）：中性灰、不红不金。 */
-  .step-stop{color:var(--muted);flex:0 0 auto;}
-  /* 裁决未过徽标（commit_preview 核实「暂不可定稿」这类否定裁决）：中性 info 色、不红不绿。 */
-  .step-verdict{color:var(--info);flex:0 0 auto;}
   .step-head .tm{color:var(--faint);font-size:10.5px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
-  .step-caret{color:var(--muted);font-size:10px;flex:0 0 auto;transition:color .15s;}
-  .step-head:hover:not(:disabled) .step-caret{color:var(--accent-hi);}
-  .step-detail{margin:5px 0 1px;padding-left:10px;border-left:2px solid var(--line-faint);
-    color:var(--muted);font-size:12.5px;line-height:1.62;white-space:pre-wrap;}
-  .process-log-children{margin:4px 0 2px 8px;padding-left:8px;border-left:1px solid var(--line-faint);
-    display:flex;flex-direction:column;gap:2px;}
   /* 光影：只有「正在跑」那步的标签字上扫金色光带（.is-active）；已完成/未开始的步骤静止。
      常驻扫光会让金色亮斑随机停在某个字上，看起来像渲染故障的金方块（A-9/T9），故撤掉常驻扫。
      扫光位置仍由 .ai-body 上的全局时钟变量 --codex-sweep-x 驱动，多步并发时同相位。 */
@@ -437,14 +416,6 @@
   .codex-desk-bar .cd-tabs button.is-active{color:var(--accent-hi);background:var(--accent-soft);
     box-shadow:inset 0 0 0 1px var(--accent-line-soft);font-weight:600;}
 
-  /* 底栏：再来一版（幽淡按钮，hover 才透金）。正文字号已并入「设置 · 显示」面板，旧字号组已撤。 */
-  .codex-desk-bar .cd-reroll{
-    border:1px solid var(--line);background:var(--sunken);color:var(--muted);
-    font-size:11.5px;padding:5px 11px;border-radius:8px;cursor:pointer;transition:.15s;}
-  .codex-desk-bar .cd-reroll:hover:not(:disabled){color:var(--accent-hi);border-color:var(--accent-line-soft);background:var(--accent-soft);}
-  .codex-desk-bar .cd-reroll:disabled{opacity:.5;cursor:default;}
-  /* 再来一版推到底栏最右。 */
-  .codex-desk-bar-bottom .cd-reroll{margin-left:auto;}
 
   /* 中间舞台：固定不滚的暗场（含暗角），把「稿纸框」居中撑满、框内自滚。 */
   .codex-desk-stage{position:relative;z-index:1;min-height:0;min-width:0;overflow:hidden;
@@ -642,12 +613,6 @@
   .step-card .sc-head:hover:not(:disabled) .sc-caret{color:var(--accent-hi);}
   .step-card .sc-body{padding:2px 14px 13px;}
   @keyframes scDotPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
-
-  /* 入库 delta 卡（CommitDeltaCard）：状态行 + 标签·值 分项。 */
-  .step-card .cdc-list{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;}
-  .step-card .cdc-row{display:inline-flex;gap:6px;align-items:baseline;padding:3px 9px;border-radius:999px;background:var(--sunken);font-size:12px;}
-  .step-card .cdc-k{color:var(--muted);}
-  .step-card .cdc-v{color:var(--text);}
 
   /* 质检明细卡（QualityCheckCard）：硬伤突出红、软提示二级折叠。 */
   .step-card .qcc-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
@@ -909,7 +874,6 @@
 .codex-app .op-history-list{display:flex;flex-direction:column;gap:8px;}
 .codex-app .op-history-item{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);}
 .codex-app .op-history-item strong{font-size:13px;font-weight:600;color:var(--text);}
-.codex-app .op-history-time{font-size:12px;color:var(--muted);white-space:nowrap;}
 .codex-app .op-history-item button{font-size:12px;padding:5px 12px;border:1px solid var(--accent);border-radius:8px;background:transparent;color:var(--accent);cursor:pointer;white-space:nowrap;}
 .codex-app .op-history-item button:disabled{opacity:.5;cursor:default;}
 

@@ -74,10 +74,10 @@ describe("chat-sessions-io CRUD", () => {
         role: "assistant",
         content: "已写入。",
         turnSnapshots: [{ toolName: "foundation_write", snapshotId: "snap-abc", chapterNumber: 1 }],
-        cards: [{ type: "commit-preview", preview: { chapter: 1, canCommit: true } }],
+        cards: [{ type: "commit-preview", preview: { chapter: 1, blockingReasons: ["缺稿"] } }],
       },
       // 只差字数下限的（定稿窗口重开还有「就这么短，照样定稿」）。
-      { id: "assistant-short", role: "assistant", content: "定不了。", cards: [{ type: "commit-preview", preview: { chapter: 2, canCommit: false, shortOnly: true } }] },
+      { id: "assistant-short", role: "assistant", content: "定不了。", cards: [{ type: "commit-preview", preview: { chapter: 2, blockingReasons: ["不到 1000 字"], shortOnly: true } }] },
     ]);
     const session = await readChatSession(dir, id);
     const msg = session?.messages[0];
@@ -86,8 +86,8 @@ describe("chat-sessions-io CRUD", () => {
     ]);
     // agentTimelineModel.canUndo 条件：turnSnapshots.length > 0
     expect((msg?.turnSnapshots?.length ?? 0) > 0).toBe(true);
-    expect(msg?.cards).toEqual([{ type: "commit-preview", preview: { chapter: 1, canCommit: true } }]);
-    expect(session?.messages[1]?.cards).toEqual([{ type: "commit-preview", preview: { chapter: 2, canCommit: false, shortOnly: true } }]);
+    expect(msg?.cards).toEqual([{ type: "commit-preview", preview: { chapter: 1, blockingReasons: ["缺稿"] } }]);
+    expect(session?.messages[1]?.cards).toEqual([{ type: "commit-preview", preview: { chapter: 2, blockingReasons: ["不到 1000 字"], shortOnly: true } }]);
   });
 
   it("删 active 自动转移；删到空自动建空会话；index 永远 >=1 且 active 有效", async () => {

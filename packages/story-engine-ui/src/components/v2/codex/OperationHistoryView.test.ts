@@ -23,7 +23,7 @@ describe("改版 groupSnapshotsByDay：操作历史按自然日分组", () => {
   });
 });
 
-describe("改版 snapshotKind：操作历史筛选分类", () => {
+describe("改版 snapshotKind：操作历史分类", () => {
   it("用服务端给的分类，老服务端没给时算正文改动", () => {
     expect(snapshotKind({ kind: "commit" })).toBe("commit");
     expect(snapshotKind({ kind: "restore" })).toBe("restore");

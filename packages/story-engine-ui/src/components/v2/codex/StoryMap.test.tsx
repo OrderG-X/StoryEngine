@@ -17,7 +17,7 @@ const MAP: MapData = {
   lastDay: 7,
   chapters: [
     { chapter: 1, presentLine: true, days: "第 1 天", weekday: 0, weekdayDerived: false, timeOfDay: "傍晚", segments: [], summary: "周守义到了九号院", present: ["周守义", "老板娘"], viewpoint: "周守义" },
-    { chapter: 2, presentLine: true, days: "第 2 天", unsure: "按旧账推的，不算准", weekday: 1, weekdayDerived: true, segments: ["回忆（3 年前）"], present: ["周守义"] },
+    { chapter: 2, presentLine: true, days: "第 2 天", unsure: "大概的", weekday: 1, weekdayDerived: true, segments: ["回忆（3 年前）"], present: ["周守义"] },
     { chapter: 3, presentLine: true, days: "第 6 天到第 7 天", gap: "过了 4 天", weekdayDerived: false, segments: [], present: ["周守义", "沈同志"] },
   ],
   cast: [
@@ -45,7 +45,7 @@ describe("故事地图（重构 P6，草图 ③）", () => {
     expect(screen.getByText("周一 · 傍晚")).toBeTruthy();
     expect(screen.getByText("周二（推） · 回忆（3 年前）")).toBeTruthy();
     expect(screen.getByText("第 6 天到第 7 天")).toBeTruthy();
-    expect(screen.getByText("约").getAttribute("title")).toBe("按旧账推的，不算准");
+    expect(screen.getByText("约").getAttribute("title")).toBe("大概的");
     expect(screen.getByText("过了 4 天")).toBeTruthy();
     expect(screen.getByText("周守义到了九号院")).toBeTruthy();
   });

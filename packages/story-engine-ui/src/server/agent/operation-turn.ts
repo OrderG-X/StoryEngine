@@ -14,7 +14,8 @@ import { INSPECT_KIND } from "../services/operations/recipes/inspect-run.js";
 import { PLAN_PROPOSE_KIND, readPlanProposeParams } from "../services/operations/recipes/plan-propose.js";
 import { LEDGER_CHANGE_KIND } from "../services/operations/recipes/ledger-change.js";
 import { CANON_PROPOSE_KIND, canonInputOf, type CanonConfirmPreview, type CanonProposeBody, type CanonProposeParams } from "../services/operations/recipes/canon-propose.js";
-import { AUTHOR_CHOICE_KIND, COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
+import type { AuthorChoicePreview } from "../services/commit-view.js";
+import { COMMIT_CONFLICTS_ACTION, COMMIT_PREPARE_KIND, type CommitPrepareBody } from "../services/operations/recipes/commit-prepare.js";
 import { SETTINGS_CHANGE_KIND, type SettingsChangeBody } from "../services/operations/recipes/settings-change.js";
 import { HISTORY_CHANGE_KIND, type HistoryChangeBody } from "../services/operations/recipes/history-change.js";
 import { checkedDraftChanged } from "../services/operations/summary.js";
@@ -150,10 +151,11 @@ export async function finishOperationTurn(args: {
       projectDir: args.projectDir,
       sendEvent: args.sendEvent,
       scrubber: args.scrubber,
-      // 写完就定稿：请求号由这次写稿定（收尾再来一遍也是同一次定稿）。
+      // 写完就定稿：请求号由这次写稿定（收尾再来一遍也是同一次定稿）。不是作者点的「定稿」：按对话交的算，先问一句。
       ...(signal ? {
         previewCommit: (chapter: number) => runOperationAction({
           action: { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: `then-${record.opId}`, issuedAt: record.issuedAt },
+          fromChat: true,
           projectDir: args.projectDir,
           sendEvent: args.sendEvent,
           scrubber: args.scrubber,
@@ -253,6 +255,11 @@ export async function finishOperationTurn(args: {
       emitText(`${what}${PAUSED_TEXT[record.pauseReason ?? "interrupted"] ?? "停下了"}：点卡上的「接着做」接着，或「不要了」。`);
       return;
     case "waiting_author":
+      // 定稿前核出对不上的：那几处出成核账卡（卡上能「改这处」「不是问题」），停着的卡上只剩「照这样定稿」。
+      if (record.kind === COMMIT_PREPARE_KIND) {
+        const conflicts = record.pendingActions.find((action) => !action.decisionHash && action.actionId === COMMIT_CONFLICTS_ACTION)?.preview as Partial<AuthorChoicePreview> | undefined;
+        if (conflicts?.check) args.sendEvent("card", { type: "continuity", check: conflicts.check });
+      }
       // 改稿先给作者看：改法在卡上。
       emitText(record.kind === DRAFT_CHANGE_KIND && record.mode === "revise"
         ? "改法在卡上：点「换上」才换进稿子。"
@@ -274,8 +281,8 @@ export async function finishOperationTurn(args: {
 }
 
 /**
- * 定稿做完：定不了的只说一句（原因在清单里，只差字数的清单上有「就这么短，照样定稿」）；定了的说结论，
- * 下一步给写下一章（线索堆多了加「归并线索」；设定本里还没标主角、账里有视角人物的加「把『X』设为主角」，点了交给对话 AI 设）。
+ * 定稿做完：定不了的只说一句（原因在卡上，只差字数的卡上有「就这么短，照样定稿」）；定了的说结论，
+ * 下一步给写下一章（设定本里还没标主角、账里有视角人物的加「把『X』设为主角」，点了交给对话 AI 设）。
  */
 async function finishCommit(
   projectDir: string,
@@ -286,11 +293,11 @@ async function finishCommit(
   sendEvent: SendEvent,
 ): Promise<void> {
   if (body?.committed !== true) {
-    emitText(body?.fill ? `第 ${chapter} 章的账现在补不了，原因在卡上。` : `第 ${chapter} 章现在还定不了，原因在清单里。`);
+    emitText(body?.fill ? `第 ${chapter} 章的账现在补不了，原因在卡上。` : `第 ${chapter} 章现在还定不了，原因在卡上。`);
     return;
   }
   emitText(humanizeToolNames(conclusion));
-  const status = body.done?.report?.ledger.status;
+  const status = body.done?.report?.status;
   const next = await resolveNextDraftTarget(projectDir, chapter);
   // 补上了：接着写；账待记 / 没记全：「补记账」摆在写下一章旁边（补之前接着写也行，写作上下文里说清那章账没记上）。
   if (body.fill) {
@@ -307,7 +314,6 @@ async function finishCommit(
   const rename = await buildProtagonistRenameSuggestion(projectDir).catch(() => undefined);
   sendNextSteps(sendEvent, `第 ${chapter} 章定稿了，接下来？`, [
     { ...writeNextChoice(next), recommended: true },
-    ...(body.done?.threadMaintenanceHint === "escalated" ? [{ label: "归并线索", intent: "看看开着的线索里有没有讲同一件事的，提一份归并方案给我确认" }] : []),
     ...(rename ? [{ label: rename.label, intent: rename.intent }] : []),
   ]);
 }
@@ -317,11 +323,11 @@ function isFillRecord(record: OperationRecord): boolean {
   return (record.params as { readonly fill?: unknown } | undefined)?.fill === true;
 }
 
-/** 定稿停着等作者：记账没成的卡（再记一次 / 先定正文）、定稿清单、补账清单。清单在弹窗和对话小卡里，回话只说一句（刷新后弹窗没开也说得通）。 */
+/** 定稿停着等作者：对话里交的先问一句、核出对不上的那几处。卡上有，回话只说一句。 */
 function commitWaitingText(record: OperationRecord, chapter: number): string {
   const waiting = record.pendingActions.find((action) => !action.decisionHash);
-  if (waiting?.kind === AUTHOR_CHOICE_KIND) return `第 ${chapter} 章的账这次没记成，怎么办在卡上。`;
-  return isFillRecord(record) ? `第 ${chapter} 章的账可以补上，清单在卡上：点「确认记账」才记。` : `第 ${chapter} 章可以定稿，清单在卡上：点「确认定稿」才定。`;
+  if (waiting?.actionId === COMMIT_CONFLICTS_ACTION) return `第 ${chapter} 章有几处和前文对不上，在卡上。`;
+  return isFillRecord(record) ? `第 ${chapter} 章的账要补记的话，点卡上的「补记账」。` : `第 ${chapter} 章要定稿的话，点卡上的「定稿」。`;
 }
 
 /** 定论查完等作者点：卡上面那句话（查到几处、在哪几章、没查全的），定论本身卡上有。 */
@@ -345,6 +351,8 @@ export async function runOperationAction(args: {
   readonly sendEvent: SendEvent;
   readonly scrubber: { push(text: string): string; flush(): string };
   readonly signal: AbortSignal;
+  /** 不是作者点的按钮、是服务端替对话接着交的（写完就定稿）：按对话交的算（定稿先问一句）。 */
+  readonly fromChat?: true;
 }): Promise<void> {
   const { action, projectDir } = args;
   const emitText = (text: string): void => {
@@ -363,7 +371,7 @@ export async function runOperationAction(args: {
       params: action.params,
       requestKey: action.requestKey,
       issuedAt: action.issuedAt,
-      origin: { kind: "button", messageId: action.requestKey, ...(chapter !== undefined ? { chapter } : {}) },
+      origin: { kind: args.fromChat ? "chat" : "button", messageId: action.requestKey, ...(chapter !== undefined ? { chapter } : {}) },
     });
     const receipt = receiptOf(outcome, "button", { kind: action.type, ...(mode !== undefined ? { mode } : {}), ...(chapter !== undefined ? { chapter } : {}) });
     if (!receipt.accepted || !receipt.opId) {
