@@ -40,7 +40,7 @@ import {
 import { BookUnsettledError, describeBasisChanges, readTruthBasisForWork } from "../../../book/truth-basis.js";
 import { callConfiguredBrainModel, READER_CALL_MAX_SENDS } from "../../../editorial/checker.js";
 import { commitEntriesOf, commitOrderProblem, draftFingerprint, prepareChapterCommit, type CommitPreview } from "../../../editorial/commit-flow.js";
-import { prepareCheckerNotes, READER_MAX_VOLUME_BUILDS } from "../../../editorial/continuity/check-service.js";
+import { ownChapterIssues, prepareCheckerNotes, READER_MAX_VOLUME_BUILDS } from "../../../editorial/continuity/check-service.js";
 import { warmUpReaders } from "../../../editorial/index.js";
 import { KEEPER_MAX_CALLS, KEEPER_MAX_CATCH_UP } from "../../../editorial/ledger-keeper.js";
 import type { ReaderWaited } from "../../../editorial/reader-progress.js";
@@ -481,7 +481,7 @@ export function createCommitPrepareRecipe(deps: CommitPrepareDeps = DEFAULT_DEPS
       const notes: { -readonly [K in keyof CommitNotes]: CommitNotes[K] } = {};
       if (!isFill) {
         // 定稿前核一遍：确定对不上的才停下给作者看；没核成不挡定稿，回执里说一句。
-        ctx.progress(`在核第 ${chapter} 章`);
+        ctx.progress("在对前文");
         const read = await ctx.step("notes", { chapter }, () => checkNotes(bookDir, chapter, deps.readerCallModel));
         const checked: Checked = read.ok
           ? await ctx.step("check", { chapter, digest: frozen.basis.digest }, () => check(bookDir, chapter, frozen, read.waited, deps.readerCallModel))
@@ -490,12 +490,13 @@ export function createCommitPrepareRecipe(deps: CommitPrepareDeps = DEFAULT_DEPS
         else {
           if (checked.output.failures.length > 0) notes.checkPartial = checked.output.failures[0];
           if (checked.output.coverage) notes.checkCold = true;
-          if (checked.output.sure.length > 0) {
+          const own = ownChapterIssues(checked.output.sure, chapter);
+          if (own.length > 0) {
             await ctx.waitForAuthor({
               actionId: COMMIT_CONFLICTS_ACTION,
               kind: AUTHOR_CHOICE_KIND,
               decisions: ["commit"],
-              preview: conflictsChoice(chapter, checked.output) satisfies AuthorChoicePreview,
+              preview: conflictsChoice(chapter, { ...checked.output, sure: own }) satisfies AuthorChoicePreview,
             });
             // 停着的时候作者改了那几处（或别的）：点「照这样定稿」定的还是冻结那版，先别花记账的钱，直接说改过了。
             const now = await readDraft(bookDir, chapter);
@@ -506,7 +507,7 @@ export function createCommitPrepareRecipe(deps: CommitPrepareDeps = DEFAULT_DEPS
       // 记账：没成自动再记一次；还不成，定稿就先定正文、账待记，补账如实说没补上。
       let preview: CommitPreview | undefined;
       for (let round = 1; round <= LEDGER_ROUNDS && preview === undefined; round += 1) {
-        ctx.progress(`在记第 ${chapter} 章的账`);
+        ctx.progress("在记账");
         const ledgered = await ctx.step(ledgerStepId(round), { chapter, digest: frozen.basis.digest, ...(round > 1 ? { round } : {}) }, () => ledger(bookDir, chapter, frozen, deps.callModel));
         if (ledgered.kind === "blocked") return blockedResult(chapter, ledgered.view, isFill);
         if (ledgered.kind === "ok") {

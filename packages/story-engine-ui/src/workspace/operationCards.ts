@@ -24,11 +24,15 @@ export function projectOperationEverywhere(view: OperationViewData, ownerMessage
   const { inspect: _inspect, draft: _draft, pending: _pending, changed: _changed, commit: _commit, ...rest } = view;
   const bare: OperationViewData = { ...rest, allowed: [], summary: "", conclusion: "" };
   const store = useChatStore.getState();
+  // 结束了、owner 在对话里说结论：老的那几条连那一行也不留（安静账房：不再一路摆「做完了」）。
+  const quietOthers = ENDED_OPERATION_STATES.has(view.state) && store.messages.some((message) => message.id === ownerMessageId);
   for (const message of store.messages) {
     if (message.id === ownerMessageId) {
       store.updateMessage(message.id, (current) => projectAgentEvent(current, { type: "operation", operation: view, ...(options.announced ? { announced: true as const } : {}) }));
     }
-    else if (carries(message, view.opId)) store.updateMessage(message.id, (current) => projectAgentEvent(current, { type: "operation", operation: bare }));
+    else if (carries(message, view.opId)) {
+      store.updateMessage(message.id, (current) => projectAgentEvent(current, { type: "operation", operation: bare, ...(quietOthers ? { announced: true as const } : {}) }));
+    }
   }
 }
 

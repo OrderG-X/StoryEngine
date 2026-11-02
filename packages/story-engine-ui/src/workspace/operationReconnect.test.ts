@@ -191,7 +191,7 @@ describe("作者在卡上接着那一次（点「定稿」）", () => {
 });
 
 describe("projectOperationEverywhere", () => {
-  it("owner 那条出结果卡、记 announced；别的挂着同一次的只换操作卡", () => {
+  it("owner 那条出结果卡、记 announced；别的挂着同一次的只换操作卡、结束了就不再显示", () => {
     useChatStore.setState({
       messages: [
         { id: "a1", role: "assistant", content: "", cards: opCard(OP_A) },
@@ -204,7 +204,8 @@ describe("projectOperationEverywhere", () => {
     }), "a2", { announced: true });
     const [a1, a2] = useChatStore.getState().messages;
     expect(cardOf(a1!, "operation")?.op).toMatchObject({ state: "succeeded" });
-    expect(cardOf(a1!, "operation")?.op.announced).toBeUndefined();
+    // 结束了、结论在 owner 上说：原来那条连「做完了」那一行也不留。
+    expect(cardOf(a1!, "operation")?.op.announced).toBe(true);
     // 结论只在 owner 上（接着做那一轮说了，原来那条不再说一遍）。
     expect(cardOf(a1!, "operation")?.op.conclusion).toBeUndefined();
     expect(cardOf(a1!, "quality")).toBeUndefined();

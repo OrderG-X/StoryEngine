@@ -109,6 +109,14 @@ const homeChapterOf = (issue: Pick<ContinuityIssueV2, "fixChapter">, chapter: nu
   issue.fixChapter !== undefined && issue.fixChapter > 0 ? issue.fixChapter : chapter;
 
 /**
+ * 错在这一章的那几条（安静账房：定稿停不停、写完出不出卡只看这些）。错在前文某章的（前文和设定对不上、
+ * 本章和设定一致而前文那章不一致）不拦这一章，作者自己点「核账」时整张卡照样列。
+ */
+export function ownChapterIssues<T extends { readonly fixChapter?: number }>(issues: readonly T[], chapter: number): T[] {
+  return issues.filter((issue) => homeChapterOf(issue, chapter) === chapter);
+}
+
+/**
  * 错在前面某章的条目，之前核账报过没有：从它所在那章到上一章，哪章的核账记忆里有同一条（sameIssue）就算报过。
  * 报过的不再当这一章的新问题（作者没改就每章重报一遍，吵）；没报过的（那章没核过、设定后来改了）照常报一次。
  */

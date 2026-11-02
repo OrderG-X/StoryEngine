@@ -72,6 +72,15 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
     ]);
   });
 
+  it("核出的确定错在前面那章（前文和设定对不上）：不拦这一章，不出卡、照常给「定稿」", async () => {
+    const { events, text, next } = await finish(record("succeeded", { body: written({ draftLength: { actualLength: 3000 }, qualityPipeline: { continuity: { checked: true } } }) }), {
+      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [{ quote: "q", fixChapter: 1 }], maybe: [], failures: [] }),
+    });
+    expect(text).toBe("第 2 章写好了，3000 字。写完核了一遍，没发现对不上的地方。");
+    expect(events.some((item) => item.event === "card")).toBe(false);
+    expect(next?.choices.map((choice) => choice.label)).toEqual(["定稿", "AI 写下一章"]);
+  });
+
   it("写完核过账、但记忆对不上（有一遍没核全）→ 如实说没核全，下一步给「核账」，不偷偷再跑", async () => {
     const { events, text, next } = await finish(record("succeeded", { body: written({ draftLength: { actualLength: 3000 }, qualityPipeline: { continuity: { checked: true } } }) }), {
       readCachedCheck: async () => null,
@@ -106,7 +115,7 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
       readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [{ quote: "q" }], maybe: [], failures: [] }),
     });
     expect(previewCommit).toHaveBeenCalledTimes(2);
-    expect(conflicted.text).toContain("\n先没定稿，改好这几处再定。");
+    expect(conflicted.text).toContain("\n先没定稿，改好了再定。");
     expect(conflicted.events.map((item) => item.event)).toContain("card");
   });
 

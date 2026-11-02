@@ -802,9 +802,11 @@ function MessageBubbles({
 
   const statusNotes = cardOf(message, "status-notes")?.notes;
   // 卡片按 type 分发渲染，按固定次序排（布局稳定，不随工具先后跳）；状态说明在最上面单独渲染。
+  // 停着等作者点的操作卡排最后：按钮跟在它问的那些东西（如定稿前核出的那几处）下面。
+  const cardRank = (card: MessageCard): number => (card.type === "operation" && card.op.state === "waiting_author" ? CARD_ORDER.length : CARD_ORDER.indexOf(card.type));
   const orderedCards = [...(message.cards ?? [])]
     .filter((card) => card.type !== "status-notes" && card.type !== "error")
-    .sort((a, b) => CARD_ORDER.indexOf(a.type) - CARD_ORDER.indexOf(b.type));
+    .sort((a, b) => cardRank(a) - cardRank(b));
   const inspectedChapter = cardOf(message, "operation")?.op.chapter;
   const withStaleNote = (key: string, checked: CheckedBody, node: ReactNode) => (
     checkedBeforeEdit(checked, inspectedChapter, { chapter: paperChapter, baseVersion: paperVersion, savedBody: paperSavedBody, dirty: paperDirty })

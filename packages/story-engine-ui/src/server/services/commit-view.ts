@@ -44,7 +44,7 @@ export function commitAskChoice(chapter: number, fill: boolean): AuthorChoicePre
 export function conflictsChoice(chapter: number, check: ContinuityCheckOutput): AuthorChoicePreview {
   const sure: readonly ChapterCheckItem[] = check.sure;
   return {
-    lines: [`第 ${chapter} 章有 ${sure.length} 处和前文对不上，先看一眼：`],
+    lines: [`第 ${chapter} 章有 ${sure.length} 处和前文对不上，改好了再点「定稿」。`],
     choices: [{ decision: "commit", label: "照这样定稿" }],
     check: { ...check, maybe: [], earlierOpen: [] },
   };

@@ -365,7 +365,7 @@ describe("作者点「定稿」：核账 → 记账 → 定，一路走完", () 
     expect(record.state).toBe("waiting_author");
     expect(waitingOf(record)).toMatchObject({ actionId: COMMIT_CONFLICTS_ACTION, kind: AUTHOR_CHOICE_KIND, decisions: ["commit"] });
     const choice = choiceOf(record);
-    expect(choice.lines).toEqual([`第 2 章有 ${choice.check?.sure.length} 处和前文对不上，先看一眼：`]);
+    expect(choice.lines).toEqual([`第 2 章有 ${choice.check?.sure.length} 处和前文对不上，改好了再点「定稿」。`]);
     expect(choice.check?.sure.map((issue) => issue.quote)).toContain(CONFLICT.quote);
     expect(choice.check?.maybe).toEqual([]);
     expect(choice.choices).toEqual([{ decision: "commit", label: "照这样定稿" }]);

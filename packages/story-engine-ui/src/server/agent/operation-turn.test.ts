@@ -424,7 +424,7 @@ describe("定稿按钮（commit.prepare）收尾", () => {
     expect(out.choices()[0]).toMatchObject({ label: "核第 3 章", recommended: true, action: { kind: "new", type: INSPECT_KIND, mode: "continuity", params: { chapter: 3 } } });
   });
 
-  it("定不了：说原因在卡上，不给下一步；停着问「定稿？」：说点卡上的「定稿」；核出对不上的停着：说在卡上", async () => {
+  it("定不了：说原因在卡上，不给下一步；停着问「定稿？」、核出对不上的停着：话都在停着的卡上，这里不再说一遍", async () => {
     fakeCommit({ body: { committed: false } });
     const blocked = await press(1);
     expect(blocked.text()).toBe("第 1 章现在还定不了，原因在卡上。");
@@ -433,12 +433,12 @@ describe("定稿按钮（commit.prepare）收尾", () => {
     fakeCommit({ wait: COMMIT_ASK_ACTION });
     const asking = await press(2);
     expect(asking.operationStates().at(-1)).toBe("waiting_author");
-    expect(asking.text()).toBe("第 2 章要定稿的话，点卡上的「定稿」。");
+    expect(asking.text()).toBe("");
     __resetRecipesForTests();
     fakeCommit({ wait: COMMIT_CONFLICTS_ACTION });
     const conflicts = await press(3);
     expect(conflicts.operationStates().at(-1)).toBe("waiting_author");
-    expect(conflicts.text()).toBe("第 3 章有几处和前文对不上，在卡上。");
+    expect(conflicts.text()).toBe("");
   });
 
   it("先定了正文、账待记：说结论，下一步推荐「补记账」、再给写下一章；补账做完推荐写下一章，没补全给「再补一次」（P2b）", async () => {

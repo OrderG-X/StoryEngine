@@ -255,10 +255,12 @@ export async function finishOperationTurn(args: {
       emitText(`${what}${PAUSED_TEXT[record.pauseReason ?? "interrupted"] ?? "停下了"}：点卡上的「接着做」接着，或「不要了」。`);
       return;
     case "waiting_author":
-      // 定稿前核出对不上的：那几处出成核账卡（卡上能「改这处」「不是问题」），停着的卡上只剩「照这样定稿」。
+      // 定稿停着：问「定稿？」、核出对不上的那几处，话都在停着的卡上，这里不再说一遍。对不上的那几处出成核账卡
+      // （卡上能「改这处」「不是问题」），停着的卡上只剩「照这样定稿」。
       if (record.kind === COMMIT_PREPARE_KIND) {
         const conflicts = record.pendingActions.find((action) => !action.decisionHash && action.actionId === COMMIT_CONFLICTS_ACTION)?.preview as Partial<AuthorChoicePreview> | undefined;
         if (conflicts?.check) args.sendEvent("card", { type: "continuity", check: conflicts.check });
+        return;
       }
       // 改稿先给作者看：改法在卡上。
       emitText(record.kind === DRAFT_CHANGE_KIND && record.mode === "revise"
@@ -271,8 +273,6 @@ export async function finishOperationTurn(args: {
               ? canonWaitingText(record)
               : record.kind === HISTORY_CHANGE_KIND
                 ? (record.mode === "prune" ? "要裁的在卡上：点「确认裁剪」才裁。" : "撤之前要你看一眼，在卡上：点「全撤」才撤。")
-              : record.kind === COMMIT_PREPARE_KIND && chapter !== undefined
-                ? commitWaitingText(record, chapter)
                 : `${what}在等你点卡上的按钮。`);
       return;
     default:
@@ -321,13 +321,6 @@ async function finishCommit(
 /** 这次定稿操作是补账。 */
 function isFillRecord(record: OperationRecord): boolean {
   return (record.params as { readonly fill?: unknown } | undefined)?.fill === true;
-}
-
-/** 定稿停着等作者：对话里交的先问一句、核出对不上的那几处。卡上有，回话只说一句。 */
-function commitWaitingText(record: OperationRecord, chapter: number): string {
-  const waiting = record.pendingActions.find((action) => !action.decisionHash);
-  if (waiting?.actionId === COMMIT_CONFLICTS_ACTION) return `第 ${chapter} 章有几处和前文对不上，在卡上。`;
-  return isFillRecord(record) ? `第 ${chapter} 章的账要补记的话，点卡上的「补记账」。` : `第 ${chapter} 章要定稿的话，点卡上的「定稿」。`;
 }
 
 /** 定论查完等作者点：卡上面那句话（查到几处、在哪几章、没查全的），定论本身卡上有。 */

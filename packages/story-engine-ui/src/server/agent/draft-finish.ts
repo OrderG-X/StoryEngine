@@ -9,6 +9,7 @@
  * - 改稿（revise / fix / deai，片 2C）：一句结论（改了几处、哪几处没改成为什么）；按核账改的给「再核一遍」，没改成的给「让 AI 改」。
  * 只按操作记录里的结构化结果出，不看模型说了什么。
  */
+import { ownChapterIssues } from "../editorial/continuity/check-service.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import type { OperationRecord } from "../lib/operations/store.js";
 import { isChapterCommitted } from "../lib/working-draft-text.js";
@@ -160,11 +161,13 @@ async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenP
   const more: NextStepChoice[] = [...(short ? [continueChoice(chapter)] : []), ...fillBeats];
   if (cached) {
     // 写完已经核过一遍账：有确定对不上的才出核账卡（只列确定的）、画到稿纸上，不用作者再点「核账」。
-    const check = cached as CheckLike;
-    const sureCount = Array.isArray(check.sure) ? check.sure.length : 0;
+    // 只看错在这一章的（前文和设定对不上的那几条不拦这章，作者点「核账」时整张卡照样列）。
+    const whole = cached as CheckLike;
+    const check: CheckLike = { ...whole, sure: ownChapterIssues((Array.isArray(whole.sure) ? whole.sure : []) as { readonly fixChapter?: number }[], chapter) };
+    const sureCount = check.sure?.length ?? 0;
     if (sureCount > 0) {
       args.sendEvent("text-delta", { text: "\n" });
-      args.sendEvent("card", { type: "continuity", check: { ...(cached as object), maybe: [], earlierOpen: [] } });
+      args.sendEvent("card", { type: "continuity", check: { ...(cached as object), sure: check.sure, maybe: [], earlierOpen: [] } });
     }
     const fixed = continuity?.autoFixed?.applied ?? 0;
     const said = [afterDraftCheckLine(check, fixed), check.headline].find((text): text is string => typeof text === "string" && text.trim().length > 0);
@@ -175,7 +178,7 @@ async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenP
       await preview(chapter);
       return;
     }
-    if (preview) emit("\n先没定稿，改好这几处再定。");
+    if (preview) emit("\n先没定稿，改好了再定。");
     if (check.ok === false) return;
     // 确定 N 处时改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」），稿纸工具条照样有「定稿」：不再挂定稿和写下一章。
     const choices: NextStepChoice[] = sureCount > 0
