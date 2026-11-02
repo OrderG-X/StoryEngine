@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1（2026-11-02）
+
+[下载](https://github.com/OrderG-X/StoryEngine/releases/tag/v0.3.1)
+
+- **AI 能联网查资料了，不用填密钥**：问历史、地理、行业细节，AI 直接搜，每天 100 次，国内能用；想用博查 / Tavily 也能在 设置 → 搜索 换，不想用可以关掉
+- **AI 写稿时也能接着聊**：写稿那会儿对话框不锁，你可以接着问别的；想停就点卡上的「停下」
+
 ## 0.3.0（2026-11-02）
 
 [下载](https://github.com/OrderG-X/StoryEngine/releases/tag/v0.3.0)
