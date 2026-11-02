@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// web_search 纯逻辑单测（P11）：博查 / Tavily 两家接口的结果归一、没开时如实说、
+// web_search 纯逻辑单测（P11）：免费档（You.com）/ 博查 / Tavily 三家接口的结果归一、关了时如实说、
 // 编排层诚实回报（空 query / 密钥不对 / 额度 / 网络失败 / 零结果分开措辞），fetch 注入不走真网络。
 import { describe, expect, it } from "vitest";
 
@@ -28,8 +28,8 @@ function bochaBody(items: readonly { name: string; url: string; snippet?: string
   return wrap ? { code: 200, msg: null, data: inner } : inner;
 }
 
-describe("runWebSearch：没开就如实说", () => {
-  it("没设置搜索服务 → ok:false、说去设置里开、不发请求", async () => {
+describe("runWebSearch：关了就如实说", () => {
+  it("作者关了联网搜索 → ok:false、说去设置里开、不发请求", async () => {
     let called = false;
     const out = await runWebSearch({
       query: "清代镖局",
@@ -37,9 +37,73 @@ describe("runWebSearch：没开就如实说", () => {
       fetchImpl: (async () => { called = true; return new Response(""); }) as typeof fetch,
     });
     expect(out.ok).toBe(false);
-    expect(out.summary).toContain("联网搜索还没开");
+    expect(out.summary).toContain("联网搜索被你关掉了");
     expect(out.summary).toContain("设置");
     expect(called).toBe(false);
+  });
+});
+
+const FREE = { provider: "free", apiKey: "" } as const;
+
+function fetchEventStream(messages: readonly unknown[], status = 200, calls: Call[] = []): typeof fetch {
+  return (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), ...(init ? { init } : {}) });
+    const body = messages.map((message) => `event: message\ndata: ${JSON.stringify(message)}\n\n`).join("");
+    return new Response(body, { status, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+}
+
+const youWeb = (web: readonly unknown[]) => ({ results: { web } });
+
+describe("runWebSearch：免费档（You.com）", () => {
+  it("不带密钥、按 MCP tools/call 调 you-search；跳过通知只认自己那条；摘要接上要点", async () => {
+    const calls: Call[] = [];
+    const out = await runWebSearch({
+      query: "清代镖局",
+      maxResults: 3,
+      settings: FREE,
+      fetchImpl: fetchEventStream([
+        { jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data: "Search successful" } },
+        { jsonrpc: "2.0", id: 1, result: { structuredContent: youWeb([
+          { url: "https://baike.baidu.com/item/x", title: "镖局_百度百科", description: "镖局，又称镖行", contents: { highlights: ["始于乾隆年间"] } },
+          { url: "https://b.com/2", title: "乙", contents: { highlights: ["要点一", "要点二"] } },
+        ]) } },
+      ], 200, calls),
+    });
+    expect(out.ok).toBe(true);
+    expect(out.results).toEqual([
+      { title: "镖局_百度百科", url: "https://baike.baidu.com/item/x", snippet: "镖局，又称镖行 始于乾隆年间" },
+      { title: "乙", url: "https://b.com/2", snippet: "要点一 要点二" },
+    ]);
+    expect(out.summary).toContain("baike.baidu.com");
+    expect(calls[0]?.url).toBe("https://api.you.com/mcp?profile=free");
+    const headers = calls[0]?.init?.headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      method: "tools/call",
+      params: { name: "you-search", arguments: { query: "清代镖局", count: 3 } },
+    });
+  });
+
+  it("没有 structuredContent 就读第一段文字里的 JSON；回的是普通 JSON 也认", async () => {
+    const out = await runWebSearch({
+      query: "甲",
+      settings: FREE,
+      fetchImpl: fetchJson({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify(youWeb([{ url: "https://a.com", title: "甲" }])) }] } }),
+    });
+    expect(out.results).toEqual([{ title: "甲", url: "https://a.com", snippet: "" }]);
+  });
+
+  it("次数用完（429）/ 工具说没成 / JSON-RPC 报错 → 如实说、不编", async () => {
+    const used = await runWebSearch({ query: "甲", settings: FREE, fetchImpl: fetchJson({}, 429) });
+    expect(used.ok).toBe(false);
+    expect(used.summary).toContain("免费搜索今天的次数用完了（每天 100 次）");
+    expect(used.summary).toContain("博查");
+    const failed = await runWebSearch({ query: "甲", settings: FREE, fetchImpl: fetchEventStream([{ jsonrpc: "2.0", id: 1, result: { isError: true, content: [] } }]) });
+    expect(failed.summary).toContain("免费搜索那边没搜成");
+    const rpc = await runWebSearch({ query: "甲", settings: FREE, fetchImpl: fetchEventStream([{ jsonrpc: "2.0", id: 1, error: { code: -32602, message: "x" } }]) });
+    expect(rpc.ok).toBe(false);
+    expect(rpc.summary).toContain("免费搜索那边没搜成");
   });
 });
 
@@ -156,7 +220,7 @@ describe("runWebSearch：诚实回报", () => {
 
 describe("probeSearchSettings（设置页「试一下」）", () => {
   it("没开 / 能用 / 密钥不对 / 没结果 分开说，不带给 AI 的话术", async () => {
-    expect((await probeSearchSettings({ settings: null })).summary).toContain("还没开");
+    expect((await probeSearchSettings({ settings: null })).summary).toContain("关着");
     const works = await probeSearchSettings({ settings: BOCHA, fetchImpl: fetchJson(bochaBody([{ name: "甲", url: "https://a.com" }])) });
     expect(works).toEqual({ works: true, summary: "能用：真搜到了结果。" });
     const bad = await probeSearchSettings({ settings: TAVILY, fetchImpl: fetchJson({}, 401) });
@@ -170,7 +234,7 @@ describe("probeSearchSettings（设置页「试一下」）", () => {
 describe("normalizeSearchResults", () => {
   it("只认 http/https、去重、没标题的丢掉、摘要压空白并截短", () => {
     const out = normalizeSearchResults([
-      { t: "甲", u: "https://a.com", s: "x".repeat(300) },
+      { t: "甲", u: "https://a.com", s: "x".repeat(600) },
       { t: "甲重", u: "https://a.com", s: "" },
       { t: "坏链接", u: "javascript:alert(1)", s: "" },
       { t: "", u: "https://c.com", s: "" },
@@ -178,7 +242,7 @@ describe("normalizeSearchResults", () => {
       { t: "乙", u: "http://b.com", s: 42 },
     ], (item) => ({ title: item.t, url: item.u, snippet: item.s }), 8);
     expect(out.map((r) => r.title)).toEqual(["甲", "乙"]);
-    expect(out[0]?.snippet).toHaveLength(200);
+    expect(out[0]?.snippet).toHaveLength(500);
     expect(out[1]?.snippet).toBe("");
   });
 });

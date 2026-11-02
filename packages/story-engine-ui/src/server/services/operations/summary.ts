@@ -81,11 +81,16 @@ export async function buildOperationSummary(bookDir: string, limit: number = OPE
 
 const ALLOWED_TEXT: Readonly<Record<"resume" | "cancel", string>> = { resume: "「接着做」", cancel: "「不要了」" };
 
+/** 卡上的字：在做的那次停它叫「停下」（OperationCard 同一份）。 */
+function allowedText(action: "resume" | "cancel", state: OperationSummary["operations"][number]["state"]): string {
+  return action === "cancel" && (state === "running" || state === "queued") ? "「停下」" : ALLOWED_TEXT[action];
+}
+
 /** 给对话 AI 的那一段（system 消息）：没有操作就不注。操作号只给 read_operation 用。 */
 export function operationSummaryText(summary: OperationSummary): string | undefined {
   if (summary.operations.length === 0) return undefined;
   const lines = summary.operations.map((item) => {
-    const allowed = item.allowed.length > 0 ? `；作者可以点${item.allowed.map((action) => ALLOWED_TEXT[action]).join("或")}` : "";
+    const allowed = item.allowed.length > 0 ? `；作者可以点${item.allowed.map((action) => allowedText(action, item.state)).join("或")}` : "";
     const changed = item.draftChanged ? "（查的是改稿前那一版，稿子之后改过）" : "";
     return `- ${item.opId}：${item.what}，${item.stateText}${item.summary ? `：${item.summary}` : ""}${changed}${allowed}`;
   });

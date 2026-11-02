@@ -15,15 +15,15 @@ function op(overrides: Partial<OperationCardData> = {}): OperationCardData {
 afterEach(() => cleanup());
 
 describe("OperationCard", () => {
-  it("在做：最新一句进度；不是这一轮交的才给「不要了」", () => {
+  it("在做：最新一句进度；不是这一轮交的才给「停下」", () => {
     const onAction = vi.fn();
     const { rerender } = render(<OperationCard op={op({ progress: "核账员在读第 3 章" })} inLiveTurn={false} busy={false} onAction={onAction} />);
     expect(screen.getByText("核账·第 3 章：核账员在读第 3 章")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "不要了" }));
+    fireEvent.click(screen.getByRole("button", { name: "停下" }));
     expect(onAction).toHaveBeenCalledWith({ kind: "cancel", opId: OP_ID });
     rerender(<OperationCard op={op()} inLiveTurn busy={false} onAction={onAction} />);
     expect(screen.getByText("核账·第 3 章：在做")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "不要了" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "停下" })).toBeNull();
   });
 
   it("停着：为什么停 +「接着做」「不要了」；忙的时候点不了", () => {

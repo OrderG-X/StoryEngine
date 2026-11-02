@@ -442,6 +442,108 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useDraftStore.getState().streaming).toBeNull();
   });
 
+  it("写稿时也能聊：写稿交上了就放开对话，作者接着发的是新的一轮；写完的字、结论照样落回原来那条，两轮互不误伤", async () => {
+    const gate = deferred<void>();
+    const realDraft = "夜色四合，主角推开祠堂斑驳的木门。";
+    mockedStreamAgentChat.mockImplementationOnce(async (_input, handlers) => {
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("夜色四合", 1));
+      await gate.promise;
+      writeDisk(3, { draft: realDraft, title: "夜探祠堂" });
+      handlers.onOperation?.(draftDone(3, "夜探祠堂"));
+      handlers.onTextDelta("第 3 章写好了。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let drafting!: Promise<void>;
+    act(() => { drafting = result.current.handleSendMessage("写这一章"); });
+    await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(false));
+    expect(isWorkspaceBusy()).toBe(false);
+    expect(useDraftStore.getState().streaming).toContain("夜色四合");
+    const draftingId = lastAssistant()!.id;
+
+    // 写稿还在跑，作者接着问一句：新的一轮照常发、照常收。
+    scriptAgentStream((handlers) => {
+      handlers.onTextDelta("还在写第 3 章。");
+      handlers.onDone();
+    });
+    await act(async () => { await result.current.handleSendMessage("写到哪了"); });
+    expect(mockedStreamAgentChat).toHaveBeenCalledTimes(2);
+    expect(lastAssistant()?.content).toBe("还在写第 3 章。");
+    expect(useDraftStore.getState().streaming).toContain("夜色四合");
+
+    // 写完了：结论落回写稿那条，稿纸换上盘上终稿。
+    gate.resolve();
+    await act(async () => { await drafting; });
+    const draftingMessage = messages().find((message) => message.id === draftingId)!;
+    expect(draftingMessage.content).toBe("第 3 章写好了。");
+    expect(cardOf(draftingMessage, "operation")?.op).toMatchObject({ opId: DRAFT_OP, state: "succeeded" });
+    expect(lastAssistant()?.content).toBe("还在写第 3 章。");
+    expect(useDraftStore.getState()).toMatchObject({ body: realDraft, streaming: null });
+    expect(useChatStore.getState().chatLoading).toBe(false);
+    expect(isWorkspaceBusy()).toBe(false);
+  });
+
+  it("写稿交出去以后新一轮在跑：写稿那轮收尾不动新一轮的「在忙」和工作区", async () => {
+    const draftGate = deferred<void>();
+    const askGate = deferred<void>();
+    mockedStreamAgentChat.mockImplementationOnce(async (_input, handlers) => {
+      handlers.onOperation?.(draftView());
+      await draftGate.promise;
+      handlers.onOperation?.(draftView({ state: "failed", stateText: "没做成", allowed: [], eventSeq: 9 }));
+      handlers.onDone();
+    });
+    mockedStreamAgentChat.mockImplementationOnce(async (_input, handlers) => {
+      await askGate.promise;
+      handlers.onTextDelta("好。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    let drafting!: Promise<void>;
+    act(() => { drafting = result.current.handleSendMessage("写这一章"); });
+    await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(false));
+    let asking!: Promise<void>;
+    act(() => { asking = result.current.handleSendMessage("先聊聊"); });
+    await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(true));
+
+    draftGate.resolve();
+    await act(async () => { await drafting; });
+    expect(useChatStore.getState().chatLoading).toBe(true);
+    expect(isWorkspaceBusy()).toBe(true);
+
+    askGate.resolve();
+    await act(async () => { await asking; });
+    expect(useChatStore.getState().chatLoading).toBe(false);
+    expect(isWorkspaceBusy()).toBe(false);
+  });
+
+  it("卡上停交到后台的写稿：直接交服务端停掉，不另开一轮；停掉了流出来的字留给作者", async () => {
+    seedPaper(3, { draft: "短" });
+    const gate = deferred<void>();
+    mockedStreamAgentChat.mockImplementationOnce(async (_input, handlers) => {
+      handlers.onOperation?.(draftView());
+      handlers.onOperationLive?.(draftDelta("已流出的一截新正文。", 1));
+      await gate.promise;
+      handlers.onOperation?.(draftView({ state: "cancelled", stateText: "停掉了", allowed: [], eventSeq: 5 }));
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    let drafting!: Promise<void>;
+    act(() => { drafting = result.current.handleSendMessage("写这一章"); });
+    await vi.waitFor(() => expect(useChatStore.getState().chatLoading).toBe(false));
+
+    await act(async () => { await result.current.handleSendUserAction({ kind: "cancel", opId: DRAFT_OP }); });
+    expect(vi.mocked(cancelOperationRequest)).toHaveBeenCalledWith(PROJECT, DRAFT_OP);
+    expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1);
+    expect(messages().filter((m) => m.role === "user")).toHaveLength(1);
+
+    gate.resolve();
+    await act(async () => { await drafting; });
+    expect(useDraftStore.getState().body).toContain("已流出的一截新正文");
+    expect(useDraftStore.getState().streaming).toBeNull();
+  });
+
   it("正文流按号拼：replace 换掉已流出的新写的字，迟到的旧号丢掉；一步重做（换了执行）之前流的作废", async () => {
     const gate = deferred<void>();
     mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {

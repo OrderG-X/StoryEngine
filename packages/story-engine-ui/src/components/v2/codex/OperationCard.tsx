@@ -67,7 +67,7 @@ export function OperationCard({ op, inLiveTurn, busy, onAction }: {
             <button type="button" className="chip" disabled={busy} onClick={() => onAction?.({ kind: "resume", opId: op.opId })}>接着做</button>
           ) : null}
           {canCancel ? (
-            <button type="button" className="chip" disabled={busy} onClick={() => onAction?.({ kind: "cancel", opId: op.opId })}>不要了</button>
+            <button type="button" className="chip" disabled={busy} onClick={() => onAction?.({ kind: "cancel", opId: op.opId })}>{running ? "停下" : "不要了"}</button>
           ) : null}
         </span>
       ) : null}

@@ -1,11 +1,11 @@
 /** 联网搜索设置（P11）。形状与 server/routes/search-settings.ts 一致（前端不引服务端）；密钥只上不下。 */
 
-export type SearchProviderIdView = "bocha" | "tavily";
+export type SearchProviderIdView = "free" | "bocha" | "tavily";
 
 export interface SearchSettingsView {
   readonly provider: SearchProviderIdView | null;
   readonly hasKey: boolean;
-  readonly providers: readonly { readonly id: SearchProviderIdView; readonly label: string; readonly site: string }[];
+  readonly providers: readonly { readonly id: SearchProviderIdView; readonly label: string; readonly site: string; readonly needsKey: boolean }[];
 }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
@@ -26,7 +26,7 @@ export async function fetchSearchSettings(): Promise<SearchSettingsView> {
   return call<SearchSettingsView>("/api/search-settings");
 }
 
-/** 存：同一家不填密钥 = 沿用旧的；provider 为 null = 关掉、删密钥。 */
+/** 存：免费的不要密钥；同一家不填密钥 = 沿用旧的；provider 为 null = 关掉、删密钥。 */
 export async function saveSearchSettings(input: { readonly provider: SearchProviderIdView | null; readonly apiKey?: string }): Promise<SearchSettingsView> {
   return call<SearchSettingsView>("/api/search-settings", postJson(input));
 }

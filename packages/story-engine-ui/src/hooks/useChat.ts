@@ -34,6 +34,7 @@ import {
   isWorkspaceOperationTargetCurrent,
   retargetWorkspaceOperation,
   canRetargetWorkspaceOperation,
+  workspaceOperationTargetMatches,
 } from "../utils/workspaceOperation.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
@@ -55,6 +56,16 @@ import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 /** 操作还在做的那几种（别的都是停下来了：做完、没成、停掉、停着等）。 */
 const LIVE_STATES: ReadonlySet<string> = new Set(["queued", "running"]);
+
+// 写稿交出去、在后台跟着写的那几次（写稿时也能聊）：opId → 哪本书。这期间别的轮自己没写稿的，稿纸上的流式字、「正在生成」、
+// 写稿步骤都归后台那轮，不去动；停它直接交服务端停掉（后台那轮跟着收尾），不另开一轮。
+const backgroundDrafts = new Map<string, string>();
+
+function stopBackgroundDraft(opId: string, projectPath: string): void {
+  void cancelOperationRequest(projectPath, opId).catch((error: unknown) => {
+    useNavigationStore.getState().showToast(`没停成：${error instanceof Error ? error.message : String(error)}`, 5000);
+  });
+}
 
 /** 回合收尾等盘上重读最多等这么久（读盘卡住不能一直占着工作区）。 */
 const RESYNC_WAIT_MS = 5_000;
@@ -158,6 +169,11 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 还没交上（模型在想、在调别的工具）才掐连接。
   const liveOperationRef = useRef<{ readonly projectPath: string; readonly opId: string } | null>(null);
   const stopAgent = useCallback(() => {
+    // 没有在跑的这一轮、只有交到后台的写稿：停的是它。
+    if (!agentAbortRef.current && !liveOperationRef.current) {
+      for (const [opId, book] of backgroundDrafts) stopBackgroundDraft(opId, book);
+      return;
+    }
     const live = liveOperationRef.current;
     if (live) {
       void cancelOperationRequest(live.projectPath, live.opId).catch((error: unknown) => {
@@ -198,14 +214,17 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
       let operation = claimedOperation;
+      // 写稿交出去了（见下面 handOff）：工作区已经交还，这一轮在后台跟着写稿，只要作者还在这本书、这一章、这个会话就照常落。
+      let handedOff = false;
       const ownsCurrentWorkspace = (): boolean => {
         const currentBook = useBookStore.getState();
         const currentChat = useChatStore.getState();
-        return isWorkspaceOperationTargetCurrent(operation, {
+        const current = {
           projectPath: useNavigationStore.getState().projectPath ?? "",
           chapter: currentBook.workspace.currentChapter.chapterNumber,
           sessionId: currentChat.activeSessionId,
-        });
+        };
+        return handedOff ? workspaceOperationTargetMatches(operation, current) : isWorkspaceOperationTargetCurrent(operation, current);
       };
       const notifyStaleOperation = (): void => {
         useNavigationStore.getState().showToast("你切换了书，那次结果没有写进来。", 5000);
@@ -311,14 +330,17 @@ export function useChat(params: UseChatParams): UseChatResult {
         if (!streamOpen || turnFinished || draftStreamChapter === null || paper.chapter !== draftStreamChapter) return;
         paper.setStreaming(streamedText());
       };
+      // 别的轮在后台写稿、这一轮自己没写稿：稿纸归那一轮（见 backgroundDraftTurns）。
+      const paperIsElsewhere = (): boolean => draftOpId === null && backgroundDrafts.size > 0;
       const endStreaming = (): void => {
         streamOpen = false;
+        if (paperIsElsewhere()) return;
         if (useDraftStore.getState().streaming !== null) useDraftStore.getState().setStreaming(null);
       };
       // 写稿没成收尾：写稿操作一开始把 flowStatus 置「正在生成草稿」，失败路径若不复位，标题区
       // 会卡在「正在生成草稿」=明明失败却谎称在生成（诚实铁律）。据稿纸上有没有字复位成 draft_ready/idle。
       const unstickGeneratingFlow = (): void => {
-        if (!ownsCurrentWorkspace()) return;
+        if (!ownsCurrentWorkspace() || paperIsElsewhere()) return;
         const wsBook = useBookStore.getState();
         const next = flowStatusAfterGenerateFailure(wsBook.workspace.flowStatus, useDraftStore.getState().body.trim().length > 0);
         if (next) wsBook.updateWorkspace({ flowStatus: next });
@@ -530,6 +552,18 @@ export function useChat(params: UseChatParams): UseChatResult {
       // M3：本轮的中止器——「停止」按钮 abort 它即可干净停掉这条流（streamAgentChat 据此不报错收尾）。
       const abortController = new AbortController();
       agentAbortRef.current = abortController;
+      // 写稿时也能聊：写稿操作交上了（模型这一轮已经停了，剩下的是跟着它到写完），就把对话放开——交还工作区、不再「在忙」，
+      // 作者接着打字是新的一轮；这一轮在后台照样流正文、出结论和下一步。停它用卡上的「不要了」（底下的「停止」归新一轮）。
+      // 稿纸要换到 AI 写的那章的，等换完再交（认领那章要在交还之前）。
+      const handOff = (): void => {
+        if (handedOff || turnFinished || !streamOpen || !isWorkspaceOperationCurrent(operation)) return;
+        handedOff = true;
+        if (draftOpId) backgroundDrafts.set(draftOpId, projectPath);
+        if (agentAbortRef.current === abortController) agentAbortRef.current = null;
+        liveOperationRef.current = null;
+        finishWorkspaceOperation(operation);
+        setChatLoading(false);
+      };
       try {
         // AI 读的是盘上的稿子：先把作者没存的字存掉。存不上也照常发（AI 写的稿回来时稿纸会提示作者选）。
         // 回合里作者接着打的字照常存（写作版本 P1b）：AI 写完时稿子改过，AI 那版不换上、留成候选让作者选。
@@ -554,7 +588,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             onOperation: (view) => {
               if (!ownsCurrentWorkspace()) return;
               projectOperationEverywhere(view, assistantMsgId, { announced: ENDED_OPERATION_STATES.has(view.state) });
-              liveOperationRef.current = view.allowed.includes("cancel") && view.state !== "paused" ? { projectPath, opId: view.opId } : null;
+              if (!handedOff) liveOperationRef.current = view.allowed.includes("cancel") && view.state !== "paused" ? { projectPath, opId: view.opId } : null;
               // 改稿、换上 / 不要 AI 稿：不流正文，停下来了按盘上重读稿纸（稿纸提示条跟着收起或换成别的）。
               if ((view.kind === "draft.change" && isDraftEditMode(view.mode)) || isCandidateDecisionType(view.kind)) {
                 if (editOpId === null && !editSettled) beginEdit(view);
@@ -562,6 +596,10 @@ export function useChat(params: UseChatParams): UseChatResult {
               } else if (view.kind === "draft.change") {
                 if (draftOpId === null) beginDraftStream(view);
                 if (!LIVE_STATES.has(view.state)) finishDraftStream(view);
+                else if (view.opId === draftOpId && !handedOff) {
+                  if (paperSwitch) void paperSwitch.then(handOff, handOff);
+                  else handOff();
+                }
               } else if (view.kind === "commit.prepare") {
                 followCommit(view);
               }
@@ -749,7 +787,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           endStreaming();
           unstickGeneratingFlow();
         }
-        useUiStore.getState().setDraftPhase(null);
+        if (!paperIsElsewhere()) useUiStore.getState().setDraftPhase(null);
         // 保持 operation 所有权直到盘上真值读完；否则异步读刚返回，finally 已释放 token，结果会被当成迟到数据丢掉。
         // 等的途中排着的工具结果又发起了重读（第 5 轮 S2）：接着等，直到不再有新的。
         // 但一共最多等 RESYNC_WAIT_MS：读盘卡住不能把整个工作区一直占着。
@@ -786,8 +824,10 @@ export function useChat(params: UseChatParams): UseChatResult {
           if (ownsCurrentWorkspace()) setChatLoading(false);
           finishWorkspaceOperation(operation);
         }
-        agentAbortRef.current = null; // 本轮收尾，清掉中止器（避免「停止」误伤下一轮）。
-        liveOperationRef.current = null;
+        // 本轮收尾，清掉中止器（避免「停止」误伤下一轮）；交出去了的，中止器和在做的那次早就不归这一轮了。
+        if (agentAbortRef.current === abortController) agentAbortRef.current = null;
+        if (!handedOff) liveOperationRef.current = null;
+        else if (draftOpId) backgroundDrafts.delete(draftOpId);
       }
     },
     [
@@ -953,6 +993,11 @@ export function useChat(params: UseChatParams): UseChatResult {
     async (action: AgentUserAction, options: { readonly echo?: string } = {}): Promise<void> => {
       if (!projectPath) {
         setChatError("请先打开真实本地项目。");
+        return;
+      }
+      // 卡上停交到后台的写稿：直接交服务端停掉，不另开一轮（后台那轮跟着它如实收尾）。
+      if (action.kind === "cancel" && backgroundDrafts.has(action.opId)) {
+        stopBackgroundDraft(action.opId, projectPath);
         return;
       }
       const liveChat = useChatStore.getState();

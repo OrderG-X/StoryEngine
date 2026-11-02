@@ -6,8 +6,9 @@ import { SearchSettingsSection } from "./SearchSettingsSection.js";
 afterEach(cleanup);
 
 const PROVIDERS: SearchSettingsView["providers"] = [
-  { id: "bocha", label: "博查", site: "https://open.bochaai.com" },
-  { id: "tavily", label: "Tavily", site: "https://app.tavily.com" },
+  { id: "free", label: "免费", site: "https://you.com", needsKey: false },
+  { id: "bocha", label: "博查", site: "https://open.bochaai.com", needsKey: true },
+  { id: "tavily", label: "Tavily", site: "https://app.tavily.com", needsKey: true },
 ];
 
 function api(view: SearchSettingsView = { provider: null, hasKey: false, providers: PROVIDERS }) {
@@ -15,7 +16,7 @@ function api(view: SearchSettingsView = { provider: null, hasKey: false, provide
     fetchSearchSettings: vi.fn(async () => view),
     saveSearchSettings: vi.fn(async (input: { provider: SearchProviderIdView | null; apiKey?: string }) => ({
       provider: input.provider,
-      hasKey: input.provider !== null,
+      hasKey: input.provider !== null && input.provider !== "free",
       providers: PROVIDERS,
     })),
     testSearchSettings: vi.fn(async () => ({ works: true, summary: "能用：真搜到了结果。" })),
@@ -23,6 +24,22 @@ function api(view: SearchSettingsView = { provider: null, hasKey: false, provide
 }
 
 describe("设置 · 联网搜索", () => {
+  it("默认免费的：没有密钥框、说清每天 100 次和发给谁；能试一下；关了再开不用填密钥", async () => {
+    const calls = api({ provider: "free", hasKey: false, providers: PROVIDERS });
+    render(<SearchSettingsSection api={calls} />);
+    expect(await screen.findByText("在用：免费")).toBeInTheDocument();
+    expect(screen.queryByLabelText("免费的密钥")).toBeNull();
+    expect(screen.getByText("不用密钥，每天 100 次。搜的词会发给 You.com。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "试一下" }));
+    expect((await screen.findByRole("status")).textContent).toContain("能用");
+    fireEvent.click(screen.getByRole("button", { name: "关掉" }));
+    expect(await screen.findByText("没开")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "免费" }));
+    fireEvent.click(screen.getByRole("button", { name: "存" }));
+    expect(calls.saveSearchSettings).toHaveBeenLastCalledWith({ provider: "free" });
+    expect(await screen.findByText("在用：免费")).toBeInTheDocument();
+  });
+
   it("没开：选一家、填密钥才能存；存完能试一下", async () => {
     const calls = api();
     render(<SearchSettingsSection api={calls} />);

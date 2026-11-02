@@ -8,8 +8,8 @@ import {
 } from "../../../api/searchSettingsClient.js";
 
 /**
- * 设置 · 联网搜索（P11）：选一家搜索服务、填自己的密钥，AI 才能查真实资料。
- * 不开也不影响写；密钥只往上存，界面拿不到原文。
+ * 设置 · 联网搜索（P11）：默认免费的（You.com，不要密钥）；想要更稳的选博查 / Tavily、填自己的密钥。
+ * 关了也不影响写；密钥只往上存，界面拿不到原文。
  */
 export function SearchSettingsSection({ api = { fetchSearchSettings, saveSearchSettings, testSearchSettings } }: {
   readonly api?: {
@@ -71,6 +71,7 @@ export function SearchSettingsSection({ api = { fetchSearchSettings, saveSearchS
   const saved = view?.provider ?? null;
   const picked = view?.providers.find((provider) => provider.id === choice) ?? null;
   const keepsKey = Boolean(view?.hasKey && saved === choice);
+  const needsKey = picked?.needsKey ?? false;
   const dirty = choice !== saved || Boolean(key.trim());
 
   return (
@@ -78,7 +79,7 @@ export function SearchSettingsSection({ api = { fetchSearchSettings, saveSearchS
       <header className="ms-header">
         <div className="ms-header-text">
           <h2 className="ms-title">联网搜索</h2>
-          <p className="ms-subtitle">让 AI 查真实资料（历史、地理、行业细节）。密钥要你自己去搜索服务那里申请；不开也不影响写。</p>
+          <p className="ms-subtitle">让 AI 查真实资料（历史、地理、行业细节）。关了也不影响写。</p>
         </div>
       </header>
       <div className="ms-body">
@@ -109,6 +110,7 @@ export function SearchSettingsSection({ api = { fetchSearchSettings, saveSearchS
 
             {picked ? (
               <div className="se-backup-edit">
+                {needsKey ? (<>
                 <input
                   aria-label={`${picked.label}的密钥`}
                   className="se-backup-input"
@@ -123,10 +125,13 @@ export function SearchSettingsSection({ api = { fetchSearchSettings, saveSearchS
                 <p className="ms-display-hint">
                   没有密钥？去 <a href={picked.site} target="_blank" rel="noreferrer">{picked.site.replace(/^https:\/\//u, "")}</a> 注册申请。
                 </p>
+                </>) : (
+                  <p className="ms-display-hint">不用密钥，每天 100 次。搜的词会发给 You.com。</p>
+                )}
                 <div className="se-backup-edit-actions">
                   {saved ? <button type="button" className="ms-btn ms-btn-ghost" disabled={busy} onClick={() => void turnOff()}>关掉</button> : null}
                   {saved && !dirty ? <button type="button" className="ms-btn ms-btn-ghost" disabled={busy} onClick={() => void test()}>试一下</button> : null}
-                  <button type="button" className="ms-btn ms-btn-primary" disabled={busy || !dirty || (!keepsKey && !key.trim())} onClick={() => void save()}>存</button>
+                  <button type="button" className="ms-btn ms-btn-primary" disabled={busy || !dirty || (needsKey && !keepsKey && !key.trim())} onClick={() => void save()}>存</button>
                 </div>
               </div>
             ) : null}

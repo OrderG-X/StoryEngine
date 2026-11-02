@@ -20,16 +20,20 @@ afterEach(async () => {
 });
 
 describe("联网搜索设置（P11）", () => {
-  it("没文件 / 坏文件 / 认不得的服务 → 当没开", async () => {
-    expect(await readSearchSettings()).toBeNull();
+  it("没文件 / 坏文件 / 认不得的服务 / 要密钥没填 → 用免费的；作者关过才算没开", async () => {
+    const free = { provider: "free", apiKey: "" };
+    expect(await readSearchSettings()).toEqual(free);
     await writeFile(join(dataDir, "search-settings.json"), "{坏", "utf-8");
-    expect(await readSearchSettings()).toBeNull();
+    expect(await readSearchSettings()).toEqual(free);
     await writeFile(join(dataDir, "search-settings.json"), JSON.stringify({ provider: "google", apiKey: "x" }), "utf-8");
-    expect(await readSearchSettings()).toBeNull();
+    expect(await readSearchSettings()).toEqual(free);
+    await writeFile(join(dataDir, "search-settings.json"), JSON.stringify({ provider: "bocha" }), "utf-8");
+    expect(await readSearchSettings()).toEqual(free);
+    expect(searchSettingsView(free as never)).toEqual({ provider: "free", hasKey: false });
     expect(searchSettingsView(null)).toEqual({ provider: null, hasKey: false });
   });
 
-  it("存：只本人可读；同一家不填密钥沿用旧的；换一家得重填；关掉删文件", async () => {
+  it("存：只本人可读；同一家不填密钥沿用旧的；换一家得重填；换回免费删密钥；关掉记下关了", async () => {
     await expect(saveSearchSettings({ provider: "bocha" })).rejects.toThrow("要填「博查」的密钥");
     await saveSearchSettings({ provider: "bocha", apiKey: " k1 " });
     expect(await readSearchSettings()).toEqual({ provider: "bocha", apiKey: "k1" });
@@ -42,8 +46,13 @@ describe("联网搜索设置（P11）", () => {
     expect(JSON.parse(await readFile(join(dataDir, "search-settings.json"), "utf-8"))).toEqual({ version: 1, provider: "tavily", apiKey: "k2" });
     expect(searchSettingsView(await readSearchSettings())).toEqual({ provider: "tavily", hasKey: true });
 
+    await saveSearchSettings({ provider: "free", apiKey: "多给的" });
+    expect(JSON.parse(await readFile(join(dataDir, "search-settings.json"), "utf-8"))).toEqual({ version: 1, provider: "free" });
+    expect(await readSearchSettings()).toEqual({ provider: "free", apiKey: "" });
+
     await clearSearchSettings();
     expect(await readSearchSettings()).toBeNull();
     await clearSearchSettings();
+    expect(await readSearchSettings()).toBeNull();
   });
 });

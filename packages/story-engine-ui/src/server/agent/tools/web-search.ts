@@ -1,8 +1,9 @@
 /**
  * web_search — 查真实世界资料（历史/地理/行业/名物细节等），供写作时补现实依据。
  *
- * 后端（P11）：只走有正式接口的搜索服务（博查 / Tavily），作者在 设置 → 搜索 里填自己的密钥。
- * 没开就如实说「联网搜索没开」，不去抓搜索引擎网页（P11 删了抓 Bing 那条路）。
+ * 后端（P11）：只走有正式接口的搜索服务。默认 You.com 公开的免费档（不要密钥、每天 100 次），
+ * 作者也可以在 设置 → 搜索 换成博查 / Tavily、填自己的密钥。作者关了就如实说「联网搜索关着」。
+ * 不去抓搜索引擎网页（P11 删了抓 Bing 那条路：违反条款）。
  *
  * 铁律：ok=false 必如实回报原因（没开/密钥不对/额度/网络/零结果分开说）；
  * summary 面向用户（中文、带来源域名、无内部术语）；搜索结果只是参考资料，不是真相。
@@ -22,7 +23,8 @@ export interface WebSearchResult {
 const DEFAULT_MAX_RESULTS = 5;
 const MAX_RESULTS_CAP = 8;
 const FETCH_TIMEOUT_MS = 15_000;
-const SNIPPET_CAP = 200;
+// 给 AI 看的每条摘要：太短看不到要查的数字（真查「民国上海电车票价」时 200 字截掉了票价那句）。
+const SNIPPET_CAP = 500;
 
 // 句法层从宽（模型无关铁律）：空串/0/超大值都放进来，语义层归一并诚实回报——
 // schema 层拒绝会变成框架级报错，模型拿不到结构化 ok:false（评审加固）。
@@ -168,14 +170,78 @@ export const tavilyBackend: SearchBackend = async (query, maxResults, apiKey, fe
   }), maxResults);
 };
 
-const BACKENDS: Record<SearchProviderId, SearchBackend> = { bocha: bochaBackend, tavily: tavilyBackend };
+/** 免费档出的错：JSON-RPC 的错、工具说没成（isError）。 */
+export class SearchRpcError extends Error {
+  override readonly name = "SearchRpcError";
+}
+
+const YOU_FREE_URL = "https://api.you.com/mcp?profile=free";
+
+/** 回包是 JSON 或事件流（每条 `data:` 一个 JSON-RPC 消息）；只认带我们请求号的那条。 */
+function rpcReply(contentType: string, text: string, id: number): unknown {
+  const messages: unknown[] = contentType.includes("text/event-stream")
+    ? text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice("data:".length)) as unknown)
+    : [JSON.parse(text) as unknown];
+  return messages.find((message) => isRecord(message) && message.id === id);
+}
+
+/**
+ * You.com 免费档：公开给 AI 工具用的 MCP 接口（不要密钥，每天 100 次），只用它的 you-search。
+ * 无状态，直接 tools/call；结果在 structuredContent.results.web（没有就读第一段文字里的 JSON）。
+ */
+export const youFreeBackend: SearchBackend = async (query, maxResults, _apiKey, fetchImpl) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let reply: unknown;
+  try {
+    const response = await fetchImpl(YOU_FREE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "you-search", arguments: { query, count: maxResults } },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new SearchHttpError(response.status);
+    reply = rpcReply(response.headers.get("content-type") ?? "", await response.text(), 1);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!isRecord(reply) || !isRecord(reply.result)) throw new SearchRpcError("免费搜索没回结果");
+  const result = reply.result;
+  if (result.isError === true) throw new SearchRpcError("免费搜索说没搜成");
+  let structured: unknown = result.structuredContent;
+  if (!isRecord(structured) && Array.isArray(result.content)) {
+    const first: unknown = result.content[0];
+    try {
+      structured = isRecord(first) && typeof first.text === "string" ? JSON.parse(first.text) as unknown : undefined;
+    } catch {
+      structured = undefined;
+    }
+  }
+  const web = isRecord(structured) && isRecord(structured.results) ? structured.results.web : undefined;
+  return normalizeSearchResults(Array.isArray(web) ? web : [], (item) => {
+    const highlights = isRecord(item.contents) && Array.isArray(item.contents.highlights) ? item.contents.highlights : [];
+    const parts = [textOf(item.description), ...highlights.map(textOf)].filter(Boolean);
+    return { title: item.title, url: item.url, snippet: parts.join(" ") };
+  }, maxResults);
+};
+
+const BACKENDS: Record<SearchProviderId, SearchBackend> = { free: youFreeBackend, bocha: bochaBackend, tavily: tavilyBackend };
 
 const NOT_ENABLED_SUMMARY =
-  "联网搜索还没开：去 设置 → 搜索 选一家搜索服务（博查或 Tavily）、填上密钥就能用。我不会编造搜索结果。";
+  "联网搜索被你关掉了：去 设置 → 搜索 打开就能用（免费的不用密钥）。我不会编造搜索结果。";
 
 /** 失败原因只看结构（状态码、超时），措辞给作者看。设置页里自己试的不用再指路去设置。 */
 function failureReason(error: unknown, provider: SearchProviderId, pointToSettings = true): string {
-  const label = searchProviderLabel(provider);
+  const label = provider === "free" ? "免费搜索" : searchProviderLabel(provider);
+  if (provider === "free" && error instanceof SearchHttpError && error.status === 429) {
+    return `免费搜索今天的次数用完了（每天 100 次）${pointToSettings ? "，明天再用，或者去 设置 → 搜索 换成博查 / Tavily" : ""}`;
+  }
+  if (error instanceof SearchRpcError) return `${label}那边没搜成`;
   if (error instanceof SearchHttpError) {
     if (error.status === 401) return `${label}说密钥不对${pointToSettings ? "，去 设置 → 搜索 检查一下" : ""}`;
     if (error.status === 402 || error.status === 403 || error.status === 432 || error.status === 433) {
@@ -245,7 +311,7 @@ export async function probeSearchSettings(input: {
   readonly fetchImpl?: typeof fetch;
 } = {}): Promise<{ readonly works: boolean; readonly summary: string }> {
   const settings = input.settings !== undefined ? input.settings : await readSearchSettings();
-  if (!settings) return { works: false, summary: "还没开：先选一家、填上密钥。" };
+  if (!settings) return { works: false, summary: "关着：先选一家。" };
   try {
     const results = await BACKENDS[settings.provider]("天气", 1, settings.apiKey, input.fetchImpl ?? fetch);
     return results.length > 0
