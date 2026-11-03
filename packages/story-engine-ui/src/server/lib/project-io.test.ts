@@ -113,7 +113,7 @@ describe("project io asset helpers", () => {
 });
 
 describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
-  it("核账卡、本轮用量、定稿预览的账本清单都随消息存下来", () => {
+  it("核账卡、本轮用量、定不了的那张卡都随消息存下来；以前的定稿清单（没有挡下的原因）读回时丢掉", () => {
     const [message] = readWorkspaceMessages([{
       id: "assistant-1",
       role: "assistant",
@@ -128,7 +128,9 @@ describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
     }]);
     expect(cardOf(message, "continuity")?.check).toMatchObject({ chapter: 8 });
     expect(message.tokenUsage).toEqual({ input: 90000, cachedInput: 43000, output: 4000 });
-    expect(cardOf(message, "commit-preview")?.preview?.ledgerChecklist).toEqual([{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }]);
+    expect(cardOf(message, "commit-preview")).toBeUndefined();
+    const [blocked] = readWorkspaceMessages([{ id: "assistant-2", role: "assistant", content: "定不了", commitPreview: { chapter: 8, blockingReasons: ["第 8 章还没有工作稿。"], shortOnly: true } }]);
+    expect(cardOf(blocked, "commit-preview")?.preview).toEqual({ chapter: 8, blockingReasons: ["第 8 章还没有工作稿。"], shortOnly: true });
   });
 });
 
@@ -152,12 +154,13 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
       role: "assistant",
       content: "看卡",
       cards: [
-        { type: "commit-preview", preview: { chapter: 3, canCommit: false, blockingReasons: ["缺稿"] } },
+        { type: "commit-preview", preview: { chapter: 3, blockingReasons: ["缺稿"] } },
         { type: "continuity", check: { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] } },
         { type: "error", detail: "boom" },
         { type: "status-notes", notes: ["历史窗口被裁剪", ""] },
         { type: "made-up", data: 1 },
         { type: "name-drift", warnings: [{ establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" }] },
+        { type: "commit-preview", preview: { chapter: 3, blockingReasons: ["前面差一章"] } },
         { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
         "nope",
       ],
@@ -166,7 +169,7 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
       { type: "continuity", check: { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] } },
       { type: "error", detail: "boom" },
       { type: "status-notes", notes: ["历史窗口被裁剪"] },
-      { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
+      { type: "commit-preview", preview: { chapter: 3, blockingReasons: ["前面差一章"] } },
     ]);
   });
 
@@ -182,14 +185,14 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
     expect(junk.cards).toEqual([{ type: "continuity", check }]);
   });
 
-  it("定稿预览卡带预览时的稿纸版本和记账员提醒（重构 P6）：读回；坏值丢掉", () => {
+  it("定不了的卡带当时的稿纸版本（重构 P6）：读回；坏值丢掉", () => {
     const [kept, junk] = readWorkspaceMessages([
-      { id: "p1", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文", "", 5] }, checkedVersion: "v9" }] },
-      { id: "p2", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: "还在读前文" }, checkedVersion: 9 }] },
+      { id: "p1", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, blockingReasons: ["缺稿", "", 5] }, checkedVersion: "v9" }] },
+      { id: "p2", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, blockingReasons: "缺稿" }, checkedVersion: 9 }] },
     ]);
-    expect(kept.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文"] }, checkedVersion: "v9" }]);
-    // 单个字符串照别的清单字段的读法收成一条；版本号不是字符串就丢。
-    expect(junk.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文"] } }]);
+    expect(kept.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, blockingReasons: ["缺稿"] }, checkedVersion: "v9" }]);
+    // 单个字符串收成一条；版本号不是字符串就丢。
+    expect(junk.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, blockingReasons: ["缺稿"] } }]);
   });
 
   it("老会话的分散字段读成卡；adviceCards 认出来丢掉", () => {
@@ -458,7 +461,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
 
-    expect(cardOf(out[0]!, "commit-preview")).toEqual({ type: "commit-preview", preview: { chapter: 2, canCommit: true, blockingReasons: ["x"], summary: "可以定稿。" } });
+    expect(cardOf(out[0]!, "commit-preview")).toEqual({ type: "commit-preview", preview: { chapter: 2, blockingReasons: ["x"], summary: "可以定稿。" } });
     expect(out[0]!.suggestedActions?.map((action) => action.id)).toEqual(["quality-check"]);
     expect(cardOf(out[1]!, "commit-preview")).toBeUndefined();
   });

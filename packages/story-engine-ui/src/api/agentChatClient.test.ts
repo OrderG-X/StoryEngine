@@ -590,43 +590,25 @@ describe("streamAgentChat", () => {
     expect(progress).toEqual([{ opId: OP_ID, text: "核账员在读第 3 章" }]);
   });
 
-  it("定稿（片 4A）：清单等作者点 → pending 是定稿清单（防御解析，认不出的不算）；定不了 → 带清单卡；定成了 → 带回执和存档点；按钮存下来读回来", async () => {
+  it("定稿：对话里交的先问一句 → pending 是选择卡（按钮只认服务端列的决定）；定不了 → 带原因卡；定成了 → 带回执和存档点；按钮存下来读回来", async () => {
     const commitView = (overrides: Record<string, unknown>) => opView("", null, { kind: "commit.prepare", mode: undefined, what: "定稿·第 2 章", chapter: 2, ...overrides });
-    const checklist = {
-      chapter: 2, canCommit: true, blockingReasons: [], summary: "第 2 章可以定稿：2 条自动记下。", notRecorded: [],
-      ledgerChecklist: [
-        { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
-        { id: "i0", kind: "fact", label: "林远到了钟楼", detail: "林远推门进了钟楼。", removable: true },
-        { id: "", kind: "fact", label: "没键的丢掉", removable: true },
-      ],
-    };
-    const blocked = { chapter: 2, canCommit: false, blockingReasons: ["正文 120 字，不到每章下限 300 字。这章就该这么短的话，点「就这么短，照样定稿」"], summary: "第 2 章现在还定不了。", notRecorded: [], shortOnly: true };
-    const report = { chapter: 2, chapterPath: "chapters/0002.md", ledger: { facts: 1, threadsOpened: 0, threadsAdvanced: 0, threadsClosed: 0, present: 1, day: 3, dayEnd: 3, notRecorded: 0 } };
+    const ask = { lines: ["第 2 章定稿？"], choices: [{ decision: "commit", label: "定稿", primary: true }, { decision: "nope", label: "决定里没有的丢掉" }] };
+    const blocked = { chapter: 2, blockingReasons: ["正文 120 字，不到每章下限 300 字。这章就该这么短的话，点「就这么短，照样定稿」"], summary: "第 2 章现在还定不了。", shortOnly: true };
+    const report = { chapter: 2, status: "ready" };
     const { views } = await collectOperations([
       frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
-        { actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: checklist }, decided: false },
+        { actionId: "commit-ask", kind: "author_choice", decisions: ["commit"], preview: ask, decided: false },
       ] }) }),
       frame("operation", { type: "record", operation: commitView({ state: "waiting_author", result: undefined, pendingActions: [
-        { actionId: "confirm-commit", kind: "commit_confirm", decisions: ["commit"], preview: { view: { chapter: 2 } }, decided: false },
+        { actionId: "commit-ask", kind: "author_choice", decisions: ["commit"], preview: { chapter: 2 }, decided: false },
       ] }) }),
-      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "定不了", body: { kind: "commit.prepare", chapter: 2, committed: false, blocked } } }) }),
-      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "第 2 章已定稿。", body: { kind: "commit.prepare", chapter: 2, committed: true, done: { report, summary: "第 2 章已定稿。", draftBody: "正文" }, snapshotId: "s-7" } } }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "定不了", body: { kind: "commit.prepare", chapter: 2, committed: false, blocked: { ...blocked, canCommit: false } } } }) }),
+      frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "第 2 章定稿了。", body: { kind: "commit.prepare", chapter: 2, committed: true, done: { report, summary: "第 2 章定稿了。", draftBody: "正文" }, snapshotId: "s-7" } } }) }),
       frame("operation", { type: "record", operation: commitView({ result: { schema: "operation-result/1", summary: "坏的", body: { kind: "commit.prepare", chapter: 2, committed: true } } }) }),
     ]);
-    expect(views[0]?.pending).toEqual({
-      kind: "commit",
-      actionId: "confirm-commit",
-      decisions: ["commit"],
-      preview: {
-        chapter: 2, canCommit: true, summary: "第 2 章可以定稿：2 条自动记下。",
-        ledgerChecklist: [
-          { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
-          { id: "i0", kind: "fact", label: "林远到了钟楼", detail: "林远推门进了钟楼。", removable: true },
-        ],
-      },
-    });
+    expect(views[0]?.pending).toEqual({ kind: "choice", actionId: "commit-ask", decisions: ["commit"], lines: ["第 2 章定稿？"], choices: [{ decision: "commit", label: "定稿", primary: true }] });
     expect(views[1]?.pending).toBeUndefined();
-    expect(views[2]?.commit).toEqual({ chapter: 2, committed: false, blocked: { ...blocked, notRecorded: undefined } });
+    expect(views[2]?.commit).toEqual({ chapter: 2, committed: false, blocked });
     expect(views[3]?.commit).toEqual({ chapter: 2, committed: true, report, snapshotId: "s-7" });
     expect(views[4]?.commit).toBeUndefined();
 

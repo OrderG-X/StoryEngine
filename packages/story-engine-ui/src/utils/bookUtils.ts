@@ -37,7 +37,7 @@ export function isBookSummary(value: unknown): value is BookSummary {
     && typeof item.writtenChapters === "number"
     && typeof item.totalWords === "number"
     && typeof item.projectPath === "string"
-    && (item.status === "草稿中" || item.status === "待确认" || item.status === "可继续下一章");
+    && (item.status === "草稿中" || item.status === "可继续下一章");
 }
 
 /** 书架上「多久前写过」：按最后活跃的时刻现算（存下来的 updatedAt 是那一刻的「刚刚」，放久了就不对了）。 */

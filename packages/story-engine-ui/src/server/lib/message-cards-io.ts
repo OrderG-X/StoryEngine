@@ -82,7 +82,7 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       return { ...card, ...(opId && /^op-[0-9a-f]{20}$/u.test(opId) ? { opId } : {}), ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
     }
     case "commit-report":
-      // 定稿回执原样存（体量大、结构跟着引擎走），渲染侧 summarizeCommitReport 防御解析。
+      // 定稿回执原样存（之前存的老回执结构不同），渲染侧 summarizeCommitReport 防御解析。
       return value.report !== undefined && value.report !== null ? { type, report: value.report } : undefined;
     case "next-steps":
       return cardFromNextSteps(value.prompt);

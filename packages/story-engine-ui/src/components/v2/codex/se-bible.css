@@ -29,26 +29,15 @@
   /* ═══ 操作历史 ═══ */
   .op-history{height:100%;overflow-y:auto;}
   .op-history-body{width:100%;max-width:860px;margin:0 auto;padding:28px 36px 56px;box-sizing:border-box;}
-  /* 每类一个颜色：定稿 强调色、正文改动 灰、设定 绿、恢复 黄。筛选胶囊、时间线上的点都用它 */
-  :is(.op-history-filters button,.op-history-entry){--kind:var(--muted);}
-  :is(.op-history-filters button,.op-history-entry).is-commit{--kind:var(--accent);}
-  :is(.op-history-filters button,.op-history-entry).is-bible{--kind:var(--success);}
-  :is(.op-history-filters button,.op-history-entry).is-restore{--kind:var(--warn);}
-  .op-history-filters{display:flex;flex-wrap:wrap;gap:6px;margin:20px 0 -4px;}
-  .op-history-filters button{
-    display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:transparent;
-    color:var(--muted);font-size:12px;cursor:pointer;transition:color .15s ease,border-color .15s ease,background-color .15s ease;
-  }
-  .op-history-filters button:not(.is-all)::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--kind);}
-  .op-history-filters button small{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums;}
-  .op-history-filters button:hover{color:var(--text);border-color:var(--line-strong);}
-  .op-history-filters button.on{color:var(--text);border-color:var(--accent-line);background:var(--accent-soft);}
-  .op-history-filters button.on small{color:var(--accent);}
-  /* 日子：小字 + 条数 + 一道细线 */
+  /* 每类一个颜色：定稿 强调色、正文改动 灰、设定 绿、恢复 黄；时间线上的点用它 */
+  .op-history-entry{--kind:var(--muted);}
+  .op-history-entry.is-commit{--kind:var(--accent);}
+  .op-history-entry.is-bible{--kind:var(--success);}
+  .op-history-entry.is-restore{--kind:var(--warn);}
+  /* 日子：小字 + 一道细线 */
   .op-history-day{display:flex;align-items:center;gap:8px;margin:28px 0 8px;font-size:11.5px;font-weight:650;letter-spacing:.14em;color:var(--muted);}
-  .op-history-day small{padding:0 7px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:0;line-height:18px;color:var(--faint);background:var(--sunken);font-variant-numeric:tabular-nums;}
   .op-history-day::after{content:"";flex:1;height:1px;background:var(--line-weak);}
-  /* 时间线：时刻 | 点 | 做了什么 | 多久前 | 操作；一根竖线穿过当天所有的点 */
+  /* 时间线：时刻 | 点 | 做了什么 | 留空 | 操作；一根竖线穿过当天所有的点 */
   .op-history-list{display:flex;flex-direction:column;gap:0;background:linear-gradient(var(--line-strong),var(--line-strong)) 78.5px 14px/1px calc(100% - 28px) no-repeat;}
   .op-history-item{
     display:grid;grid-template-columns:48px 14px minmax(0,1fr) auto auto;align-items:center;gap:12px;
@@ -62,7 +51,6 @@
   .op-history-item.is-confirming{background:var(--warn-soft);}
   .op-history-clock{font-size:13px;color:var(--faint);font-variant-numeric:tabular-nums;}
   .op-history-item strong{font-size:14px;font-weight:500;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .op-history-item .op-history-time{font-size:12px;color:var(--faint);}
   .op-history-item .op-history-restore{
     height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
     color:var(--faint);font-size:13px;cursor:pointer;opacity:.8;
@@ -71,16 +59,9 @@
   .op-history-item .op-history-restore:hover:not(:disabled){background:var(--hover);}
   .op-history-item .op-history-restore:disabled{cursor:default;opacity:.5;}
   .op-history-acts{display:flex;gap:2px;}
-  .op-history-item.is-showing{background:var(--hover);}
-  .op-history-item.is-showing .op-history-restore{opacity:1;color:var(--text);}
-  /* 「查看改动」展开的清单：对齐标题列，小圆点列表 */
-  .op-history-changes{
-    display:flex;flex-direction:column;gap:6px;margin:2px 12px 8px 98px;padding:10px 14px;list-style:none;
-    border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:13px;color:var(--muted);
-    animation:se-in var(--dur-3) var(--ease-out);
-  }
-  .op-history-changes li{display:flex;gap:8px;line-height:1.6;}
-  .op-history-changes li::before{content:"";flex:none;width:5px;height:5px;margin-top:9px;border-radius:50%;background:var(--faint);}
+  /* 每天收起来的设定、恢复那几条：一行淡字，点开摊进时间线 */
+  .op-history-more{margin:4px 0 0 86px;padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--faint);font-size:12.5px;cursor:pointer;}
+  .op-history-more:hover{background:var(--hover);color:var(--text);}
   .op-history-confirm{
     display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:2px 12px 8px 98px;padding:10px 12px;
     border:1px solid var(--line-strong);border-radius:10px;background:var(--surface-2);font-size:13px;
@@ -238,7 +219,7 @@
     .se-bnav-group:first-of-type{display:none;}
     .se-bnav-item.on{box-shadow:none;}
     .se-bible .read,.op-history-body{padding:24px 24px 48px;}
-    .op-history-confirm,.op-history-changes{margin-left:12px;}
+    .op-history-confirm{margin-left:12px;}
   }
   /* ═══ 这章改了什么（重构 P6 第 6 步）：定稿记下的人、线索、事，点原句回稿纸 ═══ */
   .se-cc-nav{display:flex;gap:6px;flex:none;}

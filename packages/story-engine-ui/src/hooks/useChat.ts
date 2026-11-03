@@ -14,7 +14,6 @@ import { agentFlowStatusForTool, flowAfterOperation } from "./agentFlowStatus.js
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
-import { openCommitSheet, reusableCommitPreviewId } from "../workspace/commitSheet.js";
 import { settleDraftEdit } from "../workspace/draftEditOutcome.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
@@ -116,6 +115,22 @@ function visibleChapter(projectPath: string): number | undefined {
 }
 
 /** 作者发这句时在看哪一章（右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
+/**
+ * 作者点「定稿」= 定眼前这一版（安静账房：点了就定，不再出清单）：先把没存的字存上，带上存下的那版版本号，
+ * 服务端冻结时工作稿已经不是这版就不定（Astra 2026-11-03 第 1 条）。存不上、稿纸上还挂着「别处改过」的提示就不交。
+ * 补账、别的章（稿纸没开在那章）不带。
+ */
+async function withPaperVersion(action: AgentUserAction): Promise<{ readonly action: AgentUserAction } | { readonly error: string }> {
+  if (action.kind !== "new" || action.type !== "commit.prepare" || action.params.fill) return { action };
+  const flushed = await flushDraftSave();
+  if (!flushed.ok) return { error: `稿子还没存上（${flushed.error}），没定稿。` };
+  const paper = useDraftStore.getState();
+  if (paper.chapter !== action.params.chapter || !paper.baseVersion) return { action };
+  const cause = paper.incoming?.cause;
+  if (cause === "conflict" || cause === "update") return { error: "稿纸上方有一条「稿子在别处改过」的提示，先选好用哪一版再定稿。" };
+  return { action: { ...action, params: { ...action.params, draftVersion: paper.baseVersion } } };
+}
+
 function chapterStamp(): { readonly chapter?: number } {
   const chapter = useBookStore.getState().workspace.currentChapter?.chapterNumber;
   return typeof chapter === "number" && chapter > 0 ? { chapter } : {};
@@ -496,18 +511,10 @@ export function useChat(params: UseChatParams): UseChatResult {
         }
         apply();
       };
-      // 这一轮交的定稿（片 4A）：清单 / 定不了的原因头一回到就弹出定稿清单，记下清单到时稿纸是哪一版（稿子没再变时再点「定稿」
-      // 直接打开这份，不再重跑记账员）；定成了按盘上重读稿纸和书的状态，顶栏「设定本」亮个小点（点进去先看这章改了什么）。
-      const shownCommits = new Set<string>();
+      // 这一轮交的定稿（片 4A）：定成了按盘上重读稿纸和书的状态，顶栏「设定本」亮个小点（点进去先看这章改了什么）。
       const settledCommits = new Set<string>();
       const followCommit = (view: OperationViewData): void => {
         sawChapterWriteToolCall = true;
-        if ((view.pending?.kind === "commit" || view.commit?.blocked) && !shownCommits.has(view.opId)) {
-          shownCommits.add(view.opId);
-          const paper = useDraftStore.getState();
-          if (paper.chapter === view.chapter) useChatStore.getState().stampPreviewVersion(assistantMsgId, paper.baseVersion);
-          openCommitSheet(assistantMsgId);
-        }
         if (view.state !== "succeeded" || !view.commit?.committed || settledCommits.has(view.opId) || !projectPath) return;
         settledCommits.add(view.opId);
         const chapter = view.commit.chapter;
@@ -990,14 +997,14 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 与「确认定稿」同一通道；对话里照留一句「你：…」回显（userActionChoiceText）。
   const handleSendUserAction = useCallback(
     /** echo＝对话里「你：…」那句换成调用方给的（选中文字改写说清是润色还是扩写）。 */
-    async (action: AgentUserAction, options: { readonly echo?: string } = {}): Promise<void> => {
+    async (requested: AgentUserAction, options: { readonly echo?: string } = {}): Promise<void> => {
       if (!projectPath) {
         setChatError("请先打开真实本地项目。");
         return;
       }
       // 卡上停交到后台的写稿：直接交服务端停掉，不另开一轮（后台那轮跟着它如实收尾）。
-      if (action.kind === "cancel" && backgroundDrafts.has(action.opId)) {
-        stopBackgroundDraft(action.opId, projectPath);
+      if (requested.kind === "cancel" && backgroundDrafts.has(requested.opId)) {
+        stopBackgroundDraft(requested.opId, projectPath);
         return;
       }
       const liveChat = useChatStore.getState();
@@ -1005,6 +1012,12 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }
+      const stamped = await withPaperVersion(requested);
+      if ("error" in stamped) {
+        showToast(stamped.error, 5200);
+        return;
+      }
+      const { action } = stamped;
       // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
       const draftAction = action.kind === "new" && action.type === "draft.change" && (action.mode === "write" || action.mode === "continue") ? action : undefined;
       const picked = draftAction ? pickedDirection(liveChat.messages, draftAction.params.chapter) : undefined;
@@ -1026,14 +1039,6 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
   const handleChapterButton = useCallback(
     (button: ChapterButton): void => {
-      // 「定稿」：上次出清单后稿子没变、那次定稿还在等作者点，直接打开那份清单，不再重跑记账员。
-      if (button === "commit") {
-        const reusable = reusableCommitPreviewId(useChatStore.getState().messages, useDraftStore.getState());
-        if (reusable) {
-          openCommitSheet(reusable);
-          return;
-        }
-      }
       const liveBook = useBookStore.getState();
       const liveUi = useUiStore.getState();
       const chapter = liveBook.workspace.currentChapter?.chapterNumber;

@@ -355,12 +355,12 @@ function withDraftEffects(message: ChapterMessage, view: OperationViewData): Cha
 }
 
 /**
- * 定稿（片 4A）：清单等作者点 / 定不了 → 定稿清单卡（这一次的清单只挂一次：重连、补发的记录再来不冲掉记下的稿纸版本号）；
+ * 定稿（片 4A）：定不了 → 原因卡（这一次只挂一次）；
  * 定成了 → 定稿回执卡，这一轮记下它打的存档点（「撤销这次定稿」「撤销到此」从它退），块头标「影响了正文·草稿」。
  */
 function withCommitCards(message: ChapterMessage, view: OperationViewData): ChapterMessage {
   if (view.kind !== "commit.prepare") return message;
-  const preview = view.pending?.kind === "commit" ? view.pending.preview : view.commit?.blocked;
+  const preview = view.commit?.blocked;
   if (preview) return cardOf(message, "commit-preview")?.opId === view.opId ? message : withCard(message, { type: "commit-preview", preview, opId: view.opId });
   const commit = view.commit;
   if (!commit?.committed || hasCard(message, "commit-report")) return message;

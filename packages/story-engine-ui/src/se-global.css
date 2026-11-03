@@ -88,10 +88,10 @@
 /* 按钮统一过渡：悬停变色、按下一缩都跟同一个节奏（原来一半按钮悬停是「啪」一下变的）。
    :where 不加权重：组件自己写了 transition 的照旧，没写的吃这一条。 */
 :root :where(
-  .se-icon-btn,.se-text-btn,.se-search-btn,.se-model-chip,.se-crumb-book,
-  .cd-tools-btn,.cd-reroll,.cd-starter-btn,.cd-incoming-actions button,.se-v2-notice-action,
-  .se-todo-primary,.se-todo-act,.se-setup-btn,.composer .send,.cap-menu-btn,.cap-btn,.chip,.nextstep-choice,
-  .se-cs-btn,.se-bs-pick,.se-bs-form button,.se-cc-pop-acts button,.cpc-confirm,.cpc-decline,
+  .se-icon-btn,.se-text-btn,.se-model-chip,.se-crumb-book,
+  .cd-tools-btn,.cd-starter-btn,.cd-incoming-actions button,.se-v2-notice-action,
+  .se-setup-btn,.composer .send,.cap-menu-btn,.cap-btn,.chip,.nextstep-choice,
+  .se-bs-pick,.se-bs-form button,.se-cc-pop-acts button,.cpc-confirm,
   .se-btn,.se-hero-go,.se-v2-dialog-confirm-btn,.se-v2-dialog-cancel-btn,.se-v2-dialog-danger-btn,
   .ms-btn,.se-v2-selection-toolbar-btn
 ){
@@ -108,10 +108,10 @@
 }
 /* 按下：按钮轻轻一缩（列表行不缩，只变色）。 */
 :root :is(
-  .se-icon-btn,.se-text-btn,.se-search-btn,.se-model-chip,.se-crumb-book,
-  .cd-tools-btn,.cd-reroll,.cd-starter-btn,.cd-incoming-actions button,.se-v2-notice-action,
-  .se-todo-primary,.se-todo-act,.se-setup-btn,.composer .send,.cap-menu-btn,.cap-btn,.chip,.nextstep-choice,
-  .se-cs-btn,.se-bs-pick,.se-bs-form button,.se-cc-pop-acts button,.cpc-confirm,.cpc-decline,
+  .se-icon-btn,.se-text-btn,.se-model-chip,.se-crumb-book,
+  .cd-tools-btn,.cd-starter-btn,.cd-incoming-actions button,.se-v2-notice-action,
+  .se-setup-btn,.composer .send,.cap-menu-btn,.cap-btn,.chip,.nextstep-choice,
+  .se-bs-pick,.se-bs-form button,.se-cc-pop-acts button,.cpc-confirm,
   .se-btn,.se-hero-go,.se-v2-dialog-confirm-btn,.se-v2-dialog-cancel-btn,.se-v2-dialog-danger-btn,
   .ms-btn,.se-v2-selection-toolbar-btn
 ):not(:disabled):active{transform:scale(.97);transition-duration:var(--dur-1);}

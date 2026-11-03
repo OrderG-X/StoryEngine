@@ -4,22 +4,20 @@ import { describe, expect, it, vi } from "vitest";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 
-describe("CommitPreviewCard 定稿预览卡（R3）", () => {
-  it("有阻断项 → attention 徽章「暂不可定稿」、阻断原因照实列出（不靠模型转述）", () => {
-    const preview: CommitPreviewCardData = {
-      chapter: 7,
-      canCommit: false,
-      blockingReasons: ["第 7 章还没有工作稿。"],
-      summary: "暂不可定稿。",
-    };
+// 本文件不做自动 cleanup，多次 render 会叠在 document 上——按钮一律在各自 container 内查。
+describe("CommitPreviewCard 定不了的那张卡（安静账房：只剩这一种）", () => {
+  it("attention 徽章「暂不可定稿」、阻断原因照实列出（不靠模型转述）；补账说「暂补不了」", () => {
+    const preview: CommitPreviewCardData = { chapter: 7, blockingReasons: ["第 7 章还没有工作稿。"], summary: "暂不可定稿。" };
     const { container, getByText } = render(<CommitPreviewCard preview={preview} />);
     expect(container.querySelector(".step-card.sc-attention")).toBeTruthy();
     expect(getByText("暂不可定稿")).toBeTruthy();
     expect(container.textContent ?? "").toContain("第 7 章还没有工作稿。");
+    const { container: fill } = render(<CommitPreviewCard preview={{ ...preview, fill: true }} />);
+    expect(fill.textContent ?? "").toContain("暂补不了");
   });
 
-  it("只差字数下限：卡上也有「就这么短，照样定稿」（窗口关了也找得到）；别的原因挡住的没有", () => {
-    const preview: CommitPreviewCardData = { chapter: 7, canCommit: false, shortOnly: true, blockingReasons: ["正文 900 字，低于写作规则要求的下限 2000 字"] };
+  it("只差字数下限：卡上有「就这么短，照样定稿」；别的原因挡住的没有", () => {
+    const preview: CommitPreviewCardData = { chapter: 7, shortOnly: true, blockingReasons: ["正文 900 字，低于写作规则要求的下限 2000 字"] };
     const onCommitShort = vi.fn();
     const { getByRole, rerender, queryByRole } = render(<CommitPreviewCard preview={preview} onCommitShort={onCommitShort} />);
     fireEvent.click(getByRole("button", { name: "就这么短，照样定稿" }));
@@ -28,100 +26,22 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     expect(queryByRole("button", { name: "就这么短，照样定稿" })).toBeNull();
   });
 
-  it("canCommit:true 且无阻断 → done 徽章「可以定稿」、不说「暂不可定稿」", () => {
-    const preview: CommitPreviewCardData = { chapter: 7, canCommit: true, summary: "可以定稿。" };
-    const { container, getByText } = render(<CommitPreviewCard preview={preview} />);
-    expect(container.querySelector(".step-card.sc-done")).toBeTruthy();
-    expect(getByText("可以定稿")).toBeTruthy();
-    expect(container.textContent ?? "").toContain("定稿清单 · 第 7 章");
-  });
-
-  it("残缺不一致输出：canCommit:true 却带阻断项 → 按阻断项显示「暂不可定稿」（绝不显示可以定稿）", () => {
-    const preview: CommitPreviewCardData = {
-      chapter: 7,
-      canCommit: true,
-      blockingReasons: ["质检有 1 处硬伤。"],
-    };
-    const { container } = render(<CommitPreviewCard preview={preview} />);
-    expect(container.querySelector(".step-card.sc-attention")).toBeTruthy();
-    expect(container.textContent ?? "").toContain("暂不可定稿");
-  });
-
-  it("阻断项就是那条文稿问题（字数不够）→ 只列一次，「文稿问题」里不再重复；别的文稿问题照列", () => {
+  it("阻断项就是那条文稿问题（字数不够）→ 只列一次；别的文稿问题折叠着、点开才列", () => {
     const short = "正文 1006 字，低于写作规则要求的下限 2500 字。";
-    const { container, rerender } = render(
-      <CommitPreviewCard preview={{ chapter: 23, canCommit: false, blockingReasons: [short], draftIssues: [short] }} />,
-    );
+    const { container, rerender } = render(<CommitPreviewCard preview={{ chapter: 23, blockingReasons: [short], draftIssues: [short] }} />);
     expect((container.textContent ?? "").split(short)).toHaveLength(2);
     expect(container.textContent ?? "").not.toContain("文稿问题");
 
-    rerender(<CommitPreviewCard preview={{ chapter: 23, canCommit: false, blockingReasons: [short], draftIssues: [short, "第三段有乱码。"] }} />);
-    expect(container.textContent ?? "").toContain("文稿问题 1 项");
-  });
-
-  // R7.7·报告 4.3：明细文案直接列在卡里——默认折叠（一屏读得完），点开才列出。
-  it("带明细文案 → 默认折叠不露明细，点 chip 展开；没有就不出这一行", () => {
-    const { container, rerender } = render(
-      <CommitPreviewCard
-        preview={{
-          chapter: 1,
-          canCommit: false,
-          blockingReasons: ["缺稿。"],
-          draftIssues: ["正文过短，疑似只返回标题。", "段落不足。"],
-        }}
-      />,
-    );
-    expect(container.textContent ?? "").toContain("文稿问题 2 项（点开看）");
-    expect(container.textContent ?? "").not.toContain("正文过短");
+    rerender(<CommitPreviewCard preview={{ chapter: 23, blockingReasons: [short], draftIssues: [short, "第三段有乱码。"] }} />);
+    expect(container.textContent ?? "").toContain("文稿问题 1 项（点开看）");
+    expect(container.textContent ?? "").not.toContain("第三段有乱码。");
     fireEvent.click(container.querySelector("button.chip")!);
-    expect(container.textContent ?? "").toContain("正文过短，疑似只返回标题。");
-    expect(container.textContent ?? "").toContain("段落不足。");
-    expect(container.textContent ?? "").toContain("文稿问题 2 项（收起）");
-    expect(container.textContent ?? "").not.toContain("质检卡");
-
-    rerender(<CommitPreviewCard preview={{ chapter: 1, canCommit: true }} />);
-    expect(container.textContent ?? "").not.toContain("文稿问题");
+    expect(container.textContent ?? "").toContain("第三段有乱码。");
   });
 
   it("空阻断项被过滤（残缺输出里塞空串不渲染空行）", () => {
-    const { container } = render(
-      <CommitPreviewCard preview={{ chapter: 1, canCommit: false, blockingReasons: ["", "  ", "真阻断。"] }} />,
-    );
-    const items = container.querySelectorAll(".cpc-item");
-    expect(items).toHaveLength(1);
+    const { container } = render(<CommitPreviewCard preview={{ chapter: 1, blockingReasons: ["", "  ", "真阻断。"] }} />);
+    expect(container.querySelectorAll(".cpc-item")).toHaveLength(1);
     expect(container.textContent ?? "").toContain("真阻断。");
-  });
-
-  // 本文件不做自动 cleanup，多次 render 会叠在 document 上——按钮一律在各自 container 内查。
-  it("可定稿：卡里一行「要你看几条 · 自动记几条」+【打开清单】（清单在弹窗里，重构 P6）", () => {
-    const onOpen = vi.fn();
-    const preview: CommitPreviewCardData = {
-      chapter: 7,
-      canCommit: true,
-      ledgerChecklist: [
-        { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
-        { id: "0", kind: "fact", label: "钥匙在林溪手里（核账员标了）", removable: true, needsConfirm: true },
-        { id: "1", kind: "thread", label: "新线索：去码头", removable: true },
-        { id: "2", kind: "fact", label: "铜盒回到桌上", removable: true },
-      ],
-    };
-    const { container } = render(<CommitPreviewCard preview={preview} confirmable onOpen={onOpen} />);
-    expect(container.querySelector(".cpc-counts")?.textContent).toBe("要你看 1 条 · 自动记 2 条");
-    expect(container.querySelector("input[type=checkbox]")).toBeNull();
-    const open = container.querySelector<HTMLButtonElement>("button.cpc-confirm");
-    expect(open?.textContent).toBe("打开清单");
-    fireEvent.click(open!);
-    expect(onOpen).toHaveBeenCalledTimes(1);
-  });
-
-  it("旧清单（已用掉）→ 只能「看这份清单」；定不了 → 没有打开按钮、照实列原因", () => {
-    const { container } = render(<CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onOpen={() => undefined} />);
-    expect(container.querySelector("button.cpc-confirm")).toBeNull();
-    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "看这份清单")).toBe(true);
-    const { container: blocked } = render(
-      <CommitPreviewCard preview={{ chapter: 4, canCommit: false, blockingReasons: ["字数不足。"] }} confirmable onOpen={() => undefined} />,
-    );
-    expect([...blocked.querySelectorAll("button")].some((b) => b.textContent === "打开清单" || b.textContent === "看这份清单")).toBe(false);
-    expect(blocked.textContent ?? "").toContain("字数不足。");
   });
 });

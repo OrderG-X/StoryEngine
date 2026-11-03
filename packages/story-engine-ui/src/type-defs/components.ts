@@ -52,8 +52,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;
   /** 「✎ 自己说」：选中正文 + 作者自己的要求 → 同上。 */
   readonly onSelectionRewriteCustom?: (selectionText: string, instruction: string) => Promise<void>;
-  /** 「AI 另写几版」（片 2D）：另写两版摆给作者挑，作者的稿子不动（进对话一轮）。 */
-  readonly onReroll?: () => void;
   /** 并排面板上点「用这版」：交 draft.adopt 换进工作稿（进对话一轮，先存档、可撤销）。 */
   readonly onApplyCandidate?: (candidate: WorkspaceDraftCandidate) => void;
   readonly onCloseCandidates?: () => void;
@@ -68,7 +66,7 @@ export interface BookSummary {
   readonly currentChapterTitle: string;
   readonly currentChapterNumber: number;
   readonly protagonistName: string;
-  readonly status: "草稿中" | "待确认" | "可继续下一章";
+  readonly status: "草稿中" | "可继续下一章";
   readonly updatedAt: string;
   /** 最近活跃时间（ms）。书架排序真值：扫描来自服务端 lastActiveMs，本地打开/新建/改名时=Date.now()。缺失（老数据）当 0。 */
   readonly lastActiveMs?: number;

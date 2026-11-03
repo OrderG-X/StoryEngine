@@ -1,7 +1,7 @@
 /**
  * ChatCapabilityBar —— 聊天区（右栏·唯一控制面）输入框上方的「能力快捷条」。
  *
- * 治「这么多能力用户不知道能用」：写作流程那几个工具已由 ChapterToolRail 按阶段列出；这里补上
+ * 治「这么多能力用户不知道能用」：稿纸上只有一个主按钮（定稿 / 补记账），写作流程别的事跟 AI 说；这里补上
  * **散的、非阶段性的资料/整理能力**（补全人物/故事设定/地点/物品/写作规则、整理关系/理线索/合并伏笔）——
  * 它们此前只散落在各资料面板按钮里、用户在聊天时看不见。高频几个常驻露脸，点「⋯ 更多」展开全部。
  *
@@ -32,8 +32,7 @@ export const QUICK_ACTIONS: readonly CapabilityAction[] = [
 
 /**
  * 「⋯ 更多」展开后的全部能力，按 写作 / 补全 / 整理 分组。
- * 写作辅助（内容审阅/检查机器腔/硬伤检查/定稿）也在上方 ChapterToolRail 按阶段提示——那是"当下该用啥"的流程向导，
- * 这里是"能用啥"的能力清单（随时可见），两者用途不同、可并存。
+ * 这里是"能用啥"的能力清单（随时可见）。
  */
 export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly actions: readonly CapabilityAction[] }[] = [
   {
@@ -109,7 +108,7 @@ export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, le
   readonly disabled?: boolean;
   /** true：只放 leading（设定本/历史里不再拿写作工具凑满一排），其余进「更多」。 */
   readonly leadingOnly?: boolean;
-  /** 按本章进度派生的工具（ChapterToolRail.railActionsForFlow）：排在最前、第一个高亮；常驻快捷里同 key 的去重。 */
+  /** 调用方给的、排在最前的几个（第一个高亮）；常驻快捷里同 key 的去重。 */
   readonly leading?: readonly CapabilityAction[];
   /** menu（重构 P6 写作台）：只出一个「更多」小按钮放在输入框左边，点开在上方弹出全部能力；不占一整条。 */
   readonly variant?: "bar" | "menu";

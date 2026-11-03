@@ -31,9 +31,9 @@ async function filesMatching(dir: string, pattern: RegExp): Promise<string[]> {
 }
 
 describe("检查类只有执行器一个入口", () => {
-  it("四个检查的跑法只有 inspect.run 配方调", async () => {
+  it("四个检查的跑法只有 inspect.run 配方调；定稿前核一遍账（安静账房）只有 commit.prepare 配方调", async () => {
     const callers = await filesMatching(SERVER, /\b(?:runContinuityCheck|runQualityCheck|runReview|runFlavorCheck|freezeChapterText)\s*\(/u);
-    expect(callers).toEqual(["services/inspect-service.ts", "services/operations/recipes/inspect-run.ts"]);
+    expect(callers).toEqual(["services/inspect-service.ts", "services/operations/recipes/commit-prepare.ts", "services/operations/recipes/inspect-run.ts"]);
   });
 
   it("对话工具、按钮分发里没有 P2a 前的四个检查工具名", async () => {

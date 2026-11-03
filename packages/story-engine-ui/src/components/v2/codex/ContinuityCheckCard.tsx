@@ -18,7 +18,7 @@ import { useMaybeMarks } from "./maybeMarks.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { continuityItemKey, quoteInPaper } from "../../../workspace/chapterProgress.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
-import { newCanonPick, newCanonStatement, newEditAction, type AgentUserAction, type ChapterSideData, type SettleSideData } from "../../../api/agentChatClient.js";
+import { EDIT_MAX_FIXES, EDIT_MAX_TEXT, newCanonPick, newCanonStatement, newEditAction, type AgentUserAction, type ChapterSideData, type SettleSideData } from "../../../api/agentChatClient.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 
 type ContinuityCheck = ContinuityCheckData;
@@ -124,7 +124,7 @@ export function continuityFixAction(chapter: number, items: readonly Item[]): Ag
   return newEditAction({
     mode: "fix",
     chapter,
-    fixes: items.map((item) => ({ targetText: item.quote, revisionGoal: continuityFixGoal(chapter, item) })),
+    fixes: items.map((item) => ({ targetText: item.quote, revisionGoal: continuityFixGoal(chapter, item).slice(0, EDIT_MAX_TEXT) })),
   });
 }
 
@@ -221,8 +221,10 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   const canRevise = (item: Item): boolean => Boolean(onRevise) || (Boolean(onFixAction) && canFixDirectly(check.chapter, item));
   // 主按钮只管前文就在本章的；两章打架、对设定的要作者定哪边为准，各自点。
   const sureHere = sure.filter((item) => canFixDirectly(check.chapter, item) && !settleChoices(check.chapter, item) && !gone(item));
+  // 一次最多交 EDIT_MAX_FIXES 处（服务端超了整个不收）：多的先改前面这些，改掉的划掉后按钮跟着换成剩下的。
+  const fixBatch = sureHere.slice(0, EDIT_MAX_FIXES);
   const reviseAll = (): void => {
-    onFixAction?.(continuityFixAction(check.chapter, sureHere));
+    onFixAction?.(continuityFixAction(check.chapter, fixBatch));
   };
   const canReviseAll = sureHere.length > 0 && Boolean(onFixAction);
   // 点开「可能」那段，稿纸上才把这一章的「可能」划出来；收起就撤（默认不划，见 maybeMarks）。
@@ -257,7 +259,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
           className="chip drc-fix-all"
           onClick={reviseAll}
         >
-          {sureHere.length < liveSure ? `改掉本章 ${sureHere.length} 处` : `改掉这 ${sureHere.length} 处`}
+          {fixBatch.length < sureHere.length ? `先改前 ${fixBatch.length} 处` : sureHere.length < liveSure ? `改掉本章 ${sureHere.length} 处` : `改掉这 ${sureHere.length} 处`}
         </button>
       ) : null}
       {sure.length > 0 ? (

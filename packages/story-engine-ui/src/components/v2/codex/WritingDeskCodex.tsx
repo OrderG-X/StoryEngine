@@ -12,7 +12,7 @@ import { ChapterTitle } from "./ChapterTitle.js";
 import { ChapterSynopsis } from "./ChapterSynopsis.js";
 import { PreWriteMemo } from "./PreWriteMemo.js";
 import { IconPencil } from "./icons.js";
-import { useChapterDirections, useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
+import { useChapterDirections, useContinuityResult, usePaperAction } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
 import { useUiStore } from "../../../stores/uiStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
@@ -101,8 +101,6 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   readonly onFillComposer?: (text: string) => void;
   /** 新书首屏三步看的设定本：有哪些卡、故事设定填没填。 */
   readonly starter?: { readonly cardNames: readonly string[]; readonly storyFilled: boolean };
-  /** 按章号打开一章（已定稿时工具条的「去第 N 章」）。 */
-  readonly onOpenChapter?: (chapter: number) => void;
   /** 回原句：打开那一章、滚到这句（写前备忘里点线索、状态）。 */
   readonly onJumpToQuote?: (chapter: number, quote: string) => void;
 }) {
@@ -119,7 +117,6 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const committedBody = useDraftStore((state) => state.committed?.body ?? "");
   const draftCandidates = useUiStore((state) => state.draftCandidates);
   const workspaceBusy = Boolean(props.chatLoading || isWorkspaceBusy());
-  const canReroll = draft.status !== "committed" && Boolean(props.onReroll) && !workspaceBusy;
   const draftWordCount = draft.wordCount ?? 0;
   // 「作者写、AI 管账」：新书首屏第一个按钮是「自己动笔写」——点了直接出稿纸（2026-10-10 验收：新书原先只有三个让 AI 写的按钮，作者没地方下笔）。
   const [authorStarted, setAuthorStarted] = useState(false);
@@ -144,8 +141,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const paperDraft = draft;
   const showEditHint = activeTab === "draft" && draft.status !== "committed" && draft.streaming !== true;
   const targetWords = targetChapterWordsOf(props.overview);
-  // 这一章还差什么（工具条和右栏顶卡同源）+ 这一章最新的核账结果（稿纸划线）。
-  const progress = useChapterProgress(targetWords);
+  // 稿纸底下那一个按钮 + 这一章最新的核账结果（稿纸划线）。
+  const paperAction = usePaperAction();
   const continuityResult = useContinuityResult(draft.chapterNumber);
   const goalPct = targetWords ? Math.min(100, Math.round((draftWordCount / targetWords) * 100)) : 0;
   // 低于目标 78%（≈「最少」口径）提醒橙，达标绿，其余强调色。
@@ -339,7 +336,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
                         // 模型照抄前文回「预览好了，清单打开着」却没调工具（2026-10-19 试写）。
                         onClick={() => props.onChapterButton?.("commit")}
                       >
-                        预览定稿改动
+                        定稿
                       </button>
                     ) : null}
                   </div>
@@ -381,7 +378,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
         ) : null}
       </div>
 
-      {/* 底部：上一章 / 本章动作（核账状态 + 核账 / 定稿，专注模式也在）/ 下一章。 */}
+      {/* 底部：上一章 / 定稿（专注模式也在）/ 下一章。 */}
       {!showStarter ? (
       <footer className="codex-desk-bar codex-desk-bar-bottom">
         {prevChapter ? (
@@ -391,17 +388,9 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
         ) : <span />}
         {activeTab === "draft" ? (
           <PaperToolbar
-            progress={progress}
+            action={paperAction}
             busy={workspaceBusy || draft.streaming === true}
-            onChapterButton={props.onChapterButton}
-            {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
-            {...(canReroll && draft.content.trim() ? {
-              reroll: {
-                label: "AI 另写几版",
-                onClick: () => props.onReroll?.(),
-                title: "你的稿子不动，AI 另写两版摆出来给你挑",
-              },
-            } : {})}
+            {...(props.onChapterButton ? { onChapterButton: props.onChapterButton } : {})}
           />
         ) : <span />}
         {nextChapter ? (

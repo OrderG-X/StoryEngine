@@ -1,8 +1,8 @@
 // @vitest-environment node
 //
-// agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：作者点「定稿」「确认定稿」按钮 → body.action →
-// 交给执行器（commit.prepare），不经模型（agent.stream 一次都不调）。真项目 + 真执行器 + 真落盘，记账员是假的。
-// 「确认改设定」「确认改账」（写作版本 P2a：改设定、改账是一次操作，按钮接着那次）、梗概上直接改、定稿回执里的「还没建卡的人」也在这里走真链。
+// agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：作者点「定稿」、卡上的「定稿」按钮 → body.action →
+// 交给执行器（commit.prepare），不经模型（agent.stream 一次都不调）。真项目 + 真执行器 + 真落盘，记账员、核账员是假的。
+// 「确认改设定」「确认改账」（写作版本 P2a：改设定、改账是一次操作，按钮接着那次）、梗概上直接改也在这里走真链。
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createStoryProject } from "../book/project-store.js";
 import { readStoryViews } from "../book/story-views.js";
-import { cardWrite, chapterCommit, projectBook, readCards, runCommand, type CardOp, type EntryInput } from "@actalk/story-core";
+import { cardWrite, projectBook, readCards, runCommand, type CardOp } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -19,7 +19,7 @@ import { restoreForTest } from "../lib/history-test-helpers.js";
 
 const storyAgentMocks = vi.hoisted(() => ({ getStoryAgent: vi.fn() }));
 vi.mock("../agent/story-agent.js", () => ({ getStoryAgent: storyAgentMocks.getStoryAgent, getStoryAgentModel: () => undefined, getStoryAgentToolNames: () => undefined }));
-// 本文件测「确认定稿」按钮的结构化动作，不定稿后的编辑部后台预热：mock 掉 warmUpReaders，
+// 本文件测「定稿」按钮的结构化动作，不定稿后的编辑部后台预热：mock 掉 warmUpReaders，
 // 别让单测真去补读笔记（R3 后三个专员常开、没有开关可关）。
 const brainMocks = vi.hoisted(() => ({ warmUpReaders: vi.fn(async () => undefined) }));
 vi.mock("../editorial/index.js", async (importOriginal) => ({
@@ -29,7 +29,7 @@ vi.mock("../editorial/index.js", async (importOriginal) => ({
 
 import { __resetOperationStoreForTests, readOperation } from "../lib/operations/store.js";
 import { __drainOperationsForTests, __resetRecipesForTests, registerRecipe, submitOperation } from "../services/operations/executor.js";
-import { COMMIT_CONFIRM_ACTION, COMMIT_PREPARE_KIND, createCommitPrepareRecipe } from "../services/operations/recipes/commit-prepare.js";
+import { COMMIT_ASK_ACTION, COMMIT_PREPARE_KIND, createCommitPrepareRecipe } from "../services/operations/recipes/commit-prepare.js";
 import { LEDGER_CHANGE_KIND, ledgerChangeRecipe } from "../services/operations/recipes/ledger-change.js";
 import { SETTINGS_CHANGE_KIND, settingsChangeRecipe } from "../services/operations/recipes/settings-change.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
@@ -49,13 +49,15 @@ const fakeKeeper: BrainCallModel = async (messages) =>
         threads: [],
       })
     : "笔记。";
+/** 假核账员：什么都没核出来，不连网。 */
+const fakeReader: BrainCallModel = async (_messages, call) => (call.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记。");
 
 interface SseEvent {
   readonly event: string;
   readonly data: Record<string, unknown>;
 }
 
-describe("agent-chat route：结构化动作「确认定稿」", () => {
+describe("agent-chat route：结构化动作「定稿」", () => {
   const rootDirs = new Set<string>();
 
   beforeEach(() => {
@@ -76,17 +78,40 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     rootDirs.clear();
   });
 
-  it("点「定稿」→ 清单停着等作者、书没动；点「确认定稿」→ 定稿落盘、一句结论 + 下一步卡；模型零调用", { timeout: 30_000 }, async () => {
+  it("点「定稿」→ 核账、记账、定稿一路走完，一句结论 + 下一步卡；模型零调用", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    const prepared = await prepareByButton(projectDir, 1, fakeKeeper);
-    expect(prepared.waiting).toMatchObject({ state: "waiting_author" });
-    expect(textOf(prepared.events)).toBe("第 1 章可以定稿，清单在卡上：点「确认定稿」才定。");
-    await expect(access(join(projectDir, "chapters", "0001.md"))).rejects.toThrow();
-
-    const { events } = await confirmByButton(projectDir, prepared.opId);
-    expect(textOf(events)).toContain("第 1 章已定稿");
+    const { events } = await commitByButton(projectDir, 1, fakeKeeper);
+    expect(textOf(events)).toBe("第 1 章定稿了。");
     expect(events.some((e) => e.event === "tool-result" && e.data.toolName === "suggest_next_steps")).toBe(true);
     expect(events.at(-1)?.event).toBe("done");
+    await expect(access(join(projectDir, "chapters", "0001.md"))).resolves.toBeUndefined();
+    const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
+    expect(agent?.stream).not.toHaveBeenCalled();
+  });
+
+  it("对话里交的定稿停在「定稿？」、书没动；点卡上的「定稿」→ 定稿落盘、一句结论；模型零调用", { timeout: 30_000 }, async () => {
+    const projectDir = await makeProjectWithDraft(1);
+    registerRecipe(createCommitPrepareRecipe({ callModel: fakeKeeper, readerCallModel: fakeReader, modelProblem: () => undefined }));
+    const asked = await submitOperation(projectDir, {
+      kind: COMMIT_PREPARE_KIND,
+      params: { chapter: 1 },
+      requestKey: randomUUID(),
+      issuedAt: new Date().toISOString(),
+      origin: { kind: "chat", messageId: randomUUID() },
+    });
+    if (!asked.ok || !("record" in asked)) throw new Error("没受理");
+    await __drainOperationsForTests();
+    expect(await readOperation(projectDir, asked.record.opId)).toMatchObject({ kind: "record", record: { state: "waiting_author" } });
+    await expect(access(join(projectDir, "chapters", "0001.md"))).rejects.toThrow();
+
+    const { handlerPromise, res } = callAgentChatRoute({
+      projectPath: projectDir,
+      messages: [{ role: "user", content: "定稿" }],
+      action: { kind: "resume", opId: asked.record.opId, answer: { actionId: COMMIT_ASK_ACTION, decision: "commit" } },
+    });
+    await handlerPromise;
+    await __drainOperationsForTests();
+    expect(textOf(parseSse(res.written.join("")))).toContain("第 1 章定稿了。");
     await expect(access(join(projectDir, "chapters", "0001.md"))).resolves.toBeUndefined();
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
@@ -106,7 +131,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
 
   it("「确认改账」：AI 提的改账停着等作者 → 点了记成作者裁定、写手读的事实跟着变；点两次只记一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    await commitByButtons(projectDir, 1, fakeKeeper);
+    await commitByButton(projectDir, 1, fakeKeeper);
 
     registerRecipe(ledgerChangeRecipe);
     const proposal = await submitOperation(projectDir, {
@@ -156,7 +181,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
 
   it("梗概上「改」：直接改账（不再问），对话里如实说改好了", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    await commitByButtons(projectDir, 1, fakeKeeper);
+    await commitByButton(projectDir, 1, fakeKeeper);
     registerRecipe(ledgerChangeRecipe);
     const { handlerPromise, res } = callAgentChatRoute({
       projectPath: projectDir,
@@ -274,128 +299,22 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
   }
 });
 
-// 定稿回执（P9）：出场了还没建卡的人列出来、引去设定本「还没建卡」；没建卡的人出场满 3 章单独点一次名。
-// 前两章直接走核心定稿命令打底，第 3 章走真按钮（「定稿」→「确认定稿」）。
-describe("agent-chat route：定稿回执里的「还没建卡的人」", () => {
-  const rootDirs = new Set<string>();
-
-  beforeEach(() => {
-    brainMocks.warmUpReaders.mockClear();
-    storyAgentMocks.getStoryAgent.mockResolvedValue({ stream: vi.fn(async () => { throw new Error("结构化动作不应调用模型"); }) });
-  });
-
-  afterEach(async () => {
-    await __drainOperationsForTests();
-    __resetRecipesForTests();
-    __resetOperationStoreForTests();
-    storyAgentMocks.getStoryAgent.mockReset();
-    await Promise.all([...rootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
-    rootDirs.clear();
-  });
-
-  const LINES = { lin: "林远在会议室外停下脚步。", zhou: "老周在门口抽烟。", he: "阿禾端来一碗热面。" };
-
-  /** 第 1、2 章：林远（有卡）和老周（周守义，没卡）都出场。 */
-  async function makeBook(cards: CardOp[] = []): Promise<string> {
-    const rootDir = await makeHomeTempDir("story-engine-agent-receipt-");
-    rootDirs.add(rootDir);
-    const { projectDir } = await createStoryProject({ rootDir, title: "回执测试书", genre: "都市", protagonistName: "林远" });
-    if (cards.length > 0) {
-      const outcome = await runCommand(projectDir, cardWrite, { ops: cards }, { caller: "author", idempotencyKey: "receipt-cards" });
-      if (!outcome.ok) throw new Error(outcome.message);
-    }
-    for (const chapter of [1, 2]) {
-      const entries: EntryInput[] = [
-        { kind: "presence", review: "auto", name: "林远", nameUsed: "林远", viewpoint: true, quote: LINES.lin },
-        { kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: LINES.zhou },
-      ];
-      const outcome = await runCommand(projectDir, chapterCommit, { chapter, text: `# 第${chapter}章\n\n${LINES.lin}${LINES.zhou}`, entries }, { caller: "author", idempotencyKey: `receipt-c${chapter}` });
-      if (!outcome.ok) throw new Error(outcome.message);
-    }
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await writeFile(join(projectDir, "drafts", "fast", "chapter-0003.md"), `# 第3章\n\n${LINES.lin}${LINES.zhou}${LINES.he}${SENTENCE.repeat(12)}\n`, "utf-8");
-    return projectDir;
-  }
-
-  /** 第 3 章的假记账员：林远、老周、阿禾（头一回出场）。 */
-  const keeper3: BrainCallModel = async (messages) =>
-    ((messages.at(-1)?.content ?? "").includes("交这一章的账单") || (messages.at(-1)?.content ?? "").includes("只记本章东西的去向"))
-      ? JSON.stringify({
-          summary: { text: "林远在会议室外犹豫", quote: "林远在会议室外停下脚步" },
-          presence: [
-            { name: "林远", nameUsed: "林远", viewpoint: true, quote: "林远在会议室外停下脚步" },
-            { name: "周守义", nameUsed: "老周", quote: "老周在门口抽烟" },
-            { name: "阿禾", nameUsed: "阿禾", quote: "阿禾端来一碗热面" },
-          ],
-          facts: [],
-          threads: [],
-        })
-      : "笔记。";
-
-  async function commitChapter3(projectDir: string): Promise<string> {
-    const { events } = await commitByButtons(projectDir, 3, keeper3);
-    const summary = textOf(events);
-    expect(summary).toContain("第 3 章已定稿");
-    return summary;
-  }
-
-  it("头一回出场的没卡的人列出来；没卡的人这章正好出场满 3 章 → 单独提醒一次；有卡的不提", { timeout: 60_000 }, async () => {
-    const summary = await commitChapter3(await makeBook());
-    expect(summary).toContain("这章还出现了新人物：阿禾——要给谁建卡，在设定本「还没建卡」里点一下就行。");
-    expect(summary).toContain("「周守义」已经出场 3 章了，还没有人物卡。");
-    expect(summary).not.toContain("林远」已经出场");
-    expect(summary).not.toMatch(/新人物：[^—]*周守义/u);
-  });
-
-  it("老周已经建了卡（按别名对上）→ 不再提醒他；阿禾照样列出来", { timeout: 60_000 }, async () => {
-    const summary = await commitChapter3(await makeBook([{ op: "card.create", kind: "character", name: "老周" }]));
-    expect(summary).toContain("这章还出现了新人物：阿禾");
-    expect(summary).not.toContain("还没有人物卡");
-    expect(summary).not.toContain("周守义");
-  });
-
-  it("作者说过不用建卡的（按别名对上）→ 也不再点名", { timeout: 60_000 }, async () => {
-    const summary = await commitChapter3(await makeBook([{ op: "uncarded.skip", name: "老周" }, { op: "uncarded.skip", name: "阿禾" }]));
-    expect(summary).not.toContain("新人物");
-    expect(summary).not.toContain("还没有人物卡");
-  });
-});
-
 const textOf = (events: readonly SseEvent[]): string => events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
 
-/** 点「定稿」：清单出来停着等作者（记账员用给的假的）。 */
-async function prepareByButton(projectDir: string, chapter: number, keeper: BrainCallModel): Promise<{ readonly opId: string; readonly waiting: Record<string, unknown> | undefined; readonly events: SseEvent[] }> {
-  registerRecipe(createCommitPrepareRecipe({ callModel: keeper, modelProblem: () => undefined }));
+/** 点「定稿」：核账、记账、定稿一路走完（记账员、核账员用假的）。 */
+async function commitByButton(projectDir: string, chapter: number, keeper: BrainCallModel): Promise<{ readonly events: SseEvent[] }> {
+  registerRecipe(createCommitPrepareRecipe({ callModel: keeper, readerCallModel: fakeReader, modelProblem: () => undefined }));
   const { handlerPromise, res } = callAgentChatRoute({
     projectPath: projectDir,
     messages: [{ role: "user", content: `定稿第 ${chapter} 章` }],
     action: { kind: "new", type: COMMIT_PREPARE_KIND, params: { chapter }, requestKey: randomUUID(), issuedAt: new Date().toISOString() },
   });
   await handlerPromise;
+  await __drainOperationsForTests();
   const events = parseSse(res.written.join(""));
   const operations = events.filter((e) => e.event === "operation").map((e) => e.data.operation as Record<string, unknown> | undefined).filter((op) => op !== undefined);
-  const waiting = operations.at(-1);
-  const opId = typeof waiting?.opId === "string" ? waiting.opId : "";
-  return { opId, waiting, events };
-}
-
-/** 在清单上点「确认定稿」（什么都不动）。 */
-async function confirmByButton(projectDir: string, opId: string): Promise<{ readonly events: SseEvent[] }> {
-  const { handlerPromise, res } = callAgentChatRoute({
-    projectPath: projectDir,
-    messages: [{ role: "user", content: "确认定稿" }],
-    action: { kind: "resume", opId, answer: { actionId: COMMIT_CONFIRM_ACTION, decision: "commit" } },
-  });
-  await handlerPromise;
-  await __drainOperationsForTests();
-  return { events: parseSse(res.written.join("")) };
-}
-
-/** 「定稿」→「确认定稿」走完。 */
-async function commitByButtons(projectDir: string, chapter: number, keeper: BrainCallModel): Promise<{ readonly events: SseEvent[] }> {
-  const { opId } = await prepareByButton(projectDir, chapter, keeper);
-  expect(opId).toMatch(/^op-/u);
-  return confirmByButton(projectDir, opId);
+  expect(operations.at(-1)).toMatchObject({ state: "succeeded" });
+  return { events };
 }
 
 function parseSse(raw: string): SseEvent[] {

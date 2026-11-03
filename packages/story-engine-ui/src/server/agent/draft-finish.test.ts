@@ -55,8 +55,9 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
       body: written({ draftTitle: "存根", draftLength: { actualLength: 2300, lowerBound: 2400, lengthStatus: "below_lower_bound" }, qualityPipeline: { continuity: { checked: true } } }),
     }), { readCachedCheck });
     expect(readCachedCheck).toHaveBeenCalledWith(BOOK, 2);
-    expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了；另有可能 1 处，在卡上点开看。");
-    expect(events.filter((item) => item.event === "card")).toEqual([{ event: "card", data: { type: "continuity", check: expect.objectContaining({ chapter: 2, reused: true }) } }]);
+    expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了。");
+    // 卡上只列确定的（安静账房）：「可能」不出。
+    expect(events.filter((item) => item.event === "card")).toEqual([{ event: "card", data: { type: "continuity", check: expect.objectContaining({ chapter: 2, reused: true, maybe: [] }) } }]);
     expect(next?.question).toBe("接下来？");
     expect(next?.choices).toEqual([expect.objectContaining({ label: "接着往下写", action: draftAction("continue", { chapter: 2 }) })]);
   });
@@ -69,6 +70,15 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
       expect.objectContaining({ label: "定稿", recommended: true }),
       expect.objectContaining({ label: "AI 写下一章", action: draftAction("write", { chapter: 3 }) }),
     ]);
+  });
+
+  it("核出的确定错在前面那章（前文和设定对不上）：不拦这一章，不出卡、照常给「定稿」", async () => {
+    const { events, text, next } = await finish(record("succeeded", { body: written({ draftLength: { actualLength: 3000 }, qualityPipeline: { continuity: { checked: true } } }) }), {
+      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [{ quote: "q", fixChapter: 1 }], maybe: [], failures: [] }),
+    });
+    expect(text).toBe("第 2 章写好了，3000 字。写完核了一遍，没发现对不上的地方。");
+    expect(events.some((item) => item.event === "card")).toBe(false);
+    expect(next?.choices.map((choice) => choice.label)).toEqual(["定稿", "AI 写下一章"]);
   });
 
   it("写完核过账、但记忆对不上（有一遍没核全）→ 如实说没核全，下一步给「核账」，不偷偷再跑", async () => {
@@ -88,18 +98,25 @@ describe("写稿做完了这一轮怎么收（写作版本 P2a：对话、按钮
     expect(events.some((item) => item.event === "card")).toBe(false);
   });
 
-  it("作者要写完就定稿 → 核账卡后接着出定稿清单，不另给下一步；没核账的也直接出清单", async () => {
+  it("作者要写完就定稿 → 核过没确定的、没核账的都接着交定稿，不另给下一步；核出确定的不交，说一句、出核账卡", async () => {
     const previewCommit = vi.fn(async () => undefined);
     const checked = await finish(record("succeeded", { body: written({ thenPreview: true, qualityPipeline: { continuity: { checked: true } } }) }), {
       previewCommit,
-      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [], maybe: [], failures: [] }),
+      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [], maybe: [{}], failures: [] }),
     });
     expect(previewCommit).toHaveBeenCalledWith(2);
-    expect(checked.events.map((item) => item.event)).toContain("card");
+    expect(checked.events.map((item) => item.event)).not.toContain("card");
     expect(checked.next).toBeUndefined();
     const plain = await finish(record("succeeded", { body: written({ thenPreview: true }) }), { previewCommit });
     expect(previewCommit).toHaveBeenCalledTimes(2);
     expect(plain.next).toBeUndefined();
+    const conflicted = await finish(record("succeeded", { body: written({ thenPreview: true, qualityPipeline: { continuity: { checked: true } } }) }), {
+      previewCommit,
+      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [{ quote: "q" }], maybe: [], failures: [] }),
+    });
+    expect(previewCommit).toHaveBeenCalledTimes(2);
+    expect(conflicted.text).toContain("\n先没定稿，改好了再定。");
+    expect(conflicted.events.map((item) => item.event)).toContain("card");
   });
 
   it("写手把「第 N 章 · 」写进了章名：书名号里只放章名", async () => {
@@ -190,10 +207,10 @@ describe("rewriteChoices 有稿的章（作者点了才写）", () => {
 });
 
 describe("afterDraftCheckLine 写完核账那一句", () => {
-  it("只剩「可能」：说在卡上点开看，不说画上了；改过的说改了几处、再核还剩几处", () => {
+  it("只剩「可能」：不报（安静账房）；改过的说改了几处、还剩几处", () => {
     const item = { quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" };
-    expect(afterDraftCheckLine({ ok: true, sure: [], maybe: [item] })).toBe("写完核了一遍：没有确定对不上的；可能 1 处，在卡上点开看。");
-    expect(afterDraftCheckLine({ ok: true, sure: [item], maybe: [] }, 2)).toBe("写完核账，改了 2 处对不上的；再核还有确定对不上 1 处，画在稿纸上了。");
+    expect(afterDraftCheckLine({ ok: true, sure: [], maybe: [item] })).toBe("写完核了一遍，没发现对不上的地方。");
+    expect(afterDraftCheckLine({ ok: true, sure: [item], maybe: [] }, 2)).toBe("写完核账，改了 2 处对不上的；还有确定对不上 1 处，画在稿纸上了。");
     expect(afterDraftCheckLine({ ok: true, sure: [], maybe: [] }, 3)).toBe("写完核账，改了 3 处对不上的；再核没发现别的。");
     expect(afterDraftCheckLine({ ok: false })).toBeUndefined();
   });

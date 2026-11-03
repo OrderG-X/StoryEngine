@@ -164,7 +164,7 @@ describe("定稿收尾追加「设为主角」建议（只加不改原选项）"
     await commit(1, ["陆沉"], "陆沉");
     fakeCommit({ committed: false });
     const { text, choices } = await finish();
-    expect(text).toBe("第 1 章现在还定不了，原因在清单里。");
+    expect(text).toBe("第 1 章现在还定不了，原因在卡上。");
     expect(choices).toEqual([]);
   });
 });

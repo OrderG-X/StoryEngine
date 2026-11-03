@@ -4,89 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { attachSnapshotChanges, describeSnapshotChanges } from "./snapshot-changes.js";
 import { readCommitFileChanges } from "./snapshot.js";
 
 const run = promisify(execFile);
-const names = new Map([["char-ffe5af", "周屿"], ["char-c6008d", "阿琴"]]);
 const m = (path: string) => ({ status: "M", path });
 const a = (path: string) => ({ status: "A", path });
-const d = (path: string) => ({ status: "D", path });
 
-describe("操作历史「查看改动」：文件 → 人话", () => {
-  it("定稿：正文写入 + 角色/线索/时间线等资料，内部文件不列", () => {
-    const lines = describeSnapshotChanges([
-      a(".story-engine-tx/commit-chapter-0058/chapters/0058.md"),
-      a("chapters/0058.md"),
-      m("characters/char-ffe5af/state.json"),
-      a("diagnostics/commit-chapter-0058.json"),
-      m("story/threads.json"),
-      m("timeline/events.json"),
-      m("story/fact-ledger.json"),
-      m(".story-engine-ui/chapter-workspaces/chapter-0058.json"),
-    ], names);
-    expect(lines).toEqual([
-      "正文：第 58 章写入定稿",
-      "角色：周屿 的资料有更新",
-      "伏笔与线索有更新",
-      "时间线有更新",
-      "硬事实账本有更新",
-    ]);
-  });
-
-  it("开书挪走老镜像文件后的那个存档：几个删除不列（整理，不是改了资料）", () => {
-    const d = (path: string) => ({ status: "D" as const, path });
-    expect(describeSnapshotChanges([
-      m("drafts/fast/chapter-0003.md"),
-      d("story/threads.json"),
-      d("story/timeline.json"),
-      d("timeline/events.json"),
-      d("time/calendar.json"),
-      d("story/fact-ledger.json"),
-      d("story/arc-goals.json"),
-      d("story/hooks.json"),
-    ], names)).toEqual(["工作稿：第 3 章有改动"]);
-  });
-
-  it("新建角色报名字、不重复报角色册；认不出的角色不吐 id", () => {
-    expect(describeSnapshotChanges([
-      a("characters/char-c6008d/core.json"),
-      a("characters/char-c6008d/profile.json"),
-      m("story/character-bible.json"),
-    ], names)).toEqual(["新增角色：阿琴"]);
-    const unknown = describeSnapshotChanges([m("characters/char-999999/state.json")], names);
-    expect(unknown).toEqual(["角色资料有更新"]);
-    expect(unknown.join("")).not.toMatch(/char-/u);
-  });
-
-  it("工作稿多章合并成一行；章纲（drafts/plans/）单列不再落进「其他文件」；只有内部文件时没有改动可列", () => {
-    expect(describeSnapshotChanges([m("drafts/fast/chapter-0057.md"), m("drafts/fast/chapter-0056.md")], names))
-      .toEqual(["工作稿：第 56、57 章有改动"]);
-    // 修复轮（2026-10-13）：章纲 drafts/plans/chapter-N.json 原先折进「其他文件」，作者看不出是哪章的纲。
-    expect(describeSnapshotChanges([m("drafts/plans/chapter-0002.json"), m("drafts/plans/chapter-0003.json")], names))
-      .toEqual(["章纲：第 2、3 章有改动"]);
-    expect(describeSnapshotChanges([m(".story-engine-ui/chapter-workspaces/chapter-0056.json")], names)).toEqual([]);
-  });
-
-  it("配给存档点的是它之后那个提交的改动；恢复结果用自己的；没有改动的不带 changes", () => {
-    const entries = [
-      { id: "s2", timestamp: 4, label: "落盘收尾：agent:commit_apply" },
-      { id: "c2", timestamp: 3, label: "agent:commit_apply" },
-      { id: "r1", timestamp: 2, label: "恢复到：agent:commit_apply" },
-      { id: "p1", timestamp: 1, label: "恢复前自动快照" },
-    ];
-    const files = new Map([
-      ["s2", [a("chapters/0058.md")]],
-      ["c2", [m("drafts/fast/chapter-0058.md")]],
-      ["r1", [m("story/threads.json")]],
-      ["p1", [m("drafts/fast/chapter-0057.md")]],
-    ]);
-    const out = attachSnapshotChanges(entries, files, names);
-    expect(out.find((e) => e.id === "c2")?.changes).toEqual(["正文：第 58 章写入定稿"]);
-    expect(out.find((e) => e.id === "r1")?.changes).toEqual(["伏笔与线索有更新"]);
-    expect(out.find((e) => e.id === "p1")?.changes).toBeUndefined();
-  });
-
+describe("readCommitFileChanges", () => {
   it("readCommitFileChanges：按提交拿到新增/修改状态", async () => {
     const dir = await mkdtemp(join(tmpdir(), "snap-changes-"));
     const git = (...args: string[]) => run("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args]);
@@ -105,6 +29,7 @@ describe("操作历史「查看改动」：文件 → 人话", () => {
     expect(changes[1]).toEqual([a("story/threads.json")]);
   });
 });
+
 
 describe("操作历史条目名", () => {
   it("「X前快照」改成操作名、章号放后；恢复条目说清回到哪一步之前", async () => {

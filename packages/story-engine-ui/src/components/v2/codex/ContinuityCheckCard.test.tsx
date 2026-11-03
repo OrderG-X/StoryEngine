@@ -131,6 +131,14 @@ describe("核账卡主按钮「改掉这 N 处」（N 随「不是问题」实�
     expect(fixedQuotes(onFixAction)).toEqual(items.slice(1).map((kept) => kept.quote));
   });
 
+  it("本章确定的超过一次能交的 12 处 → 按钮「先改前 12 处」，只交前 12 处", async () => {
+    const many = Array.from({ length: 14 }, (_, index) => ({ quote: `第 ${index + 1} 句不对。`, earlierQuote: "前面这样写的。", earlierChapter: 9, reason: "对不上" }));
+    const onFixAction = vi.fn();
+    render(<Controlled check={{ ...fourSure, sure: many }} onRevise={vi.fn()} onFixAction={onFixAction} onDismiss={vi.fn(async () => true)} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "先改前 12 处" })); });
+    expect(fixedQuotes(onFixAction)).toEqual(many.slice(0, 12).map((item) => item.quote));
+  });
+
   it("确定的都划掉 → 主按钮消失（只剩「可能」档时也不出）", async () => {
     const oneSure = { chapter: 9, source: "draft" as const, sure: [first], maybe: [items[1]!] };
     render(<Controlled check={oneSure} onRevise={vi.fn()} onFixAction={vi.fn()} onDismiss={vi.fn(async () => true)} />);

@@ -97,8 +97,6 @@ export function flowLabel(state: ChapterFlowStatus | undefined | null): string {
     draft_generating: "正在生成工作稿",
     draft_ready: "工作稿中",
     quality_checked: "已硬伤检查",
-    commit_preview_ready: "待确认定稿",
-    waiting_commit_confirmation: "待确认定稿",
     committed: "已定稿",
     ready_for_next: "可进入下一章",
   };
@@ -114,8 +112,6 @@ export function flowHint(state: ChapterFlowStatus): string {
     draft_generating: "正在写工作稿，不会更新已定稿版。",
     draft_ready: "工作稿已生成。请先阅读，再核账或定稿。",
     quality_checked: "硬伤检查完成。若没有阻断问题，可以定稿。",
-    commit_preview_ready: "定稿清单出来了。点「确认定稿」才写入，能撤销。",
-    waiting_commit_confirmation: "定稿清单出来了。点「确认定稿」才写入，能撤销。",
     committed: "本章已定稿。可以继续下一章。",
     ready_for_next: "已进入新章节。你可以先说这一章想怎么写，也可以让 AI 拟章纲。",
   };

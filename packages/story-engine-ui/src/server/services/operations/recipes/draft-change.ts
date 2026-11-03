@@ -203,7 +203,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
       const materials = await ctx.step("materials", { mode, chapter }, () => readDraftMaterials(bookDir, mode, params));
 
       const notes = await ctx.step("notes", { chapter, readers: materials.readers }, async () => {
-        if (materials.readers.planner || materials.readers.checker) ctx.progress(`专员在读第 ${chapter} 章之前的前文`);
+        if (materials.readers.planner || materials.readers.checker) ctx.progress("在读前文");
         let outcome;
         try {
           outcome = await prepareDraftNotes({

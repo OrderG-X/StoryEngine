@@ -15,8 +15,6 @@ export type ChapterWorkflowState =
   | "draft_generating"
   | "draft_ready"
   | "quality_checked"
-  | "commit_preview_ready"
-  | "waiting_commit_confirmation"
   | "committed"
   | "ready_for_next";
 

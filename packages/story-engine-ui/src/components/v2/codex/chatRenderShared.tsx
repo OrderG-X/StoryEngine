@@ -129,9 +129,6 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
     case "draft_ready":
     case "quality_checked":
       return "哪里想改，直接说…";
-    case "commit_preview_ready":
-    case "waiting_commit_confirmation":
-      return "在定稿清单里看一遍，点「确认定稿」…";
     case "committed":
     case "ready_for_next":
       return "下一章想写什么…";

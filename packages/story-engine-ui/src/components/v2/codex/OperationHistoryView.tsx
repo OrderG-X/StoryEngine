@@ -4,6 +4,7 @@
  * 修：旧入口点左侧「操作历史」只触发一个被 projectPath 门控的全局模态，真书路径异常或 summary-only 书时
  * 静默不出、主区仍是正文书桌。改成确定性主区视图（与「资料中心/写作台」同构、点了必显），不依赖模态是否挂载。
  * 复用既有只读取数/恢复接口（fetchSnapshots / restoreSnapshotApi）——恢复线本就被认可，不新增写入旁路（守铁律②）。
+ * 安静账房（2026-11-03）：只列定稿、正文改动（哪章定了、AI 改了哪章），设定、恢复那几条每天收成一行，点开才看；不再有统计、筛选、「查看改动」。
  */
 import { useEffect, useState } from "react";
 import { fetchSnapshots, restoreSnapshotApi } from "../../../api/client.js";
@@ -18,14 +19,6 @@ import { PageHead, Skeleton } from "./bibleVisual.js";
 
 function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
-}
-
-function formatRelativeTime(epochSeconds: number): string {
-  const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
-  if (elapsedSeconds < 60) return "刚刚";
-  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)} 分钟前`;
-  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)} 小时前`;
-  return `${Math.floor(elapsedSeconds / 86400)} 天前`;
 }
 
 function formatClock(epochSeconds: number): string {
@@ -61,18 +54,16 @@ export function groupSnapshotsByDay<T extends { readonly timestamp: number }>(
 
 export type SnapshotKind = "commit" | "draft" | "bible" | "restore";
 
-/** 筛选分类由服务端按写入方工具名给出（重构 P7：不再按人话标签里的字眼猜）。 */
+/** 分类由服务端按写入方工具名给出（重构 P7：不再按人话标签里的字眼猜）。 */
 export function snapshotKind(snapshot: Pick<SnapshotEntryDto, "kind">): SnapshotKind {
   return snapshot.kind ?? "draft";
 }
 
-const KIND_FILTERS: readonly { readonly id: "all" | SnapshotKind; readonly label: string }[] = [
-  { id: "all", label: "全部" },
-  { id: "commit", label: "定稿" },
-  { id: "draft", label: "正文改动" },
-  { id: "bible", label: "设定" },
-  { id: "restore", label: "恢复" },
-];
+/** 平时就列出来的：定稿、正文改动；设定、恢复收起来。 */
+const isChapterChange = (snapshot: Pick<SnapshotEntryDto, "kind">): boolean => {
+  const kind = snapshotKind(snapshot);
+  return kind === "commit" || kind === "draft";
+};
 
 /**
  * refreshKey 变了就重读列表（传开书概况：开着历史页时在聊天里撤销、AI 写入、定稿，概况一刷新这里跟着出新条目，
@@ -87,8 +78,8 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
   const [restoring, setRestoring] = useState<string | null>(null);
   // 恢复要先在行内确认一次（会把整本书退回那个存档，误点代价大）。
   const [confirmId, setConfirmId] = useState<string | null>(null);
-  // 「查看改动」一次只展开一条。
-  const [changesId, setChangesId] = useState<string | null>(null);
+  // 哪几天把收起来的（设定、恢复）也摊开了。
+  const [openDays, setOpenDays] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     if (!projectPath) return;
@@ -129,80 +120,43 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
     }
   };
 
-  const [kindFilter, setKindFilter] = useState<"all" | SnapshotKind>("all");
-  const filtered = snapshots ? snapshots.filter((snapshot) => kindFilter === "all" || snapshotKind(snapshot) === kindFilter) : null;
-  const groups = filtered ? groupSnapshotsByDay(filtered) : [];
-  const countOf = (id: "all" | SnapshotKind): number =>
-    snapshots ? (id === "all" ? snapshots.length : snapshots.filter((snapshot) => snapshotKind(snapshot) === id).length) : 0;
-  const today = snapshots ? groupSnapshotsByDay(snapshots).find((group) => group.day === "今天")?.items.length ?? 0 : 0;
+  const groups = snapshots ? groupSnapshotsByDay(snapshots) : [];
 
   return (
     <div className="op-history">
       <div className="op-history-body">
-        <PageHead
-          kicker="这本书"
-          title="操作历史"
-          sub="AI 每次写入前都会自动存档。恢复前也会先存一份，恢复本身也能再撤销。"
-          stats={[{ value: countOf("all"), label: "个存档" }, { value: today, label: "今天" }, { value: countOf("commit"), label: "次定稿" }]}
-        />
-        {snapshots && snapshots.length > 0 ? (
-          <div className="op-history-filters" role="group" aria-label="按类型筛选">
-            {KIND_FILTERS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                className={`is-${f.id}${kindFilter === f.id ? " on" : ""}`}
-                aria-pressed={kindFilter === f.id}
-                onClick={() => { setKindFilter(f.id); setConfirmId(null); }}
-              >
-                {f.label}
-                {countOf(f.id) > 0 ? <small aria-hidden="true">{countOf(f.id)}</small> : null}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {filtered && snapshots && snapshots.length > 0 && filtered.length === 0 ? (
-          <div className="op-history-empty">没有「{KIND_FILTERS.find((f) => f.id === kindFilter)?.label}」类的存档。</div>
-        ) : null}
+        <PageHead kicker="这本书" title="操作历史" sub="每次改动前都存了一份，能回到任何一步之前。" />
         {!projectPath ? <div className="op-history-empty">请先打开一本真实的本地项目，才能查看操作历史。</div> : null}
         {projectPath && error ? <div className="op-history-error">{error}</div> : null}
         {projectPath && !error && snapshots === null ? <Skeleton label="正在读取存档列表…" /> : null}
         {projectPath && snapshots !== null && snapshots.length === 0 ? (
           <div className="op-history-empty">还没有任何存档。AI 第一次写入前会自动创建。</div>
         ) : null}
-        {groups.map((group) => (
+        {groups.map((group) => {
+          const open = openDays.has(group.day);
+          const folded = group.items.filter((snapshot) => !isChapterChange(snapshot)).length;
+          const shown = open ? group.items : group.items.filter(isChapterChange);
+          return (
           <section key={group.day} className="op-history-group" aria-label={group.day}>
-            <h3 className="op-history-day"><span>{group.day}</span><small>{group.items.length}</small></h3>
+            <h3 className="op-history-day"><span>{group.day}</span></h3>
             <div className="op-history-list">
-              {group.items.map((snapshot) => {
+              {shown.map((snapshot) => {
                 const confirming = confirmId === snapshot.id;
-                const changes = snapshot.changes ?? [];
-                const showing = changesId === snapshot.id && changes.length > 0;
                 // 「恢复到…」这条本身就是恢复的结果，内容和它恢复的那条一样；要撤销恢复，点它下面那条「恢复前的自动存档」。
                 const restorable = !snapshot.label.startsWith("恢复到");
                 return (
                   <div key={snapshot.id} className={`op-history-entry is-${snapshotKind(snapshot)}`}>
-                    <article className={`op-history-item${confirming ? " is-confirming" : ""}${showing ? " is-showing" : ""}`}>
+                    <article className={`op-history-item${confirming ? " is-confirming" : ""}`}>
                       <span className="op-history-clock" title={formatTime(snapshot.timestamp)}>{formatClock(snapshot.timestamp)}</span>
                       <strong>{snapshot.label}</strong>
-                      <span className="op-history-time" title={formatTime(snapshot.timestamp)}>{formatRelativeTime(snapshot.timestamp)}</span>
+                      <span />
                       <span className="op-history-acts">
-                        {changes.length > 0 ? (
-                          <button
-                            className="op-history-restore"
-                            aria-expanded={showing}
-                            onClick={() => { setChangesId(showing ? null : snapshot.id); setConfirmId(null); }}
-                            type="button"
-                          >
-                            {showing ? "收起改动" : "查看改动"}
-                          </button>
-                        ) : null}
                         {restorable ? (
                           <button
                             className="op-history-restore"
                             disabled={restoring !== null}
                             aria-expanded={confirming}
-                            onClick={() => { setConfirmId(confirming ? null : snapshot.id); setChangesId(null); }}
+                            onClick={() => setConfirmId(confirming ? null : snapshot.id)}
                             type="button"
                           >
                             {restoring === snapshot.id ? "恢复中……" : "恢复到这之前"}
@@ -210,11 +164,6 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
                         ) : null}
                       </span>
                     </article>
-                    {showing ? (
-                      <ul className="op-history-changes" aria-label="这一步改了什么">
-                        {changes.map((line) => <li key={line}>{line}</li>)}
-                      </ul>
-                    ) : null}
                     {confirming && restoring === null ? (
                       <div className="op-history-confirm" role="alertdialog" aria-label="确认恢复">
                         <span>回到「{snapshot.label}」之前的样子？现在的内容会先自动存档，之后也能再撤销。</span>
@@ -226,8 +175,24 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
                 );
               })}
             </div>
+            {folded > 0 ? (
+              <button
+                className="op-history-more"
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOpenDays((days) => {
+                  const next = new Set(days);
+                  if (open) next.delete(group.day);
+                  else next.add(group.day);
+                  return next;
+                })}
+              >
+                {open ? "收起设定、恢复那几条" : `还有 ${folded} 条设定、恢复的改动`}
+              </button>
+            ) : null}
           </section>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

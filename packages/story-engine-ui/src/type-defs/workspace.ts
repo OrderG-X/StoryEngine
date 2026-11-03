@@ -241,38 +241,18 @@ export interface ContinuityCheckItemData {
   readonly revisited?: { readonly from: string };
 }
 
-/** 定稿清单卡的数据（服务端 services/commit-view.ts 的 CommitPreviewView；防御解析见 utils/commitPreviewCard.ts）。 */
+/** 定不了的卡的数据（服务端 services/commit-view.ts 的 CommitPreviewView；防御解析见 utils/commitPreviewCard.ts）。 */
 export interface CommitPreviewCardData {
   readonly chapter: number;
-  readonly canCommit: boolean;
-  /** 定不了的原因（引擎确定性判定：缺稿 / 硬伤 / 记账员没记成等）。非空时 canCommit 必为 false。 */
-  readonly blockingReasons?: readonly string[];
+  /** 定不了的原因（引擎确定性判定：缺稿 / 硬伤 / 前一章没定等）。 */
+  readonly blockingReasons: readonly string[];
   readonly summary?: string;
   /** 正文硬闸没过的地方（卡内默认折叠）。 */
   readonly draftIssues?: readonly string[];
-  /** 记账员交了、但原句在正文里找不到或指向前文没有的东西，这次没记上的（带原因，人话）。 */
-  readonly notRecorded?: readonly string[];
-  /** 要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……）。 */
-  readonly notes?: readonly string[];
-  /** 只差字数下限：定稿窗口给「就这么短，照样定稿」。 */
+  /** 只差字数下限：卡上给「就这么短，照样定稿」。 */
   readonly shortOnly?: boolean;
-  /** 补账清单（P2b）：按钮是「确认记账」，正文不动。 */
+  /** 补账（P2b）：正文不动。 */
   readonly fill?: true;
-  /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */
-  readonly ledgerChecklist?: readonly {
-    readonly id: string;
-    readonly kind: string;
-    readonly label: string;
-    readonly reason?: string;
-    readonly detail?: string;
-    readonly removable: boolean;
-    readonly editableDay?: number;
-    readonly editableDayEnd?: number;
-    /** 天数那一行：这章是哪天不知道（前面有章的账还没记上），两栏空着请作者填。 */
-    readonly dayUnknown?: true;
-    readonly needsConfirm?: boolean;
-    readonly defaultUnchecked?: boolean;
-  }[];
 }
 
 export interface DraftPreview {

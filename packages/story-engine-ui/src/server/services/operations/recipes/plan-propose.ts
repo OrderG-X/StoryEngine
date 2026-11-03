@@ -127,7 +127,7 @@ export function createPlanProposeRecipe(deps: PlanProposeDeps = DEFAULT_DEPS): R
 
       // 当场补笔记（各最多 10 章）；缺得更多不补、交后台补读，这次按冷窗口想（只是想几种走法，不停下等）。
       await ctx.step("notes", { chapter }, async () => {
-        if (chapter > 1) ctx.progress(`专员在读第 ${chapter} 章之前的前文`);
+        if (chapter > 1) ctx.progress("在读前文");
         let roles: ReaderNotesOutcome[];
         try {
           roles = [
@@ -153,7 +153,7 @@ export function createPlanProposeRecipe(deps: PlanProposeDeps = DEFAULT_DEPS): R
 
       // 笔记在上一步补过：这两步当场一份不补（0 次笔记调用），缺的按冷窗口。
       const windows = { projectDir: bookDir, chapter, maxCatchUp: 0, maxVolumeBuilds: 0 };
-      ctx.progress(`章纲员在想第 ${chapter} 章的几种走法`);
+      ctx.progress("在想几种走法");
       const proposed = await ctx.step("propose", { chapter, idea: params.idea ?? null, avoid: params.avoid ?? [] }, async () => {
         const result = await proposeDirections({
           ...windows,

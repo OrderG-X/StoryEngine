@@ -117,7 +117,7 @@ export function createInspectRunRecipe(deps: InspectDeps = DEFAULT_DEPS): Recipe
       });
       switch (params.mode) {
         case "continuity": {
-          ctx.progress(`核账员在读第 ${chapter} 章之前的前文`);
+          ctx.progress("在读前文");
           const notes = await ctx.step("notes", { chapter }, async () => {
             try {
               return await prepareCheckerNotes(ctx.bookDir, chapter, deps.readerCallModel);

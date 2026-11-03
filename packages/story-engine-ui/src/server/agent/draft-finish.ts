@@ -9,6 +9,7 @@
  * - 改稿（revise / fix / deai，片 2C）：一句结论（改了几处、哪几处没改成为什么）；按核账改的给「再核一遍」，没改成的给「让 AI 改」。
  * 只按操作记录里的结构化结果出，不看模型说了什么。
  */
+import { ownChapterIssues } from "../editorial/continuity/check-service.js";
 import { COLD_PAUSED_TEXT } from "../editorial/reader-window.js";
 import type { OperationRecord } from "../lib/operations/store.js";
 import { isChapterCommitted } from "../lib/working-draft-text.js";
@@ -53,26 +54,18 @@ interface CheckLike {
 }
 
 /**
- * 写完那遍核账的一句话（重构 P6 第 6 步）：问题清单在核账卡和稿纸划线上，这里只说几处。
+ * 写完那遍核账的一句话（重构 P6 第 6 步）：问题在核账卡和稿纸划线上，这里只说几处。
+ * 安静账房（2026-11-03）：只说「确定」对不上的，「可能」的不报（作者自己点「核账」才给全）。
  * fixed＞0（2026-10-23）：写完核出的已按前文改了几处、改完又核过——作者看着正文变了，得知道是改过的，卡上是改后还剩的。
  */
 export function afterDraftCheckLine(result: CheckLike, fixed = 0): string | undefined {
   if (result.ok !== true) return undefined;
   const sure = Array.isArray(result.sure) ? result.sure.length : 0;
-  const maybe = Array.isArray(result.maybe) ? result.maybe.length : 0;
-  const cold = result.coverage ? `（核账员还没读完全书，更早的细节可能漏${result.coverage.pausedBackfill ? `；${COLD_PAUSED_TEXT}` : ""}）` : "";
-  // 稿纸上默认只画确定的；「可能」在核账卡上点开才画（2026-10-23 稿纸减噪），别说成画上了。
-  const counts = sure > 0
-    ? `确定对不上 ${sure} 处，画在稿纸上了${maybe > 0 ? `；另有可能 ${maybe} 处，在卡上点开看` : ""}`
-    : `没有确定对不上的；可能 ${maybe} 处，在卡上点开看`;
-  if (fixed > 0) {
-    return sure + maybe === 0
-      ? `写完核账，改了 ${fixed} 处对不上的；再核没发现别的${cold}。`
-      : `写完核账，改了 ${fixed} 处对不上的；再核还有${counts}${cold}。`;
-  }
-  return sure + maybe === 0
-    ? `写完核了一遍，没发现对不上的地方${cold}。`
-    : `写完核了一遍：${counts}${cold}。`;
+  const cold = result.coverage ? "（核账员还没读完前文，只对照了读过的和最近几章）" : "";
+  const fixedText = fixed > 0 ? `写完核账，改了 ${fixed} 处对不上的；` : "";
+  return sure > 0
+    ? `${fixedText}${fixed > 0 ? "还有" : "写完核了一遍："}确定对不上 ${sure} 处，画在稿纸上了${cold}。`
+    : fixed > 0 ? `${fixedText}再核没发现别的${cold}。` : `写完核了一遍，没发现对不上的地方${cold}。`;
 }
 
 /** 还可能没写到的作者要点（复核后仍漏的 + 去味后新漏的）。 */
@@ -167,22 +160,28 @@ async function finishWritten(args: DraftFinishArgs, body: DraftChangeBody, thenP
     : [];
   const more: NextStepChoice[] = [...(short ? [continueChoice(chapter)] : []), ...fillBeats];
   if (cached) {
-    // 写完已经核过一遍账：直接出核账卡、问题画到稿纸上，不用作者再点「核账」。
-    const check = cached as CheckLike;
-    args.sendEvent("text-delta", { text: "\n" });
-    args.sendEvent("card", { type: "continuity", check: cached });
+    // 写完已经核过一遍账：有确定对不上的才出核账卡（只列确定的）、画到稿纸上，不用作者再点「核账」。
+    // 只看错在这一章的（前文和设定对不上的那几条不拦这章，作者点「核账」时整张卡照样列）。
+    const whole = cached as CheckLike;
+    const check: CheckLike = { ...whole, sure: ownChapterIssues((Array.isArray(whole.sure) ? whole.sure : []) as { readonly fixChapter?: number }[], chapter) };
+    const sureCount = check.sure?.length ?? 0;
+    if (sureCount > 0) {
+      args.sendEvent("text-delta", { text: "\n" });
+      args.sendEvent("card", { type: "continuity", check: { ...(cached as object), sure: check.sure, maybe: [], earlierOpen: [] } });
+    }
     const fixed = continuity?.autoFixed?.applied ?? 0;
-    const said = [afterDraftCheckLine(check, fixed), check.headline, check.summary].find((text): text is string => typeof text === "string" && text.trim().length > 0);
+    const said = [afterDraftCheckLine(check, fixed), check.headline].find((text): text is string => typeof text === "string" && text.trim().length > 0);
     emit(said ? said.trim() : `第 ${chapter} 章写完核了一遍。`);
-    if (preview) {
+    // 要写完就定稿、却核出确定对不上的：不再交定稿（交了也停在同样几处），说一句、改法在核账卡上。
+    if (preview && sureCount === 0) {
       args.sendEvent("text-delta", { text: "\n" });
       await preview(chapter);
       return;
     }
+    if (preview) emit("\n先没定稿，改好了再定。");
     if (check.ok === false) return;
     // 确定 N 处时改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」），稿纸工具条照样有「定稿」：不再挂定稿和写下一章。
-    const sure = Array.isArray(check.sure) ? check.sure.length : 0;
-    const choices: NextStepChoice[] = sure > 0
+    const choices: NextStepChoice[] = sureCount > 0
       ? more
       : [
         ...more,

@@ -26,12 +26,10 @@ import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { contextActionsForView } from "./ChatCapabilityBar.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { chapterBareTitle, chapterDisplayTitle, chapterHeading } from "../v2Utils.js";
-import { ThemeToggleButton } from "./ThemeToggleButton.js";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette.js";
 import { refreshOverviewNow } from "../../../workspace/refreshOverview.js";
 import { useThemeStore } from "../../../stores/themeStore.js";
-import { CommitSheetHost } from "./CommitSheet.js";
-import { IconChevronLeft, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
+import { IconChevronLeft, IconPanelLeft, IconPlus, IconSearch, IconSettings } from "./icons.js";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform || navigator.userAgent);
 /** 快捷键提示里的修饰键（Mac ⌘，别的 Ctrl+）。 */
@@ -45,7 +43,8 @@ import "./se-bible.css";
 
 /**
  * WritingWorkspaceCodex — 写作工作区外壳。
- * 2026-10-07 改版：撤掉左侧导航栏，改为全宽顶栏（书名面包屑 / 写作·设定本·历史 / 专注·设置·AI 开关），
+ * 2026-10-07 改版：撤掉左侧导航栏，改为全宽顶栏（书名面包屑 / 写作·设定本 / 设置；安静账房 2026-11-03 起历史、专注、主题、搜索、AI 开关不在顶栏：
+ * 历史在章节栏底下和 ⌘3，专注、主题在设置「显示」，搜索 ⌘K，AI 栏收起后右边那条点了展开），
  * 设置改成弹窗；下方两栏 = 中（写作台 / 资料中心 / 操作历史）+ 右（AI 对话）。
  *
  * 落地策略（用户选的 B：直接在主界面渐进替换）：
@@ -517,41 +516,10 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           >
             设定本{unseenChangesChapter !== null ? <span className="se-seg-dot" aria-label="有新定稿的改动" /> : null}
           </button>
-          <button className={view === "history" ? "on" : ""} type="button" aria-pressed={view === "history"} onClick={() => setView("history")}>历史</button>
         </nav>
         <div className="se-top-r">
-          <button className="se-search-btn" type="button" aria-label="搜索章节、正文、设定、命令" onClick={() => setPaletteOpen(true)}>
-            <IconSearch size={16} />
-            <span className="se-search-lbl">搜章节、正文、设定</span>
-            <kbd>{IS_MAC ? "⌘K" : "Ctrl K"}</kbd>
-          </button>
-          <button
-            className={`se-icon-btn${focusWriting ? " on" : ""}`}
-            type="button"
-            aria-label="专注写作"
-            aria-pressed={focusWriting}
-            title="专注写作（收起两侧）"
-            onClick={() => {
-              if (!focusWriting) setView("desk");
-              setRailSlide(true);
-              useDisplaySettingsStore.getState().toggleFocusWriting();
-            }}
-          >
-            <IconFocus />
-          </button>
-          <ThemeToggleButton className="se-icon-btn se-theme-btn" />
           <button className="se-icon-btn" type="button" aria-label="设置" title={`设置（${MOD},）`} onClick={() => setSettingsTab(lastSettingsTabRef.current)}>
             <IconSettings />
-          </button>
-          <button
-            className={`se-icon-btn${effectiveRightOpen ? " on" : ""}`}
-            type="button"
-            aria-label={effectiveRightOpen ? "收起 AI 助手" : "展开 AI 助手"}
-            aria-pressed={effectiveRightOpen}
-            title={`AI 助手（${MOD}${SHIFT}\\）`}
-            onClick={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
-          >
-            <IconPanelRight />
           </button>
         </div>
       </header>
@@ -697,7 +665,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       className="se-new-ch"
                       type="button"
                       disabled={workspaceBusy}
-                      title={`打开第 ${nextToWrite} 章的空白稿纸自己写；要 AI 写，在稿纸下面点「AI 写这一章」`}
+                      title={`打开第 ${nextToWrite} 章的空白稿纸自己写；要 AI 写，跟右边说`}
                       onClick={() => openChapterNumber(nextToWrite)}
                     >
                       <IconPlus size={16} />写第 {nextToWrite} 章
@@ -735,12 +703,13 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                   <div className="se-ch-foot">
                     <span className={`se-dot ${chapterFoot.dot}`} aria-hidden="true" />
                     {chapterFoot.text}
+                    {/* 操作历史（定稿了哪章、AI 改了哪章，能撤）：顶栏不再放，留这一个小入口和 ⌘3。 */}
+                    <button className="se-ch-history" type="button" title={`操作历史（${MOD}3）`} onClick={() => setView("history")}>历史</button>
                   </div>
                 </nav>
               ) : null}
               <WritingDeskCodex
                 {...props}
-                onOpenChapter={openChapterNumber}
                 onJumpToQuote={jumpToQuote}
                 peekCards={peekCards}
                 starter={starter}
@@ -758,7 +727,6 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         {/* ══ 右：AI 对话（codex 视觉，AiChatCodex；唯一控制面） ══ */}
         <AiChatCodex
           {...props}
-          onOpenChapter={openChapterNumber}
           mentionNames={mentionNames}
           rightOpen={effectiveRightOpen}
           // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），
@@ -797,8 +765,6 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           onPickText={jumpToQuote}
         />
       ) : null}
-      {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
-      <CommitSheetHost busy={workspaceBusy} {...(props.onSendUserAction ? { onSendUserAction: props.onSendUserAction } : {})} />
       <ExportDialog book={exportOpen && props.projectPath ? { title: projectName, projectPath: props.projectPath } : null} onClose={() => setExportOpen(false)} />
       {settingsPresence.mounted ? <SettingsModal tab={settingsTab ?? lastSettingsTabRef.current} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} presence={settingsPresence} /> : null}
     </div>

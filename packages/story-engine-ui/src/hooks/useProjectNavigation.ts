@@ -178,11 +178,7 @@ function workspaceFromBook(book: BookSummary) {
     title: "第1章",
     status: "current" as const,
   };
-  const flowStatus: ChapterWorkflowState = book.status === "待确认"
-    ? "waiting_commit_confirmation"
-    : book.status === "可继续下一章"
-      ? "ready_for_next"
-      : "idle";
+  const flowStatus: ChapterWorkflowState = book.status === "可继续下一章" ? "ready_for_next" : "idle";
 
   return {
     projectName: book.title,

@@ -21,7 +21,7 @@ export interface StoryMapChapter {
   readonly presentLine: true | false | "unknown";
   /** 故事哪几天（「第 5 天」「第 5～6 天」「第 5 天到第 6 天」「第 5 天以后」）；不知道就没有。 */
   readonly days?: string;
-  /** 天数是按旧账推的、不算准：说明。 */
+  /** 天数是按旧账推的、不算准：「约」字上的说明。 */
   readonly unsure?: string;
   /** 和上一个当下章之间值得标的间隔：「过了 4 天」「往回 2 天」「6 个月后」（隔天、同一天、说不准不标）。 */
   readonly gap?: string;
@@ -82,7 +82,7 @@ export function toStoryMap(projection: Pick<BookProjection, "upTo" | "chapters" 
         ...(chapter.ledgerStatus !== "ready" ? { ledgerShort: chapter.ledgerStatus } : {}),
         presentLine: row.presentLine,
         ...(days ? { days } : {}),
-        ...(days && row.presumed ? { unsure: "按旧账推的，不算准" } : {}),
+        ...(days && row.presumed ? { unsure: "大概的" } : {}),
         ...(gap ? { gap } : {}),
         ...(row.weekday !== undefined ? { weekday: row.weekday } : {}),
         weekdayDerived: row.weekdayDerived,
