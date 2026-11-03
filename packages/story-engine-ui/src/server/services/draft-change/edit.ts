@@ -1,21 +1,30 @@
 /**
  * draft.change 的改稿三种（写作版本 P2a 片 2C，设计 3.1 末两条、6.6）：改已有的工作稿，改前存档、可撤销。
  * - revise：改一段或几段（对话里改稿、选中文字改写）。带 preview 的改好先给作者看：作者点「换上」才换，「再改一版」重改，「不要了」停掉。
- * - fix：核账卡「改这处 / 改掉这 N 处」（按编号句子，一章几处问一次模型）。
+ * - fix：核账卡「改这处 / 改掉这 N 处」（按编号句子，一章几处问一次模型）。改完自己再核一遍（只核改过的句子），
+ *   作者点的还在报、或改出了新错（改过的句子、本章别处还照改前说的）就再改一轮、再核；两轮都在稿子外面算，最后一次换上（一个存档点）。
+ *   还剩的列在卡上交作者；定稿时正文没再动就直接用这遍核账，不再花钱。
  * - deai：AI 味卡「改掉这句 / 一键全修」。
  *
  * 步骤：materials（依据 + 稿同一次读）→ revise:n / fix / deai（只算）→（preview：等作者 confirm:n → fresh:n 核底版和依据，
  * 变了就作废、说哪样变了）→ apply（applyAiDraft；没 preview 的写的途中稿子或前文变了，照写稿一样留成候选）。
  * 一处都没改成如实说为什么（not_changed），稿子不动。
  */
-import { diffTruthBasis, parseDraftFile, readDraftFile, readDraftState, type TruthBasis } from "@actalk/story-core";
+import { diffTruthBasis, parseDraftFile, quoteInText, readDraftFile, readDraftState, type TruthBasis } from "@actalk/story-core";
+import { continuityFixGoal } from "../../../lib/continuity-fix.js";
+import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { describeBasisChanges, readTruthBasisForWork } from "../../book/truth-basis.js";
+import type { BrainCallModel } from "../../editorial/reader-window.js";
+import { checkChapterBody, ownChapterIssues, prepareCheckerNotes, type ChapterCheckItem } from "../../editorial/continuity/check-service.js";
+import { rereadBlocker } from "../../editorial/reread-state.js";
+import { modelFailureText } from "../../lib/ai-errors.js";
 import { applyAiDraft } from "../../lib/ai-draft-write.js";
+import { rethrowIfStopped } from "../../lib/operations/context.js";
 import { readAntiRules } from "../../writing/ai-flavor/anti-rules.js";
 import { runDeAiFlavorBatch, type DeAiCallModel } from "../de-ai-flavor-batch.js";
 import { authorStepId, OperationObsolete, type OperationResult, type RecipeContext } from "../operations/executor.js";
-import { fixByUnits } from "../unit-fix.js";
-import type { DraftDeaiParams, DraftEditMode, DraftEditParams, DraftReviseEdit } from "./params.js";
+import { FIX_ROUNDS, fixByUnits } from "../unit-fix.js";
+import { EDIT_MAX_FIXES, type DraftDeaiParams, type DraftEditMode, type DraftEditParams, type DraftFixParams, type DraftReviseEdit } from "./params.js";
 import type { DraftApplied } from "./result.js";
 import { reviseDraftText, type RevisionFailure, type RevisionModelCaller } from "./revise-text.js";
 import { coded } from "./steps.js";
@@ -30,6 +39,19 @@ export interface DraftEditDeps {
   readonly fixCallModel: RevisionModelCaller;
   /** 去机器腔（repair 槽）。 */
   readonly deAiCallModel: DeAiCallModel;
+  /** 按核账改完再核（核账员，qualityCheck 槽）。 */
+  readonly readerCallModel: BrainCallModel;
+}
+
+/** 按核账改完再核的结果（进结果，卡上列还剩的）。 */
+export interface FixVerify {
+  /** 再核跑成了几遍（0 = 没核成，原因在 failure）。 */
+  readonly checks: number;
+  /** 第二轮又改了几句。 */
+  readonly again: number;
+  /** 最后一遍还对不上的（本章确定的 + 上次改过又被报的）：卡上列，作者定。 */
+  readonly left?: ContinuityCheckData;
+  readonly failure?: string;
 }
 
 /** 开改时的样子：先读依据，再读稿（全文带章名行，和版本一起读的）。 */
@@ -64,6 +86,8 @@ export interface EditOutcome {
   readonly exact?: true;
   /** deai：写作规则没读上之类，结论后面补一句。 */
   readonly note?: string;
+  /** fix：改完再核（有改动才有）。 */
+  readonly verify?: FixVerify;
 }
 
 /** 等作者时卡上摆的（preview）。 */
@@ -88,6 +112,7 @@ export interface DraftEditBody {
   readonly changes: readonly EditChange[];
   readonly failed: readonly EditFailure[];
   readonly alsoChanged?: number;
+  readonly verify?: FixVerify;
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,9 +126,10 @@ export async function editTargetProblem(projectDir: string, chapter: number): Pr
   return undefined;
 }
 
-/** 哪几步会调模型（接着做时额度按它加）：改的那一步；等作者看改法那一步之后可能「再改一版」。 */
+/** 哪几步会调模型（接着做时额度按它加）：改的那一步；按核账改完补笔记、再核、再改；等作者看改法那一步之后可能「再改一版」。 */
 export function editStepCallsModel(stepId: string): boolean {
-  return stepId === "fix" || stepId === "deai" || stepId.startsWith("revise:") || stepId.startsWith(authorStepId("confirm:"));
+  return stepId === "fix" || stepId === "deai" || stepId === "notes" || stepId.startsWith("fix:") || stepId.startsWith("check:")
+    || stepId.startsWith("revise:") || stepId.startsWith(authorStepId("confirm:"));
 }
 
 /* ------------------------------------------------------------------ */
@@ -204,6 +230,135 @@ async function fixEdits(input: {
   };
 }
 
+type Verified = { readonly ok: true; readonly left: ContinuityCheckData } | { readonly ok: false; readonly reason: string };
+
+/** 改完再核前，核账员先把前文笔记补到上一章（和定稿那遍同一套）；没成就不再核，结论里说一句。 */
+async function verifyNotes(projectDir: string, chapter: number, callModel: BrainCallModel): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
+  const rereading = await rereadBlocker(projectDir, "核账");
+  if (rereading) return { ok: false, reason: rereading };
+  try {
+    await prepareCheckerNotes(projectDir, chapter, callModel);
+    return { ok: true };
+  } catch (error) {
+    rethrowIfStopped(error);
+    return { ok: false, reason: `核账员读前文没成：${modelFailureText(error)}` };
+  }
+}
+
+/**
+ * 核改过的这份（稿子外面、还没换上）：只核改过的这几句（上一遍整章核过、记忆对得上时），否则整章核。
+ * 还对不上的 = 错在本章、确定的，加上以前改过又被报回来的（降成「可能」的那种），都交下一轮 / 作者。
+ * 这遍核全了会存成这份正文的核账记忆：换上后定稿正文没再动就直接用，不再花钱。
+ */
+async function verifyFix(projectDir: string, chapter: number, text: string, changes: readonly EditChange[], callModel: BrainCallModel): Promise<Verified> {
+  try {
+    const result = await checkChapterBody(projectDir, chapter, parseDraftFile(text).body.trim(), { readerCallModel: callModel, afterFix: changes, notesReady: {} });
+    if (!result.ok) return { ok: false, reason: result.failures[0] ?? "原因不明" };
+    return {
+      ok: true,
+      left: {
+        chapter,
+        sure: ownChapterIssues(result.sure, chapter),
+        maybe: ownChapterIssues(result.maybe.filter((item) => item.revisited), chapter),
+      },
+    };
+  } catch (error) {
+    rethrowIfStopped(error);
+    return { ok: false, reason: modelFailureText(error) };
+  }
+}
+
+const leftCount = (left: ContinuityCheckData): number => left.sure.length + left.maybe.length;
+
+const sameSentence = (a: string, b: string): boolean => Boolean(a && b) && (quoteInText(a, b) || quoteInText(b, a));
+
+/**
+ * 第二轮只管两样：作者点了要改、还在报的（第一轮没改成、改了还不对），和第一轮改出来的（报的就是改过的句子，
+ * 或本章别的句子跟改过的那句对不上）。作者没点的（两章打架、和设定打架的要作者定哪边为准，P12）、以前改过又被报的
+ * 不替作者改，留在卡上。
+ */
+function againItems(chapter: number, left: ContinuityCheckData, first: EditOutcome, fixes: DraftFixParams["fixes"]): ChapterCheckItem[] {
+  const touched = (text: string): boolean => first.changes.some((change) => sameSentence(text, change.to));
+  const asked = (text: string): boolean => fixes.some((fix) => sameSentence(text, fix.targetText));
+  return [...left.sure, ...left.maybe].filter((item) => asked(item.quote) || touched(item.quote)
+    || (!item.againstSetting && (item.earlierChapter <= 0 || item.earlierChapter === chapter) && touched(item.earlierQuote)));
+}
+
+/**
+ * 第二轮改法：和第一轮同一句话（和哪句对上 + 理由）；这句是第一轮刚改出来的，再带上第一轮那条要求，两样都要对上
+ * （不然改回去又和第一轮那句对不上，来回改）。
+ */
+function againGoal(chapter: number, item: ChapterCheckItem, first: readonly EditChange[], fixes: DraftFixParams["fixes"]): string {
+  const goal = continuityFixGoal(chapter, item);
+  const changed = first.find((change) => sameSentence(item.quote, change.to));
+  const earlier = changed ? fixes.find((fix) => sameSentence(fix.targetText, changed.from)) : undefined;
+  return earlier ? `${goal}；这句刚按「${earlier.revisionGoal}」改过，两样都要对得上` : goal;
+}
+
+/** 两轮的改动并成一份：第二轮改的是第一轮改出来的句子就接上（改前取最早那版），改回原样的去掉。 */
+function mergeRounds(first: EditOutcome, second: EditOutcome): EditOutcome {
+  const changes = [...first.changes];
+  for (const change of second.changes) {
+    const at = changes.findIndex((earlier) => earlier.to === change.from);
+    if (at >= 0) changes[at] = { from: changes[at]!.from, to: change.to };
+    else changes.push(change);
+  }
+  const also = (first.alsoChanged ?? 0) + (second.alsoChanged ?? 0);
+  return {
+    text: second.text,
+    changes: changes.filter((change) => change.from !== change.to),
+    // 第一轮没改成、第二轮也没动到的才算没改成（原句还原样在稿里）。
+    failed: first.failed.filter((failure) => quoteInText(failure.target, second.text)),
+    ...(also > 0 ? { alsoChanged: also } : {}),
+  };
+}
+
+/** 再核不再报的「没改成」不算没改成：两处报的是同一件事的两头，改了这头那头就对上了（真机 2026-11-03）。 */
+function settledFailures(outcome: EditOutcome, left?: ContinuityCheckData): EditOutcome {
+  const flagged = left ? [...left.sure, ...left.maybe] : [];
+  return { ...outcome, failed: outcome.failed.filter((failure) => flagged.some((item) => sameSentence(item.quote, failure.target))) };
+}
+
+/** fix：改 → 补笔记 → 再核 →（还有对不上的）再改一轮 → 再核。都只算、不写盘；换上在外面一次做。 */
+async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditParams, { mode: "fix" }>, materials: EditMaterials, deps: DraftEditDeps): Promise<EditOutcome> {
+  const { bookDir } = ctx;
+  const { chapter } = params;
+  const { text } = materials;
+  const first = await ctx.step("fix", { text }, () => {
+    ctx.progress("在按核账改");
+    return fixEdits({ chapter, text, fixes: params.fixes, callModel: deps.fixCallModel });
+  });
+  if (first.changes.length === 0) return first;
+  // 改的途中作者存过稿：这版换不上（留成候选），不再花钱核它。
+  if ((await readDraftState(bookDir, chapter)).version !== materials.baseVersion) return first;
+  const notes = await ctx.step("notes", { chapter }, () => verifyNotes(bookDir, chapter, deps.readerCallModel));
+  if (!notes.ok) return { ...first, verify: { checks: 0, again: 0, failure: notes.reason } };
+  const once = await ctx.step("check:1", { text: first.text }, () => {
+    ctx.progress("改完再核一遍");
+    return verifyFix(bookDir, chapter, first.text, first.changes, deps.readerCallModel);
+  });
+  if (!once.ok) return { ...first, verify: { checks: 0, again: 0, failure: once.reason } };
+  if (leftCount(once.left) === 0) return { ...settledFailures(first), verify: { checks: 1, again: 0 } };
+  // 第二轮（FIX_ROUNDS）：作者点的、第一轮改出来的还对不上的那几处，第一轮刚改出来的带上第一轮那条要求。
+  const fixes = againItems(chapter, once.left, first, params.fixes).slice(0, EDIT_MAX_FIXES)
+    .map((item) => ({ targetText: item.quote, revisionGoal: againGoal(chapter, item, first.changes, params.fixes) }));
+  if (fixes.length === 0) return { ...settledFailures(first, once.left), verify: { checks: 1, again: 0, left: once.left } };
+  const second = await ctx.step(`fix:${FIX_ROUNDS}`, { text: first.text, fixes }, () => {
+    ctx.progress("还有几处对不上，再改一轮");
+    return fixEdits({ chapter, text: first.text, fixes, callModel: deps.fixCallModel });
+  });
+  // 第二轮一句都没改成：照第一轮的结果交，还剩的列给作者。
+  if (second.changes.length === 0) return { ...settledFailures(first, once.left), verify: { checks: 1, again: 0, left: once.left } };
+  const merged = mergeRounds(first, second);
+  const twice = await ctx.step(`check:${FIX_ROUNDS}`, { text: second.text }, () => {
+    ctx.progress("改完再核一遍");
+    return verifyFix(bookDir, chapter, second.text, second.changes, deps.readerCallModel);
+  });
+  const again = second.changes.length;
+  if (!twice.ok) return { ...merged, verify: { checks: 1, again, failure: twice.reason } };
+  return { ...settledFailures(merged, twice.left), verify: { checks: 2, again, ...(leftCount(twice.left) > 0 ? { left: twice.left } : {}) } };
+}
+
 async function deaiEdits(input: {
   readonly projectDir: string;
   readonly text: string;
@@ -269,13 +424,23 @@ function doneLine(params: DraftEditParams, outcome: EditOutcome): string {
   if (params.mode === "deai") return `${at}改掉了 ${count} 处机器腔（可撤销）。`;
   if (params.mode === "fix") {
     const also = outcome.alsoChanged ? `本章别处说同一件事的 ${outcome.alsoChanged} 句跟着改了。` : "";
-    return `${params.fixes.length === 1 ? `${at}改好了这一处（可撤销）。` : `${at}改好了 ${count - (outcome.alsoChanged ?? 0)} 处（可撤销）。`}${also}`;
+    const done = params.fixes.length - outcome.failed.length;
+    return `${params.fixes.length === 1 ? `${at}改好了这一处（可撤销）。` : `${at}改好了 ${done} 处（可撤销）。`}${also}`;
   }
   if (outcome.exact) return `${at}按你给的原文换上了（可撤销）。`;
   // 先给作者看过改法的：卡上已经摆过改了什么，换上了就一句。
   if (params.preview) return params.edits.length === 1 ? `${at}换上了（可撤销）。` : `${at}换上了 ${count} 处（可撤销）。`;
   if (outcome.brief) return `${at}改好了：${outcome.brief}（可撤销）。`;
   return params.edits.length === 1 ? `${at}改好了这一处（可撤销）。` : `${at}改好了 ${count} 处（可撤销）。`;
+}
+
+/** 改完再核的一句：没对不上的了 / 还有几处在卡上 / 没核成（定稿时再核）。 */
+function verifyLine(verify: FixVerify | undefined): string {
+  if (!verify) return "";
+  if (verify.failure) return `改完再核没跑成（${verify.failure}），定稿时会再核。`;
+  const left = verify.left ? leftCount(verify.left) : 0;
+  const again = verify.again > 0 ? `又跟着改了 ${verify.again} 句，` : "";
+  return left > 0 ? `改完再核${again}还有 ${left} 处对不上，在卡上。` : `改完再核${again}没有对不上的了。`;
 }
 
 export function buildDraftEditResult(input: {
@@ -297,9 +462,10 @@ export function buildDraftEditResult(input: {
     changes: outcome.changes,
     failed: outcome.failed,
     ...(outcome.alsoChanged ? { alsoChanged: outcome.alsoChanged } : {}),
+    ...(outcome.verify ? { verify: outcome.verify } : {}),
   };
   const summary = applied.applied
-    ? `${doneLine(params, outcome)}${notDoneLine(editTotal(params), outcome.failed)}${outcome.note ?? ""}`
+    ? `${doneLine(params, outcome)}${notDoneLine(editTotal(params), outcome.failed)}${outcome.note ?? ""}${verifyLine(outcome.verify)}`
     : applied.message;
   return {
     schema: "operation-result/1",
@@ -329,10 +495,7 @@ export async function runDraftEdit(ctx: RecipeContext<unknown>, params: DraftEdi
 
   let outcome: EditOutcome;
   if (mode === "fix") {
-    outcome = await ctx.step("fix", { text }, () => {
-      ctx.progress("在按核账改");
-      return fixEdits({ chapter, text, fixes: params.fixes, callModel: deps.fixCallModel });
-    });
+    outcome = await fixRounds(ctx, params, materials, deps);
   } else if (mode === "deai") {
     outcome = await ctx.step("deai", { text }, () => {
       ctx.progress("在去机器腔");

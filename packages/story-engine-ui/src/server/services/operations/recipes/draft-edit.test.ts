@@ -16,7 +16,8 @@ import { __resetOperationStoreForTests, readOperation } from "../../../lib/opera
 import { listSnapshots } from "../../../lib/snapshot.js";
 import { operationView } from "../view.js";
 import { __drainOperationsForTests, __resetRecipesForTests, cancelOperation, resumeOperation } from "../executor.js";
-import { fakeDraftDeps, runDraftEdit, settledDraftChange, submitDraftChange } from "./draft-change-kit.js";
+import type { BrainCallModel } from "../../../editorial/index.js";
+import { fakeDraftDeps, quietReader, runDraftEdit, settledDraftChange, submitDraftChange } from "./draft-change-kit.js";
 
 let root: string;
 let book: string;
@@ -46,6 +47,22 @@ const bodyOf = async (chapter: number): Promise<string | undefined> => (await re
 const reviseReply = (beforeText: string, afterText: string, changeSummary = "改了") => JSON.stringify({ beforeText, afterText, changeSummary });
 const goal = "和第 10 章「八几年就没了」对上";
 
+/**
+ * 假核账员（改完再核用）：核的那份稿里有 when 的几句（都有）就报 conflict；自复核都判 sure；别的都说没问题。
+ */
+function recheckReader(rules: readonly { readonly when: readonly string[]; readonly conflict: Record<string, unknown> }[]): BrainCallModel {
+  return async (messages, options) => {
+    if (!options?.json) return "笔记。";
+    const last = messages.at(-1)!.content;
+    if (last.includes("你刚才核完报了")) {
+      const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+      return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
+    }
+    const all = messages.map((message) => message.content).join("\n");
+    return JSON.stringify({ checks: [], contradictions: rules.filter((rule) => rule.when.every((text) => all.includes(text))).map((rule) => rule.conflict) });
+  };
+}
+
 describe("受理前", () => {
   it("没有工作稿 → no_draft，不调模型", async () => {
     const fixCallModel = vi.fn(async () => "{}");
@@ -70,11 +87,94 @@ describe("fix：核账卡改这处", () => {
     expect(record.state).toBe("succeeded");
     expect(fixCallModel).toHaveBeenCalledTimes(1);
     expect(await bodyOf(1)).toBe("他说那家店八几年就没了。老周点头。\n天快黑了。");
-    expect(summary).toBe("第 1 章改好了 2 处（可撤销）。");
-    expect(body).toMatchObject({ kind: "draft.change", mode: "fix", ok: true, chapter: 1, failed: [] });
+    // 改完自己再核了一遍（只核改过的句子）：没有对不上的了。
+    expect(summary).toBe("第 1 章改好了 2 处（可撤销）。改完再核没有对不上的了。");
+    expect(body).toMatchObject({ kind: "draft.change", mode: "fix", ok: true, chapter: 1, failed: [], verify: { checks: 1, again: 0 } });
     expect(body?.changes).toEqual([{ from: "他说那家店八几年还开着。", to: "他说那家店八几年就没了。" }, { from: "天黑了。", to: "天快黑了。" }]);
     expect((await listSnapshots(book)).some((snapshot) => snapshot.id === body?.snapshotId)).toBe(true);
     expect((await readFixLog(book, 1)).map((entry) => entry.to)).toContain("天快黑了。");
+  });
+
+  it("改完再核还有对不上的（本章别处还照改前说）：再改一轮、再核，两轮一起换上、一个存档点；两轮的改句都记上", async () => {
+    await save(1, "钟停在三点。老周看了一眼，说是三点。\n天黑了。");
+    const prompts: string[] = [];
+    const fixCallModel = vi.fn(async (prompt: string) => {
+      prompts.push(prompt);
+      return prompts.length === 1
+        ? JSON.stringify({ edits: [{ id: 1, to: "钟停在四点。" }] })
+        : JSON.stringify({ edits: [{ id: 2, to: "老周看了一眼，说是四点。" }] });
+    });
+    const reader = recheckReader([{ when: ["钟停在四点。", "说是三点。"], conflict: { quote: "老周看了一眼，说是三点。", earlierQuote: "钟停在四点。", earlierChapter: 1, reason: "钟停的时刻对不上", confidence: "sure" } }]);
+    const { record, body, summary } = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "钟停在三点", revisionGoal: goal }] }, fakeDraftDeps({ fixCallModel, readerCallModel: reader }));
+    expect(record.state).toBe("succeeded");
+    expect(fixCallModel).toHaveBeenCalledTimes(2);
+    // 第二轮的改法：和本章那句对上；那句不是第一轮改出来的，不带第一轮的要求。
+    expect(prompts[1]).toContain("和本章前面「钟停在四点。」对上（钟停的时刻对不上）");
+    expect(prompts[1]).not.toContain("两样都要对得上");
+    expect(await bodyOf(1)).toBe("钟停在四点。老周看了一眼，说是四点。\n天黑了。");
+    expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核又跟着改了 1 句，没有对不上的了。");
+    expect(body?.verify).toEqual({ checks: 2, again: 1 });
+    expect(body?.changes).toEqual([{ from: "钟停在三点。", to: "钟停在四点。" }, { from: "老周看了一眼，说是三点。", to: "老周看了一眼，说是四点。" }]);
+    expect((await listSnapshots(book)).filter((snapshot) => snapshot.label === "第1章按核账改前快照")).toHaveLength(1);
+    expect((await readFixLog(book, 1)).map((entry) => entry.to)).toEqual(["钟停在四点。", "老周看了一眼，说是四点。"]);
+  });
+
+  it("第二轮改的是第一轮刚改出来的句子：改法带上第一轮那条要求；两轮改完还对不上的列给作者（卡上）", async () => {
+    await save(1, "钟停在三点。老周点头。\n天黑了。");
+    const prompts: string[] = [];
+    const fixCallModel = vi.fn(async (prompt: string) => {
+      prompts.push(prompt);
+      return JSON.stringify({ edits: [{ id: 1, to: prompts.length === 1 ? "钟停在四点。" : "钟停在四点一刻。" }] });
+    });
+    const conflict = (quote: string) => ({ quote, earlierQuote: "天黑了。", earlierChapter: 1, reason: "天黑了钟不会停在下午", confidence: "sure" });
+    const reader = recheckReader([
+      { when: ["钟停在四点。"], conflict: conflict("钟停在四点。") },
+      { when: ["钟停在四点一刻。"], conflict: conflict("钟停在四点一刻。") },
+    ]);
+    const { body, summary } = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "钟停在三点", revisionGoal: goal }] }, fakeDraftDeps({ fixCallModel, readerCallModel: reader }));
+    expect(prompts[1]).toContain(`这句刚按「${goal}」改过，两样都要对得上`);
+    expect(await bodyOf(1)).toBe("钟停在四点一刻。老周点头。\n天黑了。");
+    expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核又跟着改了 1 句，还有 1 处对不上，在卡上。");
+    expect(body?.verify).toMatchObject({ checks: 2, again: 1, left: { chapter: 1, sure: [{ quote: "钟停在四点一刻。" }], maybe: [] } });
+    // 同一句改了两次：给作者看的是最早那版 → 最后那版。
+    expect(body?.changes).toEqual([{ from: "钟停在三点。", to: "钟停在四点一刻。" }]);
+  });
+
+  it("两处是同一件事的两头：改了一头、另一头 AI 没动，再核不报了就算两处都改好了", async () => {
+    await save(1, "“明晚你值班？”孟叔问。今夜值班的是她。");
+    const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 1, to: "“今晚你值班？”孟叔问。" }] }));
+    const { body, summary } = await runDraftEdit(book, "fix", { chapter: 1, fixes: [
+      { targetText: "“明晚你值班？”孟叔问。", revisionGoal: "和本章后面「今夜值班的是她。」对上" },
+      { targetText: "今夜值班的是她。", revisionGoal: "和本章前面「“明晚你值班？”孟叔问。」对上" },
+    ] }, fakeDraftDeps({ fixCallModel }));
+    expect(fixCallModel).toHaveBeenCalledTimes(1);
+    expect(summary).toBe("第 1 章改好了 2 处（可撤销）。改完再核没有对不上的了。");
+    expect(body?.failed).toEqual([]);
+  });
+
+  it("再核报的跟这次改的不相干（作者没点、也不是改出来的）：不替作者改，列在卡上", async () => {
+    await save(1, "钟停在三点。老周来过。门开着。");
+    const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 1, to: "钟停在四点。" }] }));
+    const reader = recheckReader([{ when: ["钟停在四点。"], conflict: { quote: "门开着。", earlierQuote: "老周来过。", earlierChapter: 1, reason: "老周走时锁了门", confidence: "sure" } }]);
+    const { body, summary } = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "钟停在三点", revisionGoal: goal }] }, fakeDraftDeps({ fixCallModel, readerCallModel: reader }));
+    expect(fixCallModel).toHaveBeenCalledTimes(1);
+    expect(await bodyOf(1)).toBe("钟停在四点。老周来过。门开着。");
+    expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核还有 1 处对不上，在卡上。");
+    expect(body?.verify).toMatchObject({ checks: 1, again: 0, left: { sure: [{ quote: "门开着。" }] } });
+  });
+
+  it("改完再核没跑成：照样换上，结论说一句、定稿时再核", async () => {
+    await save(1, "他说那家店八几年还开着。老周点头。");
+    const fixCallModel = async () => JSON.stringify({ edits: [{ id: 1, to: "他说那家店八几年就没了。" }] });
+    const reader: BrainCallModel = async (messages, options) => {
+      if (options?.json) throw new Error("服务商 502");
+      return quietReader(messages, options);
+    };
+    const { record, body, summary } = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "八几年还开着", revisionGoal: goal }] }, fakeDraftDeps({ fixCallModel, readerCallModel: reader }));
+    expect(record.state).toBe("succeeded");
+    expect(await bodyOf(1)).toBe("他说那家店八几年就没了。老周点头。");
+    expect(body?.verify?.checks).toBe(0);
+    expect(summary).toMatch(/^第 1 章改好了这一处（可撤销）。改完再核没跑成（.+），定稿时会再核。$/u);
   });
 
   it("原句找不到了：不问模型、稿子不动，记成没做成并说为什么", async () => {

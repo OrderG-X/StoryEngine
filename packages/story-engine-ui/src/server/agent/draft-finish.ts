@@ -6,7 +6,8 @@
  *   作者要写完就定稿的接着出定稿清单（交一次定稿），否则给下一步。
  * - 写好了没换上（写的途中稿子或前文改过）：照结论说，AI 这版在稿纸上等作者选，不再写一遍。
  * - 没写成 / 没受理：照原因说，按原因给下一步（再写一次、改成从头写、先定稿前一章、重写 / 接着写这一章）。
- * - 改稿（revise / fix / deai，片 2C）：一句结论（改了几处、哪几处没改成为什么）；按核账改的给「再核一遍」，没改成的给「让 AI 改」。
+ * - 改稿（revise / fix / deai，片 2C）：一句结论（改了几处、哪几处没改成为什么）；没改成的给「让 AI 改」。
+ *   按核账改的改完在操作里又核过：还剩对不上的出核账卡，没有了给「定稿」；再核没跑成给「再核一遍」。
  * 只按操作记录里的结构化结果出，不看模型说了什么。
  */
 import { ownChapterIssues } from "../editorial/continuity/check-service.js";
@@ -258,6 +259,20 @@ function finishDraftEdit(record: OperationRecord, args: DraftFinishArgs): void {
     if (params?.mode !== "fix" || body?.ok !== true) return;
     const failedTargets = new Set((body.failed ?? []).map((item) => item.target));
     const failed = params.fixes.filter((fix) => failedTargets.has(fix.targetText));
+    // 改完在操作里又核过：还有对不上的出核账卡（卡上能再改、能标「不是问题」），核完没有了给「定稿」。
+    const verify = body.verify;
+    if (verify && !verify.failure) {
+      if (verify.left && verify.left.sure.length + verify.left.maybe.length > 0) {
+        args.sendEvent("text-delta", { text: "\n" });
+        args.sendEvent("card", { type: "continuity", check: { ...verify.left, earlierOpen: [] } });
+        return;
+      }
+      sendNextSteps(args.sendEvent, "改好了，接下来？", [
+        ...(failed.length > 0 ? [askAiToFix(params.chapter, failed)] : []),
+        commitChoice(params.chapter, failed.length === 0 ? { recommended: true } : {}),
+      ]);
+      return;
+    }
     sendNextSteps(args.sendEvent, "改好了，接下来？", [
       ...(failed.length > 0 ? [askAiToFix(params.chapter, failed)] : []),
       { label: "再核一遍", intent: `重新核第 ${params.chapter} 章的账`, ...(failed.length === 0 ? { recommended: true } : {}), action: checkChapterAction(params.chapter) },

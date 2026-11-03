@@ -68,7 +68,7 @@ import {
   type DraftVersion,
 } from "../../draft-change/steps.js";
 import type { RevisionModelCaller } from "../../draft-change/revise-text.js";
-import { DRAFT_EDIT_TASKS, draftChangeStepBudget, draftChangeTasks, draftEditSends, sumBudget } from "../budgets.js";
+import { draftChangeStepBudget, draftChangeTasks, draftEditSends, draftEditStepBudget, draftEditTasks, sumBudget } from "../budgets.js";
 import type { OperationResult, Recipe, RecipeContext } from "../executor.js";
 import { modelFailureText } from "../../../lib/ai-errors.js";
 
@@ -148,7 +148,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
       if (isDraftEditMode(input.mode)) {
         const edit = readDraftEditParams(input.mode, input.params);
         if (!edit) return { ok: false, code: "bad_params", message: "要改哪一章、改哪几处没说清。" };
-        for (const task of DRAFT_EDIT_TASKS) {
+        for (const task of draftEditTasks(edit.mode)) {
           const problem = deps.modelProblem(input.models, task);
           if (problem) return { ok: false, code: "model_missing", message: problem };
         }
@@ -159,7 +159,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
           params: edit,
           mode: edit.mode,
           writeScope: { chapters: [edit.chapter] },
-          budget: draftEditSends(edit) + await frozenCompatAllowance(input.models, DRAFT_EDIT_TASKS),
+          budget: draftEditSends(edit) + await frozenCompatAllowance(input.models, draftEditTasks(edit.mode)),
         };
       }
       const read = readStoredDraftChange(input.mode, input.params);
@@ -423,12 +423,12 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
 
     stepBudget(stepId, params) {
       if (stepId === undefined) return 0;
-      if (isStoredEdit(params)) return editStepCallsModel(stepId) ? draftEditSends(params) : 0;
+      if (isStoredEdit(params)) return editStepCallsModel(stepId) ? draftEditStepBudget(params, stepId) : 0;
       return draftChangeStepBudget(params.mode, versionCount(params.mode, params), params.pick)[stepId] ?? 0;
     },
 
     modelTasks(params) {
-      return isStoredEdit(params) ? DRAFT_EDIT_TASKS : draftChangeTasks(params.mode);
+      return isStoredEdit(params) ? draftEditTasks(params.mode) : draftChangeTasks(params.mode);
     },
   };
 }

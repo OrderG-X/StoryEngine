@@ -70,7 +70,7 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(out).toMatchObject({ text: "甲。乙。\n", applied: [], failed: [{ fix: 0, why: "AI 没给出这句的改法" }] });
   });
 
-  it("本章别处说同一件事的句子跟着改（P13 真机：「四个字」只改了点名那句）；锁住的、超三句的、要删句的不收", async () => {
+  it("本章别处说同一件事的句子跟着改（P13 真机：「四个字」只改了点名那句）；锁住的、超出每处四句的、要删句的不收", async () => {
     const text = "他说了四个字。不到时候。她问哪四个字。他说就这四个字。前面也说四个字。\n";
     const out = await fixByUnits({
       chapter: 9, text, fixes: [{ quote: "他说了四个字", goal }],
@@ -88,10 +88,25 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(locked.alsoChanged).toBe(0);
 
     const capped = await fixByUnits({
-      chapter: 9, text: "甲。乙。丙。丁。戊。\n", fixes: [{ quote: "甲", goal }],
-      callModel: async () => reply([{ id: 1, to: "甲甲。" }, { id: 2, to: "乙乙。" }, { id: 3, to: "丙丙。" }, { id: 4, to: "丁丁。" }, { id: 5, to: "戊戊。" }]),
+      chapter: 9, text: "甲。乙。丙。丁。戊。己。\n", fixes: [{ quote: "甲", goal }],
+      callModel: async () => reply([{ id: 1, to: "甲甲。" }, { id: 2, to: "乙乙。" }, { id: 3, to: "丙丙。" }, { id: 4, to: "丁丁。" }, { id: 5, to: "戊戊。" }, { id: 6, to: "己己。" }]),
     });
-    expect(capped.text).toBe("甲甲。乙乙。丙丙。丁丁。戊。\n");
+    expect(capped.text).toBe("甲甲。乙乙。丙丙。丁丁。戊戊。己。\n");
+  });
+
+  it("连带改的句数按处数算：一次改两处，合起来能连带八句（考台 2026-11-03：一批只许 3 句，剩下的全是「本章别处还照改前说」）", async () => {
+    const text = `${[..."子丑寅卯辰巳午未申酉戌亥"].map((name) => `${name}时。`).join("")}\n`;
+    let prompt = "";
+    const out = await fixByUnits({
+      chapter: 9, text, fixes: [{ quote: "子时", goal }, { quote: "丑时", goal }],
+      callModel: async (sent) => {
+        prompt = sent;
+        return reply(Array.from({ length: 11 }, (_, index) => ({ id: index + 1, to: `改${index + 1}。` })));
+      },
+    });
+    expect(prompt).toContain("合起来最多 8 句");
+    expect(out).toMatchObject({ applied: [0, 1], alsoChanged: 8 });
+    expect(out.text).toContain("改10。戌时。");
   });
 
   it("几处里一处换上了、一处没给：改了的照换，没给的照实说", async () => {
