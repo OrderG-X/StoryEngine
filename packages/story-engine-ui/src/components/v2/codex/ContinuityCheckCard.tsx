@@ -7,9 +7,11 @@
  * 「改这处」= 交一次按核账改（draft.change fix，片 2C：服务端按编号整句改、改前存档可撤销，对话里出一轮）；
  * 错在前文那章的「改第 N 章」照旧给 AI 发一句意图。「不是问题」= 记下来（onDismiss 存盘），以后核账不再报；
  * 存失败如实提示「没记住」。可撤回。主按钮「改掉这 N 处」在卡上：N 随「不是问题」实时变，只交还列着的那几处。
- * 两章打架、和设定打架的（P12「前文一次定死」）：不再给「改这处」——改哪边是作者的决定，改了不记下来下回还会翻烧饼。
- * 这种条目给「以第 N 章为准」「以本章为准」（对设定的「以设定为准」，对定论的「以定论为准」）：出一张定论卡，
- * 查全书哪几句跟着改，作者确认后一次改齐、记进设定本「定论」。主按钮「改掉本章 N 处」只管前文就在本章的。
+ * 两章打架、和设定打架的（P12「前文一次定死」）：单条不给「改这处」，给「以第 N 章为准」「以本章为准」（对设定的「以设定为准」，
+ * 对定论的「以定论为准」）：出一张定论卡，查全书哪几句跟着改，作者确认后一次改齐、记进设定本「定论」。
+ * 主按钮「改掉这 N 处」管错在本章的全部（本章前后、跨章、对设定都算）：点它 = 作者定了这几处都照前文 / 设定改本章，
+ * 和出稿流程按核账改同一条路，改完在操作里再核（2026-11-04：作者手写章 38 处里 33 处是跨章 / 对设定的，原来要一条条出定论卡）。
+ * 前文自己打架的（第 3 章说 A、第 5 章说 B），照一边改完再核会报另一边，留在卡上，作者再点「以第 N 章为准」定死。
  * 外壳沿用 StepCard，条目样式沿用审稿卡的 .drc-*。
  */
 import { useEffect, useRef, useState } from "react";
@@ -219,8 +221,8 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
     else onRevise?.(buildContinuityFixIntent(check.chapter, item));
   };
   const canRevise = (item: Item): boolean => Boolean(onRevise) || (Boolean(onFixAction) && canFixDirectly(check.chapter, item));
-  // 主按钮只管前文就在本章的；两章打架、对设定的要作者定哪边为准，各自点。
-  const sureHere = sure.filter((item) => canFixDirectly(check.chapter, item) && !settleChoices(check.chapter, item) && !gone(item));
+  // 主按钮管错在本章的（跨章、对设定的照前文 / 设定改本章）；错在前文那章的不算，那章各自点。
+  const sureHere = sure.filter((item) => canFixDirectly(check.chapter, item) && !gone(item));
   // 一次最多交 EDIT_MAX_FIXES 处（服务端超了整个不收）：多的先改前面这些，改掉的划掉后按钮跟着换成剩下的。
   const fixBatch = sureHere.slice(0, EDIT_MAX_FIXES);
   const reviseAll = (): void => {
