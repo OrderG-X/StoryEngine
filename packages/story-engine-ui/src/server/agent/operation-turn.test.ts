@@ -316,6 +316,34 @@ describe("写稿按钮（draft.change）", () => {
     expect((await readDraftState(book, 1)).version).not.toBeNull();
   });
 
+  it("核账卡「改掉」：改完再核没有对不上的了，下一步推荐「定稿」；还有对不上的出核账卡、不给定稿", async () => {
+    expect(await runCommand(book, draftSave, { chapter: 1, body: "钟停在三点。老周点头。", baseVersion: null, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
+    const fixAction = (): OperationAction => ({ kind: "new", type: "draft.change", mode: "fix", params: { mode: "fix", chapter: 1, fixes: [{ targetText: "钟停在三点", revisionGoal: "和第 3 章「钟停在四点」对上" }] }, requestKey: `fix-${Math.random()}`, issuedAt: new Date().toISOString() });
+    registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ fixCallModel: async () => JSON.stringify({ edits: [{ id: 1, to: "钟停在四点。" }] }) })));
+    const clean = collector();
+    await runOperationAction({ action: fixAction(), projectDir: book, sendEvent: clean.sendEvent, scrubber: scrubber(), signal: new AbortController().signal });
+    expect(clean.text()).toContain("改完再核没有对不上的了。");
+    expect(clean.choices()).toMatchObject([{ label: "定稿", action: { type: COMMIT_PREPARE_KIND } }]);
+    expect(clean.events.some((item) => item.event === "card")).toBe(false);
+
+    // 核账员每遍都说「老周摇头」和改后那句对不上：改两轮还剩一处，卡上列出来。（换一份正文，免得用上一遍的核账记忆。）
+    const stubborn: BrainCallModel = async (messages, options) => {
+      if (!options?.json) return "笔记。";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) return JSON.stringify({ verdicts: [...last.matchAll(/【(K\d+)】/gu)].map((match) => ({ id: match[1], verdict: "sure" })) });
+      const all = messages.map((message) => message.content).join("\n");
+      return JSON.stringify({ checks: [], contradictions: all.includes("老周摇头。") ? [{ quote: "老周摇头。", earlierQuote: "钟停在四点。", earlierChapter: 1, reason: "对不上", confidence: "sure" }] : [] });
+    };
+    expect(await runCommand(book, draftSave, { chapter: 1, body: "钟停在三点。老周摇头。", baseVersion: (await readDraftState(book, 1)).version, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
+    __resetRecipesForTests();
+    registerRecipe(createDraftChangeRecipe(fakeDraftDeps({ readerCallModel: stubborn, fixCallModel: async () => JSON.stringify({ edits: [{ id: 1, to: "钟停在四点。" }] }) })));
+    const left = collector();
+    await runOperationAction({ action: fixAction(), projectDir: book, sendEvent: left.sendEvent, scrubber: scrubber(), signal: new AbortController().signal });
+    expect(left.text()).toContain("还有 1 处对不上，在卡上。");
+    expect(left.events.find((item) => item.event === "card")?.data).toMatchObject({ type: "continuity", check: { chapter: 1, sure: [{ quote: "老周摇头。" }], earlierOpen: [] } });
+    expect(left.choices()).toEqual([]);
+  });
+
   it("选中改写：改法摆出来停着等作者；「不要了」说这版不要了、稿子没动", async () => {
     const before = (await readDraftState(book, 1)).version;
     expect(await runCommand(book, draftSave, { chapter: 1, body: "他推开门。", baseVersion: before, title: "" }, { caller: "author" })).toMatchObject({ ok: true });

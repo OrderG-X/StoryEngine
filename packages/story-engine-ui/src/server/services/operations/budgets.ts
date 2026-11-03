@@ -17,7 +17,7 @@ import { CONTINUE_CALL_MAX_SENDS } from "../draft-pipeline/production-call-model
 import type { DraftChangeMode, DraftEditParams } from "../draft-change/params.js";
 import { REVISE_MAX_CALLS } from "../draft-change/revise-text.js";
 import type { InspectMode } from "../inspect-service.js";
-import { UNIT_FIX_MAX_CALLS } from "../unit-fix.js";
+import { FIX_ROUNDS, UNIT_FIX_MAX_CALLS } from "../unit-fix.js";
 
 /** 核账员当场补读那一步：章上限 × 每次 + 卷节点上限 × 每次。 */
 export const READER_NOTES_SENDS = (READER_MAX_CATCH_UP + READER_MAX_VOLUME_BUILDS) * READER_CALL_MAX_SENDS;
@@ -129,7 +129,7 @@ export function draftChangeTasks(mode: DraftChangeMode): readonly ModelTaskProfi
 export function draftEditSends(params: DraftEditParams): number {
   switch (params.mode) {
     case "fix":
-      return UNIT_FIX_MAX_CALLS * MODEL_CALL_MAX_SENDS;
+      return sumBudget(FIX_STEP_BUDGET);
     case "deai":
       return SINGLE_CALL_SENDS;
     case "revise":
@@ -137,5 +137,24 @@ export function draftEditSends(params: DraftEditParams): number {
   }
 }
 
-/** draft.change 改稿用到的模型任务：改句、去机器腔都走 repair 槽。 */
-export const DRAFT_EDIT_TASKS: readonly ModelTaskProfileKey[] = ["repair"];
+/**
+ * 按核账改每一步最多发几次：改两轮（FIX_ROUNDS）各一批、核账员补笔记一次、改完再核两遍。
+ * 再核按「只核改过的 / 整章」取大的算（READER_CHECK_SENDS）。
+ */
+const FIX_STEP_BUDGET: Readonly<Record<string, number>> = {
+  fix: UNIT_FIX_MAX_CALLS * MODEL_CALL_MAX_SENDS,
+  [`fix:${FIX_ROUNDS}`]: UNIT_FIX_MAX_CALLS * MODEL_CALL_MAX_SENDS,
+  notes: READER_NOTES_SENDS,
+  "check:1": READER_CHECK_SENDS,
+  [`check:${FIX_ROUNDS}`]: READER_CHECK_SENDS,
+};
+
+/** 改稿某一步最多发几次（接着做时额度按它加）：按核账改按步算；改一段、去机器腔只有改的那一步，按整次算。 */
+export function draftEditStepBudget(params: DraftEditParams, stepId: string): number {
+  return params.mode === "fix" ? FIX_STEP_BUDGET[stepId] ?? 0 : draftEditSends(params);
+}
+
+/** draft.change 改稿用到的模型任务：改句、去机器腔都走 repair 槽；按核账改完还要核账员再核（qualityCheck）。 */
+export function draftEditTasks(mode: DraftEditParams["mode"]): readonly ModelTaskProfileKey[] {
+  return mode === "fix" ? ["repair", "qualityCheck"] : ["repair"];
+}

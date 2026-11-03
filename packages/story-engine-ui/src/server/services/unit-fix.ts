@@ -35,12 +35,16 @@ export interface UnitFixOutcome {
 /** 一处原句最多落到几句上；再多就是引得太长，交给作者。 */
 const MAX_UNITS_PER_FIX = 4;
 /**
- * 本章别处说同一件事、不跟着改就前后对不上的句子，最多连带改几句（真机 P13：「四个字」只改了点名那句，
- * 本章另两句还说「四个字」，再核又报两处）。
+ * 本章别处说同一件事、不跟着改就前后对不上的句子，每处最多连带改几句（真机 P13：「四个字」只改了点名那句，
+ * 本章另两句还说「四个字」，再核又报两处）。一批按处数算总数：作者自己写的章一次七八处，原来一批合起来只许 3 句，
+ * 改完再核剩下的几乎全是「本章别处还照改前说」（考台 2026-11-03）。
  */
-const MAX_ALSO_EDITS = 3;
+export const ALSO_EDITS_PER_FIX = 4;
+const alsoEditsFor = (targets: number): number => ALSO_EDITS_PER_FIX * Math.max(1, targets);
 /** 一批改句最多调几次：一次 + 格式不对再要一次（写作版本 P2a 4.5 额度从这里算）。 */
 export const UNIT_FIX_MAX_CALLS = 2;
+/** 核账卡「改掉」最多改几轮：第一轮改作者点的那几处，改完再核还有对不上的再改一轮（考台 2026-11-03：一轮改完还剩一半）。 */
+export const FIX_ROUNDS = 2;
 
 /** 原句落在哪几句（编号）；找不到 / 不唯一 / 太长给原因。 */
 export function unitsOfQuote(text: string, units: readonly TextUnit[], quote: string): readonly number[] | string {
@@ -59,7 +63,7 @@ export function unitFixTask(chapter: number, numbered: string, targets: readonly
     ...targets.map((target, index) => `${index + 1}. ${target.ids.map((id) => `[${id}]`).join("")}：${target.goal}`),
     "要求：",
     "- 只改点名的句子；能小改就小改，口吻、写法、标点习惯照原来的；",
-    `- 本章别的句子也说了同一件事、点名那句改了它不跟着改就前后对不上的（比如数目、时间、谁说的），也照同样的改法一并给出，最多 ${MAX_ALSO_EDITS} 句；和这件事无关的句子一个字不动；`,
+    `- 本章别的句子也说了同一件事、点名那句改了它不跟着改就前后对不上的（比如数目、时间、地点、人名、谁说的），也照同样的改法一并给出（这几处合起来最多 ${alsoEditsFor(targets.length)} 句）；和这件事无关的句子一个字不动；`,
     "- 一句改完还是一句：别把前后句抄进来，也别拆成几句；点名了两三句的，只改要改的那句就行；",
     "- 实在要删掉这句才通顺，to 给空串。",
     '只输出一个 JSON：{"edits":[{"id":12,"to":"改后的这一句"}]}',
@@ -81,7 +85,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 }
 
 /**
- * 模型回的改法：点名的编号照收；别的编号是「本章别处说同一件事」的连带改，最多 MAX_ALSO_EDITS 句、锁住的（接着写时作者写的那段）不收。
+ * 模型回的改法：点名的编号照收；别的编号是「本章别处说同一件事」的连带改，最多 maxAlso 句、锁住的（接着写时作者写的那段）不收。
  * 新句过一遍 prepareUnitReplacement，用不了、和原句一样的不要。
  */
 export function parseUnitFixEdits(
@@ -89,6 +93,7 @@ export function parseUnitFixEdits(
   units: readonly TextUnit[],
   allowed: ReadonlySet<number>,
   locked: ReadonlySet<number> = new Set(),
+  maxAlso: number = alsoEditsFor(1),
 ): UnitEdit[] | undefined {
   const parsed = parseJsonObject(reply);
   if (!parsed || !Array.isArray(parsed.edits)) return undefined;
@@ -108,7 +113,7 @@ export function parseUnitFixEdits(
       const unit = units.find((item) => item.id === id);
       if (!unit) continue;
       const named = allowed.has(id);
-      if (!named && (locked.has(id) || also >= MAX_ALSO_EDITS)) continue;
+      if (!named && (locked.has(id) || also >= maxAlso)) continue;
       const to = prepareUnitReplacement(units, id, chinesePunctuationLike(context, piece.to));
       if (to === undefined || to === unit.text || to.length > unit.text.length * 3 + 60) continue;
       // 连带改的不许删句：删一句要作者看着办。
@@ -166,7 +171,7 @@ export async function fixByUnits(input: {
   let edits: UnitEdit[] | undefined;
   try {
     for (let call = 0; call < UNIT_FIX_MAX_CALLS && !edits; call += 1) {
-      edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
+      edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked, alsoEditsFor(targets.length));
     }
   } catch (error) {
     rethrowIfStopped(error);
