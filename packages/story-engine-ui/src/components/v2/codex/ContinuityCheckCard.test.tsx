@@ -105,7 +105,7 @@ describe("核账卡：上一遍按核账改过、这遍又说不对的", () => {
 describe("核账卡主按钮「改掉这 N 处」（N 随「不是问题」实时变，只交还列着的那几处）", () => {
   afterEach(() => cleanup());
 
-  // 主按钮只管前文就在本章的（P12：两章打架的要作者定哪边为准，不进主按钮）。
+  // 这几条前文都在本章；跨章、对设定的也进主按钮，见下面「两章打架的」。
   const items = [
     { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在红木抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" },
     { quote: "外面下着大雨。", earlierQuote: "天上一个星子都没有，干得发裂。", earlierChapter: 9, reason: "天气对不上" },
@@ -253,7 +253,7 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     expect(onRevise).not.toHaveBeenCalled();
   });
 
-  it("两章打架的（P12）：不给「改这处」，给「以第 3 章为准 / 以本章为准」出定论卡；主按钮不算它", () => {
+  it("两章打架的（P12）：单条不给「改这处」，给「以第 3 章为准 / 以本章为准」出定论卡；主按钮照第 3 章改它", () => {
     const onFixAction = vi.fn();
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [a, cross], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
     expect(screen.getAllByRole("button", { name: "改这处" })).toHaveLength(1);
@@ -272,8 +272,22 @@ describe("核账卡「改这处」按钮直接改（交按核账改的操作，�
     expect(lastParams(onFixAction)).not.toHaveProperty("item");
     fireEvent.click(screen.getByRole("button", { name: "以本章为准" }));
     expect(lastParams(onFixAction)).toMatchObject({ truth: { where: "chapter", chapter: 9, quote: cross.quote }, item: continuityItemKey(cross) });
+    fireEvent.click(screen.getByRole("button", { name: "改掉这 2 处" }));
+    expect((onFixAction.mock.lastCall![0] as { params: { fixes: { targetText: string; revisionGoal: string }[] } }).params.fixes).toEqual([
+      { targetText: a.quote, revisionGoal: `和本章前面「${a.earlierQuote}」对上（${a.reason}）` },
+      { targetText: cross.quote, revisionGoal: `和第 3 章「${cross.earlierQuote}」对上（${cross.reason}）` },
+    ]);
+  });
+
+  it("对设定的、错在本章的：主按钮照设定改；错在前文那章的不进主按钮，按钮说「改掉本章 N 处」", () => {
+    const onFixAction = vi.fn();
+    const here = { quote: "许微的眼睛是灰的。", earlierQuote: "眼睛：褐色", earlierChapter: 0, reason: "眼睛颜色对不上", againstSetting: { label: "人物卡", kind: "character" as const, card: "许微" } };
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [here, earlier], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
+    expect(screen.getAllByRole("button", { name: "以设定为准" })).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "改掉本章 1 处" }));
-    expect((onFixAction.mock.lastCall![0] as { params: { fixes: { targetText: string }[] } }).params.fixes.map((fix) => fix.targetText)).toEqual([a.quote]);
+    expect((onFixAction.mock.lastCall![0] as { params: { fixes: unknown[] } }).params.fixes).toEqual([
+      { targetText: here.quote, revisionGoal: `和设定本人物卡「${here.earlierQuote}」对上（${here.reason}）` },
+    ]);
   });
 
   it("对设定的（错在前文那章）：「以设定为准 / 以第 3 章为准」，设定那边带卡名；全是这种就不出主按钮", () => {
