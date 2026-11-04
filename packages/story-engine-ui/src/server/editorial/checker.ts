@@ -12,6 +12,7 @@
  * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
+import { splitUnits } from "@actalk/story-core";
 import { describeTimelineForChapter } from "../book/story-timeline.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readStoryViews } from "../book/story-views.js";
@@ -104,13 +105,60 @@ const CHECKER_PASSES: readonly { readonly focus: CheckerFocus; readonly label: s
 export const REASON_WORDING = "reason 用中文一句话说哪里对不上，是给作者看的：日子说成「第 4 天」「当天」「第二天」，不写笔记里自己用的记号（D+3 之类）";
 
 /** 核账提示：先逐条列出新稿里碰到硬信息的说法并对照前文，再把对不上的列为矛盾，每条带把握（sure / maybe）。 */
-export function checkTask(chapter: number, focus?: CheckerFocus): string {
+export interface DraftSegment {
+  /** 第几块（1 起）。 */
+  readonly index: number;
+  readonly count: number;
+  /** 这一块的原文（新稿里原样的一段）。 */
+  readonly text: string;
+}
+
+/**
+ * 新稿按段落切成 count 块、每块字数差不多（只在段与段之间切；一段太长才在句子之间切）。
+ * 首遍一遍只列 10～16 处说法（作者手写章实测 2026-11-05），整章近百句、细处核不到；分块后每次逐句核一块。
+ */
+export function draftSegments(body: string, count: number): readonly DraftSegment[] {
+  const units = splitUnits(body);
+  if (count <= 1 || units.length < count * 2) return [{ index: 1, count: 1, text: body }];
+  const total = units.reduce((sum, unit) => sum + unit.text.length, 0);
+  const target = total / count;
+  const slack = target * 0.25;
+  const cuts: number[] = [];
+  let size = 0;
+  /** 上一个段落边界：切在第 index 句之前，到那儿一共 size 字。 */
+  let boundary: { readonly index: number; readonly size: number } | undefined;
+  units.forEach((unit, index) => {
+    size += unit.text.length;
+    const next = units[index + 1];
+    if (!next || cuts.length >= count - 1) return;
+    const goal = target * (cuts.length + 1);
+    const atParagraph = next.line !== unit.line;
+    if (size >= goal) {
+      // 到数了：正好段落结尾就切这儿；上一个段落边界离得不远就切回那儿；都不行、又超出不少才在句子之间切。
+      if (atParagraph) cuts.push(index + 1);
+      else if (boundary && boundary.index > (cuts.at(-1) ?? 0) && goal - boundary.size <= slack) cuts.push(boundary.index);
+      else if (size >= goal + slack) cuts.push(index + 1);
+    }
+    if (atParagraph) boundary = { index: index + 1, size };
+  });
+  const bounds = [0, ...cuts, units.length];
+  return bounds.slice(0, -1).map((from, index) => ({
+    index: index + 1,
+    count: bounds.length - 1,
+    text: body.slice(units[from]!.start, units[bounds[index + 1]! - 1]!.end),
+  }));
+}
+
+export function checkTask(chapter: number, focus?: CheckerFocus, segment?: DraftSegment): string {
   return [
     `这是作者刚交的第 ${chapter} 章新稿（上面还没给过你）。对照你读过的前文原文和笔记，逐段核对：`,
     "1. 先在 checks 里按顺序列出新稿里每一处碰到硬信息的说法：物件在哪、谁拿着、写着什么、有几个；人物年龄、身份、住处、亲属、称呼；几天前、几点、星期、天色；谁知道什么；方位、距离、路上用时；数目。每条一句：说法要点 → 前文怎么写的 → 对得上 / 对不上。新稿自己前后也要核（同一场面的钟点、物件位置、人物位置）。",
     "2. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。本来会变的状态（门开关、灯、值班的人）不同时候不一样也不算。",
     `每条 contradictions：quote 逐字抄有问题、该改的那一句（「改这处」只改它）——两句冲突时，和更早几章一致的那句是对的，不能当 quote；两句都在新稿里，抄和前文各章不一致的那句，前文没写过就抄后出现的那句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；${REASON_WORDING}；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。`,
     ...(focus ? [`【这一遍的重点】${CHECKER_FOCUS[focus]}`] : []),
+    ...(segment && segment.count > 1
+      ? [`【这一遍逐句核的一段】新稿分成 ${segment.count} 段，这一遍只逐句核第 ${segment.index} 段（下面原样贴出），别的段当上下文看、不用列：\n${segment.text}`]
+      : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");
 }
@@ -145,7 +193,7 @@ export interface ReaderCheckVariant {
   readonly sureGate?: boolean;
   /** F 时间线表只进自复核：三遍核账不附时间线表（B 对三遍的效果关掉），只在 A 自复核那一轮附表并写明「日子以表为准，不要自己推算」。要 selfReview 开着才有那一轮。 */
   readonly timelineInReview?: boolean;
-  /** G 每遍核几次（缺省 1）：同一遍同样的输入再独立核一次、合并去重——同一章两次核出的问题差得多，并起来漏得少。 */
+  /** G 每遍核几次（缺省 1）：几次各逐句核新稿的一块（按段落切成这么多块，draftSegments），合并去重。 */
   readonly passRepeats?: number;
   /** 改后只核改过的句子时并行几次（缺省同 passRepeats）。 */
   readonly recheckRepeats?: number;
@@ -164,6 +212,10 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  * （改后重核考卷 16 章 57 处标注：首遍抓到 34，并上整章再核 44，并上只核改过的 36）。首遍每遍核四次补回来：同一批章首遍
  * 自己就抓到 46（「确定」33→40，查准下限 37%→40%）——而且是在按核账改之前抓到、跟着一起改掉，不是改完才摆在卡上。四次并行，多等的是排队，不是再核一整遍。
  * 改后只核改过的那一遍照旧两次（recheckRepeats）。
+ * 四次各核一块（2026-11-05）：原来四次都核整章，一次只列 10～16 处说法，近百句的章细处总核不到。作者手写第 9 章 8 份
+ * （Claude 子代理两人各找一遍 + 盲判定出 49 处真错）：「确定、错在本章」查全 55%（只改了相对日子那条）→ 两次 67%、71%，
+ * 去掉「小处也别跳过」那句后 76%，「确定」里真错占比不掉（73%）。AI 写的章（考卷 16 章）没多抓到真错，「不是」的多了约
+ * 每章一条（27→46 条），数字见 docs/rebuild/reports/作者写的章核账查全-2026-11-05.md。
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
  */
 export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 };
@@ -806,8 +858,12 @@ export async function checkChapterByReader(input: ReaderCheckInput & {
         },
       }]
       : []),
-    ...CHECKER_PASSES.flatMap(({ focus, label }) => Array.from({ length: Math.max(1, variant.passRepeats ?? 1) }, (_, repeat) =>
-      contradictionPass(input, setup, repeat === 0 ? label : `${label}第 ${repeat + 1} 次`, checkTask(input.chapter, focus)))),
+    ...CHECKER_PASSES.flatMap(({ focus, label }) => {
+      const repeats = Math.max(1, variant.passRepeats ?? 1);
+      const segments = draftSegments(input.draftBody, repeats);
+      return Array.from({ length: repeats }, (_, repeat) =>
+        contradictionPass(input, setup, repeat === 0 ? label : `${label}第 ${repeat + 1} 次`, checkTask(input.chapter, focus, segments.length > 1 ? segments[repeat % segments.length] : undefined)));
+    }),
   ];
   const ran = await runReaderPasses(passPlans);
   const failures: string[] = [...setup.failures, ...ran.failures];

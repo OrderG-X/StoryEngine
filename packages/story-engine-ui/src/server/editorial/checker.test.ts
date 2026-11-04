@@ -18,6 +18,7 @@ import {
   CHECKER_ROLE_STRUCTURED,
   checkerRoleFor,
   DEFAULT_READER_VARIANT,
+  draftSegments,
   parseKeywords,
   parsePlanProblems,
   planCheckTask,
@@ -94,6 +95,48 @@ describe("核账员：每遍核两次（G）", () => {
     for (const key of Object.values(FOCUS_KEYS)) expect(calls.filter((call) => call.includes(key))).toHaveLength(2);
     expect(new Set(calls.filter((call) => call.includes(FOCUS_KEYS.objects))).size).toBe(1);
     expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH_SENTENCE, "sure"], [AUNT_SENTENCE, "maybe"]]);
+  });
+});
+
+describe("核账员：每遍的几次各核一块（2026-11-05 作者手写章查全）", () => {
+  const PARAS = ["林舟一早开门。他从工作台上拿起那块怀表。", "表盖还开着。他看了一眼钟。", "周婶在门口喊他。他应了一声。", "巷子里有人推车过去。车上装着煤。"];
+  const LONG = PARAS.join("\n\n");
+
+  it("draftSegments：按段落切成几块、字数差不多，拼起来一字不少；太短不切", () => {
+    const segments = draftSegments(LONG, 2);
+    expect(segments.map((segment) => segment.text)).toEqual([`${PARAS[0]}\n\n${PARAS[1]}`, `${PARAS[2]}\n\n${PARAS[3]}`]);
+    expect(segments.map((segment) => [segment.index, segment.count])).toEqual([[1, 2], [2, 2]]);
+    expect(draftSegments(LONG, 4).map((segment) => segment.text)).toEqual(PARAS);
+    expect(draftSegments(BODY, 2)).toEqual([{ index: 1, count: 1, text: BODY }]);
+    expect(draftSegments(LONG, 1)).toEqual([{ index: 1, count: 1, text: LONG }]);
+  });
+
+  it("一段太长也切：没有段落可切时在句子之间切", () => {
+    const oneParagraph = PARAS.join("");
+    const segments = draftSegments(oneParagraph, 2);
+    expect(segments).toHaveLength(2);
+    expect(segments.map((segment) => segment.text).join("")).toBe(oneParagraph);
+  });
+
+  it("passRepeats=2：每遍两次各逐句核一块，提示里贴出那一块；整章照样在新稿里", async () => {
+    const dir = await makeBook();
+    const calls: string[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      calls.push(messages.at(-1)!.content);
+      return pass();
+    };
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: LONG, callModel, variant: { passRepeats: 2 } });
+    const objects = calls.filter((call) => call.includes(FOCUS_KEYS.objects));
+    expect(objects).toHaveLength(2);
+    for (const call of objects) expect(call).toContain(`【新稿：第 3 章】\n${LONG}`);
+    expect(objects.map((call) => (call.includes("只逐句核第 1 段") ? 1 : call.includes("只逐句核第 2 段") ? 2 : 0)).sort()).toEqual([1, 2]);
+    expect(objects.find((call) => call.includes("只逐句核第 2 段"))).toContain(`${PARAS[2]}\n\n${PARAS[3]}`);
+  });
+
+  it("checkTask 不带块时不提分块", () => {
+    expect(checkTask(7, "time")).not.toContain("逐句核的一段");
+    expect(checkTask(7, "time", { index: 2, count: 4, text: "某一段" })).toContain("新稿分成 4 段，这一遍只逐句核第 2 段");
   });
 });
 

@@ -100,9 +100,15 @@ describe("applyRelativeDayAlignment：按两句各在哪一刻算隔几天再比
     expect(applyRelativeDayAlignment([issue("今天见分晓", "明天就见分晓", 1)], 2, near).map((item) => item.confidence)).toEqual(["maybe"]);
   });
 
-  it("算不了 → 最多「可能」：本章还没定稿、在回忆段里、沿着旧账推定的章、时间整个读不了", () => {
+  it("本章还没定稿（没记时间）、对的是前文某章 → 照核账员的把握；同一章里两句的照旧降「可能」", () => {
     const base = [chapter(1, ["明天开工。"], { offset: days(0) })];
-    expect(applyRelativeDayAlignment([issue("明天再说", "明天开工", 1)], 2, context(base)).map((item) => item.confidence)).toEqual(["maybe"]);
+    expect(applyRelativeDayAlignment([issue("明天再说", "明天开工", 1)], 2, context(base)).map((item) => item.confidence)).toEqual(["sure"]);
+    expect(applyRelativeDayAlignment([{ ...issue("明天再说", "明天开工", 1), confidence: "maybe" }], 2, context(base)).map((item) => item.confidence)).toEqual(["maybe"]);
+    expect(applyRelativeDayAlignment([issue("明天你值班", "今天晚上我值班", 2)], 2, context(base)).map((item) => item.confidence)).toEqual(["maybe"]);
+  });
+
+  it("算不了 → 最多「可能」：在回忆段里、沿着旧账推定的章、时间整个读不了", () => {
+    const base = [chapter(1, ["明天开工。"], { offset: days(0) })];
     const memory = ["他想起那年说过明天开工。", "如今人都散了。"];
     const flashback = chapter(2, memory, { segments: [{ frame: "past", firstQuote: "他想起那年说过明天开工", lastQuote: "他想起那年说过明天开工" }] });
     const segmented = context([...base, flashback], new Map([[2, memory]]));
