@@ -12,6 +12,8 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     const callModel = vi.fn(async (prompt: string) => {
       expect(prompt).toContain("1. [2][3]：和第 3 章");
       expect(prompt).toContain("\n[4]许微没接话。");
+      // 改错别编前文没写过的细节（0.4.1 走查：信被收走那处，改成纸角又编了纸角上写什么、哪天抄的，再核又报两处）。
+      expect(prompt).toContain("别为了圆过去新编前文没写过的细节");
       return reply([{ id: 3, to: "这些年这钱在我手里压着，花在当年那条船的人身上，我心里不亏。" }]);
     });
     const out = await fixByUnits({ chapter: 5, text: draft, fixes: [{ quote: "他那本手账里一笔一笔都记着。这些年这钱在我手里压着", goal }], callModel });
