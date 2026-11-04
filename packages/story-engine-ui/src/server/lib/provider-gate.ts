@@ -23,7 +23,7 @@
 
 import { StepHaltedError } from "./ai-errors.js";
 import { beforeSend, type AttemptTarget, type SendTicket } from "./operations/attempts.js";
-import { classifyThrown } from "./operations/classify.js";
+import { classifyThrown, thrownNote } from "./operations/classify.js";
 import { currentOperation } from "./operations/context.js";
 
 export interface ProviderGateOptions {
@@ -261,7 +261,7 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
         response = await baseFetch(input, init);
       } catch (error) {
         release();
-        await settle(ticket, { class: classifyThrown(error, signal), note: error instanceof Error ? error.name : "fetch_failed" });
+        await settle(ticket, { class: classifyThrown(error, signal), note: thrownNote(error, "fetch_failed") });
         throw error;
       }
       if (!RETRYABLE_STATUS.has(response.status) || attempt >= maxRetries) {

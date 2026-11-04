@@ -18,7 +18,7 @@ import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resol
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
 import { ModelCallError, ModelSetupError, StepHaltedError, UpstreamSilentError, type PolicyStop, type UnusableReason } from "./ai-errors.js";
 import type { AttemptOutcome, AttemptTarget, SendTicket } from "./operations/attempts.js";
-import { classifyThrown } from "./operations/classify.js";
+import { classifyThrown, thrownNote } from "./operations/classify.js";
 import { currentOperation, haltStep, noteRefusedInStep, OperationStopped, refusedInStep, StopSignal, stopOf } from "./operations/context.js";
 import { TASK_LABELS } from "../../components/ModelSettingsDialogTypes.js";
 
@@ -1523,7 +1523,7 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
     if (error instanceof ModelCallError) throw error;
     // 读响应体时断了的那次还没结（发出去之前就没成的，闸已经结了 / 没落 attempt）。
     const attemptClass = classifyThrown(error, signal, ticket !== undefined);
-    if (ticket) await settle({ class: attemptClass, note: error instanceof Error ? error.name : "stream_failed" });
+    if (ticket) await settle({ class: attemptClass, note: thrownNote(error, "stream_failed") });
     const stop = stopOf(signal.aborted ? signal.reason : undefined);
     if (stop?.type === "policy") throw policyError(stop.policy, input);
     // 操作被取消 / 暂停：原样抛（降级的 catch 用 rethrowIfStopped 认它）。

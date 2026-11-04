@@ -42,6 +42,13 @@ function errorCodes(error: unknown): readonly string[] {
   return codes;
 }
 
+/** 调用记录里记的这次错：错误名 + 收到的错误码（「发出去、没收到结果」停下时，事后看得出是哪种断线）。 */
+export function thrownNote(error: unknown, fallback: string): string {
+  const codes = errorCodes(error);
+  const name = error instanceof Error ? error.name : fallback;
+  return codes.length > 0 ? `${name} ${[...new Set(codes)].join(",")}` : name;
+}
+
 /**
  * fetch 抛了错、或读响应体时断了：取消 / 暂停 → cancelled；我们按策略掐的（思考超长、正文跑飞、对冲输家）→ policy_abort；
  * 别的掐法（空闲超时）→ unknown；连接错误码全是「没发出去」那几类 → not_sent；其余 unknown。

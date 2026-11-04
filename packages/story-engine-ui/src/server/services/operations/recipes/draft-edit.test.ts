@@ -152,6 +152,20 @@ describe("fix：核账卡改这处", () => {
     expect(body?.failed).toEqual([]);
   });
 
+  it("点名那句没动、AI 改的是旁边真写了这件事的那句（核账引的是错处旁边那句，2026-11-04）：照换，再核不报了就算改好了", async () => {
+    await save(1, "他抬头看了一眼。钟停在三点。天黑了。");
+    const prompts: string[] = [];
+    const fixCallModel = vi.fn(async (prompt: string) => {
+      prompts.push(prompt);
+      return JSON.stringify({ edits: [{ id: 2, to: "钟停在四点。" }] });
+    });
+    const { body, summary } = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "他抬头看了一眼。", revisionGoal: goal }] }, fakeDraftDeps({ fixCallModel }));
+    expect(prompts[0]).toContain("改真写了它的那句，点名那句不动");
+    expect(await bodyOf(1)).toBe("他抬头看了一眼。钟停在四点。天黑了。");
+    expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核没有对不上的了。");
+    expect(body?.failed).toEqual([]);
+  });
+
   it("再核报的跟这次改的不相干（作者没点、也不是改出来的）：不替作者改，列在卡上", async () => {
     await save(1, "钟停在三点。老周来过。门开着。");
     const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 1, to: "钟停在四点。" }] }));

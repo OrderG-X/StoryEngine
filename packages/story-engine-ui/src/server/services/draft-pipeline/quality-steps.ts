@@ -93,6 +93,8 @@ export interface FixOutcome {
   readonly applied: number;
   readonly also: number;
   readonly changes: readonly FixRecord[];
+  /** 改了、但核账引的原句还原样在稿里的那几处（改在本章别的句子上、重复的句子只改了一次）：改完再核交核账员复核。 */
+  readonly revisit?: readonly string[];
 }
 
 /** 核出「确定」又错在新稿里的，和核账卡「改掉这 N 处」同一条路：几处一次交修订模型、按编号整句换；没改成的照实计数，正文不动。 */
@@ -122,18 +124,28 @@ export async function fixSureIssues(input: {
     applied: fixed.applied.length,
     also: fixed.alsoChanged,
     changes: fixed.changes,
+    ...(fixed.revisit.length > 0 ? { revisit: fixed.revisit.map((index) => targets[index]!.quote) } : {}),
   };
 }
 
-/** 改完再核：只核改过的句子（上一遍整章核全了、前文没变、换得上），否则整章重核（check-service 判）。 */
+/**
+ * 改完再核：只核改过的句子（上一遍整章核全了、前文没变、换得上），否则整章重核（check-service 判）；
+ * 改了但原句还原样在稿里的那几处（revisit）上一遍的条目交核账员复核。
+ */
 export function recheckDraft(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly draftBody: string;
   readonly changes: readonly FixRecord[];
+  readonly revisit?: readonly string[];
   readonly callModel: BrainCallModel;
 }): Promise<ChapterCheckResult> {
-  return checkChapterBody(input.projectDir, input.chapter, input.draftBody, { readerCallModel: input.callModel, afterFix: input.changes, notesReady: {} });
+  return checkChapterBody(input.projectDir, input.chapter, input.draftBody, {
+    readerCallModel: input.callModel,
+    afterFix: input.changes,
+    notesReady: {},
+    ...(input.revisit && input.revisit.length > 0 ? { revisit: input.revisit } : {}),
+  });
 }
 
 export interface ContinuityInfo {
