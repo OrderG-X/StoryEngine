@@ -849,20 +849,25 @@ export function recheckTask(chapter: number, changes: readonly ChangedSentence[]
  * 改后按改动重核（外部审查 2026-10-28：改稿后再跑一遍完整核账，等待翻倍）：整章刚核过、只改了几句，
  * 就只让核账员核改过的句子和它们牵连的本章别处——同一窗口、同一份新稿消息，按变体并行几次（recheckRepeats），
  * 候选照样自复核、过「确定」门槛。没改的句子沿用上一遍的结果，由核账服务带上（这里只返回这次新核出的）。
+ * revisit：上一遍报的、这次改在别的句子上（原句没动）的，和候选一起进自复核，判 no 的去掉，其余照带、把握沿用。
  */
 export async function recheckChangesByReader(input: ReaderCheckInput & {
   readonly changes: readonly ChangedSentence[];
+  readonly revisit?: readonly ContinuityIssueV2[];
 }): Promise<ReaderCheckResult> {
   const variant = input.variant ?? {};
+  const revisit = input.revisit ?? [];
   const setup = await prepareReaderCheck(input);
-  if ("failure" in setup) return { issues: [], failures: [setup.failure] };
+  if ("failure" in setup) return { issues: [...revisit], failures: [setup.failure] };
   const task = recheckTask(input.chapter, input.changes);
   const ran = await runReaderPasses(Array.from({ length: Math.max(1, variant.recheckRepeats ?? variant.passRepeats ?? 1) }, (_, repeat) =>
     contradictionPass(input, setup, repeat === 0 ? "核改过的句子" : `核改过的句子第 ${repeat + 1} 次`, task)));
   const failures: string[] = [...setup.failures, ...ran.failures];
-  let issues = dropMisdirectedBySetting(mergePasses(ran.passes));
+  // 带过来复核的排最前：同一句这遍又报了，留上一遍那条（把握沿用）。
+  let issues = dropMisdirectedBySetting(mergePasses([revisit, ...ran.passes]));
+  const carried = new Set<ContinuityIssueV2>(issues.filter((issue) => revisit.includes(issue)));
   if (variant.selfReview && issues.length > 0) {
-    const reviewed = await selfReviewIssues(input, setup, issues, new Set());
+    const reviewed = await selfReviewIssues(input, setup, issues, carried);
     issues = reviewed.issues;
     if (reviewed.failure) failures.push(reviewed.failure);
   }

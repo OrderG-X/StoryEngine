@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fixByUnits } from "./unit-fix.js";
 
 const goal = "和第 3 章「他那年二十九」对上";
-const reply = (edits: readonly { id: number | string; to: string }[]) => JSON.stringify({ edits });
+const reply = (edits: readonly { id: number | string; for?: number; to: string }[]) => JSON.stringify({ edits });
 
 describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
   const draft = "# 第五章 雾\n\n“我出。”杜卫平说，“我爹的账上沾了那船的钱，他那本手账里一笔一笔都记着。这些年这钱在我手里压着，花在当年那条船的人身上，不亏心。”\n许微没接话。\n";
@@ -41,21 +41,40 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(out).toMatchObject({ text: "甲乙丁。戊己。\n", applied: [0, 1], failed: [] });
   });
 
-  it("原句找不到 / 不止一处 / 太长：不问模型，照实说为什么", async () => {
+  it("原句找不到 / 出现四次以上 / 太长：不问模型，照实说为什么", async () => {
     const callModel = vi.fn(async () => reply([]));
     const out = await fixByUnits({
       chapter: 5,
-      text: "他走了。他走了。一。二。三。四。五。\n",
+      text: "他走了。他走了。他走了。他走了。一。二。三。四。五。\n",
       fixes: [{ quote: "不在稿里", goal }, { quote: "他走了", goal }, { quote: "一。二。三。四。五", goal }],
       callModel,
     });
     expect(callModel).not.toHaveBeenCalled();
-    expect(out.text).toBe("他走了。他走了。一。二。三。四。五。\n");
+    expect(out.text).toBe("他走了。他走了。他走了。他走了。一。二。三。四。五。\n");
     expect(out.failed.map((item) => item.why)).toEqual([
       "原句在稿里找不到了（可能已经改过）",
       "原句在稿里不止一处，不知道改哪一处",
       "核账引的原句太长，没法只改那几句",
     ]);
+  });
+
+  it("同一句在稿里出现两次（作者稿整段重复，考台 2026-11-04）：两次都编号交模型、说清出现了几次；只改了一次也算改了，原句还在交复核", async () => {
+    let prompt = "";
+    const out = await fixByUnits({
+      chapter: 5,
+      text: "钟停在三点。他走了。钟停在三点。\n",
+      fixes: [{ quote: "钟停在三点", goal }],
+      callModel: async (sent) => {
+        prompt = sent;
+        return reply([{ id: 3, to: "钟停在四点。" }]);
+      },
+    });
+    expect(prompt).toContain("1. [1][3]：");
+    expect(prompt).toContain("这句在稿里出现了 2 次：[1]、[3]，只改真和前文对不上的那一次；几次都对不上就都改");
+    expect(out).toMatchObject({ text: "钟停在三点。他走了。钟停在四点。\n", applied: [0], failed: [], revisit: [0] });
+
+    const both = await fixByUnits({ chapter: 5, text: "钟停在三点。他走了。钟停在三点。\n", fixes: [{ quote: "钟停在三点", goal }], callModel: async () => reply([{ id: 1, to: "钟停在四点。" }, { id: 3, to: "钟停在四点。" }]) });
+    expect(both).toMatchObject({ text: "钟停在四点。他走了。钟停在四点。\n", applied: [0], revisit: [] });
   });
 
   it("回的不是 JSON：同一份提示再要一次；还不行就照实说格式不对，正文不动", async () => {
@@ -65,9 +84,24 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(out).toMatchObject({ text: "他走了。\n", applied: [], failed: [{ fix: 0, why: "AI 回的格式不对，没写改后的句子" }] });
   });
 
-  it("只认点名的编号：改了别的句子不算；没给点名那句的改法照实说", async () => {
+  it("点名那句没动、改的是本章别的句子（核账引的是错处旁边那句，真机 2026-11-04）：照换，记成改在别处，交改完再核复核", async () => {
     const out = await fixByUnits({ chapter: 5, text: "甲。乙。\n", fixes: [{ quote: "乙", goal }], callModel: async () => reply([{ id: 1, to: "改了甲。" }]) });
-    expect(out).toMatchObject({ text: "甲。乙。\n", applied: [], failed: [{ fix: 0, why: "AI 没给出这句的改法" }] });
+    expect(out).toMatchObject({ text: "改了甲。乙。\n", applied: [0], failed: [], revisit: [0], alsoChanged: 0 });
+  });
+
+  it("几处一起改：改别处的句子按模型标的 for 算给那一处；没标、标错的只算连带改，那一处照实说没改成", async () => {
+    const text = "甲。乙。丙。丁。\n";
+    const fixes = [{ quote: "甲", goal }, { quote: "丙", goal }];
+    const tagged = await fixByUnits({ chapter: 5, text, fixes, callModel: async () => reply([{ id: 1, to: "改好的。" }, { id: 4, for: 2, to: "改了丁。" }]) });
+    expect(tagged).toMatchObject({ text: "改好的。乙。丙。改了丁。\n", applied: [0, 1], failed: [], revisit: [1] });
+
+    const untagged = await fixByUnits({ chapter: 5, text, fixes, callModel: async () => reply([{ id: 1, to: "改好的。" }, { id: 4, for: 9, to: "改了丁。" }]) });
+    expect(untagged).toMatchObject({ text: "改好的。乙。丙。改了丁。\n", applied: [0], failed: [{ fix: 1, why: "AI 没给出这句的改法" }], revisit: [], alsoChanged: 1 });
+  });
+
+  it("一句都没给：照实说没给出改法", async () => {
+    const out = await fixByUnits({ chapter: 5, text: "甲。乙。\n", fixes: [{ quote: "乙", goal }], callModel: async () => reply([]) });
+    expect(out).toMatchObject({ text: "甲。乙。\n", applied: [], failed: [{ fix: 0, why: "AI 没给出这句的改法" }], revisit: [] });
   });
 
   it("本章别处说同一件事的句子跟着改（P13 真机：「四个字」只改了点名那句）；锁住的、超出每处四句的、要删句的不收", async () => {

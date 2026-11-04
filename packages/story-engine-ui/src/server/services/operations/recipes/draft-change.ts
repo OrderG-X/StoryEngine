@@ -349,7 +349,7 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
       const final = await ctx.step("recheck", { body: finalBody, fixed: fix.applied }, async () => {
         if (fix.applied > 0) ctx.progress("改完再核一遍");
         const recheck = fix.applied > 0
-          ? await recheckDraft({ projectDir: bookDir, chapter, draftBody: finalBody, changes: fix.changes, callModel: deps.readerCallModel })
+          ? await recheckDraft({ projectDir: bookDir, chapter, draftBody: finalBody, changes: fix.changes, ...(fix.revisit ? { revisit: fix.revisit } : {}), callModel: deps.readerCallModel })
           : undefined;
         const beats = await finalBeatFidelity({
           draftBody: finalBody,

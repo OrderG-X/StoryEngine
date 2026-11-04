@@ -341,6 +341,26 @@ describe("核账服务：改后只核改过的句子（外部审查 2026-10-28�
     expect((await checkChapterBody(dir, 3, FIXED, { readerCallModel: model.callModel })).reused).toBe(true);
   });
 
+  it("改在了别的句子上（点名那句没动，2026-11-04）→ 上一遍那条不原样带，和改过的句子一起复核，判 no 就去掉", async () => {
+    const dir = await makeBook();
+    const model = recordingModel();
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: model.callModel });
+    let reviewed = "";
+    const ruledFixed: BrainCallModel = async (messages, options) => {
+      const last = messages.at(-1)!.content;
+      if (options.json && last.includes("你刚才核完报了")) {
+        reviewed = last;
+        return JSON.stringify({ verdicts: [{ id: "K1", verdict: "no" }] });
+      }
+      return model.callModel(messages, options);
+    };
+    const after = await checkChapterBody(dir, 3, FIXED, { readerCallModel: ruledFixed, afterFix: [{ from: FROM, to: TO }], revisit: [AUNT_SENTENCE] });
+    expect(after).toMatchObject({ ok: true, rechecked: { changed: 1 } });
+    expect(model.asked.full).toBe(12);
+    expect(reviewed).toContain(AUNT_SENTENCE);
+    expect(after.sure).toEqual([]);
+  });
+
   it("出稿流程直接给改了哪几句（删掉的句子也算）→ 只核改过的；改后那句又被报的照常自复核", async () => {
     const dir = await makeBook();
     const model = recordingModel([{ quote: "他从抽屉里取出那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "抽屉上了锁", confidence: "sure" }]);

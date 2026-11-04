@@ -91,6 +91,34 @@ export function locateRevisionSpan(
   }
   return { start: origIndex[head]!, end: origIndex[end - 1]! + 1 };
 }
+/**
+ * 原句在稿里的每一处（按先后）：先逐字，没有再按空白、引号归一找（和 locateRevisionSpan 同口径）；找不到是空的。
+ * 省略号连起的几截不在这里找（那种只认唯一一处）。按核账改用它：同一句出现几次，每次都编号交模型挑（unit-fix）。
+ */
+export function revisionSpans(draftContent: string, target: string): RevisionTargetSpan[] {
+  if (target.length === 0) return [];
+  const exact: RevisionTargetSpan[] = [];
+  for (let at = draftContent.indexOf(target); at >= 0; at = draftContent.indexOf(target, at + target.length)) exact.push({ start: at, end: at + target.length });
+  if (exact.length > 0) return exact;
+  const strippedChars: string[] = [];
+  const origIndex: number[] = [];
+  for (let i = 0; i < draftContent.length; i += 1) {
+    const ch = draftContent[i]!;
+    if (!/\s/u.test(ch)) {
+      strippedChars.push(canonChar(ch));
+      origIndex.push(i);
+    }
+  }
+  const strippedDraft = strippedChars.join("");
+  const strippedTarget = normalizeForMatch(target);
+  if (strippedTarget.length === 0) return [];
+  const spans: RevisionTargetSpan[] = [];
+  for (let at = strippedDraft.indexOf(strippedTarget); at >= 0; at = strippedDraft.indexOf(strippedTarget, at + strippedTarget.length)) {
+    spans.push({ start: origIndex[at]!, end: origIndex[at + strippedTarget.length - 1]! + 1 });
+  }
+  return spans;
+}
+
 /* ---------------------------------------------------------------------------
  * 结果：守卫拒绝是数据（code），给作者看的话由调用方按码组
  * ------------------------------------------------------------------------- */

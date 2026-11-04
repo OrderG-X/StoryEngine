@@ -81,6 +81,8 @@ export interface EditOutcome {
   readonly failed: readonly EditFailure[];
   /** fix：不是点名的、本章别处说同一件事跟着改的句数。 */
   readonly alsoChanged?: number;
+  /** fix：改了、但核账引的原句还原样在稿里的那几处（改在本章别的句子上、重复的句子只改了一次）；改完再核交核账员复核。 */
+  readonly revisit?: readonly string[];
   /** revise 只改了一段时 AI 说的改了什么；按作者给的原文换上的是 exact。 */
   readonly brief?: string;
   readonly exact?: true;
@@ -227,6 +229,7 @@ async function fixEdits(input: {
     changes: outcome.changes,
     failed: outcome.failed.map(({ fix, why }) => ({ target: input.fixes[fix]!.targetText, why })),
     ...(outcome.alsoChanged > 0 ? { alsoChanged: outcome.alsoChanged } : {}),
+    ...(outcome.revisit.length > 0 ? { revisit: outcome.revisit.map((fix) => input.fixes[fix]!.targetText) } : {}),
   };
 }
 
@@ -246,13 +249,19 @@ async function verifyNotes(projectDir: string, chapter: number, callModel: Brain
 }
 
 /**
- * 核改过的这份（稿子外面、还没换上）：只核改过的这几句（上一遍整章核过、记忆对得上时），否则整章核。
+ * 核改过的这份（稿子外面、还没换上）：只核改过的这几句（上一遍整章核过、记忆对得上时），否则整章核；
+ * 改了但原句还原样在稿里的那几处（revisit）上一遍的条目交核账员复核，不原样带着。
  * 还对不上的 = 错在本章、确定的，加上以前改过又被报回来的（降成「可能」的那种），都交下一轮 / 作者。
  * 这遍核全了会存成这份正文的核账记忆：换上后定稿正文没再动就直接用，不再花钱。
  */
-async function verifyFix(projectDir: string, chapter: number, text: string, changes: readonly EditChange[], callModel: BrainCallModel): Promise<Verified> {
+async function verifyFix(projectDir: string, chapter: number, text: string, changes: readonly EditChange[], callModel: BrainCallModel, revisit?: readonly string[]): Promise<Verified> {
   try {
-    const result = await checkChapterBody(projectDir, chapter, parseDraftFile(text).body.trim(), { readerCallModel: callModel, afterFix: changes, notesReady: {} });
+    const result = await checkChapterBody(projectDir, chapter, parseDraftFile(text).body.trim(), {
+      readerCallModel: callModel,
+      afterFix: changes,
+      notesReady: {},
+      ...(revisit && revisit.length > 0 ? { revisit } : {}),
+    });
     if (!result.ok) return { ok: false, reason: result.failures[0] ?? "原因不明" };
     return {
       ok: true,
@@ -335,7 +344,7 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   if (!notes.ok) return { ...first, verify: { checks: 0, again: 0, failure: notes.reason } };
   const once = await ctx.step("check:1", { text: first.text }, () => {
     ctx.progress("改完再核一遍");
-    return verifyFix(bookDir, chapter, first.text, first.changes, deps.readerCallModel);
+    return verifyFix(bookDir, chapter, first.text, first.changes, deps.readerCallModel, first.revisit);
   });
   if (!once.ok) return { ...first, verify: { checks: 0, again: 0, failure: once.reason } };
   if (leftCount(once.left) === 0) return { ...settledFailures(first), verify: { checks: 1, again: 0 } };
@@ -352,7 +361,7 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   const merged = mergeRounds(first, second);
   const twice = await ctx.step(`check:${FIX_ROUNDS}`, { text: second.text }, () => {
     ctx.progress("改完再核一遍");
-    return verifyFix(bookDir, chapter, second.text, second.changes, deps.readerCallModel);
+    return verifyFix(bookDir, chapter, second.text, second.changes, deps.readerCallModel, second.revisit);
   });
   const again = second.changes.length;
   if (!twice.ok) return { ...merged, verify: { checks: 1, again, failure: twice.reason } };

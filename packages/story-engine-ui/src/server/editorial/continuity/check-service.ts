@@ -150,6 +150,11 @@ export interface ChapterCheckOptions {
   readonly fresh?: boolean;
   /** 这份正文是上一遍核过的稿按核账改了这几句（出稿流程里按核账改后）。缺省按改句记录找。 */
   readonly afterFix?: readonly ChangedSentence[];
+  /**
+   * 按核账改时改在了本章别的句子上、原句没动的那几处（核账引的原句）：只核改过的句子时，上一遍报的这几条
+   * 不原样带着，交核账员和这遍的候选一起复核，判没错了的去掉（核账引的常是错处旁边那句）。
+   */
+  readonly revisit?: readonly string[];
   /** 核账员的模型调用（测试注入）；缺省走配置的 qualityCheck 模型。 */
   readonly readerCallModel?: BrainCallModel;
   /** 前文笔记已经在前一步补过（`prepareCheckerNotes`）：核的时候不再当场补，缺了照冷窗口核。 */
@@ -189,6 +194,8 @@ async function checkByReader(input: {
   readonly callModel: BrainCallModel;
   /** 只核改过的这几句：上一遍的结果（carryOver）已复核过，原样带上，排在新核出的前面。 */
   readonly changes?: readonly ChangedSentence[];
+  /** 只核改过的这几句时，上一遍报的、这次改在别的句子上的：不原样带，和新候选一起复核。 */
+  readonly revisit?: readonly ContinuityIssueV2[];
   readonly notesReady?: { readonly waited?: ReaderWaited };
 }): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited }> {
   const common = {
@@ -203,7 +210,7 @@ async function checkByReader(input: {
     ...(input.notesReady ? { notesReady: input.notesReady } : {}),
   };
   const reader = input.changes
-    ? await recheckChangesByReader({ ...common, changes: input.changes }).then((focused) => ({ ...focused, issues: [...input.carryOver, ...focused.issues] }))
+    ? await recheckChangesByReader({ ...common, changes: input.changes, ...(input.revisit ? { revisit: input.revisit } : {}) }).then((focused) => ({ ...focused, issues: [...input.carryOver, ...focused.issues] }))
     : await checkChapterByReader({ ...common, carryOver: input.carryOver });
   const ledger = await withStep("账本对账", () => ledgerNumberIssues({
     projectDir: input.projectDir,
@@ -350,7 +357,19 @@ export async function checkChapterBody(
     // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
     result = { issues: settleMirroredIssues(await alignRelativeDays(projectDir, memory!.issues, chapter, projection), chapter), failures: [] };
   } else {
-    result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel, ...(changes ? { changes } : {}), ...(options.notesReady ? { notesReady: options.notesReady } : {}) }));
+    const revisit = changes && options.revisit ? carryOver.filter((issue) => options.revisit!.includes(issue.quote)) : [];
+    result = await withStep("核账", () => checkByReader({
+      projectDir,
+      chapter,
+      body,
+      earlier,
+      carryOver: carryOver.filter((issue) => !revisit.includes(issue)),
+      ...(ledgerFacts ? { ledgerFacts } : {}),
+      callModel: readerCallModel,
+      ...(changes ? { changes } : {}),
+      ...(revisit.length > 0 ? { revisit } : {}),
+      ...(options.notesReady ? { notesReady: options.notesReady } : {}),
+    }));
     // 上一遍按核账改过的句子这遍又被报「确定」：两遍说法相反，降成「可能」（不再自动来回改）。
     result = { ...result, issues: settleRevisitedIssues(result.issues, chapter, body, fixes) };
     if (result.coverage) {
