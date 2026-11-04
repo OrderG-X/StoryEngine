@@ -219,7 +219,7 @@ async function checkByReader(input: {
     ...(input.ledgerFacts ? { ledgerFacts: input.ledgerFacts } : {}),
   }));
   // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按两句各在哪一刻
-  // 算隔几天再比——同一天不报；算不了最多「可能」。时间读不了当没有，只降档不删条。
+  // 算隔几天再比——同一天不报；算不了最多「可能」（还没定稿的稿对前文某章的除外，照复核的把握）。时间读不了当没有，只降档不删条。
   const merged = mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...reader.issues], input.chapter, input.body, input.earlier));
   const issues = settleMirroredIssues((await alignRelativeDays(input.projectDir, merged, input.chapter))
     .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const })), input.chapter)

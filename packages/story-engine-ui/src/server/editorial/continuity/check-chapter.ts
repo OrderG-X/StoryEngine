@@ -527,6 +527,7 @@ function momentsOf(context: RelativeDayContext, chapter: number, quote: string):
  *   不管隔几天都不可能是同一天 → 照报；说不准 → 最多算「可能」。
  * - 两边各有好几处说法（把两个日子对调了那类）：代码分不出谁对谁，隔几天确定就交给模型，说不准降「可能」。
  * - 算不了（不在当下线上、在段里、链断了、沿着旧账推定的章）→ 最多算「可能」，不进「确定」。
+ *   例外：核的是还没定稿的稿（这一章还没记时间），对的是前文某章 → 照核账员复核的把握（稿没定稿哪章都算不了，一律降就全漏了）。
  * 对的是设定本的条目不适用（设定原文不锚在某一天上）。
  */
 export function applyRelativeDayAlignment(
@@ -548,7 +549,11 @@ export function applyRelativeDayAlignment(
     }
     const gap = context ? daysBetweenQuotes(context, issue, chapter) : undefined;
     if (!gap) {
-      out.push({ ...issue, confidence: "maybe" });
+      // 核的是还没定稿的稿（这一章还没记时间、哪种说法都推不了），对的是前文某章：照核账员复核的把握。
+      // 作者手写章实测（2026-11-05）：这样降成「可能」的跨章条目 8 条全是真错（「后天清仓」说成又过了一天那类），
+      // 比留下的「确定」还准；同一章里两句的照旧降（那 2 条都是看错了哪天）。
+      const draftUnplaced = context !== undefined && !context.times.has(chapter) && issue.earlierChapter !== chapter && (issue.fixChapter ?? chapter) === chapter;
+      out.push(draftUnplaced ? issue : { ...issue, confidence: "maybe" });
       continue;
     }
     const exact = gap.lo !== undefined && gap.lo === gap.hi;
