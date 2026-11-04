@@ -422,7 +422,7 @@ describe("记账员交回的账单", () => {
       expect(parsed?.adjusted.map((item) => item.where)).toEqual(["items 第 1 条.from", "items 第 2 条.from", "items 第 3 条"]);
     });
 
-    it("重写那一问交回来的：items 带 fix 的才算重写；newItems 照收", () => {
+    it("重写那一问交回来的：items 带上写的 fix（没写就没有，认不认由重写那步定）；newItems 照收", () => {
       const patch = parseItemPatch(JSON.stringify({
         newItems: [{ tag: "N9", name: "铁盒", by: "narration", quote: "一个铁盒" }],
         items: [
@@ -431,8 +431,30 @@ describe("记账员交回的账单", () => {
         ],
       }), itemHandles);
       expect(patch?.appears).toEqual([expect.objectContaining({ op: "appear", tag: "N9", name: "铁盒" })]);
-      expect(patch?.items).toEqual([{ fix: 2, entry: expect.objectContaining({ op: "move", to: { kind: "inside", item: { tag: "N9" } } }) }]);
+      expect(patch?.items).toEqual([
+        { fix: 2, entry: expect.objectContaining({ op: "move", to: { kind: "inside", item: { tag: "N9" } } }) },
+        { entry: expect.objectContaining({ op: "at", to: { kind: "place", text: "桌上" } }) },
+      ]);
       expect(parseItemPatch("好的", itemHandles)).toBeUndefined();
+    });
+
+    it("去处只写了 {item}（没写人、地方）：就是装在那样东西里面（真机 2026-11-04，原来整条当「去处没写」丢掉）", () => {
+      const parsed = parseKeeperOutput(JSON.stringify({
+        summary: { text: "收绳", quote: "一个铁盒" },
+        newItems: [{ tag: "N9", name: "铁盒", by: "narration", quote: "一个铁盒" }],
+        items: [
+          { seq: 1, item: "I1", op: "move", to: { item: "N9", as: "盒口" }, by: "narration", quote: "放进铁盒" },
+          { seq: 2, item: "I2", op: "move", from: { item: "N9" }, to: { person: "乙" }, by: "narration", quote: "从铁盒里拿出" },
+          { seq: 3, item: "I2", op: "at", to: { person: "乙", item: "N9" }, by: "narration", quote: "乙拿着" },
+        ],
+      }), itemHandles);
+      expect(parsed?.drops).toEqual([]);
+      expect(parsed?.entries.filter((entry) => entry.kind === "item" && entry.op !== "appear")).toEqual([
+        expect.objectContaining({ op: "move", to: { kind: "inside", item: { tag: "N9" } } }),
+        expect.objectContaining({ op: "move", from: { kind: "inside", item: { tag: "N9" } }, to: { kind: "person", name: "乙" } }),
+        // 写了人又多塞个 item：照人记（多塞的字段不算第二种去处）。
+        expect.objectContaining({ op: "at", to: { kind: "person", name: "乙" } }),
+      ]);
     });
   });
 });
@@ -605,6 +627,29 @@ describe("记账员跑一章", () => {
       // 重写了还是坏的：不算，照第一遍的交。
       const still = await run(async () => JSON.stringify({ items: [{ fix: 1, seq: 1, item: "N1", op: "at", by: "narration", quote: "格子里放着一个铁盒" }] })).outcome;
       expect(still).toMatchObject({ ok: true, itemRepair: { asked: 3, fixed: 0 } });
+      // 只问了一条：fix 写成第一遍那条的序号、或干脆没写，也是重写它（真机 2026-11-04：fix:7、fix:4）。
+      const one = JSON.stringify({
+        summary: { text: "取盒", quote: "格子里放着一个铁盒" },
+        newItems: [{ tag: "N1", name: "铁盒", by: "narration", quote: "格子里放着一个铁盒" }],
+        items: [{ seq: 1, item: "N1", op: "at", by: "narration", quote: "格子里放着一个铁盒" }],
+      });
+      for (const fix of [7, undefined]) {
+        const renumbered = await runLedgerKeeper({
+          projectDir: book,
+          chapter: 2,
+          draft,
+          before,
+          maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            return messages.at(-1)?.content.includes("东西的记录没记上")
+              ? JSON.stringify({ items: [{ ...(fix ? { fix } : {}), seq: 1, item: "N1", op: "at", to: { place: "格子里" }, by: "narration", quote: "格子里放着一个铁盒" }] })
+              : one;
+          },
+        });
+        expect(renumbered).toMatchObject({ ok: true, itemRepair: { asked: 1, fixed: 1 } });
+        if (renumbered.ok) expect(renumbered.parsed.entries).toContainEqual(expect.objectContaining({ op: "at", to: { kind: "place", text: "格子里" } }));
+      }
       // 解析时丢的那条成员写坏了（说不出缺哪几样）：主体照样认得，重写交的是别的东西不认、那条照算没记上。
       const badMember = JSON.stringify({
         summary: { text: "取盒", quote: "格子里放着一个铁盒" },

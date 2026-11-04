@@ -634,13 +634,17 @@ async function repairItems(
   const replaced = new Set(problems.flatMap((problem) => (problem.kind === "entry" ? [problem.index] : [])));
   const declared = new Set(parsed.entries.flatMap((entry) => (entry.kind === "item" && entry.op === "appear" && entry.tag ? [entry.tag] : [])));
   const appears = patch.appears.filter((entry) => entry.kind === "item" && entry.tag !== undefined && !declared.has(entry.tag));
-  // 只认写明重写的是第几条、而且说的就是那一样的（编号写错了的不认，免得顶掉别的条目）。
+  // 重写的是第几条：只问了一条就是它（真机 2026-11-04：只问一条也写成第一遍那条的序号 fix:7、或不写）；
+  // 问了几条的只认写明第几条、而且说的就是那一样的（编号写错了的不认，免得顶掉别的条目）。
   // 第一遍连是哪样都认不出的：重写交的那条照收（有原句、照样核），但证明不了说的是同一样，那处没记上照留。
   const subjectOf = (item: { readonly fix: number }) => {
     const problem = problems[item.fix - 1];
     return problem ? problemSubject(problem, parsed.entries) : undefined;
   };
-  const items = patch.items.filter((item) => {
+  const items = patch.items.flatMap((item) => {
+    const fix = problems.length === 1 ? 1 : item.fix;
+    return fix === undefined ? [] : [{ entry: item.entry, fix }];
+  }).filter((item) => {
     const subject = subjectOf(item);
     return problems[item.fix - 1] !== undefined && (subject === undefined || (item.entry.kind === "item" && item.entry.item !== undefined && sameItem(item.entry.item, subject)));
   });

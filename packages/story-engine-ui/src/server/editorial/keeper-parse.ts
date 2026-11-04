@@ -509,10 +509,15 @@ const GONE: Record<string, ItemGone> = { lost: "lost", 丢了: "lost", destroyed
 
 const sameRef = (a: ItemRefInput, b: ItemRefInput): boolean => ("id" in a && "id" in b ? a.id === b.id : "tag" in a && "tag" in b ? a.tag === b.tag : false);
 
-/** 去处里写的「装在哪样里面」（没写 → undefined）。 */
+/**
+ * 去处里写的「装在哪样里面」（没写 → undefined）。只写了 {"item":"I3"}、没写人也没写地方：去处只有人、地方、东西三种，
+ * 写的是东西就是装在它里面（真机 2026-11-04：第一遍、重写都这么写，整条当「去处没写」丢掉，这章东西账没记全）。
+ */
 const insideField = (raw: unknown): unknown => {
   if (!isRecord(raw)) return undefined;
-  return raw.inside ?? (str(raw.kind)?.toLowerCase() === "inside" ? raw.item : undefined);
+  if (raw.inside !== undefined) return raw.inside;
+  const kind = str(raw.kind)?.toLowerCase();
+  return kind === "inside" || (kind === undefined && raw.person === undefined && raw.place === undefined) ? raw.item : undefined;
 };
 
 /**
@@ -679,7 +684,8 @@ function parseItems(
  */
 export function parseItemPatch(text: string, handles: KeeperHandles): {
   readonly appears: readonly EntryInput[];
-  readonly items: readonly { readonly entry: EntryInput; readonly fix: number }[];
+  /** fix：写的是重写第几条（没写就没有；对不对得上由重写那一步按问了几条、说的是哪样认）。 */
+  readonly items: readonly { readonly entry: EntryInput; readonly fix?: number }[];
 } | undefined {
   const root = extractJsonObject(text);
   if (!root) return undefined;
@@ -692,8 +698,9 @@ export function parseItemPatch(text: string, handles: KeeperHandles): {
   return {
     appears: entries.filter((entry) => entry.kind === "item" && entry.op === "appear"),
     items: entries.flatMap((entry) => {
+      if (entry.kind === "item" && entry.op === "appear") return [];
       const fix = fixes.get(entry);
-      return fix === undefined ? [] : [{ entry, fix }];
+      return [fix === undefined ? { entry } : { entry, fix }];
     }),
   };
 }
