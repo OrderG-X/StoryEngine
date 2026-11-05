@@ -80,7 +80,7 @@ function fakeReader(options: { readonly hold?: Promise<void> } = {}) {
         contradictions: [{ quote: "他从工作台上拿起那块怀表，表盖还开着。", earlierQuote: "林舟把怀表锁进了柜台下的抽屉。", earlierChapter: 1, reason: "怀表位置对不上", confidence: "sure" }],
       });
     }
-    return JSON.stringify({ checks: [], contradictions: [] });
+    return JSON.stringify({ checks: [], pairs: [], contradictions: [] });
   };
   return { callModel, notes: () => notes, checks: () => checks };
 }

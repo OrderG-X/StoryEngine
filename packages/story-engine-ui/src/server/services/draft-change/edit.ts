@@ -52,6 +52,8 @@ export interface FixVerify {
   /** 最后一遍还对不上的（本章确定的 + 上次改过又被报的）：卡上列，作者定。 */
   readonly left?: ContinuityCheckData;
   readonly failure?: string;
+  /** 再核跑了、但有一步没跑成（第一条原因）：不能说「没有对不上的了」，定稿时会再核。 */
+  readonly partial?: string;
 }
 
 /** 开改时的样子：先读依据，再读稿（全文带章名行，和版本一起读的）。 */
@@ -233,7 +235,9 @@ async function fixEdits(input: {
   };
 }
 
-type Verified = { readonly ok: true; readonly left: ContinuityCheckData } | { readonly ok: false; readonly reason: string };
+type Verified =
+  | { readonly ok: true; readonly left: ContinuityCheckData; readonly partial?: string }
+  | { readonly ok: false; readonly reason: string };
 
 /** 改完再核前，核账员先把前文笔记补到上一章（和定稿那遍同一套）；没成就不再核，结论里说一句。 */
 async function verifyNotes(projectDir: string, chapter: number, callModel: BrainCallModel): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
@@ -270,6 +274,8 @@ async function verifyFix(projectDir: string, chapter: number, text: string, chan
         sure: ownChapterIssues(result.sure, chapter),
         maybe: ownChapterIssues(result.maybe.filter((item) => item.revisited), chapter),
       },
+      // 报出了问题、但有一步没跑成：核账那边算 ok，这里不能拿它证明核完、干净（外部审查 2026-11-06）。
+      ...(result.failures.length > 0 ? { partial: result.failures[0]! } : {}),
     };
   } catch (error) {
     rethrowIfStopped(error);
@@ -289,8 +295,9 @@ const sameSentence = (a: string, b: string): boolean => Boolean(a && b) && (quot
 function againItems(chapter: number, left: ContinuityCheckData, first: EditOutcome, fixes: DraftFixParams["fixes"]): ChapterCheckItem[] {
   const touched = (text: string): boolean => first.changes.some((change) => sameSentence(text, change.to));
   const asked = (text: string): boolean => fixes.some((fix) => sameSentence(text, fix.targetText));
-  return [...left.sure, ...left.maybe].filter((item) => asked(item.quote) || touched(item.quote)
-    || (!item.againstSetting && (item.earlierChapter <= 0 || item.earlierChapter === chapter) && touched(item.earlierQuote)));
+  // 以前改过又被报回来的（revisited，已降成「可能」）不管牵连到哪句都留给作者（外部审查 2026-11-06：曾被第二轮改回去）。
+  return [...left.sure, ...left.maybe].filter((item) => !item.revisited && (asked(item.quote) || touched(item.quote)
+    || (!item.againstSetting && (item.earlierChapter <= 0 || item.earlierChapter === chapter) && touched(item.earlierQuote))));
 }
 
 /**
@@ -304,11 +311,21 @@ function againGoal(chapter: number, item: ChapterCheckItem, first: readonly Edit
   return earlier ? `${goal}；这句刚按「${earlier.revisionGoal}」改过，两样都要对得上` : goal;
 }
 
-/** 两轮的改动并成一份：第二轮改的是第一轮改出来的句子就接上（改前取最早那版），改回原样的去掉。 */
+/** 在 text 里出现几次（最多数到 2）。 */
+function occurrences(text: string, part: string): number {
+  const at = text.indexOf(part);
+  return at < 0 ? 0 : text.indexOf(part, at + 1) < 0 ? 1 : 2;
+}
+
+/**
+ * 两轮的改动并成一份：第二轮改的是第一轮改出来的那句就接上（改前取最早那版），改回原样的去掉。
+ * 认「是那句」只认第一轮改出来的句子在第一轮稿里只出现一次：同样的字出现两处，第二轮改的可能是另一处，
+ * 各记各的（外部审查 2026-11-06：两处说法对调时曾被并成「三点→三点」删掉，两轮都没落盘）。
+ */
 function mergeRounds(first: EditOutcome, second: EditOutcome): EditOutcome {
   const changes = [...first.changes];
   for (const change of second.changes) {
-    const at = changes.findIndex((earlier) => earlier.to === change.from);
+    const at = changes.findIndex((earlier) => earlier.to !== "" && earlier.to === change.from && occurrences(first.text, earlier.to) === 1);
     if (at >= 0) changes[at] = { from: changes[at]!.from, to: change.to };
     else changes.push(change);
   }
@@ -347,17 +364,20 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
     return verifyFix(bookDir, chapter, first.text, first.changes, deps.readerCallModel, first.revisit);
   });
   if (!once.ok) return { ...first, verify: { checks: 0, again: 0, failure: once.reason } };
-  if (leftCount(once.left) === 0) return { ...settledFailures(first), verify: { checks: 1, again: 0 } };
+  // 有一步没跑成：这一遍没核全，后面哪一遍核全了也只核改过的那几句，盖不住它。
+  const partial = once.partial ? { partial: once.partial } : {};
+  // 没核全时「没再报」不能当改好了：没改成的照实留着。
+  if (leftCount(once.left) === 0) return { ...(once.partial ? first : settledFailures(first)), verify: { checks: 1, again: 0, ...partial } };
   // 第二轮（FIX_ROUNDS）：作者点的、第一轮改出来的还对不上的那几处，第一轮刚改出来的带上第一轮那条要求。
   const fixes = againItems(chapter, once.left, first, params.fixes).slice(0, EDIT_MAX_FIXES)
     .map((item) => ({ targetText: item.quote, revisionGoal: againGoal(chapter, item, first.changes, params.fixes) }));
-  if (fixes.length === 0) return { ...settledFailures(first, once.left), verify: { checks: 1, again: 0, left: once.left } };
+  if (fixes.length === 0) return { ...(once.partial ? first : settledFailures(first, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
   const second = await ctx.step(`fix:${FIX_ROUNDS}`, { text: first.text, fixes }, () => {
     ctx.progress("还有几处对不上，再改一轮");
     return fixEdits({ chapter, text: first.text, fixes, callModel: deps.fixCallModel });
   });
   // 第二轮一句都没改成：照第一轮的结果交，还剩的列给作者。
-  if (second.changes.length === 0) return { ...settledFailures(first, once.left), verify: { checks: 1, again: 0, left: once.left } };
+  if (second.changes.length === 0) return { ...(once.partial ? first : settledFailures(first, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
   const merged = mergeRounds(first, second);
   const twice = await ctx.step(`check:${FIX_ROUNDS}`, { text: second.text }, () => {
     ctx.progress("改完再核一遍");
@@ -365,7 +385,11 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   });
   const again = second.changes.length;
   if (!twice.ok) return { ...merged, verify: { checks: 1, again, failure: twice.reason } };
-  return { ...settledFailures(merged, twice.left), verify: { checks: 2, again, ...(leftCount(twice.left) > 0 ? { left: twice.left } : {}) } };
+  const partialEnd = once.partial ?? twice.partial;
+  return {
+    ...(partialEnd ? merged : settledFailures(merged, twice.left)),
+    verify: { checks: 2, again, ...(leftCount(twice.left) > 0 ? { left: twice.left } : {}), ...(partialEnd ? { partial: partialEnd } : {}) },
+  };
 }
 
 async function deaiEdits(input: {
@@ -449,7 +473,9 @@ function verifyLine(verify: FixVerify | undefined): string {
   if (verify.failure) return `改完再核没跑成（${verify.failure}），定稿时会再核。`;
   const left = verify.left ? leftCount(verify.left) : 0;
   const again = verify.again > 0 ? `又跟着改了 ${verify.again} 句，` : "";
-  return left > 0 ? `改完再核${again}还有 ${left} 处对不上，在卡上。` : `改完再核${again}没有对不上的了。`;
+  const partial = verify.partial ? `有一步没核成（${verify.partial}），定稿时会再核。` : "";
+  if (left > 0) return `改完再核${again}还有 ${left} 处对不上，在卡上。${partial}`;
+  return partial ? `改完再核${again}${partial}` : `改完再核${again}没有对不上的了。`;
 }
 
 export function buildDraftEditResult(input: {

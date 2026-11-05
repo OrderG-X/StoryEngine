@@ -282,7 +282,7 @@ it("核账记忆是照改之前的前文核的：不当成「上一稿核出的�
         const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
         return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
       }
-      return JSON.stringify({ checks: [], contradictions: [{ quote: nowCorrect, earlierQuote: oldFact, earlierChapter: 1, reason: "钥匙保管人不一致", confidence: "sure" }] });
+      return JSON.stringify({ checks: [], pairs: [], contradictions: [{ quote: nowCorrect, earlierQuote: oldFact, earlierChapter: 1, reason: "钥匙保管人不一致", confidence: "sure" }] });
     },
   });
   expect(checked.sure).toHaveLength(1);
@@ -313,7 +313,7 @@ it("前文没改的核账记忆照常交给写手（对照）", async () => {
         const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
         return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
       }
-      return JSON.stringify({ checks: [], contradictions: [{ quote: wrong, earlierQuote: fact, earlierChapter: 1, reason: "钥匙保管人不一致", confidence: "sure" }] });
+      return JSON.stringify({ checks: [], pairs: [], contradictions: [{ quote: wrong, earlierQuote: fact, earlierChapter: 1, reason: "钥匙保管人不一致", confidence: "sure" }] });
     },
   });
   let conflicts: unknown;

@@ -23,7 +23,7 @@ export const fakePlanner = (summary = "照故事往下推"): BrainCallModel => a
 
 /** 假核账员：审纲、核账都说没问题，写笔记回一句。 */
 export const quietReader: BrainCallModel = async (_messages, options) =>
-  (options?.json ? JSON.stringify({ problems: [], checks: [], contradictions: [] }) : "笔记。");
+  (options?.json ? JSON.stringify({ problems: [], checks: [], pairs: [], contradictions: [] }) : "笔记。");
 
 /** 写手照给的写（每次调都回同一份；要在途中插一手就自己写 generateDraft）。 */
 export const writerOf = (content: string, title?: string): WriterClient => ({

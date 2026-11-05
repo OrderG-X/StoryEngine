@@ -156,8 +156,8 @@ const fakeReader: BrainCallModel = async (messages, call) => {
     return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
   }
   if (reader.failPass && last.includes(reader.failPass)) throw new Error("服务商 502");
-  if (reader.conflict && last.includes("这一遍只盯东西") && last.includes(CONFLICT.quote)) return JSON.stringify({ checks: [], contradictions: [CONFLICT] });
-  return JSON.stringify({ checks: [], contradictions: [] });
+  if (reader.conflict && last.includes("这一遍只盯东西") && last.includes(CONFLICT.quote)) return JSON.stringify({ checks: [], pairs: [], contradictions: [CONFLICT] });
+  return JSON.stringify({ checks: [], pairs: [], contradictions: [] });
 };
 
 const recipeNow = () => createCommitPrepareRecipe({ callModel: (messages, options) => fakeModel(messages, options), readerCallModel: fakeReader, modelProblem: () => undefined });

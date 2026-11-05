@@ -515,7 +515,8 @@ const sameRef = (a: ItemRefInput, b: ItemRefInput): boolean => ("id" in a && "id
  */
 const insideField = (raw: unknown): unknown => {
   if (!isRecord(raw)) return undefined;
-  if (raw.inside !== undefined) return raw.inside;
+  // 多塞的空 inside（null / ""）当没写，照 kind / item 认（外部审查 2026-11-06）。
+  if (raw.inside !== undefined && raw.inside !== null && raw.inside !== "") return raw.inside;
   const kind = str(raw.kind)?.toLowerCase();
   return kind === "inside" || (kind === undefined && raw.person === undefined && raw.place === undefined) ? raw.item : undefined;
 };

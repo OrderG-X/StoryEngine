@@ -249,6 +249,8 @@ export async function fixByUnits(input: {
     const why = target.ids.map((id) => dropped.get(id)).find(Boolean) ?? "AI 没给出这句的改法";
     for (const fix of target.fixes) failed.push({ fix, why });
   });
+  // 一处都没改成：别的句子（连带改、标不出为哪处改的）也不换——连带改只跟着改成了的那处走（外部审查 2026-11-06）。
+  if (applied.length === 0) return unchanged();
   const finalText = result.text;
   return {
     text: finalText,

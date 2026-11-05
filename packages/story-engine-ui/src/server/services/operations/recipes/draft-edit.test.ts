@@ -59,7 +59,7 @@ function recheckReader(rules: readonly { readonly when: readonly string[]; reado
       return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
     }
     const all = messages.map((message) => message.content).join("\n");
-    return JSON.stringify({ checks: [], contradictions: rules.filter((rule) => rule.when.every((text) => all.includes(text))).map((rule) => rule.conflict) });
+    return JSON.stringify({ checks: [], pairs: [], contradictions: rules.filter((rule) => rule.when.every((text) => all.includes(text))).map((rule) => rule.conflict) });
   };
 }
 

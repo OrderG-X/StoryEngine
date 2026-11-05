@@ -61,7 +61,7 @@ function readerModel(confidence = "sure", verdict = confidence) {
       return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict })) });
     }
     calls.checks += 1;
-    return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence }] : [] });
+    return JSON.stringify({ checks: [], pairs: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence }] : [] });
   };
   return { callModel, calls };
 }
@@ -126,7 +126,7 @@ describe("核账服务（核账员一路）", () => {
     expect(second.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
     expect(second.maybe).toEqual([]);
     // 作者把那句改掉了：不再带
-    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ contradictions: [] }) : "笔记");
+    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ pairs: [], contradictions: [] }) : "笔记");
     const third = await checkChapterBody(dir, 3, BODY.replace("周婶在门口喊他", "周婶在门外等着"), { readerCallModel: quiet });
     expect(third.sure).toEqual([]);
   });
@@ -143,7 +143,7 @@ describe("核账服务（核账员一路）", () => {
         reviewed.push(last);
         return JSON.stringify({ verdicts: [{ id: "K1", verdict: "no" }] });
       }
-      return JSON.stringify({ checks: [], contradictions: [] });
+      return JSON.stringify({ checks: [], pairs: [], contradictions: [] });
     };
     const second = await checkChapterBody(dir, 3, BODY.replace("林舟一早开门。", "林舟一早开门，周婶跟着进来。"), { readerCallModel: fixedElsewhere });
     expect(reviewed).toHaveLength(1);
@@ -162,7 +162,7 @@ describe("核账服务（核账员一路）", () => {
     await writeCard("左腿有旧伤");
     const setting: ContinuityIssueV2 = { quote: "周婶在门口喊他。", earlierQuote: "周婶……外貌：左腿有旧伤", earlierChapter: 3, reason: "设定写左腿", kind: "event", confidence: "sure", againstSetting: { label: "人物卡" } };
     await writeCheckMemory(dir, { chapter: 3, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(await readTruthBasis(dir), 3), issues: [setting] });
-    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
+    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], pairs: [], contradictions: [] }) : "笔记");
     const edited = `${BODY}林舟低头擦着柜台。`;
     const carried = await checkChapterBody(dir, 3, edited, { readerCallModel: quiet });
     expect(carried.sure.map((item) => item.quote)).toEqual([setting.quote]);
@@ -180,7 +180,7 @@ describe("核账服务（核账员一路）", () => {
       ledger: { status: "pending", reasonCodes: ["keeper_failed"] },
     }, { caller: "author", idempotencyKey: "check-service-pending-2" });
     expect(outcome.ok).toBe(true);
-    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
+    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], pairs: [], contradictions: [] }) : "笔记");
     const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: quiet });
     expect(result.ok).toBe(true);
     expect(result.ledgerShort).toEqual([{ chapter: 2, status: "pending" }]);
@@ -266,7 +266,7 @@ describe("核账服务：核账记忆", () => {
         return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
       }
       if (broken && last.includes("这一遍只盯时间")) throw new Error("连接断了");
-      return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
+      return JSON.stringify({ checks: [], pairs: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
     };
     const first = await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky });
     expect(first.failures.length).toBeGreaterThan(0);
@@ -317,10 +317,10 @@ describe("核账服务：改后只核改过的句子（外部审查 2026-10-28�
       }
       if (last.includes("刚按核账改了下面几句")) {
         asked.focused.push(last);
-        return JSON.stringify({ checks: [], contradictions: focusedReply });
+        return JSON.stringify({ checks: [], pairs: [], contradictions: focusedReply });
       }
       asked.full += 1;
-      return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
+      return JSON.stringify({ checks: [], pairs: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
     };
     return { callModel, asked };
   }
