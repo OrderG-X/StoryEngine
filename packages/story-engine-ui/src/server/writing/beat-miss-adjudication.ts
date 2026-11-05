@@ -23,6 +23,7 @@
 
 import { extractJsonObject, isRecord } from "../lib/project-io.js";
 
+import { modelFailureText } from "../lib/ai-errors.js";
 /**
  * 引证（quote）归一化空白后的最短字符数：更短的「引证」没有证明力（「一块」「的」这类片段
  * 几乎必为子串，采信等于没校验），一律不采。正常覆盖证据是一整句正文，远超此下限。
@@ -125,7 +126,7 @@ export async function adjudicateMissingBeats(input: {
   try {
     raw = await input.callModel(buildBeatMissAdjudicationPrompt(input));
   } catch (error) {
-    return keepDeterministic(error instanceof Error ? error.message : String(error));
+    return keepDeterministic(modelFailureText(error));
   }
   let parsed: unknown;
   try {

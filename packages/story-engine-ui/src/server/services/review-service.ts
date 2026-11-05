@@ -43,6 +43,7 @@ import { rethrowIfStopped } from "../lib/operations/context.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { resolveDraftContentForQualityCheck } from "./quality-service.js";
 
+import { modelFailureText } from "../lib/ai-errors.js";
 /** 把服务端实测字数钉进审稿 prompt，禁止模型瞎估（dogfood 问题 10）。 */
 export function appendActualWordCountToReviewPrompt(prompt: string, actualWordCount: number): string {
   return [
@@ -185,7 +186,7 @@ async function runReviewModel(
     return parseDraftAIReviewReport(content);
   } catch (error) {
     rethrowIfStopped(error);
-    return fallbackDraftAIReviewReport(error instanceof Error ? error.message : String(error));
+    return fallbackDraftAIReviewReport(modelFailureText(error));
   }
 }
 

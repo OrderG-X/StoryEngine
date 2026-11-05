@@ -54,6 +54,7 @@ import type { ContinueCallModel } from "../draft-pipeline/continue-draft.js";
 import { checkDraft, extendToFloor, fixSureIssues, recheckDraft, type ExtendOutcome, type FixOutcome } from "../draft-pipeline/quality-steps.js";
 import type { DraftChangeMode, DraftChangeParams } from "./params.js";
 
+import { modelFailureText } from "../../lib/ai-errors.js";
 /** 带失败码的错：操作记成 failed，码进 failure.code，原因进 failure.message。 */
 export const coded = (code: string, message: string): Error => Object.assign(new Error(message), { code });
 
@@ -317,7 +318,7 @@ export async function writeVersion(input: {
   } catch (error) {
     rethrowIfStopped(error);
     // 多版时一版没写成不拖垮别的版；只出一版时由选优那步如实报全没写成。
-    return { index: input.index, exception: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)), context: contextOf(), ...temperature };
+    return { index: input.index, exception: scrubLocalAbsolutePaths(modelFailureText(error)), context: contextOf(), ...temperature };
   }
   const body = report.passed ? report.draftBody?.trim() : undefined;
   const versionReport: VersionReport = {
@@ -483,7 +484,7 @@ export async function deAiDraft(input: {
     });
   } catch (error) {
     rethrowIfStopped(error);
-    const message = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
+    const message = scrubLocalAbsolutePaths(modelFailureText(error));
     return {
       draftBody: input.draftBody,
       changed: false,

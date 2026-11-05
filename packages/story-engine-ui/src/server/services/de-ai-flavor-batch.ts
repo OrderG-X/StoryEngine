@@ -15,6 +15,7 @@ import { z } from "zod";
 import { locateRevisionSpan as locateTargetSpan } from "./draft-change/revise-text.js";
 import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
 
+import { modelFailureText } from "../lib/ai-errors.js";
 export interface DeAiRewrite {
   readonly text: string;       // 要替换的原句（应为草稿子串）
   readonly afterText: string;  // 改后文本
@@ -199,7 +200,7 @@ export async function runDeAiFlavorBatch(input: {
       { maxContentChars: deAiReplyLimit(input.violations) },
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = modelFailureText(error);
     return {
       ok: false, detected, rewritten: 0, skipped: detected,
       skippedByReason: { ...EMPTY_SKIPPED_BY_REASON, noRewrite: detected },

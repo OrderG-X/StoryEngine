@@ -323,7 +323,7 @@ export async function proposeDirections(input: DirectionsInput & {
       options = parseBrainstorm(text, threads);
     } catch (error) {
       rethrowIfStopped(error);
-      lastError = error instanceof Error ? error.message : String(error);
+      lastError = modelFailureText(error);
       // 被拒、结果不明、跑飞：再发也一样，不再试（写作版本 P2a 4.2）。解析不了的照常重试一次。
       if (!canCallAgain(error)) break;
     }
@@ -372,7 +372,7 @@ export async function checkDirections(input: DirectionsInput & {
     return { options: splitBrainstormProblems(text, input.options, earlier), checked: true, ...(coldNote ? { coldNote } : {}) };
   } catch (error) {
     rethrowIfStopped(error);
-    return { options: input.options, checked: false, checkNote: `核账员这次没核成：${error instanceof Error ? error.message : String(error)}`, ...(coldNote ? { coldNote } : {}) };
+    return { options: input.options, checked: false, checkNote: `核账员这次没核成：${modelFailureText(error)}`, ...(coldNote ? { coldNote } : {}) };
   }
 }
 

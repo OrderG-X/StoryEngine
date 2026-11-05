@@ -212,7 +212,7 @@ export async function planChapterByPlanner(input: {
       return { ok: true, plan: await finalizePlan(input.projectDir, plan, dayOffset, materials), ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
     } catch (error) {
       rethrowIfStopped(error);
-      lastError = error instanceof Error ? error.message : String(error);
+      lastError = modelFailureText(error);
       // 模型调用结果不明、被拒、被我们掐的不再拟一次（写作版本 P2a 4.2）；回复解析不了这类照常重拟。
       if (!canCallAgain(error)) break;
     }
@@ -344,7 +344,7 @@ export async function revisePlanByPlanner(input: {
     ));
     raw = parsePlanJson(text) as Record<string, unknown>;
   } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    return { ok: false, reason: modelFailureText(error) };
   }
   // R7.5 确定性拼回：模型只回被改的要点（{"revised":[{"point":1,"beat":"…"}],"summary":""}），
   // 代码按序号换进原章纲——其余栏（人物/新信息/开场/avoid/天数）原样保留，不靠模型重抄。

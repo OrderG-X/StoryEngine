@@ -18,6 +18,7 @@ import { readPaceReport } from "../../services/pace-report.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { paceNote } from "../../../lib/pace-text.js";
 
+import { modelFailureText } from "../../lib/ai-errors.js";
 const inputSchema = z.object({});
 
 const outputSchema = z.object({
@@ -40,7 +41,7 @@ async function paceLine(projectDir: string): Promise<string> {
     if (report.flags.length === 0) return "节奏诊断：按账里每章推进的线索和字数看，没有明显拖或赶的章。";
     return `节奏诊断（按账里每章推进的线索和字数，跟全书平常比；只是「可能」，作者自己判断）：${report.flags.map(paceNote).join("；")}。`;
   } catch (error) {
-    return `节奏诊断这次没读出来：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`;
+    return `节奏诊断这次没读出来：${scrubLocalAbsolutePaths(modelFailureText(error))}`;
   }
 }
 

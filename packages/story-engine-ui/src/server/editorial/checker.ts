@@ -597,7 +597,7 @@ async function lookupEarlierPassages(input: {
     return { prefix: [...input.window, ask, { role: "assistant", content: reply }], passages: passagesMessage(passages) };
   } catch (error) {
     rethrowIfStopped(error);
-    const message = error instanceof Error ? error.message : String(error);
+    const message = modelFailureText(error);
     return { prefix: input.window, failure: `翻原文那一轮没跑成（${message}），这次只按窗口核` };
   }
 }
@@ -696,7 +696,7 @@ async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckS
   try {
     foundation = await readFoundationDigest(input.projectDir);
   } catch (error) {
-    foundationFailure = `设定本读不了，这次没对照设定核：${error instanceof Error ? error.message : String(error)}`;
+    foundationFailure = `设定本读不了，这次没对照设定核：${modelFailureText(error)}`;
   }
   const settingMessage = foundation ? foundationMessage(foundation) : undefined;
   // B 时间线表：引擎排好的日子，核账时照表判「昨天 / 前天 / 周几」，不让模型自己推算（压「换了一天」那类误报）。
@@ -827,7 +827,7 @@ async function selfReviewIssues(
     return { issues };
   } catch (error) {
     rethrowIfStopped(error);
-    return { issues: [...candidates], failure: `自复核没跑成：${error instanceof Error ? error.message : String(error)}` };
+    return { issues: [...candidates], failure: `自复核没跑成：${modelFailureText(error)}` };
   }
 }
 
@@ -1115,6 +1115,6 @@ export async function checkPlanByReader(input: {
     return { problems: parsePlanProblems(text, input.plan, earlier), failures: [], ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   } catch (error) {
     rethrowIfStopped(error);
-    return { problems: [], failures: [`审章纲没跑成：${error instanceof Error ? error.message : String(error)}`] };
+    return { problems: [], failures: [`审章纲没跑成：${modelFailureText(error)}`] };
   }
 }

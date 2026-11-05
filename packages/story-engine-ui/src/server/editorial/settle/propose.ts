@@ -41,6 +41,7 @@ import { shortChapters, type ShortChapter } from "../../book/ledger-short.js";
 import { storySpanText } from "../../book/story-timeline.js";
 import { readTruthBasisForWork } from "../../book/truth-basis.js";
 
+import { modelFailureText } from "../../lib/ai-errors.js";
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
 export type SettleSide =
   | { readonly where: "chapter"; readonly chapter: number; readonly quote: string }
@@ -673,7 +674,7 @@ export async function proposeSettle(input: {
       if (old) replaces = { id: old.id, text: old.text };
     }
   } catch (error) {
-    if (request.kind === "pick") return { ok: false, message: `这次没写出定论（${error instanceof Error ? error.message : String(error)}），重新点一次试试。` };
+    if (request.kind === "pick") return { ok: false, message: `这次没写出定论（${modelFailureText(error)}），重新点一次试试。` };
     canon = statementText;
     failures.push("没问出这条定论涉及谁，这次全书都查了");
   }
@@ -756,7 +757,7 @@ export async function proposeSettle(input: {
       reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
       reviewDropped.push(...fieldsToReview.filter((_, index) => drop.has(toReview.length + index)).map(({ card, label, from, to }) => ({ ...(card ? { card } : {}), label, from, to })));
     } catch (error) {
-      failures.push(`复核没做成（${error instanceof Error ? error.message : String(error)}），下面几处请一句句看过再确认`);
+      failures.push(`复核没做成（${modelFailureText(error)}），下面几处请一句句看过再确认`);
     }
   }
   const edits: SettleEdit[] = kept
@@ -802,7 +803,7 @@ export async function proposeSettle(input: {
       const reply = await callModel([{ role: "user", content: factsTask(canon, chapter, mine, affected, loose) }], { json: true });
       facts.push(...parseFactChanges(reply, chapter, affected, applied.text, loose));
     } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
+      const why = modelFailureText(error);
       if (affected.length > 0) {
         failures.push(`第 ${chapter} 章账里跟着改的那几条没问成（${why}），确认后这几条会作废`);
         facts.push(...affected.map((fact) => ({ chapter, factId: fact.factId, before: fact.text })));

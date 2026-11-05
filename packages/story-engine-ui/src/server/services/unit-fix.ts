@@ -12,6 +12,7 @@ import { applyUnitEdits, numberedText, prepareUnitReplacement, splitNumberedRepl
 import { locateRevisionSpan, revisionSpans, type RevisionModelCaller } from "./draft-change/revise-text.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 
+import { modelFailureText } from "../lib/ai-errors.js";
 export interface UnitFix {
   /** 核账引的原句。 */
   readonly quote: string;
@@ -162,7 +163,7 @@ export function parseUnitFixEdits(
   return out;
 }
 
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const errorText = (error: unknown): string => modelFailureText(error);
 
 /**
  * 改一章（不读盘、不写盘）：定位 → 问一次模型 → 按编号换。
