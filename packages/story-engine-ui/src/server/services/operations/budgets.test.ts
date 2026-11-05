@@ -17,7 +17,7 @@ describe("额度算式", () => {
 
   it("整章核：翻原文 + 对设定 + 三遍 × 每遍次数 + 自复核；只核改过的：翻原文 + 并行次数 + 自复核", () => {
     // 三遍（三个侧重）：默认每遍 4 次。
-    expect(readerCheckCalls(DEFAULT_READER_VARIANT)).toBe(1 + 1 + 3 * DEFAULT_READER_VARIANT.passRepeats! + 1);
+    expect(readerCheckCalls(DEFAULT_READER_VARIANT)).toBe(1 + 1 + 3 * DEFAULT_READER_VARIANT.passRepeats! + DEFAULT_READER_VARIANT.innerRepeats! + 1);
     expect(readerRecheckCalls(DEFAULT_READER_VARIANT)).toBe(1 + DEFAULT_READER_VARIANT.recheckRepeats! + 1);
     expect(readerCheckCalls({})).toBe(2 + 3);
     expect(readerRecheckCalls({ passRepeats: 3 })).toBe(1 + 3);
@@ -29,8 +29,8 @@ describe("额度算式", () => {
       check: Math.max(readerCheckCalls(DEFAULT_READER_VARIANT), readerRecheckCalls(DEFAULT_READER_VARIANT)) * READER_CALL_MAX_SENDS,
     });
     expect(READER_NOTES_SENDS).toBe(48);
-    expect(READER_CHECK_SENDS).toBe(60);
-    expect(sumBudget(inspectStepBudget("continuity"))).toBe(108);
+    expect(READER_CHECK_SENDS).toBe(76);
+    expect(sumBudget(inspectStepBudget("continuity"))).toBe(124);
     expect(inspectStepBudget("review")).toEqual({ run: MODEL_CALL_MAX_SENDS });
     expect(inspectStepBudget("flavor")).toEqual({ run: MODEL_CALL_MAX_SENDS });
     expect(inspectStepBudget("quality")).toEqual({});

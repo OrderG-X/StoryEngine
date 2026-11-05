@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { splitUnits } from "@actalk/story-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelCallError } from "../lib/ai-errors.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -19,9 +20,13 @@ import {
   checkerRoleFor,
   DEFAULT_READER_VARIANT,
   draftSegments,
+  innerCheckTask,
+  parseInnerPairs,
+  unitRanges,
   parseKeywords,
   parsePlanProblems,
   planCheckTask,
+  readerCheckCalls,
   REASON_WORDING,
   selfReviewTask,
 } from "./checker.js";
@@ -137,6 +142,112 @@ describe("核账员：每遍的几次各核一块（2026-11-05 作者手写章�
   it("checkTask 不带块时不提分块", () => {
     expect(checkTask(7, "time")).not.toContain("逐句核的一段");
     expect(checkTask(7, "time", { index: 2, count: 4, text: "某一段" })).toContain("新稿分成 4 段，这一遍只逐句核第 2 段");
+  });
+});
+
+describe("H 本章前后那一遍（2026-11-06 30 章尺子）", () => {
+  const INNER_KEY = "只找这一章自己前后打架";
+  const innerReply = (...pairs: Record<string, unknown>[]) => JSON.stringify({ pairs });
+
+  it("提示只带这一章、按句编号、先逐句列核对；不提前文；分了段才点出这一遍核哪几句", () => {
+    const task = innerCheckTask(5, "[1]甲。[2]乙。");
+    expect(task).toContain("第 5 章新稿");
+    expect(task.endsWith("\n\n[1]甲。[2]乙。")).toBe(true);
+    expect(task).toContain("先在 checks 里按顺序逐句列");
+    expect(task).toContain("不写句子编号");
+    expect(task).not.toContain("前文");
+    expect(task).not.toContain("这一遍逐句核的");
+    expect(innerCheckTask(5, "[1]甲。", { index: 2, count: 4, from: 7, to: 12 })).toContain("只逐句核第 7～12 句");
+  });
+
+  it("按句编号分块：和 draftSegments 同一套切法，编号连着、不漏", () => {
+    const PARAS = ["林舟一早开门。他从工作台上拿起那块怀表。", "表盖还开着。他看了一眼钟。", "周婶在门口喊他。他应了一声。", "巷子里有人推车过去。车上装着煤。"];
+    const units = splitUnits(PARAS.join("\n\n"));
+    expect(unitRanges(units, 2).map((range) => [range.from, range.to])).toEqual([[1, 4], [5, 8]]);
+    expect(unitRanges(units, 4).map((range) => [range.index, range.count, range.from, range.to])).toEqual([[1, 4, 1, 2], [2, 4, 3, 4], [3, 4, 5, 6], [4, 4, 7, 8]]);
+    expect(unitRanges(splitUnits(BODY), 4)).toEqual([{ index: 1, count: 1, from: 1, to: 3 }]);
+  });
+
+  it("几次并行各核一段：每次整章照样给、点出这一次核哪几句；几次报的并起来去重", async () => {
+    const dir = await makeBook();
+    const PARAS = ["林舟一早开门。他从工作台上拿起那块怀表。", "表盖还开着。他看了一眼钟。", "周婶在门口喊他。他应了一声。", "巷子里有人推车过去。车上装着煤。"];
+    const LONG = PARAS.join("\n\n");
+    const asked: string[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (!last.includes(INNER_KEY)) return pass();
+      asked.push(last);
+      return last.includes("只逐句核第 5～8 句") ? innerReply({ later: 5, earlier: 1, reason: "后一段报的", sure: true }) : innerReply({ later: 5, earlier: 1, reason: "前一段也报了", sure: true });
+    };
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: LONG, callModel, variant: { innerRepeats: 2 } });
+    expect(asked).toHaveLength(2);
+    expect(asked.map((call) => (call.includes("只逐句核第 1～4 句") ? 1 : call.includes("只逐句核第 5～8 句") ? 2 : 0)).sort()).toEqual([1, 2]);
+    for (const call of asked) expect(call).toContain("[8]车上装着煤。");
+    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([["周婶在门口喊他。", "sure"]]);
+  });
+
+  it("编号对回本章原句：后面那句当 quote，写反了按编号摆正；越界、同一句、没写编号的丢掉；编号宽进；只收它说 sure 的", () => {
+    const issues = parseInnerPairs(innerReply(
+      { later: 3, earlier: 1, reason: "早上和门口对不上", sure: true },
+      { later: "[1]", earlier: "2", reason: "写反了", sure: "true" },
+      { later: 3, earlier: 2, reason: "拿不准", sure: false },
+      { later: 2, earlier: 1, reason: "没写把握" },
+      { later: 9, earlier: 1, reason: "越界", sure: true },
+      { later: 2, earlier: 2, reason: "同一句", sure: true },
+      { later: "第三句", earlier: 1, reason: "不是编号", sure: true },
+    ), 3, BODY);
+    expect(issues).toEqual([
+      { quote: "周婶在门口喊他。", earlierQuote: "林舟一早开门。", earlierChapter: 3, reason: "早上和门口对不上", kind: "event", confidence: "sure" },
+      { quote: WATCH_SENTENCE, earlierQuote: "林舟一早开门。", earlierChapter: 3, reason: "写反了", kind: "event", confidence: "sure" },
+    ]);
+    expect(parseInnerPairs(innerReply(), 3, BODY)).toEqual([]);
+    expect(() => parseInnerPairs("不是 JSON", 3, BODY)).toThrow("不是 JSON");
+  });
+
+  it("开着时和三遍并行多发一次：不带前文窗口、只一条消息；报的进候选，本章那对句子三遍抄反了也算同一条、留三遍那条", async () => {
+    const dir = await makeBook();
+    const calls: BrainMessage[][] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes(INNER_KEY)) {
+        calls.push([...messages]);
+        return innerReply({ later: 2, earlier: 1, reason: "本章前后", sure: true }, { later: 3, earlier: 1, reason: "又一处", sure: true });
+      }
+      if (last.includes(FOCUS_KEYS.objects)) return pass({ quote: "林舟一早开门", earlierQuote: "他从工作台上拿起那块怀表", earlierChapter: 3, reason: "三遍报的", confidence: "sure" });
+      return pass();
+    };
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { innerRepeats: 1 } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(1);
+    expect(calls[0]![0]!.content).toContain("[1]林舟一早开门。[2]他从工作台上拿起那块怀表，表盖还开着。[3]周婶在门口喊他。");
+    expect(calls[0]![0]!.content).not.toContain(CH2);
+    expect(result.failures).toEqual([]);
+    expect(result.issues.map((issue) => [issue.quote, issue.reason, issue.confidence])).toEqual([
+      ["林舟一早开门。", "三遍报的", "sure"],
+      ["周婶在门口喊他。", "又一处", "sure"],
+    ]);
+  });
+
+  it("没跑成如实记一笔，三遍照收；关着不发", async () => {
+    const dir = await makeBook();
+    let inner = 0;
+    const callModel: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes(INNER_KEY)) { inner += 1; throw new Error("断了"); }
+      return last.includes(FOCUS_KEYS.objects) ? pass({ ...WATCH, confidence: "sure" }) : pass();
+    };
+    const on = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { innerRepeats: 1 } });
+    expect(on.failures).toEqual(["本章前后那一遍没跑成：断了"]);
+    expect(on.issues.map((issue) => issue.quote)).toEqual([WATCH_SENTENCE]);
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: {} });
+    expect(inner).toBe(1);
+  });
+
+  it("额度按几次算", () => {
+    expect(readerCheckCalls({ innerRepeats: 4 })).toBe(readerCheckCalls({}) + 4);
   });
 });
 
@@ -745,8 +856,8 @@ describe("F 时间线表只进自复核（R2.1）", () => {
     for (const { messages } of [...byKind().passes, ...byKind().review]) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
   });
 
-  it("产品默认组合：A 自复核 + 时间线只进自复核（R2.1）+ 每遍核四次、改后只核改过的核两次（2026-10-28 改后重核考卷）", () => {
-    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 });
+  it("产品默认组合：A 自复核 + 时间线只进自复核（R2.1）+ 每遍核四次、改后只核改过的核两次（2026-10-28 改后重核考卷）+ 本章前后（2026-11-06）", () => {
+    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2, innerRepeats: 4 });
   });
 });
 

@@ -12,7 +12,7 @@
  * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
-import { splitUnits } from "@actalk/story-core";
+import { numberedText, splitUnits, type TextUnit } from "@actalk/story-core";
 import { describeTimelineForChapter } from "../book/story-timeline.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readStoryViews } from "../book/story-views.js";
@@ -114,12 +114,11 @@ export interface DraftSegment {
 }
 
 /**
- * 新稿按段落切成 count 块、每块字数差不多（只在段与段之间切；一段太长才在句子之间切）。
- * 首遍一遍只列 10～16 处说法（作者手写章实测 2026-11-05），整章近百句、细处核不到；分块后每次逐句核一块。
+ * 新稿按段落切成 count 块、每块字数差不多（只在段与段之间切；一段太长才在句子之间切）：返回切点（第几句之前，0 起），头尾带上。
+ * 句子太少（不到每块两句）不切。
  */
-export function draftSegments(body: string, count: number): readonly DraftSegment[] {
-  const units = splitUnits(body);
-  if (count <= 1 || units.length < count * 2) return [{ index: 1, count: 1, text: body }];
+function segmentBounds(units: readonly TextUnit[], count: number): readonly number[] {
+  if (count <= 1 || units.length < count * 2) return [0, units.length];
   const total = units.reduce((sum, unit) => sum + unit.text.length, 0);
   const target = total / count;
   const slack = target * 0.25;
@@ -141,11 +140,40 @@ export function draftSegments(body: string, count: number): readonly DraftSegmen
     }
     if (atParagraph) boundary = { index: index + 1, size };
   });
-  const bounds = [0, ...cuts, units.length];
+  return [0, ...cuts, units.length];
+}
+
+/**
+ * 新稿按段落切成 count 块、每块字数差不多（segmentBounds）。
+ * 首遍一遍只列 10～16 处说法（作者手写章实测 2026-11-05），整章近百句、细处核不到；分块后每次逐句核一块。
+ */
+export function draftSegments(body: string, count: number): readonly DraftSegment[] {
+  const units = splitUnits(body);
+  const bounds = segmentBounds(units, count);
+  if (bounds.length <= 2) return [{ index: 1, count: 1, text: body }];
   return bounds.slice(0, -1).map((from, index) => ({
     index: index + 1,
     count: bounds.length - 1,
     text: body.slice(units[from]!.start, units[bounds[index + 1]! - 1]!.end),
+  }));
+}
+
+/** 「本章前后」那一遍逐句核的一段：第 from～to 句（句子编号，1 起，含两头）。 */
+export interface UnitRange {
+  readonly index: number;
+  readonly count: number;
+  readonly from: number;
+  readonly to: number;
+}
+
+/** 按句编号的分块（和 draftSegments 同一套切法），给「本章前后」那一遍几次各核一段。 */
+export function unitRanges(units: readonly TextUnit[], count: number): readonly UnitRange[] {
+  const bounds = segmentBounds(units, count);
+  return bounds.slice(0, -1).map((from, index) => ({
+    index: index + 1,
+    count: bounds.length - 1,
+    from: units[from]?.id ?? 1,
+    to: units[bounds[index + 1]! - 1]?.id ?? 1,
   }));
 }
 
@@ -161,6 +189,68 @@ export function checkTask(chapter: number, focus?: CheckerFocus, segment?: Draft
       : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");
+}
+
+/**
+ * 「本章前后」那一遍（2026-11-06 30 章尺子）：只给这一章、按句编号，找本章自己前后打架的两句，模型点句号、代码取原句。
+ * 两本 30 章的书判过的真错里同一章前后打架的占三成（早上已经拿出来、晚上又说还在箱里），核账没报的里头占四成——
+ * 三遍带着整本前文读，眼睛都在「和前文对不对」上，本章自己前后反倒看漏。这一遍不带前文窗口、很便宜，候选照样进自复核。
+ * 量过的几种（两本书 60 章、判过的同章真错 30 组）：直接交 12 组；先逐句列核对（checks）再交 15 组；再分四块并行、每次逐句核一块 18 组。
+ * 开思考抓得最全（24 组），但一章要想 8～12 分钟，不用。
+ * range：几次并行、各逐句核一段（整章照样给，当上下文）。
+ */
+export function innerCheckTask(chapter: number, numbered: string, range?: UnitRange): string {
+  return [
+    `下面是第 ${chapter} 章新稿，每句前面有编号 [n]。只找这一章自己前后打架的地方：后面某句和本章前面某句说的是同一件事，两处不可能同时成立，中间也没写过变化。`,
+    "要核的：东西在哪、在谁手里、什么样、有几个；人在哪、在做什么、穿着拿着什么；钟点、天色、过了多久；谁说过什么、谁已经知道什么；引号里的字说成「几个字」的，数一数对不对。",
+    "不算：中间写了变化（拿走了、放回去、换了地方、过了一夜）；说得通的；人物撒谎、记错、改口（正文写明的）；回忆和梦里的；文笔和节奏。",
+    "逐句读：每句碰到具体的东西、人、时间、数目，就回本章前面找同一件事核一遍。",
+    "1. 先在 checks 里按顺序逐句列：这句碰到的具体东西、人、时间、数目 → 本章前面写同一件事的那句（写编号）怎么说 → 对得上 / 对不上。本章前面没写过的不用列。",
+    `2. 对不上的放进 pairs：later 写后面那句的编号，earlier 写本章前面和它打架的那句的编号；${REASON_WORDING}，也不写句子编号；拿不准的 sure 写 false。`,
+    '只输出一个 JSON：{"checks":["[12] 箱子在桌上 → [5] 锁进了柜子 → 对不上"],"pairs":[{"later":12,"earlier":5,"reason":"","sure":true}]}。',
+    ...(range && range.count > 1 ? [`【这一遍逐句核的】只逐句核第 ${range.from}～${range.to} 句，每句回本章前面找同一件事；别的句子当上下文看，不用列。`] : []),
+    "",
+    numbered,
+  ].join("\n");
+}
+
+/** 句子编号宽进：数字、"12"、"[12]" 都收（模型照着正文里的样子抄）；别的写法当没给。 */
+function readUnitId(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  // 不猜白名单：自家格式
+  const match = /^\s*\[?\s*(\d+)\s*\]?\s*$/u.exec(value);
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * 「本章前后」那一遍的输出：编号对回本章原句（代码取，不让模型抄）。quote＝后面那句（该改的，和三遍「前文没写过就抄后出现的那句」同口径），
+ * earlierQuote＝本章更早那句。编号越界、两边同一句的丢掉；模型把先后写反了按编号摆正。
+ * 只收它自己说 sure 的（2026-11-06 两本 30 章的书）：它说 sure、自复核也判 sure 的 35 条里真错 27 条；它拿不准的 40 条里真错 7 条，
+ * 自复核也分不出来（判 sure 的 18 条里真错 4 条）——进自复核只会多出一堆误报。
+ */
+export function parseInnerPairs(text: string, chapter: number, draftBody: string): ContinuityIssueV2[] {
+  const units = new Map(splitUnits(draftBody).map((unit) => [unit.id, unit.text]));
+  let raw: unknown[];
+  try {
+    const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { pairs?: unknown };
+    raw = Array.isArray(parsed.pairs) ? parsed.pairs : [];
+  } catch {
+    throw new Error("「本章前后」那一遍输出不是 JSON");
+  }
+  const out: ContinuityIssueV2[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const a = readUnitId(record.later);
+    const b = readUnitId(record.earlier);
+    if (a === undefined || b === undefined || a === b) continue;
+    const quote = units.get(Math.max(a, b));
+    const earlierQuote = units.get(Math.min(a, b));
+    if (!quote || !earlierQuote || readBoolFlag(record.sure) !== true) continue;
+    out.push({ quote, earlierQuote, earlierChapter: chapter, reason: String(record.reason ?? "").trim(), kind: "event", confidence: "sure" });
+  }
+  return out;
 }
 
 /**
@@ -197,6 +287,8 @@ export interface ReaderCheckVariant {
   readonly passRepeats?: number;
   /** 改后只核改过的句子时并行几次（缺省同 passRepeats）。 */
   readonly recheckRepeats?: number;
+  /** H「本章前后」那一遍并行几次（innerCheckTask；缺省 0 = 不跑）：只给这一章、按句编号，几次各逐句核一段，找本章自己前后打架的，和三遍并行，候选一起进自复核。 */
+  readonly innerRepeats?: number;
 }
 
 /** D 同章的两句至少相隔几句才可能算「确定」：同一个节拍里的两个说法（比如门开着又关上）常被误读成矛盾。 */
@@ -217,15 +309,19 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  * 去掉「小处也别跳过」那句后 76%，「确定」里真错占比不掉（73%）。AI 写的章（考卷 16 章）没多抓到真错，「不是」的多了约
  * 每章一条（27→46 条），数字见 docs/rebuild/reports/作者写的章核账查全-2026-11-05.md。
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
+ * H 本章前后（2026-11-06）：两本 30 章的书（现在 main / 0.4.1 各写第 9～38 章、共 60 章）上单独跑这一遍、再过自复核，
+ * 多出「确定」35 条：真错 27、不是 6、拿不准 2（「确定」里真错约 77%，和原来三遍的差不多）；「可能」多 6 条（真错 1）。
+ * 定稿里还留着、盲找盲判出的同一章前后打架真错 30 组，定稿前核账只报过 4 组（「确定」1 组）；这一遍以「确定」抓到 13 组，另外还抓到 13 处盲找漏了的。
+ * 四次并行，每次不带前文、只给这一章，几十秒，和三遍一起跑不多等。数字见 docs/rebuild/reports/核账本章前后-2026-11-06.md。
  */
-export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 };
+export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2, innerRepeats: 4 };
 
 /** 核账员（含跟读笔记、卷笔记）一次调用最多几次占额度的发送：对冲份数 × 每份（主 + 备用）。写作版本 P2a 4.5。 */
 export const READER_CALL_MAX_SENDS = HEDGE_MAX_COPIES * MODEL_CALL_MAX_SENDS;
 
-/** 整章核一次最多几次核账员调用：翻原文 1 + 对设定本 1 + 三遍 × 每遍次数 + 自复核 1（额度按它算）。 */
+/** 整章核一次最多几次核账员调用：翻原文 1 + 对设定本 1 + 三遍 × 每遍次数 + 本章前后几次 + 自复核 1（额度按它算）。 */
 export function readerCheckCalls(variant: ReaderCheckVariant): number {
-  return 1 + 1 + CHECKER_PASSES.length * Math.max(1, variant.passRepeats ?? 1) + (variant.selfReview ? 1 : 0);
+  return 1 + 1 + CHECKER_PASSES.length * Math.max(1, variant.passRepeats ?? 1) + Math.max(0, variant.innerRepeats ?? 0) + (variant.selfReview ? 1 : 0);
 }
 
 /** 只核改过的句子一次最多几次：翻原文 1 + 并行次数 + 自复核 1。 */
@@ -408,12 +504,17 @@ export function applySureGate(
   });
 }
 
-/** 三遍合并：一条的原句包含另一条的算同一条，留先出现的；同一句一遍判 sure、一遍判 maybe 取 sure。 */
-function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[]): ContinuityIssueV2[] {
+/**
+ * 三遍合并：一条的原句包含另一条的算同一条，留先出现的；同一句一遍判 sure、一遍判 maybe 取 sure。
+ * 本章自己前后打架的，两条把同一对句子抄反了（这条的 quote 是那条的 earlierQuote、反过来也是）也算同一条。
+ */
+function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[], chapter: number): ContinuityIssueV2[] {
+  const overlaps = (a: string, b: string): boolean => { const x = normalize(a); const y = normalize(b); return x.includes(y) || y.includes(x); };
   const merged: ContinuityIssueV2[] = [];
   for (const issue of passes.flat()) {
-    const quote = normalize(issue.quote);
-    const index = merged.findIndex((other) => { const kept = normalize(other.quote); return kept.includes(quote) || quote.includes(kept); });
+    const inner = issue.earlierChapter === chapter && !issue.againstSetting;
+    const index = merged.findIndex((other) => overlaps(other.quote, issue.quote)
+      || (inner && other.earlierChapter === chapter && !other.againstSetting && overlaps(other.quote, issue.earlierQuote) && overlaps(other.earlierQuote, issue.quote)));
     if (index < 0) merged.push(issue);
     else if (issue.confidence === "sure" && merged[index]!.confidence !== "sure") merged[index] = { ...merged[index]!, confidence: "sure" };
   }
@@ -864,11 +965,27 @@ export async function checkChapterByReader(input: ReaderCheckInput & {
       return Array.from({ length: repeats }, (_, repeat) =>
         contradictionPass(input, setup, repeat === 0 ? label : `${label}第 ${repeat + 1} 次`, checkTask(input.chapter, focus, segments.length > 1 ? segments[repeat % segments.length] : undefined)));
     }),
+    // H 本章前后：不带前文窗口，只给这一章（按句编号），几次各逐句核一段；排在三遍后面，同一处三遍也报了留三遍那条（它看过前文，挑的该改那句更准）。
+    ...(() => {
+      const repeats = Math.max(0, variant.innerRepeats ?? 0);
+      if (repeats === 0) return [];
+      const units = splitUnits(input.draftBody);
+      const numbered = numberedText(units);
+      const ranges = unitRanges(units, repeats);
+      return Array.from({ length: repeats }, (_, repeat) => ({
+        label: repeat === 0 ? "本章前后那一遍" : `本章前后那一遍第 ${repeat + 1} 次`,
+        run: async (): Promise<readonly ContinuityIssueV2[]> => {
+          const range = ranges.length > 1 ? ranges[repeat % ranges.length] : undefined;
+          const text = await input.callModel([{ role: "user", content: innerCheckTask(input.chapter, numbered, range) }], { json: true });
+          return parseInnerPairs(text, input.chapter, input.draftBody);
+        },
+      }));
+    })(),
   ];
   const ran = await runReaderPasses(passPlans);
   const failures: string[] = [...setup.failures, ...ran.failures];
   // 上一稿带过来的排最前：同一句这次又报了，留上一稿那条（把握沿用）。
-  let issues = dropMisdirectedBySetting(mergePasses([carryOver, ...ran.passes]));
+  let issues = dropMisdirectedBySetting(mergePasses([carryOver, ...ran.passes], input.chapter));
   const carried = new Set<ContinuityIssueV2>(issues.filter((issue) => carryOver.includes(issue)));
   // A 自复核：没候选就不发这一轮（省调用）。
   // 上一稿带过来的也在里头：原句没动、错却可能在别处改好了（长篇实跑：作者把地点挪对了，报的那句台词没动，「确定」一直带着）。
@@ -920,7 +1037,7 @@ export async function recheckChangesByReader(input: ReaderCheckInput & {
     contradictionPass(input, setup, repeat === 0 ? "核改过的句子" : `核改过的句子第 ${repeat + 1} 次`, task)));
   const failures: string[] = [...setup.failures, ...ran.failures];
   // 带过来复核的排最前：同一句这遍又报了，留上一遍那条（把握沿用）。
-  let issues = dropMisdirectedBySetting(mergePasses([revisit, ...ran.passes]));
+  let issues = dropMisdirectedBySetting(mergePasses([revisit, ...ran.passes], input.chapter));
   const carried = new Set<ContinuityIssueV2>(issues.filter((issue) => revisit.includes(issue)));
   if (variant.selfReview && issues.length > 0) {
     const reviewed = await selfReviewIssues(input, setup, issues, carried);
