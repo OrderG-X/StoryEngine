@@ -231,13 +231,19 @@ function readUnitId(value: unknown): number | undefined {
  */
 export function parseInnerPairs(text: string, chapter: number, draftBody: string): ContinuityIssueV2[] {
   const units = new Map(splitUnits(draftBody).map((unit) => [unit.id, unit.text]));
-  let raw: unknown[];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { pairs?: unknown };
-    raw = Array.isArray(parsed.pairs) ? parsed.pairs : [];
+    parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
   } catch {
     throw new Error("「本章前后」那一遍输出不是 JSON");
   }
+  // 宽进：单条直接放在 pairs 下的包成一条，null / "" 当没找到；没写 pairs 或写成别的如实算没跑成，
+  // 不当「没发现问题」存进核账记忆（外部审查 2026-11-06）。
+  const pairs = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { pairs?: unknown }).pairs : undefined;
+  const raw: unknown[] = Array.isArray(pairs) ? pairs
+    : pairs === null || pairs === "" ? []
+    : pairs && typeof pairs === "object" ? [pairs]
+    : (() => { throw new Error("「本章前后」那一遍没按格式交 pairs"); })();
   const out: ContinuityIssueV2[] = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;

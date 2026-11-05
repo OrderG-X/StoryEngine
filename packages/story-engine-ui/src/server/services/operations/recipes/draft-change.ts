@@ -347,8 +347,9 @@ export function createDraftChangeRecipe(deps: DraftChangeDeps = DEFAULT_DEPS): R
       if (fix.changed) body = fix.draftBody;
       const finalBody = body;
       const final = await ctx.step("recheck", { body: finalBody, fixed: fix.applied }, async () => {
-        if (fix.applied > 0) ctx.progress("改完再核一遍");
-        const recheck = fix.applied > 0
+        // 正文换了就再核（核的、记进核账记忆的都是落盘这版）。
+        if (fix.changed) ctx.progress("改完再核一遍");
+        const recheck = fix.changed
           ? await recheckDraft({ projectDir: bookDir, chapter, draftBody: finalBody, changes: fix.changes, ...(fix.revisit ? { revisit: fix.revisit } : {}), callModel: deps.readerCallModel })
           : undefined;
         const beats = await finalBeatFidelity({

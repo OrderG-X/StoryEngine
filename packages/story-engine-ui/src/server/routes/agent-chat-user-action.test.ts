@@ -50,7 +50,7 @@ const fakeKeeper: BrainCallModel = async (messages) =>
       })
     : "笔记。";
 /** 假核账员：什么都没核出来，不连网。 */
-const fakeReader: BrainCallModel = async (_messages, call) => (call.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记。");
+const fakeReader: BrainCallModel = async (_messages, call) => (call.json ? JSON.stringify({ checks: [], pairs: [], contradictions: [] }) : "笔记。");
 
 interface SseEvent {
   readonly event: string;

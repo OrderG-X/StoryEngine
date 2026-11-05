@@ -332,7 +332,7 @@ describe("写稿按钮（draft.change）", () => {
       const last = messages.at(-1)!.content;
       if (last.includes("你刚才核完报了")) return JSON.stringify({ verdicts: [...last.matchAll(/【(K\d+)】/gu)].map((match) => ({ id: match[1], verdict: "sure" })) });
       const all = messages.map((message) => message.content).join("\n");
-      return JSON.stringify({ checks: [], contradictions: all.includes("老周摇头。") ? [{ quote: "老周摇头。", earlierQuote: "钟停在四点。", earlierChapter: 1, reason: "对不上", confidence: "sure" }] : [] });
+      return JSON.stringify({ checks: [], pairs: [], contradictions: all.includes("老周摇头。") ? [{ quote: "老周摇头。", earlierQuote: "钟停在四点。", earlierChapter: 1, reason: "对不上", confidence: "sure" }] : [] });
     };
     expect(await runCommand(book, draftSave, { chapter: 1, body: "钟停在三点。老周摇头。", baseVersion: (await readDraftState(book, 1)).version, title: "" }, { caller: "author" })).toMatchObject({ ok: true });
     __resetRecipesForTests();

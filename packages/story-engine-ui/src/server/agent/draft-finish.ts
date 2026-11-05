@@ -267,6 +267,9 @@ function finishDraftEdit(record: OperationRecord, args: DraftFinishArgs): void {
         args.sendEvent("card", { type: "continuity", check: { ...verify.left, earlierOpen: [] } });
         return;
       }
+    }
+    // 核全了、没有对不上的才推荐定稿；有一步没核成的照没核成给「再核一遍」。
+    if (verify && !verify.failure && !verify.partial) {
       sendNextSteps(args.sendEvent, "改好了，接下来？", [
         ...(failed.length > 0 ? [askAiToFix(params.chapter, failed)] : []),
         commitChoice(params.chapter, failed.length === 0 ? { recommended: true } : {}),

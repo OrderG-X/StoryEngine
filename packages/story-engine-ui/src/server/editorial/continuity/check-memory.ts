@@ -16,8 +16,9 @@ import { writeFileAtomic } from "../../lib/project-io.js";
 import { basisDigestBefore, type TruthBasis } from "@actalk/story-core";
 import type { ContinuityIssueV2 } from "./check-chapter.js";
 
-/** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。v6：前文指纹改用真相依据。 */
-export const CHECK_MEMORY_VERSION = 6;
+/** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。v6：前文指纹改用真相依据。
+ *  v7：首遍分块核（0.4.1）+ 「本章前后」一遍（0.4.2），没跑过这两样的记忆不再原样端出来（外部审查 2026-11-06）。 */
+export const CHECK_MEMORY_VERSION = 7;
 
 export interface CheckMemory {
   readonly version: number;

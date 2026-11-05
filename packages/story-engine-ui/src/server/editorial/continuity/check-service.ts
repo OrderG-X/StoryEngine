@@ -5,7 +5,7 @@
  * 核账员三遍（跟读窗口，带 A 自复核 + F 时间线只进自复核）、同一份核账记忆和「不是问题」批注。
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
-import type { BookProjection } from "@actalk/story-core";
+import { quoteInText, type BookProjection } from "@actalk/story-core";
 import { describeTimelineForChapter } from "../../book/story-timeline.js";
 import { itOrThem, shortChapters, shortChaptersText, type ShortChapter } from "../../book/ledger-short.js";
 import { readStoryViews } from "../../book/story-views.js";
@@ -357,7 +357,9 @@ export async function checkChapterBody(
     // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
     result = { issues: settleMirroredIssues(await alignRelativeDays(projectDir, memory!.issues, chapter, projection), chapter), failures: [] };
   } else {
-    const revisit = changes && options.revisit ? carryOver.filter((issue) => options.revisit!.includes(issue.quote)) : [];
+    // 点名时给的可能是整句、也可能是句里一段（作者 / 模型摘的）：两头互相包含就算这一条（外部审查 2026-11-06）。
+    const named = (quote: string): boolean => (options.revisit ?? []).some((part) => Boolean(part && quote) && (quoteInText(quote, part) || quoteInText(part, quote)));
+    const revisit = changes && options.revisit ? carryOver.filter((issue) => named(issue.quote)) : [];
     result = await withStep("核账", () => checkByReader({
       projectDir,
       chapter,
