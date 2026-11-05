@@ -29,6 +29,8 @@ export interface UnitFixOutcome {
   readonly failed: readonly { readonly fix: number; readonly why: string }[];
   /** 换上去的句子（改前 → 改后）。 */
   readonly changes: readonly { readonly from: string; readonly to: string }[];
+  /** changes 每一条在改前正文里从第几个字起（按位置并两轮改动用，同样的字出现几处时靠它认是哪一处）。 */
+  readonly at: readonly number[];
   /** 其中不是点名的、本章别处说同一件事跟着改的句数。 */
   readonly alsoChanged: number;
   /**
@@ -187,7 +189,7 @@ export async function fixByUnits(input: {
     if (typeof at === "string") failed.push({ fix: index, why: at });
     else located.push({ fix: index, at });
   });
-  const unchanged = (): UnitFixOutcome => ({ text, applied: [], failed: failed.sort((a, b) => a.fix - b.fix), changes: [], alsoChanged: 0, revisit: [] });
+  const unchanged = (): UnitFixOutcome => ({ text, applied: [], failed: failed.sort((a, b) => a.fix - b.fix), changes: [], at: [], alsoChanged: 0, revisit: [] });
   if (located.length === 0) return unchanged();
 
   // 两处落在同一句上：合成一条交给模型，免得同一句给两种改法。
@@ -257,6 +259,7 @@ export async function fixByUnits(input: {
     applied: applied.sort((a, b) => a - b),
     failed: failed.sort((a, b) => a.fix - b.fix),
     changes: result.applied.map((edit) => ({ from: edit.from, to: edit.to })),
+    at: result.applied.map((edit) => edit.start),
     // 连带改的不算替点名那句改到别处的那几句。
     alsoChanged: pending.filter((edit) => changedIds.has(edit.id) && !allowed.has(edit.id) && !(edit.target !== undefined && elsewhereTargets.has(edit.target))).length,
     revisit: applied.filter((fix) => locateRevisionSpan(finalText, fixes[fix]!.quote.trim()) !== "not_found"),

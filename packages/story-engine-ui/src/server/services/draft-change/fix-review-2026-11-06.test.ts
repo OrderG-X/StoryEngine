@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { draftSave, readDraft, readDraftState, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../../book/project-store.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { appendFixLog } from "../../lib/fix-log.js";
+import { appendFixLog, readFixLog } from "../../lib/fix-log.js";
 import { __resetExecutionsForTests } from "../../lib/operations/context.js";
 import { __resetLiveForTests } from "../../lib/operations/live.js";
 import { __resetOperationStoreForTests } from "../../lib/operations/store.js";
@@ -167,6 +167,54 @@ describe("外部审查 2026-11-06：改掉 / 改完再核", () => {
     expect(prompts).toHaveLength(1);
     expect((await readDraft(book, 1))?.body).toBe("钟停在四点。老周指着钟说现在是三点。");
     expect(result.body?.verify?.left?.maybe[0]?.revisited).toBeTruthy();
+  });
+
+  it("有重句时同一处两轮改回原样：算没改，不报「改好了」、不记改句", async () => {
+    const original = "钟停在三点。老周看了一眼。钟停在四点。老周转过身。后面那只钟始终停在三点。";
+    await save(original);
+    let calls = 0;
+    const reader: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记。";
+      const last = messages.at(-1)!.content;
+      if (last.includes(REVIEW)) return reviews(last);
+      if (last.includes(INNER)) return emptyReply;
+      if (calls === 1) return JSON.stringify({ checks: [], contradictions: [{ quote: "钟停在四点。", earlierQuote: "后面那只钟始终停在三点。", earlierChapter: 1, confidence: "sure", reason: "第一只钟应当是三点" }] });
+      return emptyReply;
+    };
+    const result = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "钟停在三点。", revisionGoal: "第一只钟应停在四点" }] }, fakeDraftDeps({
+      readerCallModel: reader,
+      fixCallModel: async () => (++calls === 1 ? fixes(1, "钟停在四点。") : fixes(1, "钟停在三点。")),
+    }));
+    expect(calls).toBe(2);
+    expect(result.record).toMatchObject({ state: "failed", failure: { code: "not_changed" } });
+    expect((await readDraft(book, 1))?.body).toBe(original);
+    expect(await readFixLog(book, 1)).toHaveLength(0);
+  });
+
+  it("第一遍再核有一步没成、第二遍整章核全了：不再说没核成", async () => {
+    const original = "钟停在三点。老周看了一眼，说是三点。天黑了。";
+    await save(original);
+    let rounds = 0;
+    const reader: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记。";
+      const last = messages.at(-1)!.content;
+      if (last.includes(REVIEW)) return reviews(last);
+      if (last.includes(INNER)) {
+        if (rounds === 1) throw new Error("服务商 502");
+        return emptyReply;
+      }
+      if (rounds === 1) return JSON.stringify({ checks: [], contradictions: [{ quote: "老周看了一眼，说是三点。", earlierQuote: "钟停在四点。", earlierChapter: 1, confidence: "sure", reason: "时刻不一致" }] });
+      return emptyReply;
+    };
+    const result = await runDraftEdit(book, "fix", { chapter: 1, fixes: [{ targetText: "钟停在三点。", revisionGoal: "钟应当停在四点" }] }, fakeDraftDeps({
+      readerCallModel: reader,
+      fixCallModel: async () => (++rounds === 1 ? fixes(1, "钟停在四点。") : fixes(2, "老周看了一眼，说是四点。")),
+    }));
+    expect(result.record.state).toBe("succeeded");
+    expect((await readDraft(book, 1))?.body).toBe(original.replaceAll("三点", "四点"));
+    expect(result.body?.verify).toMatchObject({ checks: 2 });
+    expect(result.body?.verify?.partial).toBeUndefined();
+    expect(result.summary).toContain("没有对不上的了");
   });
 
   it("正常两轮修改仍可整次撤销，恢复作者原稿", async () => {

@@ -83,6 +83,8 @@ export interface EditOutcome {
   readonly failed: readonly EditFailure[];
   /** fix：不是点名的、本章别处说同一件事跟着改的句数。 */
   readonly alsoChanged?: number;
+  /** fix 每一轮：changes 每一条在这一轮改前正文里从第几个字起（两轮按位置并，只在操作里用）。 */
+  readonly at?: readonly number[];
   /** fix：改了、但核账引的原句还原样在稿里的那几处（改在本章别的句子上、重复的句子只改了一次）；改完再核交核账员复核。 */
   readonly revisit?: readonly string[];
   /** revise 只改了一段时 AI 说的改了什么；按作者给的原文换上的是 exact。 */
@@ -229,6 +231,7 @@ async function fixEdits(input: {
   return {
     text: outcome.text,
     changes: outcome.changes,
+    at: outcome.at,
     failed: outcome.failed.map(({ fix, why }) => ({ target: input.fixes[fix]!.targetText, why })),
     ...(outcome.alsoChanged > 0 ? { alsoChanged: outcome.alsoChanged } : {}),
     ...(outcome.revisit.length > 0 ? { revisit: outcome.revisit.map((fix) => input.fixes[fix]!.targetText) } : {}),
@@ -236,7 +239,8 @@ async function fixEdits(input: {
 }
 
 type Verified =
-  | { readonly ok: true; readonly left: ContinuityCheckData; readonly partial?: string }
+  /** full：这遍整章核的（不是只核改过的几句）。 */
+  | { readonly ok: true; readonly left: ContinuityCheckData; readonly partial?: string; readonly full: boolean }
   | { readonly ok: false; readonly reason: string };
 
 /** 改完再核前，核账员先把前文笔记补到上一章（和定稿那遍同一套）；没成就不再核，结论里说一句。 */
@@ -276,6 +280,7 @@ async function verifyFix(projectDir: string, chapter: number, text: string, chan
       },
       // 报出了问题、但有一步没跑成：核账那边算 ok，这里不能拿它证明核完、干净（外部审查 2026-11-06）。
       ...(result.failures.length > 0 ? { partial: result.failures[0]! } : {}),
+      full: !result.rechecked,
     };
   } catch (error) {
     rethrowIfStopped(error);
@@ -311,24 +316,27 @@ function againGoal(chapter: number, item: ChapterCheckItem, first: readonly Edit
   return earlier ? `${goal}；这句刚按「${earlier.revisionGoal}」改过，两样都要对得上` : goal;
 }
 
-/** 在 text 里出现几次（最多数到 2）。 */
-function occurrences(text: string, part: string): number {
-  const at = text.indexOf(part);
-  return at < 0 ? 0 : text.indexOf(part, at + 1) < 0 ? 1 : 2;
-}
-
 /**
- * 两轮的改动并成一份：第二轮改的是第一轮改出来的那句就接上（改前取最早那版），改回原样的去掉。
- * 认「是那句」只认第一轮改出来的句子在第一轮稿里只出现一次：同样的字出现两处，第二轮改的可能是另一处，
- * 各记各的（外部审查 2026-11-06：两处说法对调时曾被并成「三点→三点」删掉，两轮都没落盘）。
+ * 两轮的改动并成一份：第二轮改的是第一轮改出来的那句（同一个位置）就接上（改前取最早那版），改回原样的去掉。
+ * 按位置认、不按字认：同样的字出现几处时，第二轮改的可能是另一处（外部审查 2026-11-06：两处说法对调时曾被并成
+ * 「三点→三点」删掉；只认出现一次又会把同一处改回原样当成两处改动）。
  */
 function mergeRounds(first: EditOutcome, second: EditOutcome): EditOutcome {
   const changes = [...first.changes];
-  for (const change of second.changes) {
-    const at = changes.findIndex((earlier) => earlier.to !== "" && earlier.to === change.from && occurrences(first.text, earlier.to) === 1);
+  // 第一轮每条改动在第一轮稿里从第几个字起：前面几处改动长短变了，往后挪。
+  const firstAt = first.at;
+  const landed = firstAt && firstAt.length === first.changes.length
+    ? first.changes.map((_, index) => firstAt[index]! + first.changes.reduce((shift, change, other) =>
+      firstAt[other]! < firstAt[index]! ? shift + change.to.length - change.from.length : shift, 0))
+    : undefined;
+  second.changes.forEach((change, index) => {
+    const secondAt = second.at?.[index];
+    const at = landed && secondAt !== undefined
+      ? changes.findIndex((earlier, other) => landed[other] === secondAt && first.changes[other]!.to === change.from)
+      : -1;
     if (at >= 0) changes[at] = { from: changes[at]!.from, to: change.to };
     else changes.push(change);
-  }
+  });
   const also = (first.alsoChanged ?? 0) + (second.alsoChanged ?? 0);
   return {
     text: second.text,
@@ -385,7 +393,8 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   });
   const again = second.changes.length;
   if (!twice.ok) return { ...merged, verify: { checks: 1, again, failure: twice.reason } };
-  const partialEnd = once.partial ?? twice.partial;
+  // 第二遍整章核的：只看它自己全没全；只核改过几句的盖不住第一遍没核成的那步。
+  const partialEnd = twice.full ? twice.partial : once.partial ?? twice.partial;
   return {
     ...(partialEnd ? merged : settledFailures(merged, twice.left)),
     verify: { checks: 2, again, ...(leftCount(twice.left) > 0 ? { left: twice.left } : {}), ...(partialEnd ? { partial: partialEnd } : {}) },
@@ -567,7 +576,8 @@ export async function runDraftEdit(ctx: RecipeContext<unknown>, params: DraftEdi
       avoid.push(...outcome.changes.map((change) => change.to));
     }
   }
-  if (outcome.changes.length === 0) throw coded("not_changed", nothingChangedMessage(params, outcome));
+  // 改来改去和原稿一字不差（同一处两轮改回原样）也是没改：不报「改好了」（外部审查 2026-11-06）。
+  if (outcome.changes.length === 0 || outcome.text === text) throw coded("not_changed", nothingChangedMessage(params, outcome));
 
   // 改的是文件原文（带章名行）：拆一次，章名照原文的。
   const draft = parseDraftFile(outcome.text);
