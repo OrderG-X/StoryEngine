@@ -19,6 +19,7 @@ import { defaultCommittedChapterPath, defaultDraftPath, extractDraftTitle } from
 import { countTextWords } from "../../../utils/textUtils.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 
+import { modelFailureText } from "../../lib/ai-errors.js";
 export const READ_DRAFT_SOURCES = ["auto", "draft", "committed"] as const;
 export type ReadDraftSource = (typeof READ_DRAFT_SOURCES)[number];
 
@@ -68,7 +69,7 @@ async function readTextTolerant(path: string): Promise<{ readonly content?: stri
     return { content: await readFile(path, "utf-8") };
   } catch (error) {
     if ((error as { code?: string })?.code === "ENOENT") return {};
-    return { readError: error instanceof Error ? error.message : String(error) };
+    return { readError: modelFailureText(error) };
   }
 }
 

@@ -75,4 +75,28 @@ describe("卡上「没成」的原因不拼错误原文", () => {
     }
     expect(found).toEqual([]);
   });
+
+  // 2026-11-05 30 章尺子：套餐额度用完，卡上写着「第 35 章这一版没通过，没写进工作稿：模型请求失败：429 {"error":…}」。
+  // 上面那条只认「没成：」，「没跑成：」「没核成：」「（…）」和先存进变量再拼的都漏了。编辑部、流程、写稿、对话 AI 这几层
+  // 出的字都可能上卡，一律走 modelFailureText（认不出的类照样用错误那句），不直接取 .message（日志除外）。
+  it("编辑部 / 流程 / 写稿 / 对话 AI 几层不直接拿错误原文", async () => {
+    const server = dirname(dirname(fileURLToPath(import.meta.url)));
+    const files: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) await walk(path);
+        else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) files.push(path);
+      }
+    };
+    for (const layer of ["editorial", "services", "writing", "agent"]) await walk(join(server, layer));
+    const raw = /instanceof Error \? \w+\.message\b/u;
+    const found: string[] = [];
+    for (const file of files) {
+      for (const [index, line] of (await readFile(file, "utf-8")).split("\n").entries()) {
+        if (raw.test(line) && !line.includes("console.")) found.push(`${file.slice(server.length + 1)}:${index + 1}`);
+      }
+    }
+    expect(found).toEqual([]);
+  });
 });

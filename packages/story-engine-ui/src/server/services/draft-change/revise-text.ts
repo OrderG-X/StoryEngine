@@ -21,6 +21,7 @@ import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm
 import { chinesePunctuationLike } from "../../../lib/dialogue-quotes.js";
 import { rethrowIfStopped } from "../../lib/operations/context.js";
 
+import { modelFailureText } from "../../lib/ai-errors.js";
 /* ---------------------------------------------------------------------------
  * 定位：精确子串优先 + 空白/引号归一兜底
  * ------------------------------------------------------------------------- */
@@ -449,7 +450,7 @@ export async function reviseDraftText(input: ReviseTextInput): Promise<RevisedTe
       ok: false,
       code: "model_output_unusable",
       task: resolvedTask,
-      detail: error instanceof Error ? error.message : String(error),
+      detail: modelFailureText(error),
     };
   }
 

@@ -124,7 +124,7 @@ export const readTimelineTool = createTool({
 
       return { ok: true as const, events, summary };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = modelFailureText(err);
       return { ok: false as const, events: [], summary: `读时间线没成：${modelFailureText(err)}`, error: message };
     }
   },

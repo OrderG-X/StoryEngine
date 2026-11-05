@@ -20,6 +20,7 @@ import { readStoryViews } from "../../book/story-views.js";
 import { type FactEntry } from "../../book/types.js";
 import type { SettingKind } from "../foundation-digest.js";
 
+import { modelFailureText } from "../../lib/ai-errors.js";
 export type ClaimKind = "object" | "place" | "time" | "identity" | "knowledge" | "number" | "event";
 
 export interface ContinuityIssueV2 {
@@ -346,7 +347,7 @@ export async function ledgerNumberIssues(input: {
     try {
       facts = (await readStoryViews(input.projectDir)).facts.facts;
     } catch (error) {
-      return { issues: [], failures: [`账本读不了，这次没对账：${error instanceof Error ? error.message : String(error)}`] };
+      return { issues: [], failures: [`账本读不了，这次没对账：${modelFailureText(error)}`] };
     }
   }
   const issues = findLedgerNumberConflicts({ chapter: input.chapter, draftBody: input.draftBody, facts }).map((conflict) => ({
