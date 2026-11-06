@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { ChapterMessage, ContinuityCheckData, OperationCardData, SettleCardData } from "../type-defs/workspace.js";
 import { useChatStore } from "../stores/chatStore.js";
+import { EDIT_MAX_TEXT } from "../api/agentChatClient.js";
+import { continuityFixGoal } from "../lib/continuity-fix.js";
 import {
   continuityItemKey,
   fixedContinuityByMessage,
@@ -127,29 +129,54 @@ describe("核账卡之后按核账改、改完再核一处不剩：改掉的条�
     }],
   });
 
-  it("这一章、错在这一章、原句就是改掉的那处 = 改掉（原句还在稿里也算：改在别处的）；错在前文那章的、别的章、没做完、在核账之前的都不算", () => {
-    const fixed = { chapter: 11, quotes: [` ${wrongName.quote} `], changes: CHANGES };
+  /** 卡上按钮交的那句改法（和 continuityFixAction 同一份）。 */
+  const goalOf = (item: typeof wrongName): string => continuityFixGoal(11, item).slice(0, EDIT_MAX_TEXT);
+  const asked = (item: typeof wrongName) => ({ quote: ` ${item.quote} `, goal: goalOf(item) });
+
+  it("这一章、错在这一章、就是点了改掉的那条 = 改掉（原句还在稿里也算：改在别处的）；错在前文那章的、别的章、没做完、在核账之前的都不算", () => {
+    const fixed = { chapter: 11, items: [asked(wrongName)], changes: CHANGES };
     expect(latestContinuityResult([checkMsg, fixOp("f", fixed)], 11, PAPER_AFTER)?.settled).toEqual([continuityItemKey(wrongName)]);
     // 对话栏那份不看稿纸：按核账改的另给（条目键 + 那次改的几句），核账卡自己拿稿纸看。
     expect(settledContinuityByMessage([checkMsg, fixOp("f", fixed)]).size).toBe(0);
     expect(fixedContinuityByMessage([checkMsg, fixOp("f", fixed)]).get("c")).toEqual([{ key: continuityItemKey(wrongName), changes: CHANGES }]);
     expect(fixedContinuityByMessage([fixOp("f", fixed), checkMsg]).size).toBe(0);
     expect(openContinuityItems(latestContinuityResult([checkMsg, fixOp("f", fixed)], 11, PAPER_AFTER)!).sure).toEqual([wrongMarket, cross]);
-    // 错在第 5 章的那条：原句一样也不算（本章这次改不到它）。
-    expect(latestContinuityResult([checkMsg, fixOp("f", { ...fixed, quotes: [cross.quote] })], 11, PAPER_AFTER)?.settled).toBeUndefined();
+    // 错在第 5 章的那条：原句、改法一样也不算（本章这次改不到它）。
+    expect(latestContinuityResult([checkMsg, fixOp("f", { ...fixed, items: [{ quote: cross.quote, goal: continuityFixGoal(11, cross) }] })], 11, PAPER_AFTER)?.settled).toBeUndefined();
     expect(latestContinuityResult([checkMsg, fixOp("f", { ...fixed, chapter: 12 })], 11, PAPER_AFTER)?.settled).toBeUndefined();
     expect(latestContinuityResult([checkMsg, fixOp("f", fixed, "running")], 11, PAPER_AFTER)?.settled).toBeUndefined();
     expect(latestContinuityResult([checkMsg, fixOp("f", undefined)], 11, PAPER_AFTER)?.settled).toBeUndefined();
   });
 
+  it("同一句报了两件事、只点了一件：只划点了的那件（外部审查 2026-11-06）", () => {
+    const keyIssue = { ...wrongName, earlierQuote: "钥匙在他口袋里。", reason: "钥匙对不上" };
+    const both: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [wrongName, keyIssue] } }] };
+    const fixed = { chapter: 11, items: [asked(wrongName)], changes: CHANGES };
+    expect(latestContinuityResult([both, fixOp("f", fixed)], 11, PAPER_AFTER)?.settled).toEqual([continuityItemKey(wrongName)]);
+    // 模型在对话里交的改法（不是卡上那句）：认不出是哪条，不划。
+    expect(latestContinuityResult([both, fixOp("f", { ...fixed, items: [{ quote: wrongName.quote, goal: "把姓改成吴" }] })], 11, PAPER_AFTER)?.settled).toBeUndefined();
+  });
+
+  it("第二轮按再核报的改的：原句 + 前文原句一字不差的那条也划（作者没点、第二轮改在别处改掉的，外部审查 2026-11-06）", () => {
+    const fixed = { chapter: 11, items: [asked(wrongMarket), { quote: wrongName.quote, earlierQuote: ` ${wrongName.earlierQuote}` }], changes: CHANGES };
+    expect(latestContinuityResult([checkMsg, fixOp("f", fixed)], 11, PAPER_AFTER)?.settled).toEqual([continuityItemKey(wrongMarket), continuityItemKey(wrongName)]);
+    const other = { chapter: 11, items: [{ quote: wrongName.quote, earlierQuote: "摊主姓李。" }], changes: CHANGES };
+    expect(latestContinuityResult([checkMsg, fixOp("f", other)], 11, PAPER_AFTER)?.settled).toBeUndefined();
+  });
+
   it("那次改的不在稿里了（撤销了、作者又改了）、稿纸没开这一章：照旧摆出来，不划错", () => {
-    const fixed = { chapter: 11, quotes: [wrongName.quote], changes: CHANGES };
-    // 撤销回到改前：改出来的那句不在了。
+    const fixed = { chapter: 11, items: [asked(wrongName)], changes: CHANGES };
+    // 撤销回到改前：改前那句回来了、改出来的那句不在了。
     expect(latestContinuityResult([checkMsg, fixOp("f", fixed)], 11, { chapter: 11, body: `${BODY}\n\n她在门口站着。` })?.settled).toBeUndefined();
     expect(latestContinuityResult([checkMsg, fixOp("f", fixed)], 11)?.settled).toBeUndefined();
     expect(latestContinuityResult([checkMsg, fixOp("f", fixed)], 11, { chapter: 12, body: PAPER_AFTER.body })?.settled).toBeUndefined();
     expect(fixInEffect(CHANGES, `${BODY}\n\n她在门口站着。`)).toBe(false);
     expect(fixInEffect(CHANGES, PAPER_AFTER.body)).toBe(true);
+    // 改出来那句本来别处就有：撤销后改前那句回来了，照样不算（外部审查 2026-11-06）。
+    expect(fixInEffect(CHANGES, `她在仓门口站住了。${BODY}\n\n她在门口站着。`)).toBe(false);
+    // 两轮改回原样的那条（改前改后一样）不算一处改动；全是这种就不算改了。
+    expect(fixInEffect([...CHANGES, { from: "天黑了。", to: "天黑了。" }], PAPER_AFTER.body)).toBe(true);
+    expect(fixInEffect([{ from: "天黑了。", to: "天黑了。" }], "天黑了。")).toBe(false);
     // 删掉的句子：删了的还在稿里 = 撤销了。
     const deleted = { ...fixed, changes: [{ from: "她在门口站着。", to: "" }] };
     expect(latestContinuityResult([checkMsg, fixOp("f", deleted)], 11, { chapter: 11, body: BODY })?.settled).toEqual([continuityItemKey(wrongName)]);

@@ -467,12 +467,12 @@ describe("streamAgentChat", () => {
       schema: "operation-result/1", summary: "改好了", body: { kind: "draft.change", mode: "fix", ok: true, chapter: 4, changes: [], failed: [], ...body },
     } });
     const { views } = await collectOperations([
-      frame("operation", { type: "record", operation: fixView({ settled: ["旧。", "", 3, "又一句。"] }) }),
-      frame("operation", { type: "record", operation: fixView({ settled: ["旧。"], ok: false }) }),
-      frame("operation", { type: "record", operation: fixView({ settled: ["旧。"], mode: "revise" }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "对上前文" }, "旧。", { quote: "", goal: "x" }, { quote: "缺。" }, { quote: "又一句。", earlierQuote: "前文那句。" }] }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "g" }], ok: false }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "g" }], mode: "revise" }) }),
       frame("operation", { type: "record", operation: fixView({ settled: "旧。" }) }),
     ]);
-    expect(views[0]?.draft?.settled).toEqual(["旧。", "又一句。"]);
+    expect(views[0]?.draft?.settled).toEqual([{ quote: "旧。", goal: "对上前文" }, { quote: "又一句。", earlierQuote: "前文那句。" }]);
     expect(views[1]?.draft?.settled).toBeUndefined();
     expect(views[2]?.draft?.settled).toBeUndefined();
     expect(views[3]?.draft?.settled).toBeUndefined();

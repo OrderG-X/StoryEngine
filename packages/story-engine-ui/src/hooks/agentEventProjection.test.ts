@@ -654,8 +654,9 @@ describe("按核账改做完、再核一处不剩（真机 2026-11-06）", () =>
 
   it("改掉了的几处和改了的几句记在操作卡上（之前的核账卡划掉它们）；同一次后来的记录没带也留着；没带的不记", () => {
     const changes = [{ from: "旧。", to: "新。" }];
-    const fixed = { chapter: 9, quotes: ["甲。", "乙。"], changes };
-    let msg = project([{ type: "operation", operation: view({ draft: { chapter: 9, applied: true, settled: ["甲。", "乙。"], changes } }) }]);
+    const items = [{ quote: "甲。", goal: "和第 3 章「乙。」对上" }, { quote: "丙。", earlierQuote: "丁。" }];
+    const fixed = { chapter: 9, items, changes };
+    let msg = project([{ type: "operation", operation: view({ draft: { chapter: 9, applied: true, settled: items, changes } }) }]);
     expect(cardOf(msg, "operation")?.op.fixed).toEqual(fixed);
     msg = projectAgentEvent(msg, { type: "operation", operation: view({ eventSeq: 6 }) });
     expect(cardOf(msg, "operation")?.op.fixed).toEqual(fixed);

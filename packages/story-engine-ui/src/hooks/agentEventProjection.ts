@@ -328,7 +328,7 @@ function applyOperation(message: ChapterMessage, view: OperationViewData, announ
     ...(view.canon ? { canon: view.canon } : same && current.canon ? { canon: current.canon } : {}),
     // 按核账改做完、再核一处不剩：改掉了哪几处（之前的核账卡划掉它们；改在别处的那处原句还在稿里，光看稿认不出）。
     ...(view.draft?.settled && view.draft.changes
-      ? { fixed: { chapter: view.draft.chapter, quotes: view.draft.settled, changes: view.draft.changes } }
+      ? { fixed: { chapter: view.draft.chapter, items: view.draft.settled, changes: view.draft.changes } }
       : same && current.fixed ? { fixed: current.fixed } : {}),
   };
   const next = withCommitCards(withChangeEffects(withDraftEffects(withCard(message, { type: "operation", op }), view), view), view);

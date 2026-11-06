@@ -17,7 +17,7 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, DraftVersionsCardData, FixedItemData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import { readCommitPreviewCard } from "../utils/commitPreviewCard.js";
 import { readDraftVersions } from "../utils/draftVersions.js";
@@ -518,8 +518,8 @@ export interface DraftOperationData {
   readonly versions?: DraftVersionsCardData;
   /** 改稿改了的几处（稿纸上高亮改后那句）。 */
   readonly changes?: readonly EditChangeData[];
-  /** 按核账改、改完再核一处不剩：改掉了的那几处原句（之前的核账卡照它划掉）。 */
-  readonly settled?: readonly string[];
+  /** 按核账改、改完再核一处不剩：改掉了的那几处（之前的核账卡照它划掉）。 */
+  readonly settled?: readonly FixedItemData[];
 }
 
 /** 操作的实时事件（与服务端 lib/operations/live.ts 的 LiveEvent 同形）。 */
@@ -608,6 +608,17 @@ function readPendingAction(value: unknown): PendingActionData | undefined {
   return undefined;
 }
 
+/** 按核账改掉了的几处（服务端 SettledFix）：原句 + 改法，或原句 + 前文原句；认不出的丢掉。存盘读回也走这一份。 */
+export function readFixedItems(value: unknown): FixedItemData[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): FixedItemData[] => {
+    if (!isRecord(item) || typeof item.quote !== "string" || !item.quote.trim()) return [];
+    if (typeof item.goal === "string" && item.goal.trim()) return [{ quote: item.quote, goal: item.goal }];
+    if (typeof item.earlierQuote === "string" && item.earlierQuote.trim()) return [{ quote: item.quote, earlierQuote: item.earlierQuote }];
+    return [];
+  });
+}
+
 /** 写稿结果 → 界面要的那几样（不是写稿、没做完、形状不对是 undefined）。 */
 function readDraftOperation(body: unknown): DraftOperationData | undefined {
   if (!isRecord(body)) return undefined;
@@ -622,9 +633,7 @@ function readDraftOperation(body: unknown): DraftOperationData | undefined {
   const snapshots = [body.planSnapshotId, body.ok === true ? body.snapshotId : undefined]
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   const changes = editChanges(body.changes);
-  const settled = body.mode === "fix" && body.ok === true && Array.isArray(body.settled)
-    ? body.settled.filter((quote): quote is string => typeof quote === "string" && quote.trim().length > 0)
-    : [];
+  const settled = body.mode === "fix" && body.ok === true ? readFixedItems(body.settled) : [];
   return {
     chapter,
     applied: body.ok === true,

@@ -142,11 +142,19 @@ export interface OperationCardData {
   /** 定论做完了：卡、作者划掉的、改没改（核账卡认哪几条被它改掉了；存进消息）。 */
   readonly canon?: CanonResultData;
   /**
-   * 按核账改做完、改完再核一处不剩：哪章改掉了哪几处原句、那次改了哪几句（之前的核账卡认它划掉；存进消息）。
+   * 按核账改做完、改完再核一处不剩：哪章改掉了哪几处、那次改了哪几句（之前的核账卡认它划掉；存进消息）。
    * 改的那几句还在稿里才算（撤销了、后来又改了就不算）。
    */
-  readonly fixed?: { readonly chapter: number; readonly quotes: readonly string[]; readonly changes: readonly { readonly from: string; readonly to: string }[] };
+  readonly fixed?: { readonly chapter: number; readonly items: readonly FixedItemData[]; readonly changes: readonly { readonly from: string; readonly to: string }[] };
 }
+
+/**
+ * 按核账改掉了的一处：作者点的按原句 + 改法认（卡上同一句可能报了两件事，只划点了的那件；改法就是卡上按钮交的那句），
+ * 第二轮按再核报的改的按原句 + 对照的前文原句认（服务端 edit.ts 的 SettledFix）。
+ */
+export type FixedItemData =
+  | { readonly quote: string; readonly goal: string }
+  | { readonly quote: string; readonly earlierQuote: string };
 
 /** 定论卡（canon.propose 的预览、结果）：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
 export interface SettleCardData {
