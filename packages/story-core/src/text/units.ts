@@ -252,7 +252,7 @@ export function splitNumberedReply(id: number, to: string): { readonly id: numbe
 
 /**
  * 模型给第 id 句的新写法 → 能换上去的字：去掉带回来的编号和换行、去掉抄进来的邻句、引号对齐原句。
- * 空串＝删句（留下原句头尾的引号）。用不了（只剩抄的邻句、引号理不平、一句改成了几句）返回 undefined。
+ * 空串＝删句（留下原句头尾的引号）。用不了（只剩抄的邻句、引号理不平、一句改成了几句、丢了句末标点）返回 undefined。
  * 一句改成几句多半是添了原文没有的话（回归书：一句「我退休那年交出去了」改成三句、多出一段台词）：不换。
  */
 export function prepareUnitReplacement(units: readonly TextUnit[], id: number, to: string): string | undefined {
@@ -265,8 +265,13 @@ export function prepareUnitReplacement(units: readonly TextUnit[], id: number, t
   const echoed = dropNeighborEcho(unit.text, cleaned, units[index - 1]?.text, units[index + 1]?.text);
   const echoFree = echoed === undefined ? undefined : cleanReplacement(echoed);
   const fitted = echoFree === undefined ? undefined : fitQuotes(unit.text, echoFree);
-  return fitted !== undefined && splitUnits(fitted).length > splitUnits(unit.text).length ? undefined : fitted;
+  if (fitted === undefined || splitUnits(fitted).length > splitUnits(unit.text).length) return undefined;
+  // 原句是一整句、新句丢了句末标点：换上去会和下一句并成一句（「钟停在五点老周看了一眼。」），也不换（外部审查 2026-11-06）。
+  return endsSentence(unit.text) && !endsSentence(fitted) ? undefined : fitted;
 }
+
+/** 这几个字收在句末：后面再接字会另起一句（不收的是段末没写句末标点的那种）。 */
+const endsSentence = (text: string): boolean => splitUnits(`${text}甲`).length > splitUnits(text).length;
 
 export interface UnitEdit {
   /** 第几句（按改之前的正文切）。 */

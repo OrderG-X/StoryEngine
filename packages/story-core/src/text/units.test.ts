@@ -129,6 +129,14 @@ describe("模型给的新句 → 能换上去的字（prepareUnitReplacement）"
     expect(prepareUnitReplacement(talk, 1, "“前些年交出去过一把。”他说，“交给邮局一个姓孟的。钥匙的事，你问他去。”")).toBeUndefined();
     expect(prepareUnitReplacement(talk, 1, "“我前些年交出去了。”")).toBe("“我前些年交出去了。”");
   });
+
+  it("原句是一整句、新句丢了句末标点（换上会和下一句并成一句）→ undefined；段末本来没标点的照收", () => {
+    const line = splitUnits("钟停在三点。老周看了一眼。\n她没接话");
+    expect(prepareUnitReplacement(line, 1, "钟停在五点")).toBeUndefined();
+    expect(prepareUnitReplacement(line, 1, "钟停在五点。")).toBe("钟停在五点。");
+    expect(prepareUnitReplacement(line, 3, "她没说话")).toBe("她没说话");
+    expect(prepareUnitReplacement(units, 2, "你爸失踪十五年了，你翻这些有什么用")).toBeUndefined();
+  });
 });
 
 // 换题材长篇实跑 2026-10-28：定论改法回成「“你知道就好。[98]你的活儿…[99]审计这行…[100]你位置空一个星期了…”」，整条被当成一句改成了几句丢掉。

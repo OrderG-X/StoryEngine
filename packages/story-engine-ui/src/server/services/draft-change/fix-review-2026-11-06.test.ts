@@ -191,6 +191,45 @@ describe("外部审查 2026-11-06：改掉 / 改完再核", () => {
     expect(await readFixLog(book, 1)).toHaveLength(0);
   });
 
+  it("改了几处、其中一处第二轮又改回原样：只报改好的那几处，改回去的照实说回到了原样；第二轮叫它别改回去", async () => {
+    // 真机 2026-11-06：「今天上午清仓」第一轮改成「后天」，再核还报，第二轮又改回「今天」，卡上仍说「改好了 5 处」。
+    const original = "钟停在三点。老周今年十八岁。通知写明钟应是四点。名册写着老周十九岁。";
+    await save(original);
+    const prompts: string[] = [];
+    const reader: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记。";
+      const last = messages.at(-1)!.content;
+      if (last.includes(REVIEW)) return reviews(last);
+      if (last.includes(INNER)) return emptyReply;
+      const body = last.split("【新稿：第 1 章】\n")[1]?.split("\n\n")[0] ?? "";
+      const clock = body.startsWith("钟停在五点。") ? "钟停在五点。" : body.startsWith("钟停在三点。") ? "钟停在三点。" : "";
+      return clock
+        ? JSON.stringify({ checks: [], contradictions: [{ quote: clock, earlierQuote: "通知写明钟应是四点。", earlierChapter: 1, confidence: "sure", reason: "钟的时刻和通知对不上" }] })
+        : emptyReply;
+    };
+    const result = await runDraftEdit(book, "fix", { chapter: 1, fixes: [
+      { targetText: "钟停在三点。", revisionGoal: "照通知改成四点" },
+      { targetText: "老周今年十八岁。", revisionGoal: "照名册改成十九岁" },
+    ] }, fakeDraftDeps({
+      readerCallModel: reader,
+      fixCallModel: async (prompt) => {
+        prompts.push(prompt);
+        return prompts.length === 1
+          ? JSON.stringify({ edits: [{ id: 1, to: "钟停在五点。" }, { id: 2, to: "老周今年十九岁。" }] })
+          : fixes(1, "钟停在三点。");
+      },
+    }));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("别改回原来的「钟停在三点。」");
+    expect(result.record.state).toBe("succeeded");
+    expect((await readDraft(book, 1))?.body).toBe("钟停在三点。老周今年十九岁。通知写明钟应是四点。名册写着老周十九岁。");
+    expect(result.body?.changes).toEqual([{ from: "老周今年十八岁。", to: "老周今年十九岁。" }]);
+    expect(result.summary).toContain("改好了 1 处");
+    expect(result.summary).toContain("1 处改了两轮又回到了原样");
+    expect(result.summary).not.toContain("没改成");
+    expect(result.summary).not.toContain("改好了 2 处");
+  });
+
   it("第一遍再核有一步没成、第二遍整章核全了：不再说没核成", async () => {
     const original = "钟停在三点。老周看了一眼，说是三点。天黑了。";
     await save(original);
@@ -234,6 +273,291 @@ describe("外部审查 2026-11-06：改掉 / 改完再核", () => {
     expect((await readDraft(book, 1))?.body).toBe(original.replaceAll("三点", "四点"));
     await undoInOperation(book, result.record.opId);
     expect((await readDraft(book, 1))?.body).toBe(original);
+  });
+});
+
+type RoundIssue = { readonly quote: string; readonly earlierQuote: string; readonly reason?: string };
+type RoundEdit = { readonly id: number; readonly to: string; readonly for?: number };
+
+/** 两轮改掉：第一轮、第二轮的改法和每遍核出的那条都写死（核账员第 1 遍报 firstIssue，之后报 finalIssue）。 */
+async function twoRounds(input: {
+  readonly original: string;
+  readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[];
+  readonly first: readonly RoundEdit[];
+  readonly second: readonly RoundEdit[];
+  readonly firstIssue: RoundIssue;
+  readonly finalIssue?: RoundIssue;
+  /** 末次再核有一步没跑成。 */
+  readonly partial?: boolean;
+}) {
+  await save(input.original);
+  const prompts: string[] = [];
+  let focused = 0;
+  const reader: BrainCallModel = async (messages, options) => {
+    if (!options.json) return "笔记。";
+    const last = messages.at(-1)!.content;
+    if (last.includes(REVIEW)) return reviews(last);
+    if (last.includes(INNER)) {
+      if (input.partial && prompts.length === 2) throw new Error("核账一步没跑成");
+      return emptyReply;
+    }
+    if (input.partial && prompts.length === 2 && last.includes("这一遍只核改过的这几句")) {
+      focused += 1;
+      if (focused === 1) throw new Error("核账一步没跑成");
+    }
+    const issue = prompts.length === 1 ? input.firstIssue : input.finalIssue;
+    return issue ? JSON.stringify({ checks: [], contradictions: [{ reason: "时刻对不上", ...issue, earlierChapter: 1, confidence: "sure" }] }) : emptyReply;
+  };
+  const result = await runDraftEdit(book, "fix", { chapter: 1, fixes: [...input.fixes] }, fakeDraftDeps({
+    readerCallModel: reader,
+    fixCallModel: async (prompt) => {
+      prompts.push(prompt);
+      return JSON.stringify({ edits: prompts.length === 1 ? input.first : input.second });
+    },
+  }));
+  expect(prompts).toHaveLength(2);
+  expect(result.record.state).toBe("succeeded");
+  return { ...result, prompts, text: (await readDraft(book, 1))?.body };
+}
+
+const CLOCK = "钟停在三点。";
+const BAD_CLOCK = "钟停在五点。";
+const AGE = "老周今年十八岁。";
+const FIXED_AGE = "老周今年十九岁。";
+const NOTICE = "通知写明钟应是四点。";
+const ROSTER = "名册写着老周十九岁。";
+const CLOCK_FIX = { targetText: CLOCK, revisionGoal: "照通知改成四点" };
+const AGE_FIX = { targetText: AGE, revisionGoal: "照名册改成十九岁" };
+const CLOCK_BACK = {
+  original: CLOCK + AGE + NOTICE + ROSTER,
+  fixes: [CLOCK_FIX, AGE_FIX],
+  first: [{ id: 1, to: BAD_CLOCK }, { id: 2, to: FIXED_AGE }],
+  second: [{ id: 1, to: CLOCK }],
+  firstIssue: { quote: BAD_CLOCK, earlierQuote: NOTICE },
+  finalIssue: { quote: CLOCK, earlierQuote: NOTICE },
+};
+
+describe("外部审查 2026-11-06：两轮改回原样按作者点的那几处算", () => {
+  it("一句里有两处、两轮下来整句回到原样：两处都记回到原样", async () => {
+    const sentence = "钟停在三点，老周今年十八岁。";
+    const changed = "钟停在五点，老周今年二十岁。";
+    const result = await twoRounds({
+      original: sentence + "门上挂着红牌。" + NOTICE + ROSTER,
+      fixes: [
+        { targetText: "钟停在三点", revisionGoal: "钟应为四点" },
+        { targetText: "老周今年十八岁", revisionGoal: "老周应为十九岁" },
+        { targetText: "门上挂着红牌。", revisionGoal: "门牌应为蓝色" },
+      ],
+      first: [{ id: 1, to: changed }, { id: 2, to: "门上挂着蓝牌。" }],
+      second: [{ id: 1, to: sentence }],
+      firstIssue: { quote: changed, earlierQuote: NOTICE, reason: "时刻和年龄都错" },
+      finalIssue: { quote: sentence, earlierQuote: NOTICE, reason: "时刻和年龄都错" },
+    });
+    expect(result.text).toBe(sentence + "门上挂着蓝牌。" + NOTICE + ROSTER);
+    expect(result.body?.failed).toHaveLength(2);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("一处的原句出现三次、三次都改回原样：只记一处回到原样，不报负数", async () => {
+    const result = await twoRounds({
+      original: CLOCK + "老周看了一眼。" + CLOCK + "老周转过身。" + CLOCK + AGE + NOTICE + ROSTER,
+      fixes: [CLOCK_FIX, AGE_FIX],
+      first: [{ id: 1, to: BAD_CLOCK }, { id: 3, to: BAD_CLOCK }, { id: 5, to: BAD_CLOCK }, { id: 6, to: FIXED_AGE }],
+      second: [{ id: 1, to: CLOCK }, { id: 3, to: CLOCK }, { id: 5, to: CLOCK }],
+      firstIssue: { quote: BAD_CLOCK, earlierQuote: NOTICE },
+      finalIssue: { quote: CLOCK, earlierQuote: NOTICE },
+    });
+    expect(result.body?.changes).toEqual([{ from: AGE, to: FIXED_AGE }]);
+    expect(result.body?.failed).toHaveLength(1);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("替点名那句改在别处（for）的那句改回原样：点名那处记回到原样", async () => {
+    const target = "老周说两只钟都走得准。";
+    const wall = "墙上的钟指向三点。";
+    const badWall = "墙上的钟指向五点。";
+    const result = await twoRounds({
+      original: target + wall + AGE + NOTICE + ROSTER,
+      fixes: [{ targetText: target, revisionGoal: "照通知修正墙上的钟" }, AGE_FIX],
+      first: [{ id: 2, for: 1, to: badWall }, { id: 3, for: 2, to: FIXED_AGE }],
+      second: [{ id: 2, for: 1, to: wall }],
+      firstIssue: { quote: target, earlierQuote: badWall, reason: "钟应为四点，却说五点的钟是准的" },
+      finalIssue: { quote: target, earlierQuote: wall, reason: "钟应为四点，却说三点的钟是准的" },
+    });
+    expect(result.text).toBe(target + wall + FIXED_AGE + NOTICE + ROSTER);
+    expect(result.body?.verify?.left?.sure).toHaveLength(1);
+    expect(result.body?.failed).toHaveLength(1);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("只点一处、点名那句改回原样、跟着改的那句还在：不说「改好了这一处」", async () => {
+    const also = "老周看了一眼，说是三点。";
+    const result = await twoRounds({
+      original: CLOCK + also + NOTICE,
+      fixes: [CLOCK_FIX],
+      first: [{ id: 1, to: BAD_CLOCK }, { id: 2, to: "老周看了一眼，说是四点。" }],
+      second: [{ id: 1, to: CLOCK }],
+      firstIssue: { quote: BAD_CLOCK, earlierQuote: NOTICE },
+      finalIssue: { quote: CLOCK, earlierQuote: NOTICE },
+    });
+    expect(result.body?.failed).toHaveLength(1);
+    expect(result.body?.changes).toEqual([{ from: also, to: "老周看了一眼，说是四点。" }]);
+    expect(result.summary).toContain("换上了 1 句改动");
+    expect(result.summary).toContain("这一处改了两轮又回到了原样");
+    expect(result.summary).not.toContain("改好了");
+  });
+
+  it("末次再核把本章打架的两句对调着报：改回原样的那处照样记着", async () => {
+    const result = await twoRounds({ ...CLOCK_BACK, finalIssue: { quote: NOTICE, earlierQuote: CLOCK, reason: "通知应为四点，钟却仍停在三点" } });
+    expect(result.text).toBe(CLOCK + FIXED_AGE + NOTICE + ROSTER);
+    expect(result.body?.verify?.left?.sure).toHaveLength(1);
+    expect(result.body?.failed).toHaveLength(1);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("第一轮改后的字稿里还有一样的另一处：第二轮不叫它「别改回」（报的可能是那一处）", async () => {
+    const result = await twoRounds({
+      original: "钟停在三点。老周看了一眼。钟停在四点。老周转过身。后面那只钟始终停在三点。",
+      fixes: [{ targetText: CLOCK, revisionGoal: "第一只钟应停在四点" }],
+      first: [{ id: 1, to: "钟停在四点。" }],
+      second: [{ id: 3, to: CLOCK }],
+      firstIssue: { quote: "钟停在四点。", earlierQuote: "后面那只钟始终停在三点。", reason: "第二只钟应当是三点，第一只钟正确" },
+    });
+    expect(result.text).toBe("钟停在四点。老周看了一眼。钟停在三点。老周转过身。后面那只钟始终停在三点。");
+    expect(result.prompts[1]).toContain("第二只钟应当是三点");
+    expect(result.prompts[1]).not.toContain("别改回");
+  });
+
+  it("点名那句改回原样、另一头改对了，末次整章再核不报了：不记回到原样", async () => {
+    const saying = "老周指着钟说现在是四点。";
+    const result = await twoRounds({
+      original: CLOCK + saying,
+      fixes: [{ targetText: CLOCK, revisionGoal: "统一钟的时刻和老周的说法" }],
+      first: [{ id: 1, to: BAD_CLOCK }],
+      second: [{ id: 1, to: CLOCK }, { id: 2, to: "老周指着钟说现在是三点。" }],
+      firstIssue: { quote: BAD_CLOCK, earlierQuote: saying },
+    });
+    expect(result.body?.failed).toEqual([]);
+    expect(result.summary).toContain("没有对不上的了");
+  });
+
+  it("几处合成一条交模型：各处只认自己点名的句子，别处留下的改动遮不住这处改回原样", async () => {
+    const result = await twoRounds({ ...CLOCK_BACK, fixes: [CLOCK_FIX, { targetText: CLOCK + AGE, revisionGoal: "照名册把老周的年龄改成十九岁" }] });
+    expect(result.text).toBe(CLOCK + FIXED_AGE + NOTICE + ROSTER);
+    expect(result.body?.verify?.left?.sure).toHaveLength(1);
+    expect(result.body?.failed).toEqual([{ target: CLOCK, why: "改了两轮又回到了原样" }]);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("改在别处又改回原样、末次再核引的是改过的那句：这处照样记回到原样", async () => {
+    const target = "老周说两只钟都走得准。";
+    const wall = "墙上的钟指向三点。";
+    const result = await twoRounds({
+      original: target + wall + AGE + NOTICE + ROSTER,
+      fixes: [{ targetText: target, revisionGoal: "照通知修正墙上的钟" }, AGE_FIX],
+      first: [{ id: 2, for: 1, to: "墙上的钟指向五点。" }, { id: 3, for: 2, to: FIXED_AGE }],
+      second: [{ id: 2, for: 1, to: wall }],
+      firstIssue: { quote: target, earlierQuote: "墙上的钟指向五点。", reason: "钟应为四点，却说五点的钟是准的" },
+      finalIssue: { quote: wall, earlierQuote: NOTICE, reason: "墙钟仍是三点，没有照通知改成四点" },
+    });
+    expect(result.text).toBe(target + wall + FIXED_AGE + NOTICE + ROSTER);
+    expect(result.body?.failed).toEqual([{ target, why: "改了两轮又回到了原样" }]);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("只差全半角的另一处：第二轮不把第一轮的要求、「别改回」套给它", async () => {
+    const result = await twoRounds({
+      original: "钟停在3点。老周看了一眼。钟停在４点。老周转过身。后面那只钟始终停在3点。",
+      fixes: [{ targetText: "钟停在3点。", revisionGoal: "第一只钟应停在4点" }],
+      first: [{ id: 1, to: "钟停在4点。" }],
+      second: [{ id: 3, to: "钟停在3点。" }],
+      firstIssue: { quote: "钟停在４点。", earlierQuote: "后面那只钟始终停在3点。", reason: "第二只钟应当是3点，第一只钟正确" },
+    });
+    expect(result.text).toBe("钟停在4点。老周看了一眼。钟停在3点。老周转过身。后面那只钟始终停在3点。");
+    expect(result.prompts[1]).not.toContain("第一只钟应停在4点");
+    expect(result.prompts[1]).not.toContain("别改回");
+  });
+
+  it("一模一样的另一处（认不出报的是哪处）：第一轮的要求也不套", async () => {
+    const result = await twoRounds({
+      original: "钟停在三点。老周看了一眼。钟停在四点。老周转过身。后面那只钟始终停在三点。",
+      fixes: [{ targetText: CLOCK, revisionGoal: "此处时刻必须写四点" }],
+      first: [{ id: 1, to: "钟停在四点。" }],
+      second: [{ id: 3, to: CLOCK }],
+      firstIssue: { quote: "钟停在四点。", earlierQuote: "后面那只钟始终停在三点。", reason: "第二只钟应当是三点，第一只钟正确" },
+    });
+    expect(result.prompts[1]).not.toContain("此处时刻必须写四点");
+  });
+
+  it("改回原样那句末次再核还被别的问题牵着：只说回到了原样，不说没改成、也不说改好了（是不是原来那件事不猜）", async () => {
+    const saying = "老周指着钟说现在是四点。";
+    const other = "隔壁的钟指向五点。";
+    const fixedSaying = "老周指着钟说现在是三点。";
+    const result = await twoRounds({
+      original: CLOCK + saying + other,
+      fixes: [{ targetText: CLOCK, revisionGoal: "统一钟的时刻和老周的说法" }],
+      first: [{ id: 1, to: BAD_CLOCK }],
+      second: [{ id: 1, to: CLOCK }, { id: 2, to: fixedSaying }],
+      firstIssue: { quote: BAD_CLOCK, earlierQuote: saying },
+      finalIssue: { quote: other, earlierQuote: CLOCK, reason: "隔壁的钟也应为三点，却指着五点" },
+    });
+    expect(result.text).toBe(CLOCK + fixedSaying + other);
+    expect(result.summary).toContain("这一处改了两轮又回到了原样");
+    expect(result.summary).toContain("还有 1 处对不上");
+    expect(result.summary).not.toContain("没改成");
+    expect(result.summary).not.toContain("改好了");
+  });
+
+  it("新句丢了句末标点（换上会和下一句并成一句）：不换，这处照实说没改成", async () => {
+    const result = await twoRounds({
+      ...CLOCK_BACK,
+      original: CLOCK + "老周看了一眼。" + AGE + NOTICE + ROSTER,
+      first: [{ id: 1, to: "钟停在五点" }, { id: 3, to: FIXED_AGE }],
+      second: [{ id: 1, to: "钟停在四点" }],
+      firstIssue: { quote: CLOCK, earlierQuote: NOTICE },
+    });
+    expect(result.text).toBe(CLOCK + "老周看了一眼。" + FIXED_AGE + NOTICE + ROSTER);
+    expect(result.body?.changes).toEqual([{ from: AGE, to: FIXED_AGE }]);
+    expect(result.body?.failed).toHaveLength(1);
+    expect(result.summary).toContain("改好了 1 处");
+    expect(result.summary).toContain("1 处没改成");
+  });
+
+  it("第二轮改回点名那句、又新改了两句：两轮照样并上、换上", async () => {
+    const saying = "老周说现在是四点。";
+    const other = "老李也说现在是四点。";
+    const result = await twoRounds({
+      original: CLOCK + saying + other,
+      fixes: [{ targetText: CLOCK, revisionGoal: "统一钟的时刻和两人的说法" }],
+      first: [{ id: 1, to: BAD_CLOCK }],
+      second: [{ id: 1, to: CLOCK }, { id: 2, to: "老周说现在是三点。" }, { id: 3, to: "老李也说现在是三点。" }],
+      firstIssue: { quote: BAD_CLOCK, earlierQuote: saying },
+    });
+    expect(result.text).toBe(CLOCK + "老周说现在是三点。老李也说现在是三点。");
+    expect(result.body?.changes).toHaveLength(2);
+    expect(result.body?.failed).toEqual([]);
+  });
+
+  it("前句改长、模型倒着回改法：按位置并，只记一处回到原样", async () => {
+    const longerAge = "老周今年刚满十九岁。";
+    const result = await twoRounds({
+      ...CLOCK_BACK,
+      original: AGE + CLOCK + NOTICE + ROSTER,
+      first: [{ id: 2, to: BAD_CLOCK }, { id: 1, to: longerAge }],
+      second: [{ id: 2, to: CLOCK }],
+    });
+    expect(result.text).toBe(longerAge + CLOCK + NOTICE + ROSTER);
+    expect(result.body?.failed).toEqual([{ target: CLOCK, why: "改了两轮又回到了原样" }]);
+    expect(result.body?.changes).toEqual([{ from: AGE, to: longerAge }]);
+    expect(result.summary).toContain("改好了 1 处");
+  });
+
+  it("末次再核有一步没跑成：改回原样的那处照样记着", async () => {
+    const result = await twoRounds({ ...CLOCK_BACK, partial: true });
+    expect(result.body?.failed).toHaveLength(1);
+    expect(result.body?.verify?.partial).toBeTruthy();
+    expect(result.summary).toContain("改好了 1 处");
+    expect(result.summary).toContain("有一步没核成");
   });
 });
 

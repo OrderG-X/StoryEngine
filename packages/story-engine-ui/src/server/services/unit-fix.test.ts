@@ -101,6 +101,23 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(untagged).toMatchObject({ text: "改好的。乙。丙。改了丁。\n", applied: [0], failed: [{ fix: 1, why: "AI 没给出这句的改法" }], revisit: [], alsoChanged: 1 });
   });
 
+  it("每句改动记着是为第几处改的：点名的算点名它的几处，改在别处的算 for 那处；点名那句也改了的，标 for 的别句只算跟着改", async () => {
+    const text = "甲乙。丙。丁。戊。\n";
+    const fixes = [{ quote: "甲", goal }, { quote: "乙", goal }, { quote: "丙", goal }];
+    const out = await fixByUnits({ chapter: 5, text, fixes, callModel: async () => reply([
+      { id: 1, to: "甲乙改。" }, { id: 3, for: 1, to: "丁改。" }, { id: 4, for: 2, to: "戊改。" },
+    ]) });
+    // [1] 甲乙同句（第 1、2 处），[3] 标 for 第 1 处、第 1 处点名那句也改了 → 跟着改；[4] 替第 3 处（丙没动）改在别处。
+    expect(out).toMatchObject({ applied: [0, 1, 2], owners: [[0, 1], [], [2]], alsoChanged: 1 });
+  });
+
+  it("两处的原句相交、合成一条交模型：每句只算点名了它的那几处，不扩到同一条里别处点名的句子", async () => {
+    const text = "甲。乙。\n";
+    const fixes = [{ quote: "甲。", goal }, { quote: "甲。乙。", goal }];
+    const out = await fixByUnits({ chapter: 5, text, fixes, callModel: async () => reply([{ id: 1, to: "甲改。" }, { id: 2, to: "乙改。" }]) });
+    expect(out).toMatchObject({ applied: [0, 1], owners: [[0, 1], [1]] });
+  });
+
   it("一句都没给：照实说没给出改法", async () => {
     const out = await fixByUnits({ chapter: 5, text: "甲。乙。\n", fixes: [{ quote: "乙", goal }], callModel: async () => reply([]) });
     expect(out).toMatchObject({ text: "甲。乙。\n", applied: [], failed: [{ fix: 0, why: "AI 没给出这句的改法" }], revisit: [] });
