@@ -127,6 +127,8 @@ export interface DraftEditBody {
   readonly failed: readonly EditFailure[];
   readonly alsoChanged?: number;
   readonly verify?: FixVerify;
+  /** 按核账改、改完再核一处不剩：改掉了的那几处（作者点的原句），核账卡照它划掉（fixSettled）。 */
+  readonly settled?: readonly string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -536,6 +538,18 @@ function verifyLine(verify: FixVerify | undefined): string {
   return partial ? `改完再核${again}${partial}` : `改完再核${again}没有对不上的了。`;
 }
 
+/**
+ * 改掉了的几处（作者点的原句）：改完再核跑全了、一处不剩，没改成的（含改回原样）不算。核账卡照它把这几条划成「已改掉」——
+ * 改在别处的那处原句还在稿里，卡上光看原句在不在认不出，结论说没有对不上的了、卡上还摆着「改掉本章 N 处」（真机 2026-11-06）。
+ * 还剩的会出新核账卡、旧卡整张作废，用不着它。
+ */
+function fixSettled(fixes: DraftFixParams["fixes"], outcome: EditOutcome): string[] {
+  const verify = outcome.verify;
+  if (!verify || verify.checks === 0 || verify.failure || verify.partial || (verify.left && leftCount(verify.left) > 0)) return [];
+  const failed = new Set(outcome.failed.map((failure) => failure.target));
+  return [...new Set(fixes.map((fix) => fix.targetText).filter((target) => !failed.has(target)))];
+}
+
 export function buildDraftEditResult(input: {
   readonly params: DraftEditParams;
   readonly outcome: EditOutcome;
@@ -543,6 +557,7 @@ export function buildDraftEditResult(input: {
   readonly applied: DraftApplied;
 }): OperationResult {
   const { params, outcome, applied } = input;
+  const settled = params.mode === "fix" && applied.applied ? fixSettled(params.fixes, outcome) : [];
   const body: DraftEditBody = {
     kind: "draft.change",
     mode: params.mode,
@@ -556,6 +571,7 @@ export function buildDraftEditResult(input: {
     failed: outcome.failed.map(({ target, why }) => ({ target, why })),
     ...(outcome.alsoChanged ? { alsoChanged: outcome.alsoChanged } : {}),
     ...(outcome.verify ? { verify: outcome.verify } : {}),
+    ...(settled.length > 0 ? { settled } : {}),
   };
   const summary = applied.applied
     ? `${doneLine(params, outcome)}${notDoneLine(editTotal(params), outcome.failed)}${outcome.note ?? ""}${verifyLine(outcome.verify)}`

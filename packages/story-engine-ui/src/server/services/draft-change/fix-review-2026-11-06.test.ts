@@ -69,6 +69,8 @@ describe("外部审查 2026-11-06：改掉 / 改完再核", () => {
     expect(result.body?.verify?.partial).toBeTruthy();
     expect(result.summary).toContain("有一步没核成");
     expect(result.summary).not.toContain("没有对不上的了");
+    // 没核全：核账卡上不划掉（真机 2026-11-06）。
+    expect(result.body?.settled).toBeUndefined();
   });
 
   it("两轮改的字一样、位置不同：各记各的，两轮都落盘", async () => {

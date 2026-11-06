@@ -36,6 +36,20 @@ describe("消息卡读回：定论做完的结果（片 3C，存在操作卡上�
   });
 });
 
+describe("消息卡读回：按核账改掉了哪几处（真机 2026-11-06，存在操作卡上）", () => {
+  const op = { opId: "op-0123456789abcdef0124", kind: "draft.change", mode: "fix", what: "按核账改", state: "succeeded", stateText: "做完了", allowed: [], summary: "改好了。", eventSeq: 7 };
+  it("章号、原句、改句跟着存、读回；空句、不是字串的原句丢掉；没章号、一句都不剩、改句缺一条整份不存，操作卡照存", () => {
+    const changes = [{ from: "旧。", to: "新。" }, { from: "删。", to: "" }];
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, quotes: ["甲。", "", 3, "甲。", "乙。"], changes } } }])).toEqual([
+      { type: "operation", op: { ...op, fixed: { chapter: 9, quotes: ["甲。", "乙。"], changes } } },
+    ]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { quotes: ["甲。"], changes } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, quotes: [" "], changes } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, quotes: ["甲。"], changes: [...changes, { from: 1 }] } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, quotes: ["甲。"] } } }])).toEqual([{ type: "operation", op }]);
+  });
+});
+
 describe("消息卡读回：另外几版", () => {
   it("几版全文跟着存、跟着读回；没章号整张不认", () => {
     const versions = { chapter: 38, pick: true, versions: [{ index: 1, candidateId: "0038-op-1", sha: "e".repeat(64), body: "甲版正文。" }] };

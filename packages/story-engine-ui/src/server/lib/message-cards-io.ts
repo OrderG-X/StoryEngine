@@ -127,6 +127,7 @@ function readOperationCard(value: unknown): OperationCardData | undefined {
     .filter((item): item is "resume" | "cancel" => item === "resume" || item === "cancel");
   const progress = readString(value.progress);
   const canon = readCanonResult(value.canon);
+  const fixed = readFixed(value.fixed);
   return {
     opId,
     kind,
@@ -141,7 +142,23 @@ function readOperationCard(value: unknown): OperationCardData | undefined {
     eventSeq: readNonNegativeInteger(value.eventSeq) ?? 0,
     ...(value.announced === true ? { announced: true as const } : {}),
     ...(canon ? { canon } : {}),
+    ...(fixed ? { fixed } : {}),
   };
+}
+
+/** 按核账改、改完再核一处不剩时改掉的那几处原句和改了的几句（核账卡认它划掉）：章号、原句、改句认不出就不存。 */
+function readFixed(value: unknown): OperationCardData["fixed"] {
+  if (!isRecord(value)) return undefined;
+  const chapter = readPositiveInteger(value.chapter);
+  const quotes = Array.isArray(value.quotes)
+    ? [...new Set(value.quotes.filter((quote): quote is string => typeof quote === "string" && quote.trim().length > 0 && quote.length <= 2000))].slice(0, 50)
+    : [];
+  const changes = Array.isArray(value.changes)
+    ? value.changes.flatMap((change) => (isRecord(change) && typeof change.from === "string" && typeof change.to === "string" ? [{ from: change.from, to: change.to }] : []))
+    : [];
+  // 改句缺了一条就认不出改的还在不在稿里：整份不存（不划掉比划错好）。
+  if (!Array.isArray(value.changes) || changes.length !== value.changes.length) return undefined;
+  return chapter !== undefined && quotes.length > 0 && changes.length > 0 ? { chapter, quotes, changes } : undefined;
 }
 
 /** 定论做完的结果（核账卡认哪几条被它改掉了）：卡认不出就不存；划掉的只认卡上真有的。 */

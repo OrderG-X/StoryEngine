@@ -39,7 +39,7 @@ import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
-import { settledContinuityByMessage } from "../../../workspace/chapterProgress.js";
+import { fixedContinuityByMessage, settledContinuityByMessage, type FixedMark } from "../../../workspace/chapterProgress.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, withoutRailDuplicates, type NextStepPrompt } from "./nextStepChoices.js";
@@ -340,6 +340,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 同一章后来又核过的旧核账卡不再给「改这处」（见 commitConfirm.ts）。
   const staleContinuityIds = supersededContinuityMessageIds(messages);
   const settledContinuity = settledContinuityByMessage(messages);
+  const fixedContinuity = fixedContinuityByMessage(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   // 「正在思考」胶囊只顶发出去到第一个字回来之前那一下；之后那条回复自己的过程行在跑光、报正在做哪步，不再两处都说。
@@ -471,6 +472,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             ledgerShortChapters={ledgerShortChapters}
             continuitySuperseded={staleContinuityIds.has(message.id)}
             continuitySettled={settledContinuity.get(message.id)}
+            continuityFixed={fixedContinuity.get(message.id)}
             projectPath={props.projectPath ?? null}
           />
           </StepCardCollapsedByDefault.Provider>
@@ -699,6 +701,7 @@ function MessageBubbles({
   ledgerShortChapters,
   continuitySuperseded = false,
   continuitySettled,
+  continuityFixed,
   onPrefillComposer,
   isLatestMessage = true,
   projectPath = null,
@@ -727,6 +730,8 @@ function MessageBubbles({
   readonly continuitySuperseded?: boolean;
   /** 这张核账卡之后定论改掉的条目键。 */
   readonly continuitySettled?: readonly string[] | undefined;
+  /** 之后按核账改掉的条目（核账卡拿稿纸看那次改的还在不在）。 */
+  readonly continuityFixed?: readonly FixedMark[] | undefined;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
   /** 是不是对话里最后一条（旧的出错卡不再给「重试」——后面已经重试过/往下走了，再点会重复跑）。 */
@@ -845,6 +850,7 @@ function MessageBubbles({
             check={card.check}
             dismissed={card.dismissed ?? []}
             {...(continuitySettled ? { settled: continuitySettled } : {})}
+            {...(continuityFixed ? { fixed: continuityFixed } : {})}
             superseded={continuitySuperseded}
             {...(continuitySuperseded ? {} : { onRevise: onSendMessage, onFixAction: onSendUserAction })}
             onDismiss={projectPath ? (item, undo) => dismissContinuityItem({ messageId: message.id, chapter: card.check.chapter, item, undo }) : undefined}

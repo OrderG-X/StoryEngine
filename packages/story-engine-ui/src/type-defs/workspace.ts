@@ -141,6 +141,11 @@ export interface OperationCardData {
   readonly pending?: PendingActionData;
   /** 定论做完了：卡、作者划掉的、改没改（核账卡认哪几条被它改掉了；存进消息）。 */
   readonly canon?: CanonResultData;
+  /**
+   * 按核账改做完、改完再核一处不剩：哪章改掉了哪几处原句、那次改了哪几句（之前的核账卡认它划掉；存进消息）。
+   * 改的那几句还在稿里才算（撤销了、后来又改了就不算）。
+   */
+  readonly fixed?: { readonly chapter: number; readonly quotes: readonly string[]; readonly changes: readonly { readonly from: string; readonly to: string }[] };
 }
 
 /** 定论卡（canon.propose 的预览、结果）：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */

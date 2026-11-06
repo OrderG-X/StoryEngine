@@ -518,6 +518,8 @@ export interface DraftOperationData {
   readonly versions?: DraftVersionsCardData;
   /** 改稿改了的几处（稿纸上高亮改后那句）。 */
   readonly changes?: readonly EditChangeData[];
+  /** 按核账改、改完再核一处不剩：改掉了的那几处原句（之前的核账卡照它划掉）。 */
+  readonly settled?: readonly string[];
 }
 
 /** 操作的实时事件（与服务端 lib/operations/live.ts 的 LiveEvent 同形）。 */
@@ -620,12 +622,16 @@ function readDraftOperation(body: unknown): DraftOperationData | undefined {
   const snapshots = [body.planSnapshotId, body.ok === true ? body.snapshotId : undefined]
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   const changes = editChanges(body.changes);
+  const settled = body.mode === "fix" && body.ok === true && Array.isArray(body.settled)
+    ? body.settled.filter((quote): quote is string => typeof quote === "string" && quote.trim().length > 0)
+    : [];
   return {
     chapter,
     applied: body.ok === true,
     ...(typeof body.draftTitle === "string" && body.draftTitle.trim() ? { title: body.draftTitle.trim() } : {}),
     ...(snapshots.length > 0 ? { snapshots } : {}),
     ...(changes ? { changes } : {}),
+    ...(settled.length > 0 ? { settled } : {}),
     ...(versions ? { versions } : {}),
   };
 }

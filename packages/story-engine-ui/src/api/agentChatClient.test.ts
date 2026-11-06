@@ -462,6 +462,22 @@ describe("streamAgentChat", () => {
     expect(views[2]?.pending).toBeUndefined();
   });
 
+  it("按核账改做完、再核一处不剩：draft 带改掉了的几处原句；不是 fix、没换上、不是字串的不认（真机 2026-11-06）", async () => {
+    const fixView = (body: Record<string, unknown>) => opView("fix", null, { kind: "draft.change", what: "按核账改·第 4 章", chapter: 4, result: {
+      schema: "operation-result/1", summary: "改好了", body: { kind: "draft.change", mode: "fix", ok: true, chapter: 4, changes: [], failed: [], ...body },
+    } });
+    const { views } = await collectOperations([
+      frame("operation", { type: "record", operation: fixView({ settled: ["旧。", "", 3, "又一句。"] }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: ["旧。"], ok: false }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: ["旧。"], mode: "revise" }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: "旧。" }) }),
+    ]);
+    expect(views[0]?.draft?.settled).toEqual(["旧。", "又一句。"]);
+    expect(views[1]?.draft?.settled).toBeUndefined();
+    expect(views[2]?.draft?.settled).toBeUndefined();
+    expect(views[3]?.draft?.settled).toBeUndefined();
+  });
+
   it("改设定、改账（片 3）：停着等作者的带那几处和附带的话；做完了带存档点；「认下」、直接改账的按钮存下来读回来，不对的不认", async () => {
     const settingsView = (overrides: Record<string, unknown>) => opView("ai", null, { kind: "settings.change", what: "改设定", chapter: undefined, ...overrides });
     const ledgerView = (overrides: Record<string, unknown>) => opView("edit", null, { kind: "ledger.change", what: "改账", chapter: undefined, ...overrides });

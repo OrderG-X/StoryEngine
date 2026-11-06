@@ -90,6 +90,8 @@ describe("fix：核账卡改这处", () => {
     // 改完自己再核了一遍（只核改过的句子）：没有对不上的了。
     expect(summary).toBe("第 1 章改好了 2 处（可撤销）。改完再核没有对不上的了。");
     expect(body).toMatchObject({ kind: "draft.change", mode: "fix", ok: true, chapter: 1, failed: [], verify: { checks: 1, again: 0 } });
+    // 再核一处不剩：作者点的这几处都算改掉了（核账卡照它划掉，真机 2026-11-06）。
+    expect(body?.settled).toEqual(["八几年还开着", "天黑了"]);
     expect(body?.changes).toEqual([{ from: "他说那家店八几年还开着。", to: "他说那家店八几年就没了。" }, { from: "天黑了。", to: "天快黑了。" }]);
     expect((await listSnapshots(book)).some((snapshot) => snapshot.id === body?.snapshotId)).toBe(true);
     expect((await readFixLog(book, 1)).map((entry) => entry.to)).toContain("天快黑了。");
@@ -114,6 +116,7 @@ describe("fix：核账卡改这处", () => {
     expect(await bodyOf(1)).toBe("钟停在四点。老周看了一眼，说是四点。\n天黑了。");
     expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核又跟着改了 1 句，没有对不上的了。");
     expect(body?.verify).toEqual({ checks: 2, again: 1 });
+    expect(body?.settled).toEqual(["钟停在三点"]);
     expect(body?.changes).toEqual([{ from: "钟停在三点。", to: "钟停在四点。" }, { from: "老周看了一眼，说是三点。", to: "老周看了一眼，说是四点。" }]);
     expect((await listSnapshots(book)).filter((snapshot) => snapshot.label === "第1章按核账改前快照")).toHaveLength(1);
     expect((await readFixLog(book, 1)).map((entry) => entry.to)).toEqual(["钟停在四点。", "老周看了一眼，说是四点。"]);
@@ -136,6 +139,8 @@ describe("fix：核账卡改这处", () => {
     expect(await bodyOf(1)).toBe("钟停在四点一刻。老周点头。\n天黑了。");
     expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核又跟着改了 1 句，还有 1 处对不上，在卡上。");
     expect(body?.verify).toMatchObject({ checks: 2, again: 1, left: { chapter: 1, sure: [{ quote: "钟停在四点一刻。" }], maybe: [] } });
+    // 还剩的出新卡、旧卡整张作废：不带改掉了哪几处。
+    expect(body?.settled).toBeUndefined();
     // 同一句改了两次：给作者看的是最早那版 → 最后那版。
     expect(body?.changes).toEqual([{ from: "钟停在三点。", to: "钟停在四点一刻。" }]);
   });
@@ -164,6 +169,8 @@ describe("fix：核账卡改这处", () => {
     expect(await bodyOf(1)).toBe("他抬头看了一眼。钟停在四点。天黑了。");
     expect(summary).toBe("第 1 章改好了这一处（可撤销）。改完再核没有对不上的了。");
     expect(body?.failed).toEqual([]);
+    // 改在别处：点名那句还原样在稿里，卡上光看原句认不出改掉了，靠它划掉。
+    expect(body?.settled).toEqual(["他抬头看了一眼。"]);
   });
 
   it("再核报的跟这次改的不相干（作者没点、也不是改出来的）：不替作者改，列在卡上", async () => {
@@ -188,6 +195,7 @@ describe("fix：核账卡改这处", () => {
     expect(record.state).toBe("succeeded");
     expect(await bodyOf(1)).toBe("他说那家店八几年就没了。老周点头。");
     expect(body?.verify?.checks).toBe(0);
+    expect(body?.settled).toBeUndefined();
     expect(summary).toMatch(/^第 1 章改好了这一处（可撤销）。改完再核没跑成（.+），定稿时会再核。$/u);
   });
 
