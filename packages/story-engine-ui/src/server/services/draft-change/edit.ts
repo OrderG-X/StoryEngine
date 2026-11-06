@@ -313,7 +313,8 @@ function againGoal(chapter: number, item: ChapterCheckItem, first: readonly Edit
   const goal = continuityFixGoal(chapter, item);
   const changed = first.find((change) => sameSentence(item.quote, change.to));
   const earlier = changed ? fixes.find((fix) => sameSentence(fix.targetText, changed.from)) : undefined;
-  return earlier ? `${goal}；这句刚按「${earlier.revisionGoal}」改过，两样都要对得上` : goal;
+  // 别改回第一轮之前那样：原来那句正是核出对不上才改的（真机 2026-11-06：「今天」改「后天」再改回「今天」）。
+  return earlier ? `${goal}；这句刚按「${earlier.revisionGoal}」改过，两样都要对得上，也别改回原来的「${changed!.from}」` : goal;
 }
 
 /**
@@ -321,7 +322,7 @@ function againGoal(chapter: number, item: ChapterCheckItem, first: readonly Edit
  * 按位置认、不按字认：同样的字出现几处时，第二轮改的可能是另一处（外部审查 2026-11-06：两处说法对调时曾被并成
  * 「三点→三点」删掉；只认出现一次又会把同一处改回原样当成两处改动）。
  */
-function mergeRounds(first: EditOutcome, second: EditOutcome): EditOutcome {
+function mergeRounds(first: EditOutcome, second: EditOutcome, targets: readonly string[]): EditOutcome {
   const changes = [...first.changes];
   // 第一轮每条改动在第一轮稿里从第几个字起：前面几处改动长短变了，往后挪。
   const firstAt = first.at;
@@ -338,11 +339,16 @@ function mergeRounds(first: EditOutcome, second: EditOutcome): EditOutcome {
     else changes.push(change);
   });
   const also = (first.alsoChanged ?? 0) + (second.alsoChanged ?? 0);
+  // 作者点的那句两轮改下来回到原样：没改成，照实算进没改成（真机 2026-11-06：曾仍报「改好了 5 处」）。
+  // 只认作者点的句子：连带改的句子回到原样不等于哪一处没改成。
+  const reverted = changes.filter((change) => change.from === change.to && quoteInText(change.from, second.text)
+    && targets.some((target) => sameSentence(change.from, target)))
+    .map((change) => ({ target: change.from, why: "改了两轮又回到了原样" }));
   return {
     text: second.text,
     changes: changes.filter((change) => change.from !== change.to),
     // 第一轮没改成、第二轮也没动到的才算没改成（原句还原样在稿里）。
-    failed: first.failed.filter((failure) => quoteInText(failure.target, second.text)),
+    failed: [...first.failed.filter((failure) => quoteInText(failure.target, second.text)), ...reverted],
     ...(also > 0 ? { alsoChanged: also } : {}),
   };
 }
@@ -386,7 +392,7 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   });
   // 第二轮一句都没改成：照第一轮的结果交，还剩的列给作者。
   if (second.changes.length === 0) return { ...(once.partial ? first : settledFailures(first, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
-  const merged = mergeRounds(first, second);
+  const merged = mergeRounds(first, second, params.fixes.map((fix) => fix.targetText));
   const twice = await ctx.step(`check:${FIX_ROUNDS}`, { text: second.text }, () => {
     ctx.progress("改完再核一遍");
     return verifyFix(bookDir, chapter, second.text, second.changes, deps.readerCallModel, second.revisit);

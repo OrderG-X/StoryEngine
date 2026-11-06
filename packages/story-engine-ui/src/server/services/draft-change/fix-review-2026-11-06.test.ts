@@ -191,6 +191,44 @@ describe("外部审查 2026-11-06：改掉 / 改完再核", () => {
     expect(await readFixLog(book, 1)).toHaveLength(0);
   });
 
+  it("改了几处、其中一处第二轮又改回原样：只报改好的那几处，改回去的算没改成；第二轮叫它别改回去", async () => {
+    // 真机 2026-11-06：「今天上午清仓」第一轮改成「后天」，再核还报，第二轮又改回「今天」，卡上仍说「改好了 5 处」。
+    const original = "钟停在三点。老周今年十八岁。通知写明钟应是四点。名册写着老周十九岁。";
+    await save(original);
+    const prompts: string[] = [];
+    const reader: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记。";
+      const last = messages.at(-1)!.content;
+      if (last.includes(REVIEW)) return reviews(last);
+      if (last.includes(INNER)) return emptyReply;
+      const body = last.split("【新稿：第 1 章】\n")[1]?.split("\n\n")[0] ?? "";
+      const clock = body.startsWith("钟停在五点。") ? "钟停在五点。" : body.startsWith("钟停在三点。") ? "钟停在三点。" : "";
+      return clock
+        ? JSON.stringify({ checks: [], contradictions: [{ quote: clock, earlierQuote: "通知写明钟应是四点。", earlierChapter: 1, confidence: "sure", reason: "钟的时刻和通知对不上" }] })
+        : emptyReply;
+    };
+    const result = await runDraftEdit(book, "fix", { chapter: 1, fixes: [
+      { targetText: "钟停在三点。", revisionGoal: "照通知改成四点" },
+      { targetText: "老周今年十八岁。", revisionGoal: "照名册改成十九岁" },
+    ] }, fakeDraftDeps({
+      readerCallModel: reader,
+      fixCallModel: async (prompt) => {
+        prompts.push(prompt);
+        return prompts.length === 1
+          ? JSON.stringify({ edits: [{ id: 1, to: "钟停在五点。" }, { id: 2, to: "老周今年十九岁。" }] })
+          : fixes(1, "钟停在三点。");
+      },
+    }));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("别改回原来的「钟停在三点。」");
+    expect(result.record.state).toBe("succeeded");
+    expect((await readDraft(book, 1))?.body).toBe("钟停在三点。老周今年十九岁。通知写明钟应是四点。名册写着老周十九岁。");
+    expect(result.body?.changes).toEqual([{ from: "老周今年十八岁。", to: "老周今年十九岁。" }]);
+    expect(result.summary).toContain("改好了 1 处");
+    expect(result.summary).toContain("1 处没改成：改了两轮又回到了原样");
+    expect(result.summary).not.toContain("改好了 2 处");
+  });
+
   it("第一遍再核有一步没成、第二遍整章核全了：不再说没核成", async () => {
     const original = "钟停在三点。老周看了一眼，说是三点。天黑了。";
     await save(original);
