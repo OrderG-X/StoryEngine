@@ -31,6 +31,11 @@ export interface UnitFixOutcome {
   readonly changes: readonly { readonly from: string; readonly to: string }[];
   /** changes 每一条在改前正文里从第几个字起（按位置并两轮改动用，同样的字出现几处时靠它认是哪一处）。 */
   readonly at: readonly number[];
+  /**
+   * changes 每一条是为第几处改的（fixes 的下标）：点名那句的算点名它的那几处（几处落在同一句的都算）；点名的都没动、
+   * 替它改在别处（for）的算那一处的；连带改、标不出为哪处改的是空。两轮改下来回到原样时，按它认是哪几处没改成（外部审查 2026-11-06）。
+   */
+  readonly owners: readonly (readonly number[])[];
   /** 其中不是点名的、本章别处说同一件事跟着改的句数。 */
   readonly alsoChanged: number;
   /**
@@ -189,7 +194,7 @@ export async function fixByUnits(input: {
     if (typeof at === "string") failed.push({ fix: index, why: at });
     else located.push({ fix: index, at });
   });
-  const unchanged = (): UnitFixOutcome => ({ text, applied: [], failed: failed.sort((a, b) => a.fix - b.fix), changes: [], at: [], alsoChanged: 0, revisit: [] });
+  const unchanged = (): UnitFixOutcome => ({ text, applied: [], failed: failed.sort((a, b) => a.fix - b.fix), changes: [], at: [], owners: [], alsoChanged: 0, revisit: [] });
   if (located.length === 0) return unchanged();
 
   // 两处落在同一句上：合成一条交给模型，免得同一句给两种改法。
@@ -254,12 +259,28 @@ export async function fixByUnits(input: {
   // 一处都没改成：别的句子（连带改、标不出为哪处改的）也不换——连带改只跟着改成了的那处走（外部审查 2026-11-06）。
   if (applied.length === 0) return unchanged();
   const finalText = result.text;
+  // 每一处为它改了哪几句：它自己点名的句子里改了的；合成一条交模型、自己点名的一句没改的，算这一条里改了的那几句；
+  // 点名的都没动、替它改在别处（for）的算那几句。点名那句也改了的，标 for 的别句只是跟着改（和 alsoChanged 同口径）：
+  // 模型连带改也常标 for，算进去会把点名那句改回原样盖住。按各处自己点名的句子认，不按合成的那条（外部审查 2026-11-06）。
+  const own = new Map<number, number[]>();
+  targets.forEach((target, index) => {
+    const group = target.ids.filter((id) => changedIds.has(id));
+    const elsewhere = elsewhereTargets.has(index)
+      ? pending.filter((edit) => changedIds.has(edit.id) && !allowed.has(edit.id) && edit.target === index).map((edit) => edit.id)
+      : [];
+    for (const fix of target.fixes) {
+      const mine = located.find((item) => item.fix === fix)!.at.ids.filter((id) => changedIds.has(id));
+      own.set(fix, mine.length > 0 ? mine : group.length > 0 ? group : elsewhere);
+    }
+  });
+  const ownersOf = (id: number): number[] => [...own].filter(([, ids]) => ids.includes(id)).map(([fix]) => fix).sort((a, b) => a - b);
   return {
     text: finalText,
     applied: applied.sort((a, b) => a - b),
     failed: failed.sort((a, b) => a.fix - b.fix),
     changes: result.applied.map((edit) => ({ from: edit.from, to: edit.to })),
     at: result.applied.map((edit) => edit.start),
+    owners: result.applied.map((edit) => ownersOf(edit.id)),
     // 连带改的不算替点名那句改到别处的那几句。
     alsoChanged: pending.filter((edit) => changedIds.has(edit.id) && !allowed.has(edit.id) && !(edit.target !== undefined && elsewhereTargets.has(edit.target))).length,
     revisit: applied.filter((fix) => locateRevisionSpan(finalText, fixes[fix]!.quote.trim()) !== "not_found"),

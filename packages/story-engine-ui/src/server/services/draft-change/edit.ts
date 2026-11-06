@@ -26,7 +26,7 @@ import { authorStepId, OperationObsolete, type OperationResult, type RecipeConte
 import { FIX_ROUNDS, fixByUnits } from "../unit-fix.js";
 import { EDIT_MAX_FIXES, type DraftDeaiParams, type DraftEditMode, type DraftEditParams, type DraftFixParams, type DraftReviseEdit } from "./params.js";
 import type { DraftApplied } from "./result.js";
-import { reviseDraftText, type RevisionFailure, type RevisionModelCaller } from "./revise-text.js";
+import { reviseDraftText, revisionSpans, type RevisionFailure, type RevisionModelCaller } from "./revise-text.js";
 import { coded } from "./steps.js";
 
 /** 作者看改法的那个按钮（卡上按它出「换上 / 再改一版」）。 */
@@ -73,7 +73,13 @@ export interface EditChange {
 export interface EditFailure {
   readonly target: string;
   readonly why: string;
+  /** fix：两轮改下来为它改的句子全回到了原样（结论照实说「改了两轮又回到了原样」，不说没改成）。 */
+  readonly reverted?: true;
+  /** fix 回到原样的：为它改过、又回到原样的那几句（再核还报不报它，这几句也算；只在操作里用）。 */
+  readonly sentences?: readonly string[];
 }
+
+const REVERTED_WHY = "改了两轮又回到了原样";
 
 /** 改的那一步的输出（存进检查点）。 */
 export interface EditOutcome {
@@ -85,6 +91,8 @@ export interface EditOutcome {
   readonly alsoChanged?: number;
   /** fix 每一轮：changes 每一条在这一轮改前正文里从第几个字起（两轮按位置并，只在操作里用）。 */
   readonly at?: readonly number[];
+  /** fix 每一轮：changes 每一条是为这一轮第几处改的（两轮改回原样时按处算没改成，只在操作里用）。 */
+  readonly owners?: readonly (readonly number[])[];
   /** fix：改了、但核账引的原句还原样在稿里的那几处（改在本章别的句子上、重复的句子只改了一次）；改完再核交核账员复核。 */
   readonly revisit?: readonly string[];
   /** revise 只改了一段时 AI 说的改了什么；按作者给的原文换上的是 exact。 */
@@ -232,6 +240,7 @@ async function fixEdits(input: {
     text: outcome.text,
     changes: outcome.changes,
     at: outcome.at,
+    owners: outcome.owners,
     failed: outcome.failed.map(({ fix, why }) => ({ target: input.fixes[fix]!.targetText, why })),
     ...(outcome.alsoChanged > 0 ? { alsoChanged: outcome.alsoChanged } : {}),
     ...(outcome.revisit.length > 0 ? { revisit: outcome.revisit.map((fix) => input.fixes[fix]!.targetText) } : {}),
@@ -309,41 +318,61 @@ function againItems(chapter: number, left: ContinuityCheckData, first: EditOutco
  * 第二轮改法：和第一轮同一句话（和哪句对上 + 理由）；这句是第一轮刚改出来的，再带上第一轮那条要求，两样都要对上
  * （不然改回去又和第一轮那句对不上，来回改）。
  */
-function againGoal(chapter: number, item: ChapterCheckItem, first: readonly EditChange[], fixes: DraftFixParams["fixes"]): string {
+function againGoal(chapter: number, item: ChapterCheckItem, first: EditOutcome, fixes: DraftFixParams["fixes"]): string {
   const goal = continuityFixGoal(chapter, item);
-  const changed = first.find((change) => sameSentence(item.quote, change.to));
-  const earlier = changed ? fixes.find((fix) => sameSentence(fix.targetText, changed.from)) : undefined;
+  // 按位置认报的是不是第一轮改过的那句：核账引的句子在第一轮稿里只有一处、正落在改过的那句上才算。
+  // 同样的字（或只差全半角）别处还有一句时，报的可能是那一句，套上第一轮的要求、「别改回」会把那句的正确改法禁了（外部审查 2026-11-06）。
+  const spans = landedSpans(first);
+  const quoted = revisionSpans(first.text, item.quote.trim());
+  if (!spans || quoted.length !== 1) return goal;
+  const at = quoted[0]!;
+  const index = first.changes.findIndex((change, other) => change.to.length > 0 && spans[other]!.start < at.end && at.start < spans[other]!.end);
+  const goals = index < 0 ? [] : [...new Set((first.owners?.[index] ?? []).map((fix) => fixes[fix]!.revisionGoal))];
+  if (goals.length === 0) return goal;
   // 别改回第一轮之前那样：原来那句正是核出对不上才改的（真机 2026-11-06：「今天」改「后天」再改回「今天」）。
-  return earlier ? `${goal}；这句刚按「${earlier.revisionGoal}」改过，两样都要对得上，也别改回原来的「${changed!.from}」` : goal;
+  return `${goal}；这句刚按「${goals.join("；")}」改过，两样都要对得上，也别改回原来的「${first.changes[index]!.from}」`;
+}
+
+/** 第一轮每条改动换上后在第一轮稿里从第几个字到第几个字（前面几处改动长短变了，往后挪）；位置没记全的没有。 */
+function landedSpans(first: EditOutcome): { readonly start: number; readonly end: number }[] | undefined {
+  const at = first.at;
+  if (!at || at.length !== first.changes.length) return undefined;
+  return first.changes.map((change, index) => {
+    const start = at[index]! + first.changes.reduce((shift, other, j) => (at[j]! < at[index]! ? shift + other.to.length - other.from.length : shift), 0);
+    return { start, end: start + change.to.length };
+  });
 }
 
 /**
  * 两轮的改动并成一份：第二轮改的是第一轮改出来的那句（同一个位置）就接上（改前取最早那版），改回原样的去掉。
  * 按位置认、不按字认：同样的字出现几处时，第二轮改的可能是另一处（外部审查 2026-11-06：两处说法对调时曾被并成
  * 「三点→三点」删掉；只认出现一次又会把同一处改回原样当成两处改动）。
+ * 作者点的哪一处，第一轮为它改的句子两轮下来全回到了原样，就算这处没改成（按第一轮记的为哪处改的认，不按字认）。
  */
-function mergeRounds(first: EditOutcome, second: EditOutcome, targets: readonly string[]): EditOutcome {
+function mergeRounds(first: EditOutcome, second: EditOutcome, fixes: DraftFixParams["fixes"]): EditOutcome {
   const changes = [...first.changes];
-  // 第一轮每条改动在第一轮稿里从第几个字起：前面几处改动长短变了，往后挪。
-  const firstAt = first.at;
-  const landed = firstAt && firstAt.length === first.changes.length
-    ? first.changes.map((_, index) => firstAt[index]! + first.changes.reduce((shift, change, other) =>
-      firstAt[other]! < firstAt[index]! ? shift + change.to.length - change.from.length : shift, 0))
-    : undefined;
+  const landed = landedSpans(first);
   second.changes.forEach((change, index) => {
     const secondAt = second.at?.[index];
     const at = landed && secondAt !== undefined
-      ? changes.findIndex((earlier, other) => landed[other] === secondAt && first.changes[other]!.to === change.from)
+      // 只在第一轮那几条里找：changes 后面接着的是这一轮新加的，没有第一轮的位置（外部审查 2026-11-06：曾越界报错）。
+      ? first.changes.findIndex((earlier, other) => landed[other]!.start === secondAt && earlier.to === change.from)
       : -1;
     if (at >= 0) changes[at] = { from: changes[at]!.from, to: change.to };
     else changes.push(change);
   });
   const also = (first.alsoChanged ?? 0) + (second.alsoChanged ?? 0);
-  // 作者点的那句两轮改下来回到原样：没改成，照实算进没改成（真机 2026-11-06：曾仍报「改好了 5 处」）。
-  // 只认作者点的句子：连带改的句子回到原样不等于哪一处没改成。
-  const reverted = changes.filter((change) => change.from === change.to && quoteInText(change.from, second.text)
-    && targets.some((target) => sameSentence(change.from, target)))
-    .map((change) => ({ target: change.from, why: "改了两轮又回到了原样" }));
+  // 作者点的那处两轮改下来回到原样：照实算进没改成（真机 2026-11-06：曾仍报「改好了 5 处」）。
+  // 一句里有几处的每处都算；一处改了几句（重复的句子、改在别处的）要全回去才算；连带改的句子回到原样不算哪一处的。
+  const owners = first.owners && first.owners.length === first.changes.length ? first.owners : [];
+  const reverted = [...new Set(owners.flat())].sort((a, b) => a - b)
+    .filter((fix) => owners.every((list, index) => !list.includes(fix) || changes[index]!.from === changes[index]!.to))
+    .map((fix): EditFailure => ({
+      target: fixes[fix]!.targetText,
+      why: REVERTED_WHY,
+      reverted: true,
+      sentences: owners.flatMap((list, index) => (list.includes(fix) ? [changes[index]!.from] : [])),
+    }));
   return {
     text: second.text,
     changes: changes.filter((change) => change.from !== change.to),
@@ -353,10 +382,19 @@ function mergeRounds(first: EditOutcome, second: EditOutcome, targets: readonly 
   };
 }
 
-/** 再核不再报的「没改成」不算没改成：两处报的是同一件事的两头，改了这头那头就对上了（真机 2026-11-03）。 */
-function settledFailures(outcome: EditOutcome, left?: ContinuityCheckData): EditOutcome {
+/**
+ * 再核不再报的「没改成」不算没改成：两处报的是同一件事的两头，改了这头那头就对上了（真机 2026-11-03）。
+ * 还报着它的认两头：本章自己前后打架的，核账员可能把两句对调着报；回到原样的连为它改过的那几句一起认（外部审查 2026-11-06）。
+ * 别章、设定那头同字不算。还报着的是不是原来那件事不猜：牵着它就照实留着（回到原样的只说回到了原样，不说没改成）。
+ */
+function settledFailures(outcome: EditOutcome, chapter: number, left?: ContinuityCheckData): EditOutcome {
   const flagged = left ? [...left.sure, ...left.maybe] : [];
-  return { ...outcome, failed: outcome.failed.filter((failure) => flagged.some((item) => sameSentence(item.quote, failure.target))) };
+  const still = (failure: EditFailure): boolean => {
+    const sentences = [failure.target, ...(failure.sentences ?? [])];
+    return flagged.some((item) => sentences.some((sentence) => sameSentence(item.quote, sentence)
+      || (!item.againstSetting && (item.earlierChapter <= 0 || item.earlierChapter === chapter) && sameSentence(item.earlierQuote, sentence))));
+  };
+  return { ...outcome, failed: outcome.failed.filter(still) };
 }
 
 /** fix：改 → 补笔记 → 再核 →（还有对不上的）再改一轮 → 再核。都只算、不写盘；换上在外面一次做。 */
@@ -381,18 +419,18 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   // 有一步没跑成：这一遍没核全，后面哪一遍核全了也只核改过的那几句，盖不住它。
   const partial = once.partial ? { partial: once.partial } : {};
   // 没核全时「没再报」不能当改好了：没改成的照实留着。
-  if (leftCount(once.left) === 0) return { ...(once.partial ? first : settledFailures(first)), verify: { checks: 1, again: 0, ...partial } };
+  if (leftCount(once.left) === 0) return { ...(once.partial ? first : settledFailures(first, chapter)), verify: { checks: 1, again: 0, ...partial } };
   // 第二轮（FIX_ROUNDS）：作者点的、第一轮改出来的还对不上的那几处，第一轮刚改出来的带上第一轮那条要求。
   const fixes = againItems(chapter, once.left, first, params.fixes).slice(0, EDIT_MAX_FIXES)
-    .map((item) => ({ targetText: item.quote, revisionGoal: againGoal(chapter, item, first.changes, params.fixes) }));
-  if (fixes.length === 0) return { ...(once.partial ? first : settledFailures(first, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
+    .map((item) => ({ targetText: item.quote, revisionGoal: againGoal(chapter, item, first, params.fixes) }));
+  if (fixes.length === 0) return { ...(once.partial ? first : settledFailures(first, chapter, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
   const second = await ctx.step(`fix:${FIX_ROUNDS}`, { text: first.text, fixes }, () => {
     ctx.progress("还有几处对不上，再改一轮");
     return fixEdits({ chapter, text: first.text, fixes, callModel: deps.fixCallModel });
   });
   // 第二轮一句都没改成：照第一轮的结果交，还剩的列给作者。
-  if (second.changes.length === 0) return { ...(once.partial ? first : settledFailures(first, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
-  const merged = mergeRounds(first, second, params.fixes.map((fix) => fix.targetText));
+  if (second.changes.length === 0) return { ...(once.partial ? first : settledFailures(first, chapter, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
+  const merged = mergeRounds(first, second, params.fixes);
   const twice = await ctx.step(`check:${FIX_ROUNDS}`, { text: second.text }, () => {
     ctx.progress("改完再核一遍");
     return verifyFix(bookDir, chapter, second.text, second.changes, deps.readerCallModel, second.revisit);
@@ -402,7 +440,7 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   // 第二遍整章核的：只看它自己全没全；只核改过几句的盖不住第一遍没核成的那步。
   const partialEnd = twice.full ? twice.partial : once.partial ?? twice.partial;
   return {
-    ...(partialEnd ? merged : settledFailures(merged, twice.left)),
+    ...(partialEnd ? merged : settledFailures(merged, chapter, twice.left)),
     verify: { checks: 2, again, ...(leftCount(twice.left) > 0 ? { left: twice.left } : {}), ...(partialEnd ? { partial: partialEnd } : {}) },
   };
 }
@@ -448,10 +486,13 @@ async function checkStillFresh(projectDir: string, chapter: number, materials: E
 /*  结论                                                                */
 /* ------------------------------------------------------------------ */
 
-/** 没改成的那几处一句话（照第一处的原因说）。 */
+/** 没改成的那几处一句话（照第一处的原因说）；两轮改回原样的另说一句，只说回到了原样（再核还报不报在后面那句）。 */
 function notDoneLine(total: number, failed: readonly EditFailure[]): string {
-  if (failed.length === 0) return "";
-  return total === 1 ? `这一处没改成：${failed[0]!.why}。` : `${failed.length} 处没改成：${failed[0]!.why}。`;
+  const back = failed.filter((failure) => failure.reverted);
+  const rest = failed.filter((failure) => !failure.reverted);
+  const restLine = rest.length === 0 ? "" : total === 1 ? `这一处没改成：${rest[0]!.why}。` : `${rest.length} 处没改成：${rest[0]!.why}。`;
+  const backLine = back.length === 0 ? "" : total === 1 ? `这一处${REVERTED_WHY}。` : `${back.length} 处${REVERTED_WHY}。`;
+  return `${restLine}${backLine}`;
 }
 
 const editTotal = (params: DraftEditParams): number =>
@@ -472,7 +513,9 @@ function doneLine(params: DraftEditParams, outcome: EditOutcome): string {
   if (params.mode === "deai") return `${at}改掉了 ${count} 处机器腔（可撤销）。`;
   if (params.mode === "fix") {
     const also = outcome.alsoChanged ? `本章别处说同一件事的 ${outcome.alsoChanged} 句跟着改了。` : "";
-    const done = params.fixes.length - outcome.failed.length;
+    const done = Math.max(0, params.fixes.length - outcome.failed.length);
+    // 点的都没改成、只剩别的句子的改动（两轮下来点名那句回到原样，跟着改的那句还在）：不说「改好了」（外部审查 2026-11-06）。
+    if (done === 0) return `${at}换上了 ${count} 句改动（可撤销）。`;
     return `${params.fixes.length === 1 ? `${at}改好了这一处（可撤销）。` : `${at}改好了 ${done} 处（可撤销）。`}${also}`;
   }
   if (outcome.exact) return `${at}按你给的原文换上了（可撤销）。`;
@@ -510,7 +553,7 @@ export function buildDraftEditResult(input: {
       ? { version: applied.version, ...(applied.snapshotId ? { snapshotId: applied.snapshotId } : {}) }
       : { kept: { candidateId: applied.candidateId, reason: applied.reason, ...(applied.handled ? { handled: true as const } : {}) } }),
     changes: outcome.changes,
-    failed: outcome.failed,
+    failed: outcome.failed.map(({ target, why }) => ({ target, why })),
     ...(outcome.alsoChanged ? { alsoChanged: outcome.alsoChanged } : {}),
     ...(outcome.verify ? { verify: outcome.verify } : {}),
   };
