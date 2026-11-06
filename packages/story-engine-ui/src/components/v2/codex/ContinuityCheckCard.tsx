@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { StepCard } from "./StepCard.js";
 import { useMaybeMarks } from "./maybeMarks.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
-import { continuityItemKey, quoteInPaper } from "../../../workspace/chapterProgress.js";
+import { continuityItemKey, fixInEffect, quoteInPaper, type FixedMark } from "../../../workspace/chapterProgress.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
 import { EDIT_MAX_FIXES, EDIT_MAX_TEXT, newCanonPick, newCanonStatement, newEditAction, type AgentUserAction, type ChapterSideData, type SettleSideData } from "../../../api/agentChatClient.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
@@ -168,10 +168,15 @@ function ItemView({ chapter, item, siblings, gone = false, onRevise, onSettle, o
   );
 }
 
-export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], settled = [], superseded = false, onRevise, onFixAction, onDismiss }: {
+export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], settled = [], fixed = [], superseded = false, onRevise, onFixAction, onDismiss }: {
   readonly check: ContinuityCheck;
   /** 之后定论改齐时改掉的条目键（settledContinuityByMessage）：和原句不在稿里的一样标「已改掉」。 */
   readonly settled?: readonly string[];
+  /**
+   * 之后按核账改、改完再核一处不剩时改掉的条目（fixedContinuityByMessage）：稿纸开着这一章、那次改的还在稿里才标「已改掉」
+   * （改在别处的那处原句还在稿里，光看原句认不出；撤销了、又改过就照旧摆出来）。
+   */
+  readonly fixed?: readonly FixedMark[];
   /** 同一章后来又核过：这张是旧结果，说一句、不给改的按钮（上面不传 onRevise / onFixAction）。 */
   readonly superseded?: boolean;
   /** 作者点过「不是问题」的条目键（存在卡上，稿纸划线共用一份）。 */
@@ -190,8 +195,14 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   // 本章自己前后打架的，作者改的也可能是前面那句（长篇实跑第 37 章：改了「药箱留在门槛里」，卡上还给「改掉这 1 处」，点了会把对的那句改错）。
   const otherSideGone = (item: Item): boolean =>
     paper !== null && !item.againstSetting && item.earlierChapter === check.chapter && !quoteInPaper(paper, item.earlierQuote);
+  const fixedGone = (item: Item): boolean => {
+    if (paper === null) return false;
+    const key = continuityItemKey(item);
+    return fixed.some((mark) => mark.key === key && fixInEffect(mark.changes, paper));
+  };
   const gone = (item: Item): boolean =>
     settledKeys.has(continuityItemKey(item))
+    || fixedGone(item)
     || (paper !== null && canFixDirectly(check.chapter, item) && !quoteInPaper(paper, item.quote))
     || otherSideGone(item);
   const [showMaybe, setShowMaybe] = useState(false);

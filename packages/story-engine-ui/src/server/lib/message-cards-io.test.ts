@@ -36,6 +36,27 @@ describe("消息卡读回：定论做完的结果（片 3C，存在操作卡上�
   });
 });
 
+describe("消息卡读回：按核账改掉了哪几处（真机 2026-11-06，存在操作卡上）", () => {
+  const op = { opId: "op-0123456789abcdef0124", kind: "draft.change", mode: "fix", what: "按核账改", state: "succeeded", stateText: "做完了", allowed: [], summary: "改好了。", eventSeq: 7 };
+  it("章号、改掉的、改句跟着存、读回；认不出的改掉的丢掉；没章号、一条都不剩、改句缺一条整份不存，操作卡照存", () => {
+    const changes = [{ from: "旧。", to: "新。" }, { from: "删。", to: "" }];
+    const items = [{ quote: "甲。", goal: "对上前文" }, { quote: "乙。", earlierQuote: "前文。" }];
+    const reported = [{ quote: "戊。", earlierQuote: "己。" }];
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, items: [...items, "丙。", { quote: "丁。" }], changes, reported } } }])).toEqual([
+      { type: "operation", op: { ...op, fixed: { chapter: 9, items, changes, reported } } },
+    ]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { items, changes } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, items: [{ quote: " ", goal: "g" }], changes } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, items, changes: [...changes, { from: 1 }] } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, items } } }])).toEqual([{ type: "operation", op }]);
+    // 还在报的没有、或有一条认不出：整份不存（宁可不划）。
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, items, changes } } }])).toEqual([{ type: "operation", op }]);
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, items, changes, reported: [{ quote: "戊。" }] } } }])).toEqual([{ type: "operation", op }]);
+    // 老样子（只有原句）不认：认不出点的是哪条。
+    expect(readMessageCards([{ type: "operation", op: { ...op, fixed: { chapter: 9, quotes: ["甲。"], changes } } }])).toEqual([{ type: "operation", op }]);
+  });
+});
+
 describe("消息卡读回：另外几版", () => {
   it("几版全文跟着存、跟着读回；没章号整张不认", () => {
     const versions = { chapter: 38, pick: true, versions: [{ index: 1, candidateId: "0038-op-1", sha: "e".repeat(64), body: "甲版正文。" }] };

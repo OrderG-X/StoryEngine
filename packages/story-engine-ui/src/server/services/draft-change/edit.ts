@@ -102,7 +102,19 @@ export interface EditOutcome {
   readonly note?: string;
   /** fix：改完再核（有改动才有）。 */
   readonly verify?: FixVerify;
+  /** fix：第二轮按再核报的改的那几条（原句 + 对照的前文原句）；改完再核一处不剩时也算改掉（fixSettled）。 */
+  readonly again?: readonly IssuePair[];
+  /** fix：最后一遍再核报的全部条目（Verified.reported）；核账卡划掉改掉的时排除还在报的。没有就不划。 */
+  readonly reported?: readonly IssuePair[];
 }
+
+/**
+ * 改掉了的一处（核账卡照它划掉）：作者点的按原句 + 改法认（卡上同一句可能报了两件事，只划点了的那件）；
+ * 第二轮按再核报的改的按原句 + 对照的前文原句认。
+ */
+export type SettledFix =
+  | { readonly quote: string; readonly goal: string }
+  | { readonly quote: string; readonly earlierQuote: string };
 
 /** 等作者时卡上摆的（preview）。 */
 export interface RevisePreview {
@@ -127,6 +139,10 @@ export interface DraftEditBody {
   readonly failed: readonly EditFailure[];
   readonly alsoChanged?: number;
   readonly verify?: FixVerify;
+  /** 按核账改、改完再核一处不剩：改掉了的那几处，核账卡照它划掉（fixSettled）。 */
+  readonly settled?: readonly SettledFix[];
+  /** 有 settled 时：最后一遍再核还在报的条目（普通「可能」不进 left），核账卡上这几条不划。 */
+  readonly reported?: readonly IssuePair[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -247,9 +263,15 @@ async function fixEdits(input: {
   };
 }
 
+/** 一条核账条目认它是哪条：原句 + 对照的前文原句。 */
+export type IssuePair = { readonly quote: string; readonly earlierQuote: string };
+
 type Verified =
-  /** full：这遍整章核的（不是只核改过的几句）。 */
-  | { readonly ok: true; readonly left: ContinuityCheckData; readonly partial?: string; readonly full: boolean }
+  /**
+   * full：这遍整章核的（不是只核改过的几句）。reported：这遍报的全部条目（确定、可能，哪章的都算）——left 不带普通「可能」，
+   * 核账卡划掉改掉的时要排除还在报的（外部审查 2026-11-06）。
+   */
+  | { readonly ok: true; readonly left: ContinuityCheckData; readonly partial?: string; readonly full: boolean; readonly reported?: readonly IssuePair[] }
   | { readonly ok: false; readonly reason: string };
 
 /** 改完再核前，核账员先把前文笔记补到上一章（和定稿那遍同一套）；没成就不再核，结论里说一句。 */
@@ -290,6 +312,7 @@ async function verifyFix(projectDir: string, chapter: number, text: string, chan
       // 报出了问题、但有一步没跑成：核账那边算 ok，这里不能拿它证明核完、干净（外部审查 2026-11-06）。
       ...(result.failures.length > 0 ? { partial: result.failures[0]! } : {}),
       full: !result.rechecked,
+      reported: [...result.sure, ...result.maybe].map((item) => ({ quote: item.quote, earlierQuote: item.earlierQuote })),
     };
   } catch (error) {
     rethrowIfStopped(error);
@@ -419,10 +442,12 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   // 有一步没跑成：这一遍没核全，后面哪一遍核全了也只核改过的那几句，盖不住它。
   const partial = once.partial ? { partial: once.partial } : {};
   // 没核全时「没再报」不能当改好了：没改成的照实留着。
-  if (leftCount(once.left) === 0) return { ...(once.partial ? first : settledFailures(first, chapter)), verify: { checks: 1, again: 0, ...partial } };
+  if (leftCount(once.left) === 0) {
+    return { ...(once.partial ? first : settledFailures(first, chapter)), verify: { checks: 1, again: 0, ...partial }, ...(once.reported ? { reported: once.reported } : {}) };
+  }
   // 第二轮（FIX_ROUNDS）：作者点的、第一轮改出来的还对不上的那几处，第一轮刚改出来的带上第一轮那条要求。
-  const fixes = againItems(chapter, once.left, first, params.fixes).slice(0, EDIT_MAX_FIXES)
-    .map((item) => ({ targetText: item.quote, revisionGoal: againGoal(chapter, item, first, params.fixes) }));
+  const againList = againItems(chapter, once.left, first, params.fixes).slice(0, EDIT_MAX_FIXES);
+  const fixes = againList.map((item) => ({ targetText: item.quote, revisionGoal: againGoal(chapter, item, first, params.fixes) }));
   if (fixes.length === 0) return { ...(once.partial ? first : settledFailures(first, chapter, once.left)), verify: { checks: 1, again: 0, left: once.left, ...partial } };
   const second = await ctx.step(`fix:${FIX_ROUNDS}`, { text: first.text, fixes }, () => {
     ctx.progress("还有几处对不上，再改一轮");
@@ -442,6 +467,8 @@ async function fixRounds(ctx: RecipeContext<unknown>, params: Extract<DraftEditP
   return {
     ...(partialEnd ? merged : settledFailures(merged, chapter, twice.left)),
     verify: { checks: 2, again, ...(leftCount(twice.left) > 0 ? { left: twice.left } : {}), ...(partialEnd ? { partial: partialEnd } : {}) },
+    again: againList.map((item) => ({ quote: item.quote, earlierQuote: item.earlierQuote })),
+    ...(twice.reported ? { reported: twice.reported } : {}),
   };
 }
 
@@ -536,6 +563,22 @@ function verifyLine(verify: FixVerify | undefined): string {
   return partial ? `改完再核${again}${partial}` : `改完再核${again}没有对不上的了。`;
 }
 
+/**
+ * 改掉了的几处：改完再核跑全了、一处不剩，作者点的里没改成的（含改回原样）不算，第二轮按再核报的改的都算。核账卡照它把这几条划成「已改掉」——
+ * 改在别处的那处原句还在稿里，卡上光看原句在不在认不出，结论说没有对不上的了、卡上还摆着「改掉本章 N 处」（真机 2026-11-06）。
+ * 还剩的会出新核账卡、旧卡整张作废，用不着它。
+ */
+function fixSettled(fixes: DraftFixParams["fixes"], outcome: EditOutcome): SettledFix[] {
+  const verify = outcome.verify;
+  // 不知道最后一遍还报着哪几条（升级前停下的那步存的结果没有）：不划。
+  if (!verify || verify.checks === 0 || verify.failure || verify.partial || (verify.left && leftCount(verify.left) > 0) || !outcome.reported) return [];
+  const failed = new Set(outcome.failed.map((failure) => failure.target));
+  return [
+    ...fixes.filter((fix) => !failed.has(fix.targetText)).map((fix): SettledFix => ({ quote: fix.targetText, goal: fix.revisionGoal })),
+    ...(outcome.again ?? []).map((item): SettledFix => ({ quote: item.quote, earlierQuote: item.earlierQuote })),
+  ];
+}
+
 export function buildDraftEditResult(input: {
   readonly params: DraftEditParams;
   readonly outcome: EditOutcome;
@@ -543,6 +586,7 @@ export function buildDraftEditResult(input: {
   readonly applied: DraftApplied;
 }): OperationResult {
   const { params, outcome, applied } = input;
+  const settled = params.mode === "fix" && applied.applied ? fixSettled(params.fixes, outcome) : [];
   const body: DraftEditBody = {
     kind: "draft.change",
     mode: params.mode,
@@ -556,6 +600,7 @@ export function buildDraftEditResult(input: {
     failed: outcome.failed.map(({ target, why }) => ({ target, why })),
     ...(outcome.alsoChanged ? { alsoChanged: outcome.alsoChanged } : {}),
     ...(outcome.verify ? { verify: outcome.verify } : {}),
+    ...(settled.length > 0 ? { settled, reported: outcome.reported ?? [] } : {}),
   };
   const summary = applied.applied
     ? `${doneLine(params, outcome)}${notDoneLine(editTotal(params), outcome.failed)}${outcome.note ?? ""}${verifyLine(outcome.verify)}`

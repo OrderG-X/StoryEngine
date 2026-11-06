@@ -393,6 +393,29 @@ describe("核账卡：原句已经改掉的条目", () => {
     expect(screen.getByText("确定 1 处")).toBeTruthy(); // 设定那条另一边是设定原文，不在稿里不算改掉
   });
 
+  it("按核账改、改完再核一处不剩：改在别处（点名那句还在稿里）也标「已改掉」，主按钮没了；撤销回去、稿纸没开这章就照旧摆出来（真机 2026-11-06）", () => {
+    const named = { quote: "她掏出笔记本，把便签抽出来。", earlierQuote: "便签夹在笔记本里。", earlierChapter: 4, reason: "便签在哪对不上" };
+    const ch1 = { quote: "老码头在东边。", earlierQuote: "位置：北岸", earlierChapter: 0, reason: "方位", fixChapter: 1, againstSetting: { label: "位置" } };
+    const fixed = [{ key: continuityItemKey(named), changes: [{ from: "她拉开抽屉取出便签。", to: "她从笔记本里抽出便签。" }] }];
+    const check = { chapter: 9, sure: [named, ch1], maybe: [] };
+    useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "她从笔记本里抽出便签。她掏出笔记本，把便签抽出来。", version: "v2" }, committed: null } as never);
+    render(<ContinuityCheckCard check={check} fixed={fixed} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+    expect(screen.getByText("已改掉")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^改掉/u })).toBeNull();
+    // 错在第 1 章的那条照旧摆着（本章这次改不到它）。
+    expect(screen.getByText("确定 1 处")).toBeTruthy();
+    cleanup();
+    // 撤销回到改前：改出来的那句不在了。
+    useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "她拉开抽屉取出便签。她掏出笔记本，把便签抽出来。", version: "v1" }, committed: null } as never);
+    render(<ContinuityCheckCard check={check} fixed={fixed} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+    expect(screen.queryByText("已改掉")).toBeNull();
+    expect(screen.getByText("确定 2 处")).toBeTruthy();
+    cleanup();
+    useDraftStore.getState().loadPaper("/book", { chapter: 8, draft: { body: "她从笔记本里抽出便签。", version: "v1" }, committed: null } as never);
+    render(<ContinuityCheckCard check={check} fixed={fixed} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+    expect(screen.queryByText("已改掉")).toBeNull();
+  });
+
   it("原句两截（A……B）按顺序都在就算还在；空白不计", () => {
     expect(quoteInPaper("她推开门。\n\n屋里 很暗，她没开灯。", "她推开门……她没开灯")).toBe(true);
     expect(quoteInPaper("她没开灯。她推开门。", "她推开门……她没开灯")).toBe(false);

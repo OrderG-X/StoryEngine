@@ -645,6 +645,30 @@ describe("定稿投影（写作版本 P2a 片 4A：定稿是一次操作）", ()
   });
 });
 
+describe("按核账改做完、再核一处不剩（真机 2026-11-06）", () => {
+  const OP = "op-0123456789abcdef0124";
+  const view = (overrides: Partial<OperationViewData> = {}): OperationViewData => ({
+    opId: OP, kind: "draft.change", mode: "fix", chapter: 9, what: "按核账改·第 9 章", state: "succeeded", stateText: "做完了", allowed: [], summary: "", conclusion: "", eventSeq: 5, origin: { kind: "user-action" },
+    ...overrides,
+  });
+
+  it("改掉了的几处和改了的几句记在操作卡上（之前的核账卡划掉它们）；同一次后来的记录没带也留着；没带的不记", () => {
+    const changes = [{ from: "旧。", to: "新。" }];
+    const items = [{ quote: "甲。", goal: "和第 3 章「乙。」对上" }, { quote: "丙。", earlierQuote: "丁。" }];
+    const reported = [{ quote: "戊。", earlierQuote: "己。" }];
+    const fixed = { chapter: 9, items, changes, reported };
+    let msg = project([{ type: "operation", operation: view({ draft: { chapter: 9, applied: true, settled: items, reported, changes } }) }]);
+    expect(cardOf(msg, "operation")?.op.fixed).toEqual(fixed);
+    msg = projectAgentEvent(msg, { type: "operation", operation: view({ eventSeq: 6 }) });
+    expect(cardOf(msg, "operation")?.op.fixed).toEqual(fixed);
+    const plain = project([{ type: "operation", operation: view({ draft: { chapter: 9, applied: true, changes } }) }]);
+    expect(cardOf(plain, "operation")?.op.fixed).toBeUndefined();
+    // 不知道还在报哪几条：不记。
+    const unknown = project([{ type: "operation", operation: view({ draft: { chapter: 9, applied: true, settled: items, changes } }) }]);
+    expect(cardOf(unknown, "operation")?.op.fixed).toBeUndefined();
+  });
+});
+
 describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {
   it("change_draft 遇到有稿的章 → 照服务端给的按钮挂「接着往下写」「重写第 N 章」（点了交的写稿原样带着）；再来一遍不重复挂", () => {
     const continueAction = newDraftAction("continue", { chapter: 3 });

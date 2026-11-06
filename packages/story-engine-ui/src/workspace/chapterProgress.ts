@@ -3,7 +3,9 @@
  *
  * 核账结果取当前会话里这一章最新的那张核账卡（对话卡和稿纸划线共用一份，作者点「不是问题」两边一起变）。
  */
-import type { ChapterMessage, ContinuityCheckData, ContinuityCheckItemData } from "../type-defs/workspace.js";
+import type { ChapterMessage, ContinuityCheckData, ContinuityCheckItemData, FixedItemData, IssuePairData } from "../type-defs/workspace.js";
+import { EDIT_MAX_TEXT } from "../api/agentChatClient.js";
+import { continuityFixGoal } from "../lib/continuity-fix.js";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { paperStage, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
@@ -59,11 +61,28 @@ export interface ContinuityResult {
 }
 
 type SettledEdit = { readonly chapter: number; readonly from: string };
-/** 一次改齐了的定论真改了什么（划掉没改的不算）；resolves = 核账卡上点「以本章为准」的那条。 */
-type Settled = { readonly edits: readonly SettledEdit[]; readonly fieldsChanged: boolean; readonly resolves?: string };
+/** 稿纸上开着的那一章（没载入是 null）：按核账改划掉的条目要看那次改的还在不在稿里。 */
+export type OpenPaper = { readonly chapter: number; readonly body: string } | null;
+type FixChange = { readonly from: string; readonly to: string };
+/** 按核账改划掉的一条：条目键 + 那次改了的几句（核账卡拿稿纸看还在不在，fixInEffect）。 */
+export type FixedMark = { readonly key: string; readonly changes: readonly FixChange[] };
+
+/**
+ * 一次改齐了的定论真改了什么（划掉没改的不算）；resolves = 核账卡上点「以本章为准」的那条。
+ * fixed = 按核账改做完、改完再核一处不剩时改掉的那几处原句（那一章的），和那次改了的几句。
+ */
+type Settled = {
+  readonly edits: readonly SettledEdit[];
+  readonly fieldsChanged: boolean;
+  readonly resolves?: string;
+  readonly fixed?: { readonly chapter: number; readonly items: readonly FixedItemData[]; readonly changes: readonly FixChange[]; readonly reported: readonly IssuePairData[] };
+};
 
 function settledOf(message: ChapterMessage): Settled | undefined {
   const op = cardOf(message, "operation")?.op;
+  if (op?.state === "succeeded" && op.fixed && op.fixed.items.length > 0 && op.fixed.changes.length > 0) {
+    return { edits: [], fieldsChanged: false, fixed: { chapter: op.fixed.chapter, items: op.fixed.items, changes: op.fixed.changes, reported: op.fixed.reported } };
+  }
   const canon = op?.state === "succeeded" ? op.canon : undefined;
   if (!canon?.applied) return undefined;
   const skip = new Set(canon.excluded);
@@ -74,20 +93,58 @@ function settledOf(message: ChapterMessage): Settled | undefined {
   };
 }
 
+/**
+ * 那次按核账改的还在这份稿里：每一句改前的都不在了、改出来的都在。撤销了（改前那句回来了）、作者后来又动过那几句就不算（条目照旧摆出来，不划错）。
+ * 改前那句在别处也有的、改出来那句本来就有的，认不出就当不在（宁可不划）。
+ */
+export function fixInEffect(changes: readonly FixChange[], body: string): boolean {
+  const real = changes.filter((change) => change.from.trim() !== change.to.trim());
+  return real.length > 0 && real.every((change) => !quoteInPaper(body, change.from) && (!change.to.trim() || quoteInPaper(body, change.to)));
+}
+
+/** 卡上这条就是那次改掉了的一处：作者点的按原句 + 改法（卡上按钮交的那句），第二轮改的按原句 + 前文原句，一字不差。 */
+function fixedMatches(chapter: number, item: ContinuityItem, fixed: FixedItemData): boolean {
+  if (fixed.quote.trim() !== item.quote.trim()) return false;
+  return "goal" in fixed
+    ? fixed.goal.trim() === continuityFixGoal(chapter, item).slice(0, EDIT_MAX_TEXT).trim()
+    : fixed.earlierQuote.trim() === item.earlierQuote.trim();
+}
+
 /** 改掉的那句和核账原句是同一处：一个含着另一个（核账原句是整句，可能连着两三句；定论按句改）。 */
 const overlaps = (changed: string, quote: string): boolean => quoteInPaper(changed, quote) || quoteInPaper(quote, changed);
+
+/** 最后一遍再核还在报这一条（原句、前文原句一字不差；「可能」不进还剩的，得另看）。 */
+const stillReported = (item: ContinuityItem, reported: readonly IssuePairData[]): boolean =>
+  reported.some((pair) => pair.quote.trim() === item.quote.trim() && pair.earlierQuote.trim() === item.earlierQuote.trim());
+
+/**
+ * 哪几条被按核账改掉了（还要看那次改的在不在稿里）：这一章、错在这一章的条目，就是那次改掉了的一处（fixedMatches），且最后一遍再核没再报它。
+ * 一条被几次改掉的，几次都列（哪次还在稿里哪次算）。
+ */
+function fixedMarksOf(check: ContinuityCheckData, later: readonly Settled[]): readonly FixedMark[] {
+  const fixes = later.flatMap((settled) => (settled.fixed && settled.fixed.chapter === check.chapter ? [settled.fixed] : []));
+  if (fixes.length === 0) return [];
+  return [...check.sure, ...check.maybe, ...(check.earlierOpen ?? [])]
+    .filter((item) => continuityFixChapter(check.chapter, item) === check.chapter)
+    .flatMap((item) => fixes
+      .filter((fixed) => fixed.items.some((one) => fixedMatches(check.chapter, item, one)) && !stillReported(item, fixed.reported))
+      .map((fixed) => ({ key: continuityItemKey(item), changes: fixed.changes })));
+}
 
 /**
  * 哪几条被定论改掉了：这条原句就在那章被改的句子里（或改的句子就在这条原句里）；或者作者点的就是这条「以本章为准」、另一边真改了
  * （对设定的＝设定本改了栏，对前文的＝那章被改的句子里有前文原句）。
+ * 给了稿纸（开着这一章）的，按核账改掉、那次改的还在稿里的也算（fixedMarksOf）。
  */
-function settledKeysOf(check: ContinuityCheckData, later: readonly Settled[]): readonly string[] {
+function settledKeysOf(check: ContinuityCheckData, later: readonly Settled[], paper: OpenPaper = null): readonly string[] {
   if (later.length === 0) return [];
+  const body = paper !== null && paper.chapter === check.chapter ? paper.body : null;
+  const fixedKeys = new Set(body === null ? [] : fixedMarksOf(check, later).filter((mark) => fixInEffect(mark.changes, body)).map((mark) => mark.key));
   return [...check.sure, ...check.maybe, ...(check.earlierOpen ?? [])]
     .filter((item) => {
       const chapter = continuityFixChapter(check.chapter, item);
       const key = continuityItemKey(item);
-      return later.some((settled) =>
+      return fixedKeys.has(key) || later.some((settled) =>
         settled.edits.some((edit) => edit.chapter === chapter && overlaps(edit.from, item.quote))
         || (settled.resolves === key && (item.againstSetting
           ? settled.fieldsChanged
@@ -96,33 +153,51 @@ function settledKeysOf(check: ContinuityCheckData, later: readonly Settled[]): r
     .map(continuityItemKey);
 }
 
-/**
- * 每张核账卡之后、对话里改齐了的定论改掉了哪几条（messageId → 条目键）：条目原句就在定论改过的那句里 = 改掉了。
- * 只认核账卡之后的定论（对话是记录：之后操作历史里撤回了也照记录说，和别的卡一样）。
- */
-export function settledContinuityByMessage(messages: readonly ChapterMessage[]): ReadonlyMap<string, readonly string[]> {
-  const out = new Map<string, readonly string[]>();
+/** 从后往前走一遍：每张核账卡和它之后的那些改动。 */
+function eachCheckWithLater(messages: readonly ChapterMessage[], visit: (messageId: string, check: ContinuityCheckData, later: readonly Settled[]) => void): void {
   const later: Settled[] = [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
     const card = cardOf(message, "continuity");
-    if (card) {
-      const keys = settledKeysOf(card.check, later);
-      if (keys.length > 0) out.set(message.id, keys);
-    }
+    if (card) visit(message.id, card.check, later);
     const settled = settledOf(message);
     if (settled) later.push(settled);
   }
+}
+
+/**
+ * 每张核账卡之后、对话里改齐了的定论改掉了哪几条（messageId → 条目键）：条目原句就在定论改过的那句里 = 改掉了。
+ * 只认核账卡之后的定论（对话是记录：之后操作历史里撤回了也照记录说，和别的卡一样）。按核账改掉的另算（fixedContinuityByMessage，要看稿纸）。
+ */
+export function settledContinuityByMessage(messages: readonly ChapterMessage[]): ReadonlyMap<string, readonly string[]> {
+  const out = new Map<string, readonly string[]>();
+  eachCheckWithLater(messages, (id, check, later) => {
+    const keys = settledKeysOf(check, later);
+    if (keys.length > 0) out.set(id, keys);
+  });
+  return out;
+}
+
+/**
+ * 每张核账卡之后、按核账改做完且改完再核一处不剩时改掉的那几条（messageId → 条目键 + 那次改的几句）：
+ * 核账卡自己拿稿纸看那次改的还在不在（撤销了、作者又改过就照旧摆出来），不让整个对话栏跟着稿纸每个字重算。
+ */
+export function fixedContinuityByMessage(messages: readonly ChapterMessage[]): ReadonlyMap<string, readonly FixedMark[]> {
+  const out = new Map<string, readonly FixedMark[]>();
+  eachCheckWithLater(messages, (id, check, later) => {
+    const marks = fixedMarksOf(check, later);
+    if (marks.length > 0) out.set(id, marks);
+  });
   return out;
 }
 
 /** 当前会话里这一章最新的核账结果；没核过返回 null。 */
-export function latestContinuityResult(messages: readonly ChapterMessage[], chapter: number): ContinuityResult | null {
+export function latestContinuityResult(messages: readonly ChapterMessage[], chapter: number, paper: OpenPaper = null): ContinuityResult | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
     const card = cardOf(message, "continuity");
     if (!card || card.check.chapter !== chapter) continue;
-    const settled = settledKeysOf(card.check, messages.slice(index + 1).flatMap((later) => settledOf(later) ?? []));
+    const settled = settledKeysOf(card.check, messages.slice(index + 1).flatMap((later) => settledOf(later) ?? []), paper);
     return {
       messageId: message.id,
       check: card.check,
@@ -167,7 +242,8 @@ export function paperAction(input: {
 /** 组件用：当前会话里这一章最新的核账结果。 */
 export function useContinuityResult(chapter: number): ContinuityResult | null {
   const messages = useChatStore((s) => s.messages);
-  return useMemo(() => latestContinuityResult(messages, chapter), [messages, chapter]);
+  const body = useDraftStore((s) => (s.loaded && s.chapter === chapter ? s.body : null));
+  return useMemo(() => latestContinuityResult(messages, chapter, body === null ? null : { chapter, body }), [messages, chapter, body]);
 }
 
 /** 组件用：当前会话里这一章最新的走法卡（头脑风暴）。 */
