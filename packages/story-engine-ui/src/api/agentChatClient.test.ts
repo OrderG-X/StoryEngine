@@ -464,15 +464,21 @@ describe("streamAgentChat", () => {
 
   it("按核账改做完、再核一处不剩：draft 带改掉了的几处原句；不是 fix、没换上、不是字串的不认（真机 2026-11-06）", async () => {
     const fixView = (body: Record<string, unknown>) => opView("fix", null, { kind: "draft.change", what: "按核账改·第 4 章", chapter: 4, result: {
-      schema: "operation-result/1", summary: "改好了", body: { kind: "draft.change", mode: "fix", ok: true, chapter: 4, changes: [], failed: [], ...body },
+      schema: "operation-result/1", summary: "改好了", body: { kind: "draft.change", mode: "fix", ok: true, chapter: 4, changes: [], failed: [], reported: [{ quote: "甲。", earlierQuote: "乙。" }], ...body },
     } });
     const { views } = await collectOperations([
       frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "对上前文" }, "旧。", { quote: "", goal: "x" }, { quote: "缺。" }, { quote: "又一句。", earlierQuote: "前文那句。" }] }) }),
       frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "g" }], ok: false }) }),
       frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "g" }], mode: "revise" }) }),
       frame("operation", { type: "record", operation: fixView({ settled: "旧。" }) }),
+      // 还在报的读不全（没有、或有一条认不出）：整份不认。
+      frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "g" }], reported: undefined }) }),
+      frame("operation", { type: "record", operation: fixView({ settled: [{ quote: "旧。", goal: "g" }], reported: [{ quote: "甲。" }] }) }),
     ]);
     expect(views[0]?.draft?.settled).toEqual([{ quote: "旧。", goal: "对上前文" }, { quote: "又一句。", earlierQuote: "前文那句。" }]);
+    expect(views[0]?.draft?.reported).toEqual([{ quote: "甲。", earlierQuote: "乙。" }]);
+    expect(views[4]?.draft?.settled).toBeUndefined();
+    expect(views[5]?.draft?.settled).toBeUndefined();
     expect(views[1]?.draft?.settled).toBeUndefined();
     expect(views[2]?.draft?.settled).toBeUndefined();
     expect(views[3]?.draft?.settled).toBeUndefined();

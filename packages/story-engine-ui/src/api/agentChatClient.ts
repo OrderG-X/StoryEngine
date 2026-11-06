@@ -17,7 +17,7 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, DraftVersionsCardData, FixedItemData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, DraftVersionsCardData, FixedItemData, IssuePairData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import { readCommitPreviewCard } from "../utils/commitPreviewCard.js";
 import { readDraftVersions } from "../utils/draftVersions.js";
@@ -520,6 +520,8 @@ export interface DraftOperationData {
   readonly changes?: readonly EditChangeData[];
   /** 按核账改、改完再核一处不剩：改掉了的那几处（之前的核账卡照它划掉）。 */
   readonly settled?: readonly FixedItemData[];
+  /** 有 settled 时：最后一遍再核还在报的条目，卡上这几条不划。 */
+  readonly reported?: readonly IssuePairData[];
 }
 
 /** 操作的实时事件（与服务端 lib/operations/live.ts 的 LiveEvent 同形）。 */
@@ -619,6 +621,13 @@ export function readFixedItems(value: unknown): FixedItemData[] {
   });
 }
 
+/** 一串核账条目（原句 + 前文原句）：不是数组、有一条认不出就是 undefined（调用方当不知道，宁可不划）。 */
+export function readIssuePairs(value: unknown): IssuePairData[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const pairs = value.flatMap((item): IssuePairData[] => (isRecord(item) && typeof item.quote === "string" && typeof item.earlierQuote === "string" ? [{ quote: item.quote, earlierQuote: item.earlierQuote }] : []));
+  return pairs.length === value.length ? pairs : undefined;
+}
+
 /** 写稿结果 → 界面要的那几样（不是写稿、没做完、形状不对是 undefined）。 */
 function readDraftOperation(body: unknown): DraftOperationData | undefined {
   if (!isRecord(body)) return undefined;
@@ -633,14 +642,16 @@ function readDraftOperation(body: unknown): DraftOperationData | undefined {
   const snapshots = [body.planSnapshotId, body.ok === true ? body.snapshotId : undefined]
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   const changes = editChanges(body.changes);
-  const settled = body.mode === "fix" && body.ok === true ? readFixedItems(body.settled) : [];
+  // 还在报的读不全就整份不认（宁可不划）。
+  const reported = readIssuePairs(body.reported);
+  const settled = body.mode === "fix" && body.ok === true && reported ? readFixedItems(body.settled) : [];
   return {
     chapter,
     applied: body.ok === true,
     ...(typeof body.draftTitle === "string" && body.draftTitle.trim() ? { title: body.draftTitle.trim() } : {}),
     ...(snapshots.length > 0 ? { snapshots } : {}),
     ...(changes ? { changes } : {}),
-    ...(settled.length > 0 ? { settled } : {}),
+    ...(settled.length > 0 && reported ? { settled, reported } : {}),
     ...(versions ? { versions } : {}),
   };
 }

@@ -3,7 +3,7 @@
  *
  * 核账结果取当前会话里这一章最新的那张核账卡（对话卡和稿纸划线共用一份，作者点「不是问题」两边一起变）。
  */
-import type { ChapterMessage, ContinuityCheckData, ContinuityCheckItemData, FixedItemData } from "../type-defs/workspace.js";
+import type { ChapterMessage, ContinuityCheckData, ContinuityCheckItemData, FixedItemData, IssuePairData } from "../type-defs/workspace.js";
 import { EDIT_MAX_TEXT } from "../api/agentChatClient.js";
 import { continuityFixGoal } from "../lib/continuity-fix.js";
 import { useMemo } from "react";
@@ -75,13 +75,13 @@ type Settled = {
   readonly edits: readonly SettledEdit[];
   readonly fieldsChanged: boolean;
   readonly resolves?: string;
-  readonly fixed?: { readonly chapter: number; readonly items: readonly FixedItemData[]; readonly changes: readonly FixChange[] };
+  readonly fixed?: { readonly chapter: number; readonly items: readonly FixedItemData[]; readonly changes: readonly FixChange[]; readonly reported: readonly IssuePairData[] };
 };
 
 function settledOf(message: ChapterMessage): Settled | undefined {
   const op = cardOf(message, "operation")?.op;
   if (op?.state === "succeeded" && op.fixed && op.fixed.items.length > 0 && op.fixed.changes.length > 0) {
-    return { edits: [], fieldsChanged: false, fixed: { chapter: op.fixed.chapter, items: op.fixed.items, changes: op.fixed.changes } };
+    return { edits: [], fieldsChanged: false, fixed: { chapter: op.fixed.chapter, items: op.fixed.items, changes: op.fixed.changes, reported: op.fixed.reported } };
   }
   const canon = op?.state === "succeeded" ? op.canon : undefined;
   if (!canon?.applied) return undefined;
@@ -113,8 +113,12 @@ function fixedMatches(chapter: number, item: ContinuityItem, fixed: FixedItemDat
 /** 改掉的那句和核账原句是同一处：一个含着另一个（核账原句是整句，可能连着两三句；定论按句改）。 */
 const overlaps = (changed: string, quote: string): boolean => quoteInPaper(changed, quote) || quoteInPaper(quote, changed);
 
+/** 最后一遍再核还在报这一条（原句、前文原句一字不差；「可能」不进还剩的，得另看）。 */
+const stillReported = (item: ContinuityItem, reported: readonly IssuePairData[]): boolean =>
+  reported.some((pair) => pair.quote.trim() === item.quote.trim() && pair.earlierQuote.trim() === item.earlierQuote.trim());
+
 /**
- * 哪几条被按核账改掉了（还要看那次改的在不在稿里）：这一章、错在这一章的条目，就是那次改掉了的一处（fixedMatches）。
+ * 哪几条被按核账改掉了（还要看那次改的在不在稿里）：这一章、错在这一章的条目，就是那次改掉了的一处（fixedMatches），且最后一遍再核没再报它。
  * 一条被几次改掉的，几次都列（哪次还在稿里哪次算）。
  */
 function fixedMarksOf(check: ContinuityCheckData, later: readonly Settled[]): readonly FixedMark[] {
@@ -122,7 +126,9 @@ function fixedMarksOf(check: ContinuityCheckData, later: readonly Settled[]): re
   if (fixes.length === 0) return [];
   return [...check.sure, ...check.maybe, ...(check.earlierOpen ?? [])]
     .filter((item) => continuityFixChapter(check.chapter, item) === check.chapter)
-    .flatMap((item) => fixes.filter((fixed) => fixed.items.some((one) => fixedMatches(check.chapter, item, one))).map((fixed) => ({ key: continuityItemKey(item), changes: fixed.changes })));
+    .flatMap((item) => fixes
+      .filter((fixed) => fixed.items.some((one) => fixedMatches(check.chapter, item, one)) && !stillReported(item, fixed.reported))
+      .map((fixed) => ({ key: continuityItemKey(item), changes: fixed.changes })));
 }
 
 /**

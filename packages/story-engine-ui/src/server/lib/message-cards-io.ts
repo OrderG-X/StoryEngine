@@ -14,7 +14,7 @@ import type {
   OperationCardData,
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
-import { parseNextStepUserAction, readAiErrorReason, readFixedItems, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
+import { parseNextStepUserAction, readAiErrorReason, readFixedItems, readIssuePairs, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
 import { readCommitPreviewCard } from "../../utils/commitPreviewCard.js";
 import { readDraftVersions } from "../../utils/draftVersions.js";
@@ -156,7 +156,8 @@ function readFixed(value: unknown): OperationCardData["fixed"] {
     : [];
   // 改句缺了一条就认不出改的还在不在稿里：整份不存（不划掉比划错好）。
   if (!Array.isArray(value.changes) || changes.length !== value.changes.length) return undefined;
-  return chapter !== undefined && items.length > 0 && changes.length > 0 ? { chapter, items, changes } : undefined;
+  const reported = readIssuePairs(value.reported);
+  return chapter !== undefined && items.length > 0 && changes.length > 0 && reported ? { chapter, items, changes, reported } : undefined;
 }
 
 /** 定论做完的结果（核账卡认哪几条被它改掉了）：卡认不出就不存；划掉的只认卡上真有的。 */

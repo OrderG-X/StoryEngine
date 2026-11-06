@@ -145,7 +145,19 @@ export interface OperationCardData {
    * 按核账改做完、改完再核一处不剩：哪章改掉了哪几处、那次改了哪几句（之前的核账卡认它划掉；存进消息）。
    * 改的那几句还在稿里才算（撤销了、后来又改了就不算）。
    */
-  readonly fixed?: { readonly chapter: number; readonly items: readonly FixedItemData[]; readonly changes: readonly { readonly from: string; readonly to: string }[] };
+  readonly fixed?: {
+    readonly chapter: number;
+    readonly items: readonly FixedItemData[];
+    readonly changes: readonly { readonly from: string; readonly to: string }[];
+    /** 最后一遍再核还在报的条目（原句 + 前文原句）：卡上这几条不划。 */
+    readonly reported: readonly IssuePairData[];
+  };
+}
+
+/** 一条核账条目认它是哪条：原句 + 对照的前文原句。 */
+export interface IssuePairData {
+  readonly quote: string;
+  readonly earlierQuote: string;
 }
 
 /**
