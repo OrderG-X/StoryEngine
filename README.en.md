@@ -24,6 +24,12 @@
 
 The interface is currently in Chinese.
 
+<p align="center">
+  <img src=".github/assets/screenshot-check.png" alt="After writing chapter 9, a continuity check quotes the lines that contradict earlier chapters, side by side" width="900" />
+  <br />
+  <sub>Real screenshot: we planted 3 contradictions in a hand-written chapter 9. The check caught all 3, plus 2 real problems we hadn't noticed ourselves</sub>
+</p>
+
 ## What it does
 
 - **Per-chapter ledger**: when you commit a chapter, the AI records who appeared, what happened, open threads, and the in-story date — every entry quotes the text, and anything it can't back with a quote is reported as not recorded
@@ -33,6 +39,29 @@ The interface is currently in Chinese.
 - **Everything is undoable**: the AI snapshots before every change; only you can commit a chapter, by clicking a button
 - **Import an existing book**: a .txt is split into chapters and the AI fills in the ledger in the background
 - **Web research** (optional): ask it to look things up; results come with sources and are used as reference only
+
+<p align="center">
+  <img src=".github/assets/screenshot-bible.png" alt="Threads board: just planted, in progress, stalled, resolved" width="440" />
+  <img src=".github/assets/screenshot-timeline.png" alt="Story map: one row per chapter, with the in-story day and who appears" width="440" />
+</p>
+
+## Does it work? We measured
+
+Same sample book, same chapter outlines: the old and new versions each wrote 30 more chapters (about 94k Chinese characters, a third of them simulating author-written chapters). Reviewers who did not know which version was which then checked every reported contradiction against the text:
+
+| | Before | Now |
+|---|---|---|
+| Contradictions that slipped through (per 1,000 characters) | 0.31 | **0.10** |
+| Lines you have to read per chapter | 58.7 | **19.5** |
+| Real errors caught in author-written chapters | about half | **about three quarters** |
+
+It still misses about a quarter and sometimes flags things that are fine. We also wrote a 50-chapter, 90k-character novel through the UI ourselves, as an author would.
+
+## Ground rules
+
+- **The AI may not guess**: no keyword or regex guessing of what you meant; every "recorded" claim must quote the text, and code checks the quote word for word
+- **The AI never decides for you**: committing a chapter or pruning history only happens when you click; every AI change is snapshotted first and can be undone
+- **Your data stays on your machine**: no account, no analytics; only the model provider you chose sees your text
 
 ## Install (macOS)
 
@@ -62,7 +91,7 @@ There is no installer for Intel Macs yet — [run from source](#run-from-source)
 
 1. **Connect an AI**: the shelf shows "AI 还没接上" (AI not connected) — click "去接上", pick a provider (DeepSeek, Qwen, GLM, Kimi, OpenAI, … any OpenAI-compatible endpoint), paste your own API key, test the connection, and pick a model
 2. **Open a book**: create a new one, or import one you've already written
-3. **Web search** (optional): Settings → 搜索 (Search), add a [Bocha](https://open.bochaai.com) or [Tavily](https://app.tavily.com) key
+3. **Web search**: works out of the box with no key (100 searches a day); to switch to [Bocha](https://open.bochaai.com) or [Tavily](https://app.tavily.com), or turn it off, go to Settings → 搜索 (Search)
 
 Without an AI connected you can still write, save, and export.
 
@@ -70,7 +99,7 @@ Without an AI connected you can still write, save, and export.
 
 - Books, story bibles, and chat history stay on your machine (library at `~/StoryEngine-NG`)
 - API keys are stored only in `~/.story-engine/`, readable only by your user account
-- When you use the AI, chapter text and settings are sent to **the model provider you chose**; web searches send the query to **the search provider you chose**
+- When you use the AI, chapter text and settings are sent to **the model provider you chose**; web searches send the query to a search provider (You.com by default; switchable, or off)
 - Nothing else goes over the network: no account, no analytics, no data collection
 
 ## Run from source
