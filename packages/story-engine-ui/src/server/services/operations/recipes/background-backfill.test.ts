@@ -235,6 +235,26 @@ describe("按角色排（Astra P2a 第 8 轮第 2、6 条）", () => {
   });
 });
 
+describe("改了前面一章（写作版本 P4a）", () => {
+  it("只重写它和后两章：中间笔记对得上的章不占一步，最后那章一步拼窗口", async () => {
+    await commitChapters(1, 12);
+    useRecipe(fakeReader().callModel);
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 12 });
+    await quiet();
+    await writeFile(chapterPath(book, 2), "# 第2章\n\n第2章改过的正文。\n", "utf-8");
+    const reader = fakeReader();
+    __resetRecipesForTests();
+    useRecipe(reader.callModel);
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 12 });
+    const records = await quiet();
+    const record = records.at(-1)!;
+    expect(record).toMatchObject({ state: "succeeded", params: { ranges: [{ role: CHECKER_ROLE.id, from: 2, to: 12 }] } });
+    expect((await readdir(join(operationDir(book, record.opId), "steps"))).sort()).toEqual(["checker_12.json", "checker_2.json", "checker_3.json", "checker_4.json"]);
+    expect(reader.calls()).toBe(3);
+    expect((record.result as { body: BackfillResultBody }).body).toEqual({ readThrough: { checker: 12 }, progressed: true, restart: false, stuck: [] });
+  });
+});
+
 describe("途中前面的章改了", () => {
   it("要重写的不止这一章：这次停在半路（restart），收尾后按新的范围重交，最后都对得上现在的正文", async () => {
     await commitChapters(1, 4);

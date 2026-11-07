@@ -32,17 +32,20 @@ export function readInPlaceProgress(root: string, roleId: string): InPlaceProgre
 // 等读回执（R5.2 必做 2）：动作等过补读，回执加一句「这次先等 X 读完第 a～b 章再 Y」
 // ---------------------------------------------------------------------------
 
-/** 一次当场等读的事实：补了第 from～to 章笔记、花了 ms 毫秒。 */
+/** 一次当场等读的事实：补了第 from～to 章笔记、花了 ms 毫秒。中间有不用补的章时 chapters＝一共补了几章（P4a：改了哪章只补它和后两章）。 */
 export interface ReaderWaited {
   readonly from: number;
   readonly to: number;
   readonly ms: number;
+  readonly chapters?: number;
 }
 
 /** 等读那一句：如「这次先等核账员读完第 51～58 章再核」（用时不报，2026-10-22 减字）。action 是句尾动词（再核 / 再拟纲 / 再记账）。 */
 export function describeReaderWait(roleId: string, waited: ReaderWaited, action: string): string {
   const label = READER_ROLE_LABELS[roleId] ?? roleId;
-  const span = waited.from >= waited.to ? `第 ${waited.from} 章` : `第 ${waited.from}～${waited.to} 章`;
+  const span = waited.from >= waited.to
+    ? `第 ${waited.from} 章`
+    : waited.chapters !== undefined ? `第 ${waited.from}～${waited.to} 章里的 ${waited.chapters} 章` : `第 ${waited.from}～${waited.to} 章`;
   return `这次先等${label}读完${span}再${action}`;
 }
 

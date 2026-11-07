@@ -1,11 +1,12 @@
 /**
  * background.backfill：后台给专员补前文笔记（写作版本 P2a 4.5、第七节；替掉原来 catch-up.ts 的 for (;;) 追新）。
  *
- * - 受理时冻结每个角色还差的章范围 `{role, from, to}`（按交来的角色先后；读齐了的不进范围，都读齐了不受理）。
+ * - 受理时冻结每个角色还差的章范围 `{role, from, to}`：from＝第一份要重写的笔记，to＝读得到的最后一章（按交来的角色先后；
+ *   读齐了的不进范围，都读齐了不受理）。
  * - 笔记都齐了、只缺卷笔记（缓存丢了、卷笔记的提示词改了）也受理：范围就是最后那一章，那一步只补卷（Astra P2a 第 9 轮第 4 条）。
- * - 一章一步（步骤号 `<角色>:<章>`）：调同一个 `ensureReaderWindow({upTo: 章, maxCatchUp: 1, maxVolumeBuilds: 上界})`——
- *   一步写这一章的笔记 + 写它、读完它的窗口要用的卷节点；卷节点数按规划的上界（volumeBuildsBound）给，额度也按它算，
- *   到了上界还没建齐就是规划出了错，如实失败（第 9 轮第 5 条：不再分段续建、拿别的章省下的额度抵）。
+ * - 要重写笔记的章一章一步（步骤号 `<角色>:<章>`），只写这一章的笔记（`notesOnly`，不拼窗口）；范围里笔记本来就对得上的章
+ *   不用一步（写作版本 P4a：笔记只看本章和前两章原文，改了第 k 章只有 k～k+2 章要重写）。最后那一章一步拼读完它的窗口，
+ *   备齐要用的卷节点；卷节点数按规划的上界（volumeBuildsBound）给，额度也按它算，到了上界还没建齐就是规划出了错，如实失败。
  * - 途中前面的章被改了（要重写的不止这一章）：这次到此为止，收尾后按新的范围重交一次。某章读不到：这个角色停在它前一章。
  * - 笔记、卷笔记是按内容键整份覆盖的缓存（过栅栏 writeBookCache）。每一步排在这本书的补读队列上（和通读记账不同时打模型）。
  * - 进程没了：开书对账时没有结果不明的调用就自动接着做。跑成了按它这几个角色再交一次：读的途中新定稿的章、
@@ -101,7 +102,7 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
       const ranges: BackfillRange[] = [];
       for (const role of wanted) {
         const status = await readerNotesStatus({ projectDir: bookDir, role, upTo });
-        if (status.valid < status.readable) ranges.push({ role: role.id, from: status.valid + 1, to: status.readable });
+        if (status.stale.length > 0) ranges.push({ role: role.id, from: status.stale[0]!, to: status.readable });
         // 笔记齐了、读完最后一章的窗口还缺卷笔记：只补卷，范围就是最后那一章。
         else if (status.readable > 0 && status.volumesMissing > 0) ranges.push({ role: role.id, from: status.readable, to: status.readable });
       }
@@ -127,7 +128,15 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
         const role = roles.find((candidate) => candidate.id === range.role);
         if (!role) throw Object.assign(new Error("要补的专员已经没有了，这次没法接着做。"), { code: "bad_params" });
         readThrough[range.role] = range.from - 1;
+        // 这一段里哪几章的笔记要重写（只读盘）；中间对得上的章不用一步。
+        const status = await readerNotesStatus({ projectDir: ctx.bookDir, role, upTo: range.to });
+        const pending = new Set(status.stale);
         for (let chapter = range.from; chapter <= range.to; chapter += 1) {
+          const last = chapter === range.to;
+          if (!last && !pending.has(chapter)) {
+            if (chapter <= status.readable) readThrough[range.role] = chapter;
+            continue;
+          }
           ctx.progress(`${READER_ROLE_LABELS[role.id] ?? role.id}在读第 ${chapter} 章`);
           const output = await ctx.step<StepOutput>(backfillStepId(role.id, chapter), { role: role.id, chapter }, () =>
             runInReaderCatchUpQueue(ctx.bookDir, async () => {
@@ -137,7 +146,7 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
                 upTo: chapter,
                 callModel: deps.callModel,
                 maxCatchUp: 1,
-                maxVolumeBuilds: backfillStepVolumeBuilds(chapter),
+                ...(last ? { maxVolumeBuilds: backfillStepVolumeBuilds(chapter) } : { notesOnly: true }),
               });
               return { readThrough: ready.readThrough, missing: ready.missing, built: ready.built, volumesBuilt: ready.volumesBuilt, ...(ready.volumeLimited ? { volumeLimited: true as const } : {}) };
             }));
