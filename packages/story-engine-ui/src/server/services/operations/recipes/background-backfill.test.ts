@@ -291,6 +291,49 @@ describe("途中前面的章改了", () => {
   });
 });
 
+describe("P4a 之前交的补读（参数里没有 steps）", () => {
+  it("停着（结果不明）的照旧停着、照旧挡：开书不作废、不另起一份重发；作者接着做时按每章一步读完（Astra P4a 第 2 轮）", async () => {
+    await commitChapters(1, 3);
+    const stuck = deferred();
+    const blocked = fakeReader({ holdAt: 2, hold: stuck.promise });
+    useRecipe(blocked.callModel);
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 3 });
+    await vi.waitFor(() => expect(blocked.calls()).toBe(2), { timeout: 5_000 });
+    const pausedId = (await backfills())[0]!.opId;
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    __resetCatchUpQueuesForTests();
+    __resetCatchUpLocksForTests();
+    // 盘上是升级前的样子：参数只有 from～to，进程没了时有一笔结果不明。
+    const { changeOperation } = await import("../../../lib/operations/store.js");
+    await changeOperation(book, pausedId, (current) => ({
+      ...current,
+      params: { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3 }] },
+      state: "paused",
+      pauseReason: "attempt_unknown",
+      runEpoch: current.runEpoch + 1,
+    }));
+    __resetRecipesForTests();
+    const fresh = fakeReader();
+    useRecipe(fresh.callModel);
+    // 开书：对账 + 交补读。
+    expect(await reconcileOperations(book)).toEqual({ resumed: [] });
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 3 });
+    await __drainBackfillSubmissionsForTests();
+    await __drainOperationsForTests();
+    expect((await backfills()).map((record) => [record.opId, record.state])).toEqual([[pausedId, "paused"]]);
+    expect(await ensureReaderWindow({ projectDir: book, role: CHECKER_ROLE, upTo: 3, callModel: fresh.callModel, maxCatchUp: 10 })).toMatchObject({ built: 0, pausedBackfill: { opId: pausedId, reason: "attempt_unknown" } });
+    expect(fresh.calls()).toBe(0);
+    // 作者点「接着做」：第 1 章照检查点重放，从第 2 章接着读。
+    stuck.resolve();
+    expect(await resumeOperation(book, pausedId)).toMatchObject({ ok: true });
+    const records = await quiet();
+    expect(records.find((record) => record.opId === pausedId)).toMatchObject({ state: "succeeded", result: { body: { readThrough: { checker: 3 }, restart: false } } });
+    expect(fresh.calls()).toBe(2);
+    expect(await notes(CHECKER_ROLE.id)).toHaveLength(3);
+  });
+});
+
 describe("进程没了", () => {
   it("开书对账自动接着做：做完的章零调用，从停下那章接着读", async () => {
     await commitChapters(1, 4);

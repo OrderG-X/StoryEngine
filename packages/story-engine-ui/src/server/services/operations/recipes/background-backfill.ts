@@ -85,7 +85,7 @@ const DEFAULT_DEPS: BackfillDeps = {
 export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS): Recipe<BackfillParams> {
   return {
     kind: BACKFILL_KIND,
-    version: 3,
+    version: 2,
     lane: "background",
     autoResume: true,
 
