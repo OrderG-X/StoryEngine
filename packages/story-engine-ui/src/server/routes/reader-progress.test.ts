@@ -8,6 +8,9 @@ import { BACKFILL_KIND, type BackfillRange } from "../lib/reader-backfill.js";
 import { registerReaderProgressRoutes } from "./reader-progress.js";
 import { callRoute } from "./test-helpers.js";
 
+/** 一章一步的那几章：第 from～to 章每章一步（这些用例只看进度行，不管哪几章要重写）。 */
+const span = (from: number, to: number): number[] => Array.from({ length: to - from + 1 }, (_, index) => from + index);
+
 beforeEach(() => {
   __resetOperationStoreForTests();
 });
@@ -44,7 +47,7 @@ const get = (dir: string) => callRoute(registerReaderProgressRoutes, "GET", `/ap
 describe("GET /api/reader-progress（R4.3 在读前文轻量轮询；写作版本 P2a 起从后台补读的操作记录出）", () => {
   it("没有在跑的后台补读：reading:false（前端收到就停轮询），roles 形状照给", async () => {
     const dir = await bookWithChapters("reader-progress-idle-", 3);
-    await backfill(dir, [{ role: "checker", from: 1, to: 3 }], { state: "succeeded" });
+    await backfill(dir, [{ role: "checker", from: 1, to: 3, steps: span(1, 3) }], { state: "succeeded" });
     const { statusCode, payload } = await get(dir);
     expect(statusCode).toBe(200);
     expect(payload).toEqual({
@@ -61,9 +64,9 @@ describe("GET /api/reader-progress（R4.3 在读前文轻量轮询；写作版�
   it("在跑：当前步骤那个角色在读（读到当前章的前一章），前面的读完、后面的排队", async () => {
     const dir = await bookWithChapters("reader-progress-live-", 58);
     await backfill(dir, [
-      { role: "ledger", from: 41, to: 58 },
-      { role: "checker", from: 1, to: 58 },
-      { role: "planner", from: 9, to: 58 },
+      { role: "ledger", from: 41, to: 58, steps: span(41, 58) },
+      { role: "checker", from: 1, to: 58, steps: span(1, 58) },
+      { role: "planner", from: 9, to: 58, steps: span(9, 58) },
     ], { currentStep: "checker:35" });
     const { statusCode, payload } = await get(dir);
     expect(statusCode).toBe(200);
@@ -80,16 +83,16 @@ describe("GET /api/reader-progress（R4.3 在读前文轻量轮询；写作版�
 
   it("在跑：读到当前那章的前一章；排着还没跑：第一个角色在读、读到 from − 1", async () => {
     const dir = await bookWithChapters("reader-progress-part-", 20);
-    await backfill(dir, [{ role: "planner", from: 5, to: 20 }], { currentStep: "planner:11" });
+    await backfill(dir, [{ role: "planner", from: 5, to: 20, steps: span(5, 20) }], { currentStep: "planner:11" });
     expect((await get(dir)).payload).toMatchObject({ reading: true, roles: [{ role: "checker", reading: false }, { role: "ledger", reading: false }, { role: "planner", reading: true, done: 10, total: 20 }] });
     const queued = await bookWithChapters("reader-progress-queued-", 20);
-    await backfill(queued, [{ role: "ledger", from: 5, to: 20 }]);
+    await backfill(queued, [{ role: "ledger", from: 5, to: 20, steps: span(5, 20) }]);
     expect((await get(queued)).payload).toMatchObject({ reading: true, roles: [{ role: "checker", reading: false }, { role: "ledger", reading: true, done: 4, total: 20 }, { role: "planner", reading: false }] });
   });
 
   it("R5.3 分母跟定稿走：冻结的是开读时的 58，chapters/ 已定稿到 0059 → total 现算成 59", async () => {
     const dir = await bookWithChapters("reader-progress-chase-", 59);
-    await backfill(dir, [{ role: "checker", from: 1, to: 58 }], { currentStep: "checker:35" });
+    await backfill(dir, [{ role: "checker", from: 1, to: 58, steps: span(1, 58) }], { currentStep: "checker:35" });
     const { payload } = await get(dir);
     expect(payload.reading).toBe(true);
     expect((payload.roles as unknown[])[0]).toEqual({ role: "checker", reading: true, done: 34, total: 59 });
@@ -97,8 +100,8 @@ describe("GET /api/reader-progress（R4.3 在读前文轻量轮询；写作版�
 
   it("不同角色各在一份里补（提交口按角色排）：各按含它的那份算", async () => {
     const dir = await bookWithChapters("reader-progress-two-", 30);
-    await backfill(dir, [{ role: "checker", from: 1, to: 30 }], { currentStep: "checker:12" });
-    await backfill(dir, [{ role: "planner", from: 1, to: 30 }]);
+    await backfill(dir, [{ role: "checker", from: 1, to: 30, steps: span(1, 30) }], { currentStep: "checker:12" });
+    await backfill(dir, [{ role: "planner", from: 1, to: 30, steps: span(1, 30) }]);
     expect((await get(dir)).payload).toEqual({
       ok: true,
       reading: true,
@@ -112,7 +115,7 @@ describe("GET /api/reader-progress（R4.3 在读前文轻量轮询；写作版�
 
   it("停着（paused）的不算在读，但如实标停着、读到哪（不当成读完了）", async () => {
     const dir = await bookWithChapters("reader-progress-paused-", 5);
-    await backfill(dir, [{ role: "checker", from: 1, to: 5 }], { state: "paused", currentStep: "checker:3" });
+    await backfill(dir, [{ role: "checker", from: 1, to: 5, steps: span(1, 5) }], { state: "paused", currentStep: "checker:3" });
     const { payload } = await get(dir);
     expect(payload.reading).toBe(false);
     expect((payload.roles as unknown[])[0]).toEqual({ role: "checker", reading: false, done: 2, total: 5, paused: "interrupted" });

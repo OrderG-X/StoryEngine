@@ -44,14 +44,16 @@ describe("额度算式", () => {
     expect(inspectTasks("quality")).toEqual([]);
   });
 
-  it("后台补读：冻结的章数 + 这段里最多新生成的卷节点，各乘核账员一次调用的上限", () => {
-    expect(backfillBudget([{ from: 1, to: 5 }])).toBe(5 * READER_CALL_MAX_SENDS); // 十章以内用不到卷笔记
+  it("后台补读：每一步一份笔记 + 最后那章的卷节点上界，各乘核账员一次调用的上限（写作版本 P4a）", () => {
+    expect(backfillBudget([{ to: 5, steps: [1, 2, 3, 4, 5] }])).toBe(5 * READER_CALL_MAX_SENDS); // 十章以内用不到卷笔记
     expect(backfillBudget([])).toBe(0);
     // 第 200 章：叶子 20 个 + 十块数 19、20 各自最多合并 18、19 次。
-    expect(backfillBudget([{ from: 200, to: 200 }])).toBe((1 + 20 + 18 + 19) * READER_CALL_MAX_SENDS);
-    expect(backfillStepSends(200)).toBe(backfillBudget([{ from: 200, to: 200 }]));
+    expect(backfillBudget([{ to: 200, steps: [200] }])).toBe((1 + 20 + 18 + 19) * READER_CALL_MAX_SENDS);
+    expect(backfillStepSends(200)).toBe(backfillBudget([{ to: 200, steps: [200] }]));
+    // 两百章的书改了第 3 章：第 3～5 章 + 第 200 章四步，卷节点只按最后那章拼窗口算。
+    expect(backfillBudget([{ to: 200, steps: [3, 4, 5, 200] }])).toBe((4 + 20 + 18 + 19) * READER_CALL_MAX_SENDS);
     // 两个角色各算各的。
-    expect(backfillBudget([{ from: 1, to: 3 }, { from: 1, to: 3 }])).toBe(6 * READER_CALL_MAX_SENDS);
+    expect(backfillBudget([{ to: 3, steps: [1, 2, 3] }, { to: 3, steps: [1, 2, 3] }])).toBe(6 * READER_CALL_MAX_SENDS);
   });
 
   it("卷节点上界：B 个十块 = B 个叶子 + 每个不同的 B 最多 B-1 次合并", () => {

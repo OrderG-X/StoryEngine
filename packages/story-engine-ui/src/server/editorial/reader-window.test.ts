@@ -215,6 +215,52 @@ describe("专员窗口：补笔记", () => {
     expect(out.messages).toHaveLength(5);
   });
 
+  it("前文原文按真给模型的那段算：第 2 章长到截断时，第 1 章改了第 3 章不跟着作废；截断边界上的字变了才作废（Astra 2026-11-07 C3）", async () => {
+    const dir = await makeBook(5, (chapter) => (chapter === 2 ? `旧头${"长".repeat(NOTE_CONTEXT_MAX_CHARS + 1)}` : `正文${chapter}。`));
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: fakeModel().callModel });
+    await writeChapter(dir, 1, "正文1，改过了。");
+    expect((await readerNotesStatus({ projectDir: dir, role: ROLE, upTo: 5 })).stale).toEqual([1, 2]);
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: fakeModel().callModel });
+    await writeChapter(dir, 2, `新头${"长".repeat(NOTE_CONTEXT_MAX_CHARS + 1)}`);
+    expect((await readerNotesStatus({ projectDir: dir, role: ROLE, upTo: 5 })).stale).toEqual([2]);
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: fakeModel().callModel });
+    await writeChapter(dir, 2, `新头${"长".repeat(NOTE_CONTEXT_MAX_CHARS)}尾`);
+    expect((await readerNotesStatus({ projectDir: dir, role: ROLE, upTo: 5 })).stale).toEqual([2, 3, 4]);
+  });
+
+  it("某章读不到又改了前面：只补读得到的那几章，后面盘上的笔记不算读过（Astra 2026-11-07 C4）", async () => {
+    const dir = await makeBook(6);
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 6, callModel: fakeModel().callModel });
+    await rm(join(dir, "chapters", "0003.md"));
+    await writeChapter(dir, 1, "正文1，改过了。");
+    expect(await readerNotesStatus({ projectDir: dir, role: ROLE, upTo: 6 })).toMatchObject({ readable: 2, stale: [1, 2] });
+    expect(await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 6, callModel: fakeModel().callModel })).toMatchObject({ built: 2, reused: 0, missing: 0, readThrough: 2 });
+  });
+
+  it("要补的不连着：超额、只补笔记、补到一半失败时各个数都按不连着的算（Astra 2026-11-07 C1）", async () => {
+    const dir = await makeBook(12);
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, callModel: fakeModel().callModel });
+    await writeChapter(dir, 2, "正文2，改过了。");
+    await writeChapter(dir, 9, "正文9，改过了。");
+    expect(await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, maxCatchUp: 5, callModel: fakeModel().callModel })).toMatchObject({ built: 0, reused: 6, missing: 6, readThrough: 1 });
+    const events: number[] = [];
+    let calls = 0;
+    const flaky: BrainCallModel = async (messages) => {
+      calls += 1;
+      if (calls === 3) throw new Error("断流了");
+      return `第${chapterAsked(messages)}章的笔记`;
+    };
+    await expect(ensureReaderWindow({
+      projectDir: dir, role: ROLE, upTo: 12, notesOnly: true, callModel: flaky,
+      onCatchUpBegin: (done) => { events.push(done); },
+      onProgress: (done) => { events.push(done); },
+      onCatchUpEnd: (done) => { events.push(done); },
+    })).rejects.toThrow("断流了");
+    expect(events).toEqual([6, 7, 8, 8]);
+    expect(await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, notesOnly: true, callModel: fakeModel().callModel }))
+      .toMatchObject({ messages: [], built: 4, reused: 8, missing: 0, readThrough: 12, waited: { from: 4, to: 11, chapters: 4 } });
+  });
+
   it("模型调用失败：照实抛出，已写下的笔记留着，下次只补剩下的", async () => {
     const dir = await makeBook(3);
     let count = 0;
@@ -371,6 +417,31 @@ describe("专员窗口：等读（R6.1）——等没等按「开口时缺的章
       ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 4, callModel: slow }),
     ]);
     expect(second.waited).toMatchObject({ from: 2, to: 4 });
+  });
+
+  it("用时算到拿到窗口那一刻：补完笔记还要建卷笔记的，建卷的时间也算（Astra 2026-11-07 第 3 条）", async () => {
+    const dir = await makeBook(25, (chapter) => `第${chapter}章的正文。${"内容".repeat(400)}`);
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let volumeCalls = 0;
+    try {
+      const out = await ensureReaderWindow({
+        projectDir: dir, role: { ...ROLE, volumeTask: "缩写成一份卷笔记。" }, upTo: 25, maxChars: 6_000,
+        callModel: async (messages) => {
+          if (messages.at(-1)!.content.includes("缩写成一份卷笔记")) {
+            volumeCalls += 1;
+            now += 10_000;
+            return "卷".repeat(900);
+          }
+          now += 100;
+          return "笔".repeat(600);
+        },
+      });
+      expect(volumeCalls).toBeGreaterThan(0);
+      expect(out.waited?.ms).toBe(now - 1_000);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("笔记本来就齐：不带 waited（没等不装等）", async () => {

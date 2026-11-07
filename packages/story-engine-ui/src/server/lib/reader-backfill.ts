@@ -42,11 +42,15 @@ export function requestReaderBackfill(bookDir: string, request: ReaderBackfillRe
 
 export const BACKFILL_KIND = "background.backfill" as const;
 
-/** 一个角色这次补哪几章（受理时冻结）：第 from～to 章。 */
+/**
+ * 一个角色这次补哪几章（受理时冻结）：第 from～to 章。steps 是一章一步的那几章（写作版本 P4a）：要重写笔记的章，
+ * 加上最后那章（拼窗口、补卷笔记）；中间笔记本来就对得上的章不占一步。从小到大、都在 from～to 里、最后一个是 to。
+ */
 export interface BackfillRange {
   readonly role: string;
   readonly from: number;
   readonly to: number;
+  readonly steps: readonly number[];
 }
 
 export interface BackfillParams {
@@ -61,9 +65,11 @@ export function readBackfillParams(value: unknown): BackfillParams | undefined {
   if (!Array.isArray(ranges)) return undefined;
   const parsed: BackfillRange[] = [];
   for (const range of ranges as unknown[]) {
-    const { role, from, to } = (range ?? {}) as Partial<BackfillRange>;
+    const { role, from, to, steps } = (range ?? {}) as Partial<BackfillRange>;
     if (typeof role !== "string" || !/^[a-z][a-z0-9-]*$/u.test(role) || !positiveInt(from) || !positiveInt(to) || from > to) return undefined;
-    parsed.push({ role, from, to });
+    if (!Array.isArray(steps) || steps.length === 0 || steps.at(-1) !== to) return undefined;
+    if (steps.some((chapter, index) => !positiveInt(chapter) || chapter < from || (index > 0 && chapter <= steps[index - 1]!))) return undefined;
+    parsed.push({ role, from, to, steps: [...steps] });
   }
   return { ranges: parsed };
 }

@@ -792,12 +792,12 @@ export async function ensureReaderWindow(input: {
       // 等读收尾（含中途失败）：把进度从「在读」翻回「读完」，失败时 done 如实停在有效的笔记数。
       if (state.stale.length > 0) await input.onCatchUpEnd?.(doneNow(), state.upTo);
     }
-    // 等过了（R6.1）：开口时缺的章这会儿都补上了（谁补的都算），如实带回执；不连着时带上一共几章。
-    const waited = spokeStale.length > 0
-      ? { waited: { from: spokeStale[0]!, to: spokeStale.at(-1)!, ms: Date.now() - startedAt, ...(spokeStale.length < spokeStale.at(-1)! - spokeStale[0]! + 1 ? { chapters: spokeStale.length } : {}) } satisfies ReaderWaited }
-      : {};
+    // 等过了（R6.1）：开口时缺的章这会儿都补上了（谁补的都算），如实带回执；不连着时带上一共几章。用时算到拿到窗口那一刻（含补卷笔记）。
+    const waited = (): { readonly waited?: ReaderWaited } => (spokeStale.length > 0
+      ? { waited: { from: spokeStale[0]!, to: spokeStale.at(-1)!, ms: Date.now() - startedAt, ...(spokeStale.length < spokeStale.at(-1)! - spokeStale[0]! + 1 ? { chapters: spokeStale.length } : {}) } }
+      : {});
     const done = { built: written, reused: state.upTo - state.stale.length, missing: 0, readThrough: state.upTo } as const;
-    if (input.notesOnly) return { messages: [], ...done, volumesBuilt: 0, foldedChapters: 0, ...waited };
+    if (input.notesOnly) return { messages: [], ...done, volumesBuilt: 0, foldedChapters: 0, ...waited() };
 
     const entries = entriesOf(state, notes);
     const volumeNotes = new Map<string, VolumeNoteEntry>();
@@ -833,7 +833,7 @@ export async function ensureReaderWindow(input: {
       ...done,
       volumesBuilt,
       foldedChapters: layout.foldedThrough,
-      ...waited,
+      ...waited(),
     };
   });
   if (!input.waitingAs) return run();
