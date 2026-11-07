@@ -1,14 +1,14 @@
 // @vitest-environment node
 // 后台补读冻结的步骤（写作版本 P4a，Astra 2026-11-07 第 1、2 条）：途中改了原本不占一步的章，回执读到哪按最后一步查到的算；
 // 接着做时做完的步骤照检查点重放，这次写过的照算。只跑配方的 run（真检查点读写，假模型），不跑执行器调度。
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { CHECKER_ROLE } from "../../../editorial/checker.js";
 import { ensureReaderWindow, readerNotesStatus, type BrainMessage } from "../../../editorial/reader-window.js";
 import { makeHomeTempDir } from "../../../lib/home-test-tmp.js";
 import { inputHashOf, readCheckpoint, writeCheckpoint } from "../../../lib/operations/checkpoints.js";
-import type { BackfillParams } from "../../../lib/reader-backfill.js";
+import { readBackfillParams, type BackfillParams } from "../../../lib/reader-backfill.js";
 import type { RecipeContext } from "../executor.js";
 import { createBackgroundBackfillRecipe, type BackfillResultBody } from "./background-backfill.js";
 
@@ -80,4 +80,21 @@ it("最后一步之前进程没了：接着做时做完的步骤照检查点重�
   const result = await again.run(context(book, params));
   expect(calls).toBe(0);
   expect(result.body as BackfillResultBody).toEqual({ readThrough: { checker: 12 }, progressed: true, restart: false, stuck: [] });
+});
+
+it("P4a 之前交的记录、每步都照检查点重放：读到哪按现在对得上的笔记算，那时写的旧笔记不算读过（Astra P4a 第 3 轮）", async () => {
+  const book = await makeBook(3);
+  await ensureReaderWindow({ projectDir: book, role: CHECKER_ROLE, upTo: 3, callModel: fakeNote });
+  // 盘上是升级前写的笔记（没有前两章原文的哈希）和那时做完的三步检查点。
+  for (let chapter = 1; chapter <= 3; chapter += 1) {
+    const path = join(book, "agents", "checker", "notes", `${String(chapter).padStart(4, "0")}.json`);
+    const { contextHash: _contextHash, ...old } = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+    await writeFile(path, JSON.stringify(old), "utf-8");
+    await writeCheckpoint(book, "steps-op", { schema: "operation-step/1", stepId: `checker:${chapter}`, inputHash: inputHashOf({ role: "checker", chapter }), exec: `1:checker:${chapter}`, output: { readThrough: chapter, missing: 0, built: 1, volumesBuilt: 0 }, finishedAt: new Date().toISOString() });
+  }
+  let calls = 0;
+  const recipe = createBackgroundBackfillRecipe({ modelProblem: () => undefined, callModel: async (messages) => { calls += 1; return fakeNote(messages); } });
+  const result = await recipe.run(context(book, readBackfillParams({ ranges: [{ role: "checker", from: 1, to: 3 }] })!));
+  expect(calls).toBe(0);
+  expect(result.body as BackfillResultBody).toEqual({ readThrough: { checker: 0 }, progressed: true, restart: true, stuck: [] });
 });

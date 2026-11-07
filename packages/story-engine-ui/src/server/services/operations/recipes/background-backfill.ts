@@ -167,9 +167,22 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
           }
         }
       }
+      // 读完的角色按现在盘上的笔记再核一遍：步骤可能是照检查点重放的（P4a 之前交的记录做完的步骤，那时写的笔记新版不认），
+      // 也可能做完之后又有章被改了。读到哪按现在从第 1 章起连着对得上的算，有对不上的就收尾后重交（Astra P4a 第 3 轮）。
+      for (const range of params.ranges) {
+        if (readThrough[range.role] !== range.to || stuck.includes(range.role)) continue;
+        const role = roles.find((candidate) => candidate.id === range.role)!;
+        const status = await readerNotesStatus({ projectDir: ctx.bookDir, role, upTo: range.to });
+        const valid = status.stale.length > 0 ? status.stale[0]! - 1 : status.readable;
+        if (valid >= range.to) continue;
+        readThrough[range.role] = valid;
+        // 有对不上的笔记：收尾后重交；笔记都对得上、只是后面的章读不到了：停在能读到的那章。
+        if (status.stale.length > 0) restart = true;
+        else stuck.push(range.role);
+      }
       const body: BackfillResultBody = { readThrough, progressed, restart, stuck };
       const summary = restart
-        ? "前面的章途中改过，专员接着按改过的读。"
+        ? "专员的笔记还有几章对不上现在的正文，接着重读。"
         : `专员读完了前文（${Object.entries(readThrough).map(([role, chapter]) => `${READER_ROLE_LABELS[role] ?? role}到第 ${chapter} 章`).join("，")}）。`;
       return { schema: "operation-result/1", summary, body };
     },
