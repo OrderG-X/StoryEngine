@@ -445,7 +445,7 @@ function renderWindowLayout(role: ReaderRole, entries: readonly ReaderWindowEntr
  * 拼窗口：[system] + 每章两条（user＝定稿原文 + 记笔记要求；assistant＝笔记）。entries 必须是从第 1 章起连续的。
  * 超预算就从第 1 章起按每 FOLD_BLOCK_CHAPTERS 章一块把原文折掉、只留笔记，折到不超为止（整块折完还超，才再一章一章折）。
  * 角色有 volumeTask 且传进了卷笔记时，超预算的块用一条卷笔记代替十章（只认传进来的，不自己生成）。
- * 写笔记时的窗口和之后核账时的窗口都用同一套规划，所以前缀逐字一样。
+ * 核账、拟纲、记账读第 N 章和读第 N+1 章用同一套规划，同一折叠档位里前缀逐字一样（服务商缓存能命中）。
  */
 export function assembleReaderWindow(
   role: ReaderRole,
