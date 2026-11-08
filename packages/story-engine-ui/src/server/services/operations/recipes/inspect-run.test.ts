@@ -206,7 +206,7 @@ describe("核账（continuity）", () => {
     for (let chapter = 1; chapter <= 3; chapter += 1) await commit(chapter, CH1);
     await draft(4, DRAFT);
     const parked = await acceptOperation(book, {
-      requestKey: "backfill-parked", issuedAt: new Date().toISOString(), kind: BACKFILL_KIND, params: { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3 }] },
+      requestKey: "backfill-parked", issuedAt: new Date().toISOString(), kind: BACKFILL_KIND, params: { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3, steps: [1, 2, 3] }] },
       recipeVersion: 1, origin: { kind: "background" }, writeScope: { chapters: [] }, budget: { limit: 3 },
     }, { bookEpoch: async () => "e" });
     if (!parked.ok || !("record" in parked)) throw new Error("没受理");

@@ -1,11 +1,13 @@
 /**
  * background.backfill：后台给专员补前文笔记（写作版本 P2a 4.5、第七节；替掉原来 catch-up.ts 的 for (;;) 追新）。
  *
- * - 受理时冻结每个角色还差的章范围 `{role, from, to}`（按交来的角色先后；读齐了的不进范围，都读齐了不受理）。
+ * - 受理时冻结每个角色还差的章范围 `{role, from, to, steps}`：from＝第一份要重写的笔记，to＝读得到的最后一章，
+ *   steps＝一章一步的那几章（要重写笔记的章 + 最后那章）（按交来的角色先后；读齐了的不进范围，都读齐了不受理）。
  * - 笔记都齐了、只缺卷笔记（缓存丢了、卷笔记的提示词改了）也受理：范围就是最后那一章，那一步只补卷（Astra P2a 第 9 轮第 4 条）。
- * - 一章一步（步骤号 `<角色>:<章>`）：调同一个 `ensureReaderWindow({upTo: 章, maxCatchUp: 1, maxVolumeBuilds: 上界})`——
- *   一步写这一章的笔记 + 写它、读完它的窗口要用的卷节点；卷节点数按规划的上界（volumeBuildsBound）给，额度也按它算，
- *   到了上界还没建齐就是规划出了错，如实失败（第 9 轮第 5 条：不再分段续建、拿别的章省下的额度抵）。
+ * - 冻结的每一步（步骤号 `<角色>:<章>`）：要重写笔记的章只写这一章的笔记（`notesOnly`，不拼窗口）；范围里笔记本来就对得上的章
+ *   不占一步（写作版本 P4a：笔记只看本章和前两章原文，改了第 k 章只有 k～k+2 章要重写）。最后那一章一步拼读完它的窗口，
+ *   备齐要用的卷节点；卷节点数按规划的上界（volumeBuildsBound）给，额度也按它算，到了上界还没建齐就是规划出了错，如实失败。
+ *   步骤受理时就定了：接着做时做完的步骤照检查点重放（这次写了几份照算），不按盘上现状重挑。
  * - 途中前面的章被改了（要重写的不止这一章）：这次到此为止，收尾后按新的范围重交一次。某章读不到：这个角色停在它前一章。
  * - 笔记、卷笔记是按内容键整份覆盖的缓存（过栅栏 writeBookCache）。每一步排在这本书的补读队列上（和通读记账不同时打模型）。
  * - 进程没了：开书对账时没有结果不明的调用就自动接着做。跑成了按它这几个角色再交一次：读的途中新定稿的章、
@@ -101,16 +103,19 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
       const ranges: BackfillRange[] = [];
       for (const role of wanted) {
         const status = await readerNotesStatus({ projectDir: bookDir, role, upTo });
-        if (status.valid < status.readable) ranges.push({ role: role.id, from: status.valid + 1, to: status.readable });
+        if (status.stale.length > 0) {
+          const steps = status.stale.at(-1) === status.readable ? [...status.stale] : [...status.stale, status.readable];
+          ranges.push({ role: role.id, from: status.stale[0]!, to: status.readable, steps });
+        }
         // 笔记齐了、读完最后一章的窗口还缺卷笔记：只补卷，范围就是最后那一章。
-        else if (status.readable > 0 && status.volumesMissing > 0) ranges.push({ role: role.id, from: status.readable, to: status.readable });
+        else if (status.readable > 0 && status.volumesMissing > 0) ranges.push({ role: role.id, from: status.readable, to: status.readable, steps: [status.readable] });
       }
       if (ranges.length === 0) return { ok: false, code: "nothing_to_read", message: "专员的前文笔记都读齐了。" };
       return {
         ok: true,
         params: { ranges },
         writeScope: { chapters: [] },
-        // 每章笔记 1 次 + 这段里最多新生成的卷节点（实际多数章一个卷节点都不用建）。
+        // 每一步笔记 1 次 + 最后那章的卷节点上界（实际多数时候一个卷节点都不用建）。
         budget: backfillBudget(ranges) + await frozenCompatAllowance(input.models, BACKFILL_TASKS),
       };
     },
@@ -127,7 +132,8 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
         const role = roles.find((candidate) => candidate.id === range.role);
         if (!role) throw Object.assign(new Error("要补的专员已经没有了，这次没法接着做。"), { code: "bad_params" });
         readThrough[range.role] = range.from - 1;
-        for (let chapter = range.from; chapter <= range.to; chapter += 1) {
+        for (const chapter of range.steps) {
+          const last = chapter === range.to;
           ctx.progress(`${READER_ROLE_LABELS[role.id] ?? role.id}在读第 ${chapter} 章`);
           const output = await ctx.step<StepOutput>(backfillStepId(role.id, chapter), { role: role.id, chapter }, () =>
             runInReaderCatchUpQueue(ctx.bookDir, async () => {
@@ -137,7 +143,7 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
                 upTo: chapter,
                 callModel: deps.callModel,
                 maxCatchUp: 1,
-                maxVolumeBuilds: backfillStepVolumeBuilds(chapter),
+                ...(last ? { maxVolumeBuilds: backfillStepVolumeBuilds(chapter) } : { notesOnly: true }),
               });
               return { readThrough: ready.readThrough, missing: ready.missing, built: ready.built, volumesBuilt: ready.volumesBuilt, ...(ready.volumeLimited ? { volumeLimited: true as const } : {}) };
             }));
@@ -148,6 +154,8 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
           }
           if (output.missing > 0) {
             // 没写东西就缺：要重写的不止这一章（前面的章途中改过）。这次到此为止，收尾后按新的范围重交。
+            // 读到哪按这一步查到的算（从第 1 章起连着有效的），别留着前面几步的章号。
+            readThrough[range.role] = output.readThrough;
             restart = true;
             break ranges;
           }
@@ -159,9 +167,22 @@ export function createBackgroundBackfillRecipe(deps: BackfillDeps = DEFAULT_DEPS
           }
         }
       }
+      // 读完的角色按现在盘上的笔记再核一遍：步骤可能是照检查点重放的（P4a 之前交的记录做完的步骤，那时写的笔记新版不认），
+      // 也可能做完之后又有章被改了。读到哪按现在从第 1 章起连着对得上的算，有对不上的就收尾后重交（Astra P4a 第 3 轮）。
+      for (const range of params.ranges) {
+        if (readThrough[range.role] !== range.to || stuck.includes(range.role)) continue;
+        const role = roles.find((candidate) => candidate.id === range.role)!;
+        const status = await readerNotesStatus({ projectDir: ctx.bookDir, role, upTo: range.to });
+        const valid = status.stale.length > 0 ? status.stale[0]! - 1 : status.readable;
+        if (valid >= range.to) continue;
+        readThrough[range.role] = valid;
+        // 有对不上的笔记：收尾后重交；笔记都对得上、只是后面的章读不到了：停在能读到的那章。
+        if (status.stale.length > 0) restart = true;
+        else stuck.push(range.role);
+      }
       const body: BackfillResultBody = { readThrough, progressed, restart, stuck };
       const summary = restart
-        ? "前面的章途中改过，专员接着按改过的读。"
+        ? "专员的笔记还有几章对不上现在的正文，接着重读。"
         : `专员读完了前文（${Object.entries(readThrough).map(([role, chapter]) => `${READER_ROLE_LABELS[role] ?? role}到第 ${chapter} 章`).join("，")}）。`;
       return { schema: "operation-result/1", summary, body };
     },

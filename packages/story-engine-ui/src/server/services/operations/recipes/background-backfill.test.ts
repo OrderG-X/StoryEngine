@@ -171,8 +171,8 @@ describe("按角色排（Astra P2a 第 8 轮第 2、6 条）", () => {
     await commitChapters(4, 4);
     await Promise.all([submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 4 }), submitBackfill(book, { roles: [PLANNER_ROLE.id], upTo: 3 })]);
     expect((await backfills()).map((record) => record.params)).toEqual([
-      { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3 }] },
-      { ranges: [{ role: PLANNER_ROLE.id, from: 1, to: 3 }] },
+      { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3, steps: [1, 2, 3] }] },
+      { ranges: [{ role: PLANNER_ROLE.id, from: 1, to: 3, steps: [1, 2, 3] }] },
     ]);
     const status = await readReadersCatchUpStatus(book);
     expect(status.roles.find((role) => role.role === PLANNER_ROLE.id)).toMatchObject({ reading: true, done: 0 });
@@ -181,10 +181,10 @@ describe("按角色排（Astra P2a 第 8 轮第 2、6 条）", () => {
     // 核账员跑完再看一眼：补上读的途中定稿的第 4 章；章纲员那份冻结的是第 1～3 章，跑完再看一眼补第 4 章。
     // （后两份谁先受理看前两份谁先跑完，不定先后。）
     expect(records.map((record) => [record.state, record.params])).toEqual(expect.arrayContaining([
-      ["succeeded", { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3 }] }],
-      ["succeeded", { ranges: [{ role: PLANNER_ROLE.id, from: 1, to: 3 }] }],
-      ["succeeded", { ranges: [{ role: CHECKER_ROLE.id, from: 4, to: 4 }] }],
-      ["succeeded", { ranges: [{ role: PLANNER_ROLE.id, from: 4, to: 4 }] }],
+      ["succeeded", { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3, steps: [1, 2, 3] }] }],
+      ["succeeded", { ranges: [{ role: PLANNER_ROLE.id, from: 1, to: 3, steps: [1, 2, 3] }] }],
+      ["succeeded", { ranges: [{ role: CHECKER_ROLE.id, from: 4, to: 4, steps: [4] }] }],
+      ["succeeded", { ranges: [{ role: PLANNER_ROLE.id, from: 4, to: 4, steps: [4] }] }],
     ]));
     expect(records).toHaveLength(4);
     expect(reader.maxInFlight()).toBe(1);
@@ -216,7 +216,7 @@ describe("按角色排（Astra P2a 第 8 轮第 2、6 条）", () => {
     const records = await quiet();
     expect(records.find((record) => record.opId === pausedId)).toMatchObject({ state: "paused", pauseReason: reason });
     expect(records.filter((record) => record.opId !== pausedId).map((record) => record.params)).toEqual([
-      { ranges: [{ role: LEDGER_ROLE.id, from: 1, to: 4 }, { role: PLANNER_ROLE.id, from: 1, to: 4 }] },
+      { ranges: [{ role: LEDGER_ROLE.id, from: 1, to: 4, steps: [1, 2, 3, 4] }, { role: PLANNER_ROLE.id, from: 1, to: 4, steps: [1, 2, 3, 4] }] },
     ]);
     expect(fresh.calls()).toBe(8); // 只有记账员、章纲员各 4 章；核账员一次都没重发
     expect((await readReadersCatchUpStatus(book)).roles.find((role) => role.role === CHECKER_ROLE.id)).toEqual({ role: CHECKER_ROLE.id, reading: false, done: 1, total: 4, paused: reason });
@@ -232,6 +232,26 @@ describe("按角色排（Astra P2a 第 8 轮第 2、6 条）", () => {
     await quiet();
     expect(await notes(CHECKER_ROLE.id)).toHaveLength(4);
     expect(fresh.calls()).toBe(before + 3);
+  });
+});
+
+describe("改了前面一章（写作版本 P4a）", () => {
+  it("只重写它和后两章：中间笔记对得上的章不占一步，最后那章一步拼窗口", async () => {
+    await commitChapters(1, 12);
+    useRecipe(fakeReader().callModel);
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 12 });
+    await quiet();
+    await writeFile(chapterPath(book, 2), "# 第2章\n\n第2章改过的正文。\n", "utf-8");
+    const reader = fakeReader();
+    __resetRecipesForTests();
+    useRecipe(reader.callModel);
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 12 });
+    const records = await quiet();
+    const record = records.at(-1)!;
+    expect(record).toMatchObject({ state: "succeeded", params: { ranges: [{ role: CHECKER_ROLE.id, from: 2, to: 12, steps: [2, 3, 4, 12] }] } });
+    expect((await readdir(join(operationDir(book, record.opId), "steps"))).sort()).toEqual(["checker_12.json", "checker_2.json", "checker_3.json", "checker_4.json"]);
+    expect(reader.calls()).toBe(3);
+    expect((record.result as { body: BackfillResultBody }).body).toEqual({ readThrough: { checker: 12 }, progressed: true, restart: false, stuck: [] });
   });
 });
 
@@ -268,6 +288,49 @@ describe("途中前面的章改了", () => {
     expect((records[0]!.result as { body: BackfillResultBody }).body).toMatchObject({ readThrough: { checker: 1 }, stuck: [CHECKER_ROLE.id] });
     // 跑完再看一眼：第 2 章还读不到，不受理（不会对着读不到的那章一直交）。
     expect(records).toHaveLength(1);
+  });
+});
+
+describe("P4a 之前交的补读（参数里没有 steps）", () => {
+  it("停着（结果不明）的照旧停着、照旧挡：开书不作废、不另起一份重发；作者接着做时按每章一步读完（Astra P4a 第 2 轮）", async () => {
+    await commitChapters(1, 3);
+    const stuck = deferred();
+    const blocked = fakeReader({ holdAt: 2, hold: stuck.promise });
+    useRecipe(blocked.callModel);
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 3 });
+    await vi.waitFor(() => expect(blocked.calls()).toBe(2), { timeout: 5_000 });
+    const pausedId = (await backfills())[0]!.opId;
+    __resetOperationStoreForTests();
+    __resetExecutionsForTests();
+    __resetCatchUpQueuesForTests();
+    __resetCatchUpLocksForTests();
+    // 盘上是升级前的样子：参数只有 from～to，进程没了时有一笔结果不明。
+    const { changeOperation } = await import("../../../lib/operations/store.js");
+    await changeOperation(book, pausedId, (current) => ({
+      ...current,
+      params: { ranges: [{ role: CHECKER_ROLE.id, from: 1, to: 3 }] },
+      state: "paused",
+      pauseReason: "attempt_unknown",
+      runEpoch: current.runEpoch + 1,
+    }));
+    __resetRecipesForTests();
+    const fresh = fakeReader();
+    useRecipe(fresh.callModel);
+    // 开书：对账 + 交补读。
+    expect(await reconcileOperations(book)).toEqual({ resumed: [] });
+    await submitBackfill(book, { roles: [CHECKER_ROLE.id], upTo: 3 });
+    await __drainBackfillSubmissionsForTests();
+    await __drainOperationsForTests();
+    expect((await backfills()).map((record) => [record.opId, record.state])).toEqual([[pausedId, "paused"]]);
+    expect(await ensureReaderWindow({ projectDir: book, role: CHECKER_ROLE, upTo: 3, callModel: fresh.callModel, maxCatchUp: 10 })).toMatchObject({ built: 0, pausedBackfill: { opId: pausedId, reason: "attempt_unknown" } });
+    expect(fresh.calls()).toBe(0);
+    // 作者点「接着做」：第 1 章照检查点重放，从第 2 章接着读。
+    stuck.resolve();
+    expect(await resumeOperation(book, pausedId)).toMatchObject({ ok: true });
+    const records = await quiet();
+    expect(records.find((record) => record.opId === pausedId)).toMatchObject({ state: "succeeded", result: { body: { readThrough: { checker: 3 }, restart: false } } });
+    expect(fresh.calls()).toBe(2);
+    expect(await notes(CHECKER_ROLE.id)).toHaveLength(3);
   });
 });
 

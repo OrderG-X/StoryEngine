@@ -42,11 +42,17 @@ export function requestReaderBackfill(bookDir: string, request: ReaderBackfillRe
 
 export const BACKFILL_KIND = "background.backfill" as const;
 
-/** 一个角色这次补哪几章（受理时冻结）：第 from～to 章。 */
+/**
+ * 一个角色这次补哪几章（受理时冻结）：第 from～to 章。steps 是一章一步的那几章（写作版本 P4a）：要重写笔记的章，
+ * 加上最后那章（拼窗口、补卷笔记）；中间笔记本来就对得上的章不占一步。从小到大、都在 from～to 里、最后一个是 to。
+ * P4a 之前交的记录没有 steps，读回来按 from～to 每章一步（和它当时的步骤号、输入一样，做完的步骤照检查点重放）：
+ * 配方版本因此没换——换了会把停着（结果不明）的旧记录作废，丢掉「谁都不替它当场补」的保护（Astra P4a 第 2 轮）。
+ */
 export interface BackfillRange {
   readonly role: string;
   readonly from: number;
   readonly to: number;
+  readonly steps: readonly number[];
 }
 
 export interface BackfillParams {
@@ -61,9 +67,15 @@ export function readBackfillParams(value: unknown): BackfillParams | undefined {
   if (!Array.isArray(ranges)) return undefined;
   const parsed: BackfillRange[] = [];
   for (const range of ranges as unknown[]) {
-    const { role, from, to } = (range ?? {}) as Partial<BackfillRange>;
+    const { role, from, to, steps } = (range ?? {}) as Partial<BackfillRange>;
     if (typeof role !== "string" || !/^[a-z][a-z0-9-]*$/u.test(role) || !positiveInt(from) || !positiveInt(to) || from > to) return undefined;
-    parsed.push({ role, from, to });
+    if (steps === undefined) {
+      parsed.push({ role, from, to, steps: Array.from({ length: to - from + 1 }, (_, index) => from + index) });
+      continue;
+    }
+    if (!Array.isArray(steps) || steps.length === 0 || steps.at(-1) !== to) return undefined;
+    if (steps.some((chapter, index) => !positiveInt(chapter) || chapter < from || (index > 0 && chapter <= steps[index - 1]!))) return undefined;
+    parsed.push({ role, from, to, steps: [...steps] });
   }
   return { ranges: parsed };
 }

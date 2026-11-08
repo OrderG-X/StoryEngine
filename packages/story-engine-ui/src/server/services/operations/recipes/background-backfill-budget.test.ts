@@ -93,7 +93,7 @@ describe("卷笔记缺口和额度上界", () => {
     // 章笔记按大窗口写齐（不建卷），默认窗口下就要卷笔记了。
     await ensureReaderWindow({ projectDir: book, role: PLANNER_ROLE, upTo: 120, callModel: async () => LONG_NOTE, maxChars: 1_000_000 });
     const status = await readerNotesStatus({ projectDir: book, role: PLANNER_ROLE, upTo: 120 });
-    expect(status).toMatchObject({ readable: 120, valid: 120 });
+    expect(status).toMatchObject({ readable: 120, stale: [] });
     expect(status.volumesMissing).toBeGreaterThan(0);
     vi.mocked(globalThis.fetch).mockImplementation(async () => sse(LONG_NOTE));
     registerBuiltInRecipes();

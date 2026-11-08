@@ -49,11 +49,11 @@ export function inspectTasks(mode: InspectMode): readonly ("qualityCheck" | "dra
 }
 
 /**
- * 后台补读整次（Astra P2a 第 9 轮第 5 条）：每个角色冻结的章数 + 这段里最多新生成的卷节点（volumeBuildsBound：
- * 窗口从写第 from 章那一刻涨到读完第 to 章；同一次里同一个卷节点只生成一次），× 每次。
+ * 后台补读整次（Astra P2a 第 9 轮第 5 条；写作版本 P4a）：每个角色冻结的每一步写一份笔记（maxCatchUp 1），
+ * 中间那几步不拼窗口、不建卷；最后那章一步拼窗口，卷节点按它的上界（backfillStepVolumeBuilds）。× 每次。
  */
-export function backfillBudget(ranges: readonly { readonly from: number; readonly to: number }[]): number {
-  return ranges.reduce((sum, range) => sum + (range.to - range.from + 1 + volumeBuildsBound(range.from - 1, range.to)) * READER_CALL_MAX_SENDS, 0);
+export function backfillBudget(ranges: readonly { readonly to: number; readonly steps: readonly number[] }[]): number {
+  return ranges.reduce((sum, range) => sum + (range.steps.length + backfillStepVolumeBuilds(range.to)) * READER_CALL_MAX_SENDS, 0);
 }
 
 /** 后台补读第 chapter 章那一步最多新生成几个卷节点（写它时的窗口 + 读完它的窗口）：这一步的上限，到了就是规划出了错。 */
