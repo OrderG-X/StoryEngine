@@ -7,6 +7,9 @@ import { nameKey, normalizeForQuote, type BookProjection, type FactView, type It
 
 /** 同名的区分取头回那句的前几个字。 */
 const QUOTE_HINT_CHARS = 8;
+/** 材料里一条原句最多几个字：只为让读的人对上是哪一下，长句截头（P4b：东西记全以后那层超过 1000 token / 章）。 */
+const LINE_QUOTE_CHARS = 20;
+const shortQuote = (quote: string): string => ([...quote].length > LINE_QUOTE_CHARS ? `${[...quote].slice(0, LINE_QUOTE_CHARS).join("")}…` : quote);
 const NEUTRAL = "一样东西";
 const REASON_TEXT = { order: "这章先后没说清", from: "去处和前文接不上", destroyed: "毁了之后又写到它" } as const;
 
@@ -182,7 +185,7 @@ export function nowQuote(item: ItemView): string | undefined {
 /** 写手、章纲员看的一行：名字 · 现在（哪章）· 里面 · 没核全 · 单列的说法 · 现在那句原句。 */
 export function writerItemLine(item: ItemView, texts: ItemTexts, chapterGap = true): string {
   const quote = nowQuote(item);
-  return `${itemLine(item, texts, chapterGap)}${quote ? ` · 原句「${quote}」` : ""}`;
+  return `${itemLine(item, texts, chapterGap)}${quote ? ` · 原句「${shortQuote(quote)}」` : ""}`;
 }
 
 export interface PickItemsOptions {
