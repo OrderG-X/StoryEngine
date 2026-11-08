@@ -230,7 +230,10 @@ function itemSection(
     handles.set(handle, item.id);
     names.set(handle, texts.label(item.id));
     const first = item.firstSeen ? ` · 头回：第 ${item.firstSeen.chapter} 章${item.firstSeen.quote ? `「${item.firstSeen.quote}」` : ""}` : "";
-    const head = `${handle} ${itemLine(item, texts)}${item.card ? " · 设定卡上有" : ""}${first}`;
+    // 最近一次写它在哪那句（和头回不是同一条才给）：同名的几样靠它分（P4b 2.5，「密封袋。」这种头回分不出）。
+    const latest = [...item.history].reverse().find((step) => step.quote && step.entry !== item.firstSeen?.entry);
+    const last = latest?.quote ? ` · 最近：第 ${latest.chapter} 章「${latest.quote}」` : "";
+    const head = `${handle} ${itemLine(item, texts)}${item.card ? " · 设定卡上有" : ""}${first}${last}`;
     const under = (facts.get(item.id) ?? []).map((fact) => {
       const factHandle = `F${(factNo += 1)}`;
       factHandles.set(factHandle, fact.id);

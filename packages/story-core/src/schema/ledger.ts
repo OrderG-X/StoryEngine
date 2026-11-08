@@ -344,7 +344,7 @@ function itemInputProblem(entry: ItemInput): string | undefined {
     case "census":
       if (!entry.members || entry.to || entry.from || entry.gone) return "清点要列里面有什么";
       if (entry.members.length === 0 && entry.complete !== true) return "清点没列东西就得是正文明说空了";
-      if (entry.members.some((member) => sameItemRef(member, item))) return "清点里不能有它自己";
+      if (entry.members.some((member) => sameItemRef(member, item))) return "清点要挂在装着这些东西的那一样上，它自己不算成员";
       return undefined;
   }
 }
@@ -629,7 +629,7 @@ function itemEntryProblem(entry: ItemEntry): string | undefined {
     case "census":
       if (!entry.members || entry.to || entry.from || entry.gone || entry.replaces || entry.overlaps) return "清点要列里面有什么";
       if (entry.members.length === 0 && entry.complete !== true) return "清点没列东西就得是正文明说空了";
-      return entry.members.some((member) => member.id === self) ? "清点里不能有它自己" : undefined;
+      return entry.members.some((member) => member.id === self) ? "清点要挂在装着这些东西的那一样上，它自己不算成员" : undefined;
   }
 }
 

@@ -104,7 +104,7 @@ describe("东西在哪：读的人拿到的材料", () => {
     // 重写第 3 章：老周说的是最近一笔，单列、标没核实。
     const third = await buildWritingContextPack({ projectDir: dir, chapter: 3, userDirection: "清点铁盒" });
     expect(third.continuityFocus.itemsWhere?.find((line) => line.startsWith("借据"))).toBe(
-      "借据 · 现在：在铁盒里（铁盒在樟木箱里，樟木箱在里屋），第 2 章 · 老周说毁了（第 2 章，没核实） · 原句「沈知秋把借据塞进铁盒」",
+      "借据 · 现在：在铁盒里（铁盒在樟木箱里，樟木箱在里屋），第 2 章 · 另：老周说毁了（第 2 章，正文没写） · 原句「沈知秋把借据塞进铁盒」",
     );
   });
 
@@ -155,8 +155,8 @@ describe("单列的说法什么时候列", () => {
   it("同一章里叙述写的去向在人物说的之后：说的过时了，不列；在之前或分不清先后照列", () => {
     const texts = itemTexts([]);
     expect(asideText(view([step(5, 5, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBeUndefined();
-    expect(asideText(view([step(5, 3, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBe("大姑说江叶拿着（第 5 章，没核实）");
-    expect(asideText(view([step(5, 4, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBe("大姑说江叶拿着（第 5 章，没核实）");
+    expect(asideText(view([step(5, 3, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBe("另：大姑说江叶拿着（第 5 章，正文没写）");
+    expect(asideText(view([step(5, 4, "江叶", scope)], [step(5, 4, "江叶", claim)]), texts)).toBe("另：大姑说江叶拿着（第 5 章，正文没写）");
     expect(asideText(view([step(6, 1, "江叶", scope)], [step(5, 9, "江叶", claim)]), texts)).toBeUndefined();
   });
 });

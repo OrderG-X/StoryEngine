@@ -485,6 +485,7 @@ describe("记账员跑一章", () => {
           maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             return messages.at(-1)?.content.includes("只记本章东西的去向") ? itemReply() : main;
           },
         });
@@ -504,6 +505,59 @@ describe("记账员跑一章", () => {
       expect(failed.parsed.entries.some((entry) => entry.kind === "item")).toBe(false);
       expect(failed.parsed.entries.some((entry) => entry.kind === "summary")).toBe(true);
       expect(failed.parsed.drops).toContainEqual(expect.objectContaining({ where: "items", kind: "item", reason: expect.stringContaining("记东西没成") }));
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("章末对一遍（P4b 2.4）：记东西那遍交完接着同一段对话问一次，补的条目照收；这一问没成照第一遍交、记下没成", async () => {
+    const book = await makeHomeTempDir("keeper-items-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const draft = "# 第1章\n\n桌上放着一个铁盒。她把铁盒揣进兜里。";
+      const units = splitUnits(draft);
+      const put = units.find((unit) => draft.slice(unit.start, unit.end).includes("桌上"))?.id ?? 0;
+      const box = units.find((unit) => draft.slice(unit.start, unit.end).includes("揣进兜里"))?.id ?? 0;
+      const main = JSON.stringify({ summary: { text: "她拿走铁盒", quote: "她把铁盒揣进兜里" } });
+      const items = JSON.stringify({
+        newItems: [{ tag: "N1", name: "铁盒", by: "narration", unit: put }],
+        items: [{ seq: 1, item: "N1", op: "at", to: { place: "桌上" }, by: "narration", unit: put }],
+      });
+      const asked: string[] = [];
+      const run = (check: () => Promise<string>) =>
+        runLedgerKeeper({
+          projectDir: book,
+          chapter: 1,
+          draft,
+          before: project({ ledgers: [], decisions: [] }),
+          maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("【对一遍章末】")) {
+              asked.push(last);
+              expect(messages.at(-2)).toMatchObject({ role: "assistant", content: items });
+              return check();
+            }
+            return last.includes("只记本章东西的去向") ? items : main;
+          },
+        });
+      const ok = await run(async () => JSON.stringify({ items: [{ item: "N1", op: "move", to: { person: "她" }, by: "narration", unit: box }] }));
+      expect(asked[0]).toContain("N1 铁盒 · 章末：在桌上");
+      expect(ok).toMatchObject({ ok: true, itemCheck: { listed: 1, added: 1, declared: 0 } });
+      if (ok.ok) {
+        const recorded = ok.parsed.entries.filter((entry) => entry.kind === "item");
+        expect(recorded.map((entry) => (entry.kind === "item" ? [entry.op, "quote" in entry ? entry.quote : ""] : []))).toEqual([
+          ["appear", "桌上放着一个铁盒。"],
+          ["at", "桌上放着一个铁盒。"],
+          ["move", "她把铁盒揣进兜里。"],
+        ]);
+      }
+      const failed = await run(async () => {
+        throw new Error("429 太忙");
+      });
+      expect(failed).toMatchObject({ ok: true, itemCheck: { added: 0, failed: expect.any(String) } });
+      if (failed.ok) expect(failed.parsed.entries.filter((entry) => entry.kind === "item").map((entry) => entry.kind === "item" && entry.op)).toEqual(["appear", "at"]);
     } finally {
       await rm(book, { recursive: true, force: true });
     }
@@ -586,6 +640,7 @@ describe("记账员跑一章", () => {
           callModel: async (messages, options) => {
             calls.push([...messages]);
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             return messages.at(-1)?.content.includes("东西的记录没记上") ? repair(messages) : first;
           },
         });
@@ -642,6 +697,7 @@ describe("记账员跑一章", () => {
           maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             return messages.at(-1)?.content.includes("东西的记录没记上")
               ? JSON.stringify({ items: [{ ...(fix ? { fix } : {}), seq: 1, item: "N1", op: "at", to: { place: "格子里" }, by: "narration", quote: "格子里放着一个铁盒" }] })
               : one;
@@ -664,6 +720,7 @@ describe("记账员跑一章", () => {
         maxCatchUp: 0,
         callModel: async (messages, options) => {
           if (!options.json) return "笔记";
+          if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
           return messages.at(-1)?.content.includes("东西的记录没记上")
             ? JSON.stringify({ items: [{ fix: 1, seq: 1, item: "N2", op: "at", to: { person: "她" }, by: "narration", quote: "她把账本放回铁盒里" }] })
             : badMember;
@@ -685,6 +742,7 @@ describe("记账员跑一章", () => {
         maxCatchUp: 0,
         callModel: async (messages, options) => {
           if (!options.json) return "笔记";
+          if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
           return messages.at(-1)?.content.includes("东西的记录没记上")
             ? JSON.stringify({ items: [{ fix: 1, seq: 1, item: "N2", op: "move", to: { inside: "N1" }, by: "narration", quote: "她把账本放回铁盒里" }] })
             : unnamed;
@@ -725,6 +783,7 @@ describe("记账员跑一章", () => {
           callModel: async (messages, options) => {
             calls.push([...messages]);
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             return messages.at(-1)?.content.includes("逐字找不到") ? repair(messages) : first;
           },
         });
@@ -787,6 +846,7 @@ describe("记账员跑一章", () => {
         projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
         callModel: async (messages, options) => {
           if (!options.json) return "笔记";
+          if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
           return messages.at(-1)?.content.includes("逐字找不到") ? JSON.stringify({ quotes: [{ n: 1, ids: [1] }, { n: 2, ids: [2] }] }) : first;
         },
       });
@@ -816,6 +876,7 @@ describe("记账员跑一章", () => {
           projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             const last = messages.at(-1)?.content ?? "";
             if (last.includes("逐字找不到")) { asks.push(last); return repair; }
             return first;
@@ -862,6 +923,7 @@ describe("记账员跑一章", () => {
           projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             const last = messages.at(-1)?.content ?? "";
             if (last.includes("逐字找不到")) { asks.push(last); return repair; }
             return first;
@@ -911,6 +973,7 @@ describe("记账员跑一章", () => {
           projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             if (messages.at(-1)?.content.includes("本章结尾是哪天就不知道了")) { asks.push([...messages]); return end(); }
             return JSON.stringify({ time });
           },
@@ -975,6 +1038,7 @@ describe("记账员跑一章", () => {
           projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             const last = messages.at(-1)?.content ?? "";
             if (last.includes("对不上。请对照正文再看一遍")) { asks.push(last); return recheck(); }
             return JSON.stringify({ time: { start: { offset: day(offset), basis: "judged", quote: "周三上午" }, weekday: "周三", sameDay: true } });
@@ -1110,6 +1174,7 @@ describe("记账员跑一章", () => {
           projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
           callModel: async (messages, options) => {
             if (!options.json) return "笔记";
+            if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             const last = messages.at(-1)?.content ?? "";
             if (last.includes("按两种换天规矩对不上")) { asks.push(last); return recheck(); }
             return JSON.stringify({ time: { start: { ...first, basis: "judged", quote: "凌晨四点，她醒了。" }, sameDay: true } });

@@ -117,13 +117,14 @@ export async function buildChapterLedger(
   const entries = stored.flatMap((item) => item.entries);
   const scenes = stored.flatMap((item) => item.scenes);
   const carried = previousOf(previous, file?.sha256);
-  // 东西条目有没收的：这章东西那类没记全（引用它的、按它算的去向都可能缺），不当记全了；带东西的事实没收再缺事实。
+  // 东西条目有没收的：这章东西那类没记全（引用它的、按它算的去向都可能缺），不当记全了。
+  // 带东西的事实没收只缺事实：这里拼的账都是新记法（itemModel），东西在哪不记进事实（P4b 2.1）。
   const itemMissing = new Set<"item" | "fact">();
   for (const { entry } of checked.rejected) {
     if (entry.kind === "item") itemMissing.add("item");
-    if (entry.kind === "fact" && entry.item !== undefined) itemMissing.add("item").add("fact");
+    if (entry.kind === "fact" && entry.item !== undefined) itemMissing.add("fact");
   }
-  const shortfall = itemShortfall(input.shortfall, [...itemMissing], missingItemRefs(checked.rejected.map((item) => item.entry)));
+  const shortfall = itemShortfall(input.shortfall, [...itemMissing], missingItemRefs(checked.rejected.map((item) => item.entry).filter((entry) => entry.kind === "item")));
   const missingItems = shortfall?.status === "partial" && shortfall.missingKinds?.includes("item") ? storedMissingItems(shortfall.missingItems, assigned.itemTags, input.entries) : undefined;
 
   const ledger = newLedger({
@@ -227,7 +228,8 @@ export function missingItemRefs(entries: readonly EntryInput[]): ItemRefInput[] 
 
 /**
  * 只缺哪几样落到账上的编号：本批标签换成发的号；标签是本批写到、没认上的那样 → 不算（它没进账）；
- * 标签本批没写到（说不出指哪样）→ undefined（整章东西当没记全）。前文的编号原样存，读的时候认不得同样当整章。
+ * N 号本批没声明 → 也不算：N 号是记账员当新东西写的，不是哪一样已有的东西（P4b 2.1）；
+ * 别的标签本批没写到（说不出指哪样）→ undefined（整章东西当没记全）。前文的编号原样存，读的时候认不得同样当整章。
  */
 function storedMissingItems(refs: readonly ItemRefInput[] | undefined, itemTags: ReadonlyMap<string, string>, entries: readonly EntryInput[]): string[] | undefined {
   if (!refs) return undefined;
@@ -236,10 +238,13 @@ function storedMissingItems(refs: readonly ItemRefInput[] | undefined, itemTags:
   for (const ref of refs) {
     if ("id" in ref) out.add(ref.id);
     else if (itemTags.has(ref.tag)) out.add(itemTags.get(ref.tag) as string);
-    else if (!declared.has(ref.tag)) return undefined;
+    else if (!declared.has(ref.tag) && !isNewTag(ref.tag)) return undefined;
   }
   return [...out].sort();
 }
+
+/** 记账员的新东西标签「N3」（自家格式）。 */
+const isNewTag = (tag: string): boolean => tag.length > 1 && tag[0] === "N" && [...tag.slice(1)].every((char) => char >= "0" && char <= "9");
 
 export const chapterCommit: WriteCommandSpec<ChapterCommitArgs, ChapterCommitResult> = {
   name: "chapter.commit",
