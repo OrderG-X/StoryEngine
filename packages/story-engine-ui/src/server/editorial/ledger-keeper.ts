@@ -75,7 +75,7 @@ export const LEDGER_ROLE: ReaderRole = {
 export const KEEPER_MAX_CATCH_UP = 10;
 
 /** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 记东西一次 + 东西章末对一遍一次 + 重写东西条目一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 8;
+export const KEEPER_MAX_CALLS = 9;
 
 /** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
 const IN_CHAPTER_BOUNDARY =
@@ -423,7 +423,19 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const itemTask = buildItemTask(input.chapter, numberedText(units), context.itemText);
   const mainCall = withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
   // 记东西那段对话：第一遍 → 章末对一遍（P4b 2.4），和记账员主对话并行。
-  const itemCall = withStep("记账员记东西", () => input.callModel([{ role: "user", content: itemTask }], { json: true })).then(
+  // 这遍没成（模型报错、交回来读不了）再问一次，两次都没成才算这章东西没记上：第 1 章东西最多，整章丢了后面都跟着不知道。
+  const askItems = async (): Promise<string> => {
+    const ask = () => withStep("记账员记东西", () => input.callModel([{ role: "user", content: itemTask }], { json: true }));
+    try {
+      const reply = await ask();
+      if (itemsWithUnitQuotes(reply, input.draft, units) !== undefined) return reply;
+      input.onRawOutput?.(reply);
+    } catch (error) {
+      rethrowIfStopped(error);
+    }
+    return ask();
+  };
+  const itemCall = askItems().then(
     async (reply) => {
       input.onRawOutput?.(reply);
       const checked = await checkItemEnds(reply, itemTask, context, input, units);

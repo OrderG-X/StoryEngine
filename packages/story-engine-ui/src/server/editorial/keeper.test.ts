@@ -497,9 +497,23 @@ describe("记账员跑一章", () => {
         ["appear", "桌上放着一个铁盒。"],
         ["move", "她把铁盒揣进兜里。"],
       ]);
+      // 一次没成（报错、交回来读不了）再问一次，记上了就不算缺。
+      for (const miss of [async () => { throw new Error("429 太忙"); }, async () => "不是 JSON"]) {
+        let asked = 0;
+        const retried = await run(async () => {
+          asked += 1;
+          return asked === 1 ? miss() : items;
+        });
+        expect(asked).toBe(2);
+        expect(retried.ok && retried.parsed.entries.some((entry) => entry.kind === "item")).toBe(true);
+        expect(retried.ok && retried.parsed.drops.some((drop) => drop.where === "items")).toBe(false);
+      }
+      let tries = 0;
       const failed = await run(async () => {
+        tries += 1;
         throw new Error("429 太忙");
       });
+      expect(tries).toBe(2);
       expect(failed.ok).toBe(true);
       if (!failed.ok) return;
       expect(failed.parsed.entries.some((entry) => entry.kind === "item")).toBe(false);
