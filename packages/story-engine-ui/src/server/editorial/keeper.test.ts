@@ -1216,6 +1216,14 @@ describe("记账员跑一章", () => {
       );
       expect(dup.time).toMatchObject({ sameDay: true });
       expect(dup.check).toMatchObject({ result: "kept", failed: expect.stringContaining("段里") });
+      // 主对话记了当下那次；另一遍沿用同一句又在回忆里多记一次、或同一句改了隔几天：都不算主对话记过的。
+      const once = { time: { start: { offset: day(1), basis: "text", quote: "早上，她开了店门。" }, dayChanges: [{ offset: day(1), quote: "第二天，雨停了。" }] }, segments: [{ frame: "past", firstQuote: "她想起那年冬天。", lastQuote: "父亲走了。", when: "unknown" }] };
+      for (const changes of [(units: ReturnType<typeof splitUnits>) => [{ id: idOf(twice, units, "第二天", 0), offset: day(1) }, { id: idOf(twice, units, "第二天", 1), offset: day(1) }], (units: ReturnType<typeof splitUnits>) => [{ id: idOf(twice, units, "第二天", 1), offset: day(2) }]]) {
+        const more = await run(twice, once, (units) => ({ start: { offset: day(1), basis: "text", startId: 1 }, dayChanges: changes(units) }));
+        expect(more.time).toMatchObject({ dayChanges: [{ offset: day(1), quote: "第二天，雨停了。" }] });
+        expect(more.time?.kind === "time" && more.time.dayChanges).toHaveLength(1);
+        expect(more.check).toMatchObject({ result: "kept", failed: expect.stringContaining("段里") });
+      }
 
       // 上一章结尾周一，正文写周二：隔 2～4 天一天也对不上。
       const tuesday = "# 第2章\n\n周二上午，她又来了。";
@@ -1234,6 +1242,17 @@ describe("记账员跑一章", () => {
       const unknownStart = await run(night, { time: { start: "unknown", sameDay: true } }, (units) => ({ start: "unknown", dayChanges: [{ id: idOf(night, units, "天亮以后"), byBoundary: { midnight: day(0), dawn: day(2) } }] }));
       expect(unknownStart.time).toMatchObject({ start: "unknown", sameDay: true });
       expect(unknownStart.check).toMatchObject({ result: "kept", failed: expect.stringContaining("走不通") });
+      // 前一次换天按两种规矩是区间（定不下在不在半夜到天亮之间），后一次差两天照样走不通。
+      const later = "# 第2章\n\n她在灯下等着。过了半夜，雨还在下。天亮以后，雨停了。";
+      const unsureFirst = await run(later, { time: { start: "unknown", sameDay: true } }, (units) => ({
+        start: "unknown",
+        dayChanges: [
+          { id: idOf(later, units, "过了半夜"), byBoundary: { midnight: day(1, 2), dawn: day(0, 1) } },
+          { id: idOf(later, units, "天亮以后"), byBoundary: { midnight: day(0), dawn: day(2) } },
+        ],
+      }));
+      expect(unsureFirst.time).toMatchObject({ start: "unknown", sameDay: true });
+      expect(unsureFirst.check).toMatchObject({ result: "kept", failed: expect.stringContaining("走不通") });
     } finally {
       await rm(book, { recursive: true, force: true });
     }

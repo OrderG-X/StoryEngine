@@ -312,9 +312,9 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
   const read = readingOf(second);
   // 第 1 章：开头是起点，隔多久不算数，只比章里。
   const secondReading: TimeReading = !input.hasPrevious && read.present && mainReading.present ? { ...read, start: mainReading.start } : read;
-  if (sameReading(mainReading, secondReading)) return { parsed, check: { result: "agreed" } };
-  if (!mainReading.present || !secondReading.present) return { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
-  if ("notPresent" in second) return { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
+  if (!mainReading.present || !secondReading.present || "notPresent" in second) {
+    return sameReading(mainReading, secondReading) ? { parsed, check: { result: "agreed" } } : { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
+  }
   const { start: _start, sameDay: _sameDay, dayChanges: _dayChanges, ...rest } = main;
   const startOf = (candidate: TimeCandidate | undefined): TimeInput["start"] =>
     candidate === main ? main.start : !candidate || "notPresent" in candidate || candidate.start === undefined ? "unknown" : candidate.start;
@@ -329,8 +329,10 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
     if (problem) return `结构不对（${problem}）`;
     return input.impossible(whole) ? "按两种换天规矩走不通、和写明的星期对不上、或换天落在回忆梦这类段里" : undefined;
   };
+  // 先核它自己整份：走不通的读法总跨度碰巧一样也不算两遍对上（操作记录如实）。
   const secondProblem = unusable(second);
   if (secondProblem) return { parsed, check: { result: "kept", failed: `记时间那遍记的${secondProblem}，照主对话的` } };
+  if (sameReading(mainReading, secondReading)) return { parsed, check: { result: "agreed" } };
   const differs = [
     ...(sameWorlds(mainReading.start, secondReading.start) ? [] : ["本章开头离上一章隔多久"]),
     ...(sameWorlds(mainReading.span, secondReading.span) ? [] : ["章里换没换天"]),

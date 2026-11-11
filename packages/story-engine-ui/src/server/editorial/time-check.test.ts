@@ -191,6 +191,12 @@ describe("两遍对一下", () => {
     expect(badSecond.time).toEqual(mainTime);
     expect(badSecond.check).toEqual({ result: "kept", failed: expect.stringContaining("记时间那遍记的按两种换天规矩走不通") });
     expect(badSecond.asked).toEqual([]);
+    // 读法和主对话一样，但它自己整份走不通：不记成两遍对上。
+    const mainTwo: TimeInput = { ...mainTime, start: { offset: day(2), basis: "judged", quote: "傍晚，她出了门。" } };
+    const sameButBad = await reconcileTime(parsedOf(mainTwo), { start: { offset: day(2), basis: "judged", quote: sentence("中午") }, sameDay: true }, {
+      draft, units, material, impossible: twoDays, hasPrevious: true, callModel: async () => { throw new Error("不该裁"); },
+    });
+    expect(sameButBad).toEqual({ parsed: parsedOf(mainTwo), check: { result: "kept", failed: expect.stringContaining("记时间那遍记的") } });
     const badJudge = await call({ start: { offset: day(0), basis: "judged", quote: sentence("傍晚") }, sameDay: true }, JSON.stringify({ start: { offset: day(2), basis: "judged", startId: 1 }, sameDay: true }));
     expect(badJudge.time).toEqual(mainTime);
     expect(badJudge.check).toEqual({ result: "kept", failed: expect.stringContaining("裁定那遍记的按两种换天规矩走不通") });

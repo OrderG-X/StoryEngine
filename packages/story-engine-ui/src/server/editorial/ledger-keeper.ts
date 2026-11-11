@@ -516,7 +516,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const where = nightWhere(input.before, input.chapter);
   const mainTime = dated.entries.find((entry) => entry.kind === "time");
   const mainClash = mainTime?.kind === "time" && weekdayClash(mainTime, input.before, input.chapter);
-  const mainChanges = new Set(mainTime?.kind === "time" ? (mainTime.dayChanges ?? []).flatMap((change) => (change.quote ? [change.quote] : [])) : []);
+  const mainChanges = mainTime?.kind === "time" ? (mainTime.dayChanges ?? []) : [];
   const timeSide = await timeCall;
   if (!timeSide.ok) rethrowIfStopped(timeSide.error);
   const timed = await reconcileTime(dated, timeSide.ok ? timeSide.value : `记时间那遍没成（${modelFailureText(timeSide.error)}）`, {
@@ -524,11 +524,11 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     units,
     material: timeMaterial,
     callModel: input.callModel,
-    // 按两种换天规矩走不通，或主对话对得上写明的星期、这份对不上，或有主对话没有的换天可能落在段里：不用（证据在正文里）。
+    // 按两种换天规矩走不通，或主对话对得上写明的星期、这份对不上，或有主对话没有的换天（同一句、同样隔几天才算有）可能落在段里：不用（证据在正文里）。
     impossible: (time) =>
-      nightIssue(time, where)?.kind === "impossible" ||
+      nightIssue(time, where, { pastUnsure: true })?.kind === "impossible" ||
       (!mainClash && weekdayClash(time, input.before, input.chapter)) ||
-      changesInSegment(time, input.draft).some((quote) => !mainChanges.has(quote)),
+      !withinChanges(changesInSegment(time, input.draft), mainChanges),
     hasPrevious: where.exists,
     ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
   });
@@ -1084,10 +1084,11 @@ export type NightIssue =
  * 从上一个当下章结尾（在不在半夜到天亮之间，不知道就从本章自己写的推）起，沿本章开头、各次换天走：
  * 半夜那边多一天 = 进了半夜到天亮之间（之前得不在），天亮那边多一天 = 出了（之前得在），差一天以上不可能。
  * 结尾还在半夜到天亮之间也报（常是凌晨开头、或过了半夜之后章里又讲到天亮以后，却没列天亮那次换天；P3a 评测两样都有）。
- * 开头说不出的从章里第一次换天走起（开头在不在半夜到天亮之间不知道）；哪一处不确定就不往下走。整章是段（没写开头）不走。
+ * 开头说不出的从章里第一次换天走起（开头在不在半夜到天亮之间不知道）；哪一处不确定就不往下走（pastUnsure：当成从那以后在不在不知道，
+ * 接着走，查后面不看起点也走不通的——两遍对时间时核另一遍的读法用；主对话复核照旧不往下走）。整章是段（没写开头）不走。
  * 没有上一个当下章（第 1 章）时开头那处不算（第 1 章开头是原点）。
  */
-export function nightIssue(time: TimeInput, previous: { readonly exists: boolean; readonly atNight?: boolean }): NightIssue | undefined {
+export function nightIssue(time: TimeInput, previous: { readonly exists: boolean; readonly atNight?: boolean }, options: { readonly pastUnsure?: boolean } = {}): NightIssue | undefined {
   if (time.start === undefined) return undefined;
   const start = time.start === "unknown" ? undefined : time.start;
   let state = start ? previous.atNight : undefined;
@@ -1097,7 +1098,11 @@ export function nightIssue(time: TimeInput, previous: { readonly exists: boolean
   ];
   for (const step of steps) {
     const shift = nightShift(step.relative);
-    if (shift === undefined) return undefined;
+    if (shift === undefined) {
+      if (!options.pastUnsure) return undefined;
+      state = undefined;
+      continue;
+    }
     if (shift === 0) continue;
     if (Math.abs(shift) > 1 || (shift === 1 && state === true) || (shift === -1 && state === false)) return { kind: "impossible", at: step.at, shift };
     state = shift === 1;
@@ -1191,11 +1196,13 @@ function startDays(start: TimeInput["start"]): number | undefined {
 
 const weekdayAfter = (weekday: number, days: number): number => (((weekday + days) % 7) + 7) % 7;
 
+type DayChange = NonNullable<TimeInput["dayChanges"]>[number];
+
 /**
- * 换天那句可能落在本章回忆、梦这类段里的那几次（交回它们的原句）：段里的换天不推当下。段定位不到的不算；
+ * 换天那句可能落在本章回忆、梦这类段里的那几次：段里的换天不推当下。段定位不到的不算；
  * 那句在正文里定得到位置的看位置，定不到的（不止一处、太短）只要段里的原文有这句就算（宁可照主对话的）。
  */
-function changesInSegment(time: TimeInput, draft: string): string[] {
+function changesInSegment(time: TimeInput, draft: string): DayChange[] {
   const source = chapterSource(0, draft);
   const byId = new Map(source.units.map((unit) => [unit.id, unit] as const));
   const ranges = (time.segments ?? []).flatMap((segment) => {
@@ -1209,7 +1216,20 @@ function changesInSegment(time: TimeInput, draft: string): string[] {
     const at = locateQuote(change.quote, source)?.units;
     const quote = normalizeForQuote(change.quote);
     const inside = at ? ranges.some((range) => at.from <= range.to && at.to >= range.from) : quote.length > 0 && ranges.some((range) => range.text.includes(quote));
-    return inside ? [change.quote] : [];
+    return inside ? [change] : [];
+  });
+}
+
+/** 这几次换天主对话都记过（同一句、同样隔几天，记了几次算几次）。 */
+function withinChanges(changes: readonly DayChange[], main: readonly DayChange[]): boolean {
+  const side = (offset: TimeOffset | undefined) => (offset ? [offset.unit, offset.min ?? null, offset.max ?? null] : null);
+  const keyOf = (change: DayChange): string => JSON.stringify([change.quote ?? "", side(change.offset), side(change.byBoundary?.midnight), side(change.byBoundary?.dawn)]);
+  const left = new Map<string, number>();
+  for (const change of main) left.set(keyOf(change), (left.get(keyOf(change)) ?? 0) + 1);
+  return changes.every((change) => {
+    const count = left.get(keyOf(change)) ?? 0;
+    left.set(keyOf(change), count - 1);
+    return count > 0;
   });
 }
 
