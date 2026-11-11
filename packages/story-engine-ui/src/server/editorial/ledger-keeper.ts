@@ -15,6 +15,7 @@ import {
   chapterSource,
   chapterTextPath,
   checkEntries,
+  locateQuote,
   locateSegment,
   numberedText,
   quoteFromText,
@@ -503,13 +504,17 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const where = nightWhere(input.before, input.chapter);
   const mainTime = dated.entries.find((entry) => entry.kind === "time");
   const mainClash = mainTime?.kind === "time" && weekdayClash(mainTime, input.before, input.chapter);
+  const mainInSegment = mainTime?.kind === "time" && changeInSegment(mainTime, input.draft);
   const timed = await reconcileTime(dated, await timeCall, {
     draft: input.draft,
     units,
     material: timeMaterial,
     callModel: input.callModel,
-    // 裁出来的按两种换天规矩走不通，或主对话对得上写明的星期、裁出来的对不上：不用（证据在正文里）。
-    impossible: (time) => nightIssue(time, where)?.kind === "impossible" || (!mainClash && weekdayClash(time, input.before, input.chapter)),
+    // 裁出来的按两种换天规矩走不通，或主对话对得上写明的星期、裁出来的对不上，或主对话没有、裁出来的有换天落在段里：不用（证据在正文里）。
+    impossible: (time) =>
+      nightIssue(time, where)?.kind === "impossible" ||
+      (!mainClash && weekdayClash(time, input.before, input.chapter)) ||
+      (!mainInSegment && changeInSegment(time, input.draft)),
     hasPrevious: where.exists,
     ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
   });
@@ -1150,6 +1155,19 @@ function startDays(start: TimeInput["start"]): number | undefined {
 }
 
 const weekdayAfter = (weekday: number, days: number): number => (((weekday + days) % 7) + 7) % 7;
+
+/** 有一次换天那句落在本章的回忆、梦这类段里（段、那句定位不到的不算）：段里的换天不推当下。 */
+function changeInSegment(time: TimeInput, draft: string): boolean {
+  const source = chapterSource(0, draft);
+  const ranges = (time.segments ?? []).flatMap((segment) => {
+    const located = locateSegment(segment, source);
+    return typeof located === "string" ? [] : [located];
+  });
+  return (time.dayChanges ?? []).some((change) => {
+    const at = change.quote ? locateQuote(change.quote, source)?.units : undefined;
+    return at !== undefined && ranges.some((range) => at.from <= range.to && at.to >= range.from);
+  });
+}
 
 /** 本章写的星期和按开头、上一个当下章结尾的星期推的对不上（哪样不知道就不算对不上）。 */
 function weekdayClash(time: TimeInput, before: BookProjection, chapter: number): boolean {

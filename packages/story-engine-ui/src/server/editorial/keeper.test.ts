@@ -1148,6 +1148,39 @@ describe("记账员跑一章", () => {
     }
   });
 
+  it("记时间那遍（P5a）：裁出来的换天落在主对话记的回忆段里，照主对话的", async () => {
+    const book = await makeHomeTempDir("keeper-time-segment-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const first = "# 第1章\n\n傍晚，面馆打烊。";
+      await writeFile(join(book, "chapters/0001.md"), first);
+      const day = (min: number) => ({ unit: "day" as const, min, max: min });
+      const before = project({ ledgers: [ledgerOf({ chapter: 1, text: first, committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "傍晚，面馆打烊。" }, sameDay: true }] })], decisions: [] });
+      const draft = "# 第2章\n\n第二天中午，她坐在窗边。她想起那年冬天。第二天一早，父亲就走了。门铃响了。";
+      const units = splitUnits(draft);
+      const inMemory = units.find((unit) => draft.slice(unit.start, unit.end).includes("父亲就走了"))!.id;
+      const changed = { start: { offset: day(1), basis: "text", startId: 1 }, dayChanges: [{ id: inMemory, offset: day(1) }] };
+      const outcome = await runLedgerKeeper({
+        projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
+        callModel: async (messages, options) => {
+          if (!options.json) return "笔记";
+          const last = messages.at(-1)?.content ?? "";
+          if (last.includes("只记本章东西的去向") || last.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
+          if (last.includes("两位记账员记这一章的时间") || last.includes("请只记本章的时间")) return JSON.stringify(changed);
+          return JSON.stringify({
+            time: { start: { offset: day(1), basis: "text", quote: "第二天中午，她坐在窗边。" }, sameDay: true },
+            segments: [{ frame: "past", firstQuote: "她想起那年冬天。", lastQuote: "第二天一早，父亲就走了。", when: "unknown" }],
+          });
+        },
+      });
+      if (!outcome.ok) throw new Error(outcome.reason);
+      expect(outcome.parsed.entries.find((entry) => entry.kind === "time")).toMatchObject({ sameDay: true, segments: [{ frame: "past" }] });
+      expect(outcome.timeCheck).toMatchObject({ result: "kept", failed: expect.stringContaining("段里") });
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
   it("按两种换天规矩走一遍：进半夜到天亮之间得先不在、出来得先在，差一天以上不可能；结尾还没天亮的报；第 1 章开头不算", () => {
     const day = (min: number) => ({ unit: "day" as const, min, max: min });
     const night = { byBoundary: { midnight: day(1), dawn: day(0) } };

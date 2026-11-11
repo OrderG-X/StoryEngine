@@ -347,7 +347,7 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
   if (took.start === "main" && took.end === "main") return { parsed, check: { result: "judged", took } };
   const problem = entryShapeProblem(fixed);
   if (problem) return { parsed, check: { result: "kept", took, failed: `裁出来的时间结构不对（${problem}），照主对话的` } };
-  if (input.impossible(fixed)) return { parsed, check: { result: "kept", took, failed: "裁出来的时间按两种换天规矩走不通、或和写明的星期对不上，照主对话的" } };
+  if (input.impossible(fixed)) return { parsed, check: { result: "kept", took, failed: "裁出来的时间按两种换天规矩走不通、和写明的星期对不上、或换天落在回忆梦这类段里，照主对话的" } };
   const adjusted = [...parsed.adjusted];
   const unknownParts = [...(took.start === "unknown" ? ["本章开头离上一章隔多久"] : []), ...(took.end === "unknown" ? ["章末是哪天"] : [])];
   if (unknownParts.length > 0) adjusted.push({ where: "time", reason: `记时间的几遍对不上，${unknownParts.join("、")}按不知道记` });
