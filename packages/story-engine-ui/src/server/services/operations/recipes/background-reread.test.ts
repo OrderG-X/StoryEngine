@@ -69,6 +69,8 @@ function fakeKeeper(options: { readonly failChapter?: number; readonly failTimes
     const task = messages.at(-1)?.content ?? "";
     // 记东西那一遍（和交账单并行）：这几章没写东西。
     if (task.includes("只记本章东西的去向")) return JSON.stringify({ newItems: [], items: [] });
+    // 记时间那一遍（P5a，也并行）：这几章的账没写时间，交个读不了的，照主对话的。
+    if (task.includes("请只记本章的时间")) return "{}";
     const chapter = [1, 2, 3].find((n) => task.includes(`【第 ${n} 章 正文`)) ?? 0;
     ledgerChapters.push(chapter);
     if (chapter === options.holdChapter && options.hold) await options.hold;

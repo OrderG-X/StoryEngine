@@ -26,6 +26,7 @@ import {
 import { touchesHardFact, unionItemRefs } from "./commit-flow.js";
 import { droppedItemRefs } from "./keeper-parse.js";
 import { runLedgerKeeper } from "./ledger-keeper.js";
+import type { TimeCheck } from "./time-check.js";
 import { canCallAgain } from "../lib/llm-client.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
@@ -48,6 +49,8 @@ export type RereadChapterOutcome =
       readonly missingItems?: LedgerRereadArgs["missingItems"];
       /** 记东西那遍的章末对一遍没成（原因）：东西照第一遍记的，不算缺账，如实留一句（P4b 2.4）。 */
       readonly itemCheckFailed?: string;
+      /** 记时间那遍和主对话对一下的结果（P5a 2.2）。 */
+      readonly timeCheck?: TimeCheck;
     }
   /** 这章的账单已经不是导入时那份空账单了（作者定稿过、记过了）：不记。 */
   | { readonly kind: "settled" }
@@ -104,6 +107,7 @@ export async function rereadChapter(projectDir: string, chapter: number, callMod
           digest: rereadInputDigest(snapshot.basis, chapter),
           ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing], ...(missingItems ? { missingItems } : {}) } : {}),
           ...(keeper.itemCheck?.failed ? { itemCheckFailed: keeper.itemCheck.failed } : {}),
+          ...(keeper.timeCheck ? { timeCheck: keeper.timeCheck } : {}),
         };
       }
       reason = keeper.reason;
