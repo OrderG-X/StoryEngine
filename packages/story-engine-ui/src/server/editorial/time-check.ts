@@ -7,7 +7,7 @@
  * 裁不出的那项按不知道记、如实说。主对话一个字不改（主对话记时间对输入很敏感，P4b 教训）。
  * 模型调用由调用方注入；规则里不写任何书名、人名、题材。
  */
-import { entryShapeProblem, type BoundaryOffsets, type TextUnit, type TimeInput, type TimeOffset } from "@actalk/story-core";
+import { entryShapeProblem, quoteInText, type BoundaryOffsets, type TextUnit, type TimeInput, type TimeOffset } from "@actalk/story-core";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
@@ -74,9 +74,23 @@ export function changesById(list: unknown, units: readonly TextUnit[], draft: st
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** 第 id 句的原句；太短核不上的（「次日。」）连上后一句，没有后一句连前一句（核心核原句至少 MIN_QUOTE_LENGTH 个字）。 */
+function unitQuote(draft: string, units: readonly TextUnit[], id: number): string | undefined {
+  const at = units.findIndex((unit) => unit.id === id);
+  const unit = units[at];
+  if (!unit) return undefined;
+  const own = draft.slice(unit.start, unit.end);
+  if (quoteInText(own, draft)) return own;
+  const next = units[at + 1];
+  const previous = units[at - 1];
+  const joined = [next ? draft.slice(unit.start, next.end) : undefined, previous ? draft.slice(previous.start, unit.end) : undefined];
+  return joined.find((quote) => quote !== undefined && quoteInText(quote, draft)) ?? own;
+}
+
 /**
  * 记时间那遍（和裁定那遍）交回来的：读成一份读法；读不了、缺开头或结尾、换天点的编号对不上 → 原因（字符串）。
- * 套了一层 time 的照收（模型无关）。开头的原句按 startId 取那一句；没点、点错了留空，由调用方补。
+ * 套了一层 time 的照收（模型无关）。开头的原句按 startId 取那一句；没点、点错了的，它自己抄的原句核得上就用，
+ * 核不上就挂本章第一句、依据记成「对照着判断的」（不借主对话那句：那句说的可能是另一个隔几天）。
  */
 export function parseTimeCandidate(text: string, draft: string, units: readonly TextUnit[]): TimeCandidate | string {
   const root = extractJsonObject(text);
@@ -89,9 +103,11 @@ export function parseTimeCandidate(text: string, draft: string, units: readonly 
     const relative = relativeOf(raw.start);
     if (typeof relative === "string") return `开头写得不对（${relative}）`;
     const id = positiveIntLike(raw.start.startId ?? raw.startId);
-    const unit = id === undefined ? undefined : units.find((candidate) => candidate.id === id);
-    const basis = typeof raw.start.basis === "string" && raw.start.basis.trim().toLowerCase() === "text" ? "text" : "judged";
-    start = { ...relative, basis, quote: unit ? draft.slice(unit.start, unit.end) : (quoteText(raw.start.quote) ?? "") };
+    const pointed = id === undefined ? undefined : unitQuote(draft, units, id);
+    const copied = quoteText(raw.start.quote);
+    const quote = pointed ?? (copied && quoteInText(copied, draft) ? copied : undefined);
+    const basis = quote !== undefined && typeof raw.start.basis === "string" && raw.start.basis.trim().toLowerCase() === "text" ? "text" : "judged";
+    start = { ...relative, basis, quote: quote ?? (units[0] ? (unitQuote(draft, units, units[0].id) ?? "") : "") };
   } else return "没写本章开头";
   if (flag(raw.endUnknown) === true) return { start };
   const changes = changesById(raw.dayChanges, units, draft);
@@ -283,7 +299,8 @@ const timeIndexOf = (parsed: KeeperParseResult): number => parsed.entries.findIn
 /**
  * 两遍对一下（设计 2.2）：second = 记时间那遍（并行跑完的）或它没成的原因。
  * 一样 → 照主对话的；不一样 → 裁一次，开头、章里分开定（pickField）；裁不出的那项按不知道记，清单上如实说一句。
- * 记时间那遍没成、裁定没成、拼出来的时间结构不对或按两种换天规矩走不通、两遍对本章在不在当下说的不一样 → 照主对话的，只在操作记录里留一句。
+ * 记时间那遍没成、裁定没成、它们自己记的整份或拼出来的时间结构不对或按两种换天规矩走不通（impossible）、两遍对本章在不在当下说的不一样
+ * → 照主对话的，只在操作记录里留一句。
  * 主对话没记上时间（整条丢了）→ 不比。
  */
 export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandidate | string, input: ReconcileInput): Promise<{ readonly parsed: KeeperParseResult; readonly check?: TimeCheck }> {
@@ -298,6 +315,22 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
   if (sameReading(mainReading, secondReading)) return { parsed, check: { result: "agreed" } };
   if (!mainReading.present || !secondReading.present) return { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
   if ("notPresent" in second) return { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
+  const { start: _start, sameDay: _sameDay, dayChanges: _dayChanges, ...rest } = main;
+  const startOf = (candidate: TimeCandidate | undefined): TimeInput["start"] =>
+    candidate === main ? main.start : !candidate || "notPresent" in candidate || candidate.start === undefined ? "unknown" : candidate.start;
+  const endOf = (candidate: TimeCandidate | undefined): Pick<TimeInput, "sameDay" | "dayChanges"> =>
+    !candidate || "notPresent" in candidate
+      ? {}
+      : { ...(candidate.sameDay !== undefined ? { sameDay: candidate.sameDay } : {}), ...(candidate.dayChanges !== undefined ? { dayChanges: candidate.dayChanges } : {}) };
+  // 一份读法整份拿来当本章时间（第 1 章开头用主对话的）用不用得了：结构不对、按两种换天规矩走不通这类，这份读法就不参与比。
+  const unusable = (candidate: TimeCandidate): string | undefined => {
+    const whole: TimeInput = { ...rest, start: input.hasPrevious ? startOf(candidate) : main.start, ...endOf(candidate) };
+    const problem = entryShapeProblem(whole);
+    if (problem) return `结构不对（${problem}）`;
+    return input.impossible(whole) ? "按两种换天规矩走不通、和写明的星期对不上、或换天落在回忆梦这类段里" : undefined;
+  };
+  const secondProblem = unusable(second);
+  if (secondProblem) return { parsed, check: { result: "kept", failed: `记时间那遍记的${secondProblem}，照主对话的` } };
   const differs = [
     ...(sameWorlds(mainReading.start, secondReading.start) ? [] : ["本章开头离上一章隔多久"]),
     ...(sameWorlds(mainReading.span, secondReading.span) ? [] : ["章里换没换天"]),
@@ -320,30 +353,14 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
   const judgeRead = readingOf(judged);
   const judgeReading: TimeReading = !input.hasPrevious && judgeRead.present ? { ...judgeRead, start: mainReading.start } : judgeRead;
   if (!judgeReading.present || "notPresent" in judged) return { parsed, check: { result: "kept", failed: "两遍对不上，裁定那遍说整章不在当下，照主对话的" } };
+  const judgeProblem = unusable(judged);
+  if (judgeProblem) return { parsed, check: { result: "kept", failed: `两遍对不上，裁定那遍记的${judgeProblem}，照主对话的` } };
   const took = {
     start: pickField(mainReading.start as Worlds, secondReading.start as Worlds, judgeReading.start),
     end: pickField(mainReading.span as Worlds, secondReading.span as Worlds, judgeReading.span),
   };
   const from = (pick: TimePick): TimeCandidate | undefined => (pick === "second" ? second : pick === "judge" ? judged : pick === "main" ? main : undefined);
-  const startFrom = from(took.start);
-  const endFrom = from(took.end);
-  const { start: _start, sameDay: _sameDay, dayChanges: _dayChanges, ...rest } = main;
-  const startOf = (candidate: TimeCandidate | undefined): TimeInput["start"] => {
-    if (candidate === main) return main.start;
-    if (!candidate || "notPresent" in candidate || candidate.start === undefined) return "unknown";
-    if (candidate.start === "unknown" || candidate.start.quote) return candidate.start;
-    // 没点依据那句：用主对话那句，主对话也没有就用本章第一句（原句核得上，隔多久照这份记）。
-    const fallback = main.start && main.start !== "unknown" && main.start.quote ? main.start.quote : (() => {
-      const first = input.units[0];
-      return first ? input.draft.slice(first.start, first.end) : "";
-    })();
-    return { ...candidate.start, quote: fallback };
-  };
-  const endOf = (candidate: TimeCandidate | undefined): Pick<TimeInput, "sameDay" | "dayChanges"> =>
-    !candidate || "notPresent" in candidate
-      ? {}
-      : { ...(candidate.sameDay !== undefined ? { sameDay: candidate.sameDay } : {}), ...(candidate.dayChanges !== undefined ? { dayChanges: candidate.dayChanges } : {}) };
-  const fixed: TimeInput = { ...rest, start: startOf(startFrom), ...endOf(endFrom) };
+  const fixed: TimeInput = { ...rest, start: startOf(from(took.start)), ...endOf(from(took.end)) };
   if (took.start === "main" && took.end === "main") return { parsed, check: { result: "judged", took } };
   const problem = entryShapeProblem(fixed);
   if (problem) return { parsed, check: { result: "kept", took, failed: `裁出来的时间结构不对（${problem}），照主对话的` } };

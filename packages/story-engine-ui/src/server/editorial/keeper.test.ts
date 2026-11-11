@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { checkEntries, ledgerOf, project, splitUnits, type ChapterLedger, type EntryDraft, type SettingCardsFile, type TimeInput } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { StopSignal } from "../lib/operations/context.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
 import { droppedItemRefs, nameHandles, parseItemPatch, parseKeeperOutput } from "./keeper-parse.js";
 import { buildChapterEndTask, buildKeeperTask, endingByWorld, endingWeekday, endsAtNight, KEEPER_SPEC, LEDGER_ROLE, nightIssue, previousPresentChapter, quoteOfUnits, runLedgerKeeper, settleTime } from "./ledger-keeper.js";
@@ -1177,6 +1178,95 @@ describe("记账员跑一章", () => {
       expect(outcome.parsed.entries.find((entry) => entry.kind === "time")).toMatchObject({ sameDay: true, segments: [{ frame: "past" }] });
       expect(outcome.timeCheck).toMatchObject({ result: "kept", failed: expect.stringContaining("段里") });
     } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("记时间那遍（P5a）边角：重复句的换天、开头区间和星期、整章是梦、开头说不出时章里走不通，都照主对话的", async () => {
+    const book = await makeHomeTempDir("keeper-time-edges-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const monday = "# 第1章\n\n周一下午，面馆还没上客。";
+      await writeFile(join(book, "chapters/0001.md"), monday);
+      const day = (min: number, max = min) => ({ unit: "day" as const, min, max });
+      const before = project({ ledgers: [ledgerOf({ chapter: 1, text: monday, committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "周一下午" }, weekday: 0, sameDay: true }] })], decisions: [] });
+      const run = async (draft: string, main: object, other: (units: ReturnType<typeof splitUnits>) => object) => {
+        const units = splitUnits(draft);
+        const outcome = await runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("只记本章东西的去向") || last.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
+            if (last.includes("两位记账员记这一章的时间") || last.includes("请只记本章的时间")) return JSON.stringify(other(units));
+            return JSON.stringify(main);
+          },
+        });
+        if (!outcome.ok) throw new Error(outcome.reason);
+        return { time: outcome.parsed.entries.find((entry) => entry.kind === "time"), check: outcome.timeCheck };
+      };
+      const idOf = (draft: string, units: ReturnType<typeof splitUnits>, text: string, nth = 0) => units.filter((unit) => draft.slice(unit.start, unit.end).includes(text))[nth]!.id;
+
+      // 回忆里那句和当下一句一字不差：按原句定不了位置，段里有这句就当可能落在段里。
+      const twice = "# 第2章\n\n早上，她开了店门。第二天，雨停了。她想起那年冬天。第二天，雨停了。父亲走了。门铃响了。";
+      const dup = await run(
+        twice,
+        { time: { start: { offset: day(1), basis: "text", quote: "早上，她开了店门。" }, sameDay: true }, segments: [{ frame: "past", firstQuote: "她想起那年冬天。", lastQuote: "父亲走了。", when: "unknown" }] },
+        (units) => ({ start: { offset: day(1), basis: "text", startId: 2 }, dayChanges: [{ id: idOf(twice, units, "第二天", 1), offset: day(1) }] }),
+      );
+      expect(dup.time).toMatchObject({ sameDay: true });
+      expect(dup.check).toMatchObject({ result: "kept", failed: expect.stringContaining("段里") });
+
+      // 上一章结尾周一，正文写周二：隔 2～4 天一天也对不上。
+      const tuesday = "# 第2章\n\n周二上午，她又来了。";
+      const range = await run(tuesday, { time: { start: { offset: day(1), basis: "judged", quote: "周二上午，她又来了。" }, weekday: "周二", sameDay: true } }, () => ({ start: { offset: day(2, 4), basis: "judged", startId: 1 }, sameDay: true }));
+      expect(range.time).toMatchObject({ start: { offset: day(1) }, weekday: 1 });
+      expect(range.check).toMatchObject({ result: "kept", failed: expect.stringContaining("星期") });
+
+      // 整章是梦（段盖住全章、没写开头）：另一遍说是当下开头也不换上。
+      const dream = "# 第2章\n\n她梦见自己回到了老家。梦里下着大雪。";
+      const whole = await run(dream, { time: { sameDay: true }, segments: [{ frame: "other", firstQuote: "她梦见自己回到了老家。", lastQuote: "梦里下着大雪。", when: "unknown" }] }, () => ({ start: { offset: day(1), basis: "text", startId: 1 }, sameDay: true }));
+      expect(whole.time).not.toHaveProperty("start");
+      expect(whole.check).toMatchObject({ result: "kept", failed: expect.stringContaining("在不在当下") });
+
+      // 主对话开头说不出；另一遍章里一次换天两种规矩差两天：走不通。
+      const night = "# 第2章\n\n她在灯下等着。天亮以后，雨停了。";
+      const unknownStart = await run(night, { time: { start: "unknown", sameDay: true } }, (units) => ({ start: "unknown", dayChanges: [{ id: idOf(night, units, "天亮以后"), byBoundary: { midnight: day(0), dawn: day(2) } }] }));
+      expect(unknownStart.time).toMatchObject({ start: "unknown", sameDay: true });
+      expect(unknownStart.check).toMatchObject({ result: "kept", failed: expect.stringContaining("走不通") });
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("记时间那遍（P5a）：它先停了、主对话后报错 → 照抛停，不吞成「没交上账单」、不留没人接的拒绝", async () => {
+    const book = await makeHomeTempDir("keeper-time-stop-");
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const before = project({ ledgers: [], decisions: [] });
+      const stop = new StopSignal({ type: "cancel" });
+      const outcome = runLedgerKeeper({
+        projectDir: book, chapter: 1, draft: "# 第1章\n\n她醒了。窗外下着雨。", before, maxCatchUp: 0,
+        callModel: async (messages, options) => {
+          if (!options.json) return "笔记";
+          const last = messages.at(-1)?.content ?? "";
+          if (last.includes("请只记本章的时间")) throw stop;
+          if (last.includes("只记本章东西的去向") || last.includes("【对一遍章末】")) {
+            await new Promise((resolve) => setTimeout(resolve, 60));
+            return JSON.stringify({ newItems: [], items: [] });
+          }
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          throw new Error("fetch failed");
+        },
+      });
+      await expect(outcome).rejects.toBe(stop);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
       await rm(book, { recursive: true, force: true });
     }
   });

@@ -17,6 +17,7 @@ import {
   checkEntries,
   locateQuote,
   locateSegment,
+  normalizeForQuote,
   numberedText,
   quoteFromText,
   quoteInText,
@@ -45,7 +46,7 @@ import { asList, extractJsonObject, flag, parseChapterEnd, parseItemPatch, parse
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, noteContextText, NOTE_CONTEXT_CHAPTERS, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
-import { askTimeReading, changesById, IN_CHAPTER_BOUNDARY, reconcileTime, type TimeCandidate, type TimeCheck, type TimeMaterial } from "./time-check.js";
+import { askTimeReading, changesById, IN_CHAPTER_BOUNDARY, reconcileTime, type TimeCheck, type TimeMaterial } from "./time-check.js";
 
 export const LEDGER_ROLE: ReaderRole = {
   id: "ledger",
@@ -444,28 +445,33 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     }
     return ask();
   };
-  const itemCall = askItems().then(
-    async (reply) => {
-      input.onRawOutput?.(reply);
-      const checked = await checkItemEnds(reply, itemTask, context, input, units);
-      return { ok: true as const, ...checked };
-    },
-    (error: unknown) => {
-      rethrowIfStopped(error);
-      return { ok: false as const, error };
-    },
+  // 并行的两遍一开始就接住（停了、出错都落成结果）：主对话那边还没完时它们先抛，不能成了没人接的拒绝（进程会退）。
+  const itemCall = settled(
+    askItems().then(
+      async (reply) => {
+        input.onRawOutput?.(reply);
+        const checked = await checkItemEnds(reply, itemTask, context, input, units);
+        return { ok: true as const, ...checked };
+      },
+      (error: unknown) => {
+        rethrowIfStopped(error);
+        return { ok: false as const, error };
+      },
+    ),
   );
   // 记时间那遍（P5a）：和主对话、记东西并行，只看本章编号正文、前两章原文和上一个当下章结尾；问完主对话那几问后两边对一下。
-  const timeCall: Promise<TimeCandidate | string> = askTimeReading({
-    draft: input.draft,
-    units,
-    material: timeMaterial,
-    callModel: input.callModel,
-    ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
-  });
+  const timeCall = settled(
+    askTimeReading({
+      draft: input.draft,
+      units,
+      material: timeMaterial,
+      callModel: input.callModel,
+      ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
+    }),
+  );
+  // 主对话没成要返回前：等并行的两遍落定；哪遍是停了的照抛停。
   const settleSide = async () => {
-    await itemCall.catch(() => undefined);
-    await timeCall.catch(() => undefined);
+    for (const side of await Promise.all([itemCall, timeCall])) if (!side.ok) rethrowIfStopped(side.error);
   };
   let text: string;
   try {
@@ -481,13 +487,18 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     await settleSide();
     return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
   }
-  const itemResult = await itemCall;
+  const itemSide = await itemCall;
+  if (!itemSide.ok) {
+    await settleSide();
+    throw itemSide.error;
+  }
+  const itemResult = itemSide.value;
   const itemJson = itemResult.ok ? itemsWithUnitQuotes(itemResult.reply, input.draft, units) : undefined;
   // 东西那遍以它为准：记账员那一遍顺手写的 newItems / items 不收（不然两遍各记一份）。
   const merged = JSON.stringify({ ...root, newItems: [], items: [], ...(itemJson ? JSON.parse(itemJson) : {}) });
   const firstPass = parseKeeperOutput(merged, context);
   if (!firstPass) {
-    await timeCall.catch(() => undefined);
+    await settleSide();
     return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
   }
   // 记东西那遍没成：这章东西整类没记上（定稿清单、投影都照「东西账没记全」如实说），别的照收。
@@ -500,21 +511,24 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const repaired = await repairQuotes(rewritten.parsed, input, conversation);
   const ended = await askChapterEnd(repaired.parsed, input, conversation);
   const nights = await recheckNight(ended, input, conversation);
-  const dated = await recheckWeekday(nights, input, conversation);
+  // 段盖住整章、开头写的说不出：先按整章不在当下收拾好再比（不然那条多写的开头会被另一遍的读法换成当下开头，整章梦上了时间线）。
+  const dated = wholeChapterOnly(withOriginalQuotes(await recheckWeekday(nights, input, conversation), input.draft), input.draft);
   const where = nightWhere(input.before, input.chapter);
   const mainTime = dated.entries.find((entry) => entry.kind === "time");
   const mainClash = mainTime?.kind === "time" && weekdayClash(mainTime, input.before, input.chapter);
-  const mainInSegment = mainTime?.kind === "time" && changeInSegment(mainTime, input.draft);
-  const timed = await reconcileTime(dated, await timeCall, {
+  const mainChanges = new Set(mainTime?.kind === "time" ? (mainTime.dayChanges ?? []).flatMap((change) => (change.quote ? [change.quote] : [])) : []);
+  const timeSide = await timeCall;
+  if (!timeSide.ok) rethrowIfStopped(timeSide.error);
+  const timed = await reconcileTime(dated, timeSide.ok ? timeSide.value : `记时间那遍没成（${modelFailureText(timeSide.error)}）`, {
     draft: input.draft,
     units,
     material: timeMaterial,
     callModel: input.callModel,
-    // 裁出来的按两种换天规矩走不通，或主对话对得上写明的星期、裁出来的对不上，或主对话没有、裁出来的有换天落在段里：不用（证据在正文里）。
+    // 按两种换天规矩走不通，或主对话对得上写明的星期、这份对不上，或有主对话没有的换天可能落在段里：不用（证据在正文里）。
     impossible: (time) =>
       nightIssue(time, where)?.kind === "impossible" ||
       (!mainClash && weekdayClash(time, input.before, input.chapter)) ||
-      (!mainInSegment && changeInSegment(time, input.draft)),
+      changesInSegment(time, input.draft).some((quote) => !mainChanges.has(quote)),
     hasPrevious: where.exists,
     ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
   });
@@ -530,6 +544,26 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     ...(timed.check ? { timeCheck: timed.check } : {}),
     ...extra,
   };
+}
+
+type Settled<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown };
+/** 一开始就接住的调用：成了、抛了都落成结果，由等它的地方决定照抛还是照收。 */
+const settled = <T>(promise: Promise<T>): Promise<Settled<T>> =>
+  promise.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+
+/** 账里那条时间按整章是段收拾一下（wholeChapterSegment）。 */
+function wholeChapterOnly(parsed: KeeperParseResult, draft: string): KeeperParseResult {
+  const index = parsed.entries.findIndex((entry) => entry.kind === "time");
+  const time = index >= 0 ? parsed.entries[index] : undefined;
+  if (time?.kind !== "time") return parsed;
+  const found = wholeChapterSegment(time, draft);
+  if (found === time) return parsed;
+  const entries = [...parsed.entries];
+  entries[index] = found;
+  return { ...parsed, entries };
 }
 
 /** 本章开头接着的那一章在不在、结尾在不在半夜到天亮之间（复核半夜到天亮、两遍对时间共用）。 */
@@ -1050,14 +1084,15 @@ export type NightIssue =
  * 从上一个当下章结尾（在不在半夜到天亮之间，不知道就从本章自己写的推）起，沿本章开头、各次换天走：
  * 半夜那边多一天 = 进了半夜到天亮之间（之前得不在），天亮那边多一天 = 出了（之前得在），差一天以上不可能。
  * 结尾还在半夜到天亮之间也报（常是凌晨开头、或过了半夜之后章里又讲到天亮以后，却没列天亮那次换天；P3a 评测两样都有）。
- * 开头说不出、哪一处不确定就不往下走。
+ * 开头说不出的从章里第一次换天走起（开头在不在半夜到天亮之间不知道）；哪一处不确定就不往下走。整章是段（没写开头）不走。
  * 没有上一个当下章（第 1 章）时开头那处不算（第 1 章开头是原点）。
  */
 export function nightIssue(time: TimeInput, previous: { readonly exists: boolean; readonly atNight?: boolean }): NightIssue | undefined {
-  if (time.start === undefined || time.start === "unknown") return undefined;
-  let state = previous.atNight;
+  if (time.start === undefined) return undefined;
+  const start = time.start === "unknown" ? undefined : time.start;
+  let state = start ? previous.atNight : undefined;
   const steps: { readonly at: "start" | number; readonly relative: { readonly offset?: TimeOffset; readonly byBoundary?: BoundaryOffsets } }[] = [
-    ...(previous.exists ? [{ at: "start" as const, relative: time.start }] : []),
+    ...(previous.exists && start ? [{ at: "start" as const, relative: start }] : []),
     ...(time.dayChanges ?? []).map((change, index) => ({ at: index + 1, relative: change })),
   ];
   for (const step of steps) {
@@ -1156,25 +1191,43 @@ function startDays(start: TimeInput["start"]): number | undefined {
 
 const weekdayAfter = (weekday: number, days: number): number => (((weekday + days) % 7) + 7) % 7;
 
-/** 有一次换天那句落在本章的回忆、梦这类段里（段、那句定位不到的不算）：段里的换天不推当下。 */
-function changeInSegment(time: TimeInput, draft: string): boolean {
+/**
+ * 换天那句可能落在本章回忆、梦这类段里的那几次（交回它们的原句）：段里的换天不推当下。段定位不到的不算；
+ * 那句在正文里定得到位置的看位置，定不到的（不止一处、太短）只要段里的原文有这句就算（宁可照主对话的）。
+ */
+function changesInSegment(time: TimeInput, draft: string): string[] {
   const source = chapterSource(0, draft);
+  const byId = new Map(source.units.map((unit) => [unit.id, unit] as const));
   const ranges = (time.segments ?? []).flatMap((segment) => {
     const located = locateSegment(segment, source);
-    return typeof located === "string" ? [] : [located];
+    const from = typeof located === "string" ? undefined : byId.get(located.from);
+    const to = typeof located === "string" ? undefined : byId.get(located.to);
+    return typeof located === "string" || !from || !to ? [] : [{ ...located, text: normalizeForQuote(draft.slice(from.start, to.end)) }];
   });
-  return (time.dayChanges ?? []).some((change) => {
-    const at = change.quote ? locateQuote(change.quote, source)?.units : undefined;
-    return at !== undefined && ranges.some((range) => at.from <= range.to && at.to >= range.from);
+  return (time.dayChanges ?? []).flatMap((change) => {
+    if (!change.quote) return [];
+    const at = locateQuote(change.quote, source)?.units;
+    const quote = normalizeForQuote(change.quote);
+    const inside = at ? ranges.some((range) => at.from <= range.to && at.to >= range.from) : quote.length > 0 && ranges.some((range) => range.text.includes(quote));
+    return inside ? [change.quote] : [];
   });
 }
 
-/** 本章写的星期和按开头、上一个当下章结尾的星期推的对不上（哪样不知道就不算对不上）。 */
+/** 正文写的星期有没有可能是开头那天：开头隔的天数（区间里任一天）推得上就算可能；不按天、没上下限、跨满一星期的都算可能。 */
+function weekdayFits(offset: TimeOffset, previousWeekday: number, weekday: number): boolean {
+  if (offset.unit !== "day" || offset.min === undefined || offset.max === undefined || offset.max - offset.min >= 6) return true;
+  for (let days = offset.min; days <= offset.max; days += 1) if (weekdayAfter(previousWeekday, days) === weekday) return true;
+  return false;
+}
+
+/** 本章写的星期和按开头、上一个当下章结尾的星期推的对不上：两种换天规矩下开头那几天没有一天对得上（哪样不知道就不算对不上）。 */
 function weekdayClash(time: TimeInput, before: BookProjection, chapter: number): boolean {
-  const days = startDays(time.start);
+  if (time.weekday === undefined || time.start === undefined || time.start === "unknown") return false;
   const previous = previousPresentChapter(before, chapter);
   const previousWeekday = previous === undefined ? undefined : endingWeekday(before, previous);
-  return time.weekday !== undefined && days !== undefined && previousWeekday !== undefined && weekdayAfter(previousWeekday, days) !== time.weekday;
+  if (previousWeekday === undefined) return false;
+  const worlds = time.start.byBoundary ? [time.start.byBoundary.midnight, time.start.byBoundary.dawn] : time.start.offset ? [time.start.offset] : [];
+  return worlds.length > 0 && worlds.every((offset) => !weekdayFits(offset, previousWeekday, time.weekday as number));
 }
 
 /** 复核星期那条 user 消息（单测也用）。 */

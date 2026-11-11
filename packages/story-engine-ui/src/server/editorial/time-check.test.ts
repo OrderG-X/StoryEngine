@@ -24,9 +24,22 @@ describe("记时间那遍交回来的", () => {
     });
     expect(parseTimeCandidate(JSON.stringify({ time: { start: "unknown", sameDay: true } }), draft, units)).toEqual({ start: "unknown", sameDay: true });
     expect(parseTimeCandidate(JSON.stringify({ notPresent: "true" }), draft, units)).toEqual({ notPresent: true });
+    // 没点依据那句、也没抄得上的原句：挂本章第一句，依据记成对照着判断的（不当正文明写）。
     expect(parseTimeCandidate(JSON.stringify({ start: { byBoundary: { midnight: day(0), dawn: day(1) }, basis: "text" }, endUnknown: true }), draft, units)).toEqual({
-      start: { byBoundary: { midnight: day(0), dawn: day(1) }, basis: "text", quote: "" },
+      start: { byBoundary: { midnight: day(0), dawn: day(1) }, basis: "judged", quote: sentence("傍晚") },
     });
+    // 自己抄的原句核得上照用。
+    expect(parseTimeCandidate(JSON.stringify({ start: { offset: day(1), basis: "text", quote: "第二天上午，雨停了" }, endUnknown: true }), draft, units)).toEqual({
+      start: { offset: day(1), basis: "text", quote: "第二天上午，雨停了" },
+    });
+  });
+
+  it("startId 点的那句太短核不上（「次日。」）：连上后一句，没有后一句连前一句", () => {
+    const short = "# 第3章\n\n次日。她推开了旅店的大门。中午，客人进门。次日。";
+    const shortUnits = splitUnits(short);
+    const reply = (id: number) => JSON.stringify({ start: { offset: day(1), basis: "text", startId: id }, sameDay: true });
+    expect(parseTimeCandidate(reply(1), short, shortUnits)).toMatchObject({ start: { offset: day(1), basis: "text", quote: "次日。她推开了旅店的大门。" } });
+    expect(parseTimeCandidate(reply(shortUnits.length), short, shortUnits)).toMatchObject({ start: { quote: "中午，客人进门。次日。" } });
   });
 
   it("读不了、缺开头、缺结尾、换天编号对不上、又同一天又换天：说原因，不当一份读法", () => {
@@ -120,14 +133,14 @@ describe("两遍对一下", () => {
   });
 
   it("开头对不上：裁的和主对话一样照留；给了把两边都包住的区间用它的；给了第三个数按不知道记、如实说", async () => {
-    const atLeast: TimeCandidate = { start: { offset: { unit: "day", min: 1 }, basis: "judged", quote: "" }, sameDay: true };
+    const atLeast: TimeCandidate = { start: { offset: { unit: "day", min: 1 }, basis: "judged", quote: sentence("中午") }, sameDay: true };
     const kept = await run(atLeast, async () => JSON.stringify({ start: { offset: day(1), basis: "judged", startId: 1 }, sameDay: true }));
     expect(kept.time).toEqual(mainTime);
     expect(kept.check).toEqual({ result: "judged", took: { start: "main", end: "main" } });
 
     const second = await run(atLeast, async () => JSON.stringify({ start: { offset: { unit: "day", min: 1 }, basis: "judged" }, sameDay: true }));
-    // 记时间那遍没点依据那句：用主对话那句。
-    expect(second.time).toMatchObject({ start: { offset: { unit: "day", min: 1 }, quote: "傍晚，她出了门。" }, sameDay: true });
+    // 用记时间那遍的开头：原句是它自己的那句，不借主对话那句。
+    expect(second.time).toMatchObject({ start: { offset: { unit: "day", min: 1 }, quote: sentence("中午") }, sameDay: true });
     expect(second.check).toEqual({ result: "judged", took: { start: "second", end: "main" } });
 
     const zero: TimeCandidate = { start: { offset: day(0), basis: "judged", quote: "x" }, sameDay: true };
@@ -154,6 +167,34 @@ describe("两遍对一下", () => {
     expect(notPresent.time).toEqual(mainTime);
     expect(notPresent.check).toMatchObject({ result: "kept", failed: expect.stringContaining("在不在当下") });
     expect(notPresent.asked).toEqual([]);
+  });
+
+  it("记时间那遍、裁定那遍自己整份走不通：不参与比（不裁、不拼成不知道），照主对话的", async () => {
+    const twoDays = (time: TimeInput) => time.start !== undefined && time.start !== "unknown" && time.start.offset?.min === 2;
+    const call = async (second: TimeCandidate, judge?: string) => {
+      const asked: BrainMessage[][] = [];
+      const outcome = await reconcileTime(parsedOf(mainTime), second, {
+        draft,
+        units,
+        material,
+        impossible: twoDays,
+        hasPrevious: true,
+        callModel: async (messages) => {
+          asked.push([...messages]);
+          if (judge === undefined) throw new Error("不该裁");
+          return judge;
+        },
+      });
+      return { ...outcome, asked, time: outcome.parsed.entries.find((entry) => entry.kind === "time") };
+    };
+    const badSecond = await call({ start: { offset: day(2), basis: "judged", quote: sentence("傍晚") }, sameDay: true });
+    expect(badSecond.time).toEqual(mainTime);
+    expect(badSecond.check).toEqual({ result: "kept", failed: expect.stringContaining("记时间那遍记的按两种换天规矩走不通") });
+    expect(badSecond.asked).toEqual([]);
+    const badJudge = await call({ start: { offset: day(0), basis: "judged", quote: sentence("傍晚") }, sameDay: true }, JSON.stringify({ start: { offset: day(2), basis: "judged", startId: 1 }, sameDay: true }));
+    expect(badJudge.time).toEqual(mainTime);
+    expect(badJudge.check).toEqual({ result: "kept", failed: expect.stringContaining("裁定那遍记的按两种换天规矩走不通") });
+    expect(badJudge.parsed.adjusted).toEqual([]);
   });
 
   it("第 1 章：开头是起点，隔多久不比、不裁；章里照样比", async () => {
