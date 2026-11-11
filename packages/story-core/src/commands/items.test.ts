@@ -130,13 +130,30 @@ describe("定稿落账", () => {
       expect((await itemOf("i1-2"))?.unverifiedSince).toBeUndefined();
     });
 
-    it("交来的没写明缺哪几样、或写的标签本批没有：整章东西都没核全", async () => {
+    it("交来的没写明缺哪几样、或写的标签本批没有（N 号以外）：整章东西都没核全", async () => {
       expectOk(await chapter1());
       expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: "# 第2章\n\n过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"] } }, author("k2")));
       expect((await readChapterLedger(book, 2))?.coverage.missingItems).toBeUndefined();
       expect(await itemOf("i1-2")).toMatchObject({ unverifiedSince: 2, unverifiedBy: "chapter" });
-      expectOk(await runCommand(book, chapterCommit, { chapter: 3, text: "# 第3章\n\n又过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"], missingItems: [{ tag: "N9" }] } }, author("k3")));
+      expectOk(await runCommand(book, chapterCommit, { chapter: 3, text: "# 第3章\n\n又过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"], missingItems: [{ tag: "P9" }] } }, author("k3")));
       expect((await readChapterLedger(book, 3))?.coverage.missingItems).toBeUndefined();
+    });
+
+    it("用了没声明的 N 号：那是记账员当新东西写的，别的东西不受影响（P4b 2.1）", async () => {
+      expectOk(await chapter1());
+      expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: "# 第2章\n\n过了一天。", entries: [], ledger: { status: "partial", reasonCodes: ["item_rejected"], missingKinds: ["item"], missingItems: [{ tag: "N9" }] } }, author("k2")));
+      expect((await readChapterLedger(book, 2))?.coverage.missingItems).toEqual([]);
+      for (const id of ["i1-1", "i1-2", "i1-4"]) expect((await itemOf(id))?.unverifiedSince).toBeUndefined();
+    });
+
+    it("带东西的事实没收：只缺事实，东西那类不算没记全（P4b 2.1）", async () => {
+      expectOk(await chapter1());
+      expectOk(await commit(2, "乙说表是旧的。", [
+        { kind: "fact", review: "auto", nature: "hard", subject: "表", attribute: "新旧", value: "旧", text: "表是旧的", quote: "这句正文里没有", item: { id: "i1-2" } },
+      ]));
+      const ledger = await readChapterLedger(book, 2);
+      expect(ledger?.coverage.missingKinds ?? []).not.toContain("item");
+      expect((await itemOf("i1-2"))?.unverifiedSince).toBeUndefined();
     });
 
     it("写明只缺的编号前文没有：读的时候当整章没记全", async () => {

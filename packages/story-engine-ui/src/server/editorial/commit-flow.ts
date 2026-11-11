@@ -23,7 +23,7 @@ import {
   knownEntries,
   ledgerOf,
   locateQuote,
-  missingItemRefs,
+  rejectedItemMissing,
   nameKey,
   offsetText,
   presenceName,
@@ -106,6 +106,8 @@ export interface CommitPreview {
   readonly missingKinds?: readonly EntryKind[];
   readonly cold?: ColdCoverage;
   readonly waited?: ReaderWaited;
+  /** 记东西那遍的章末对一遍没成（原因）：东西照第一遍记的，不算缺账，操作记录里如实留一句（P4b 2.4）。 */
+  readonly itemCheckFailed?: string;
 }
 
 export type PrepareFailureCode = "book_unsettled" | "basis_changed" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
@@ -467,14 +469,11 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const kept = recommit && record.timeComplete ? keepLastDay(snapshot, input.chapter, record, withAuthorDay, input.text, before, await timeText(input.bookDir, input.chapter, record)) : undefined;
   const accepted = kept ?? withAuthorDay;
   const rejected = opens?.rejected ?? checked.rejected;
-  // 有东西的条目没记上（核不上、格式不对的整条丢）：这章东西那类没记全；带东西的事实再缺事实（设计 2.4）。
-  const itemMissing = new Set<EntryKind>();
-  for (const { entry } of rejected) {
-    if (entry.kind === "item") itemMissing.add("item");
-    if (entry.kind === "fact" && entry.item) itemMissing.add("item").add("fact");
-  }
-  for (const drop of keeper.parsed.drops) if (drop.kind) itemMissing.add("item").add(drop.kind);
-  const itemMissingRefs = unionItemRefs(missingItemRefs(rejected.map((item) => item.entry)), droppedItemRefs(keeper.parsed.drops));
+  // 有东西的条目没记上（核不上、格式不对的整条丢）：这章东西那类没记全；带东西的事实只缺事实（和核心定稿同一把尺子，P4b 2.1）。
+  const missing = rejectedItemMissing(rejected.map((item) => item.entry));
+  const itemMissing = new Set<EntryKind>(missing.kinds);
+  for (const drop of keeper.parsed.drops) if (drop.kind) itemMissing.add(drop.kind);
+  const itemMissingRefs = unionItemRefs(missing.items, droppedItemRefs(keeper.parsed.drops));
   const missingKinds = keeper.quoteRepair?.failed
     ? [...new Set(rejected.filter((item) => item.reason === "quote_not_in_text").map((item): EntryKind => (item.entry.kind === "day" ? "time" : item.entry.kind)))]
     : [];
@@ -499,6 +498,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     ...(rejected.length > 0 ? { notRecorded: rejected.length } : {}),
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
     ...(missingKinds.length > 0 ? { missingKinds } : {}),
+    ...(keeper.itemCheck?.failed ? { itemCheckFailed: keeper.itemCheck.failed } : {}),
     ...extra,
   };
 }

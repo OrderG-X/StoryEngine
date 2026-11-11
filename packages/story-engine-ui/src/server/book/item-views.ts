@@ -7,6 +7,9 @@ import { nameKey, normalizeForQuote, type BookProjection, type FactView, type It
 
 /** 同名的区分取头回那句的前几个字。 */
 const QUOTE_HINT_CHARS = 8;
+/** 材料里一条原句最多几个字：只为让读的人对上是哪一下，长句截头（P4b：东西记全以后那层超过 1000 token / 章）。 */
+const LINE_QUOTE_CHARS = 20;
+const shortQuote = (quote: string): string => ([...quote].length > LINE_QUOTE_CHARS ? `${[...quote].slice(0, LINE_QUOTE_CHARS).join("")}…` : quote);
 const NEUTRAL = "一样东西";
 const REASON_TEXT = { order: "这章先后没说清", from: "去处和前文接不上", destroyed: "毁了之后又写到它" } as const;
 
@@ -16,20 +19,46 @@ export interface ItemTexts {
   readonly label: (id: string) => string;
 }
 
-/** 名字表：同名两样以上的，每样带上头回那句的前几个字（没有就「第 N 章那件」）。 */
+/** 头回那句的前几个字（够长才算能分：那句不到这么长的分不出几样，P4b 2.6「密封袋。」）。 */
+const quoteHint = (item: ItemView): string | undefined => {
+  const quote = item.firstSeen?.quote;
+  return quote && [...quote].length >= QUOTE_HINT_CHARS ? [...quote].slice(0, QUOTE_HINT_CHARS).join("") : undefined;
+};
+
+/** 区分同名用的「现在在哪」（只一层，不往外找、不套别的东西的区分，免得互相引用绕圈）。 */
+function plainWhere(now: ItemNow | undefined, byId: ReadonlyMap<string, ItemView>): string | undefined {
+  if (now?.kind !== "known") return undefined;
+  const place = now.place;
+  if (place.kind === "person") return `${place.name}拿着`;
+  if (place.kind === "place") return `在${place.text}`;
+  const container = byId.get(place.item)?.name;
+  return container ? `在${container}里` : undefined;
+}
+
+/**
+ * 名字表：同名两样以上的，每样带上头回那句的前几个字；那几个字分不出（那句太短、和同名的另一样一样）就写「第 N 章那件」，
+ * 再加现在在哪（P4b 2.6）。
+ */
 export function itemTexts(items: readonly ItemView[]): ItemTexts {
   const byId = new Map(items.map((item) => [item.id, item] as const));
-  const counts = new Map<string, number>();
-  for (const item of items) if (item.name) counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+  const sameName = new Map<string, ItemView[]>();
+  for (const item of items) if (item.name) sameName.set(item.name, [...(sameName.get(item.name) ?? []), item]);
   const label = (id: string): string => {
     const item = byId.get(id);
     const name = item?.name;
     if (!item || !name) return NEUTRAL;
-    if ((counts.get(name) ?? 0) < 2) return name;
+    const group = sameName.get(name) ?? [];
+    if (group.length < 2) return name;
     if (item.card) return `${name}（设定卡上那件）`;
-    const quote = item.firstSeen?.quote;
-    if (quote) return `${name}（「${[...quote].slice(0, QUOTE_HINT_CHARS).join("")}${[...quote].length > QUOTE_HINT_CHARS ? "…" : ""}」那件）`;
-    return item.firstSeen ? `${name}（第 ${item.firstSeen.chapter} 章那件）` : name;
+    const hint = quoteHint(item);
+    const quote = item.firstSeen?.quote ?? "";
+    if (hint !== undefined && !group.some((other) => other.id !== item.id && quoteHint(other) === hint)) {
+      return `${name}（「${hint}${[...quote].length > QUOTE_HINT_CHARS ? "…" : ""}」那件）`;
+    }
+    const where = plainWhere(item.now, byId);
+    const chapter = item.firstSeen ? `第 ${item.firstSeen.chapter} 章那件` : "";
+    const parts = [chapter, where ? `现在${where}` : ""].filter((part) => part.length > 0);
+    return parts.length > 0 ? `${name}（${parts.join("，")}）` : name;
   };
   return { byId, label };
 }
@@ -114,7 +143,8 @@ export function asideText(item: ItemView, texts: ItemTexts): string | undefined 
     ? `${last.gone === "destroyed" ? "毁了" : "丢了"}${last.note ? `（${last.note}）` : ""}`
     : !last.to || last.to.kind === "unknown" ? "不知道在哪" : placeText(last.to, texts);
   const who = last.scope.source === "character_claim" ? `${last.scope.speaker ?? "有人"}说${where}` : last.scope.frame === "past" ? `回忆里${where}` : `梦、想象或传闻里${where}`;
-  return `${who}（第 ${last.chapter} 章，没核实）`;
+  // 另起半句、说清正文没写：和「现在」挤在一起，读的人会当成对现在的怀疑（P4b 2.6）。
+  return `另：${who}（第 ${last.chapter} 章，正文没写）`;
 }
 
 /** 一样东西的一行（不含编号）：名字 · 现在 · 里面 · 没核全 · 单列的说法。`chapterGap: false` = 整章没记全那句另外并成一行说，这里不写。 */
@@ -155,7 +185,7 @@ export function nowQuote(item: ItemView): string | undefined {
 /** 写手、章纲员看的一行：名字 · 现在（哪章）· 里面 · 没核全 · 单列的说法 · 现在那句原句。 */
 export function writerItemLine(item: ItemView, texts: ItemTexts, chapterGap = true): string {
   const quote = nowQuote(item);
-  return `${itemLine(item, texts, chapterGap)}${quote ? ` · 原句「${quote}」` : ""}`;
+  return `${itemLine(item, texts, chapterGap)}${quote ? ` · 原句「${shortQuote(quote)}」` : ""}`;
 }
 
 export interface PickItemsOptions {

@@ -38,7 +38,9 @@ import { positiveIntLike } from "../lib/lenient-args.js";
 import { rethrowIfStopped } from "../lib/operations/context.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableItem, type ReopenableThread } from "./keeper-context.js";
-import { extractJsonObject, flag, parseChapterEnd, parseItemPatch, parseKeeperOutput, rawKeeperEntry, relativeOf, type KeeperHandles, type KeeperParseResult } from "./keeper-parse.js";
+import { buildItemCheckTask, declareUsedNewTags, listItemEnds, mergeItemCheck, nextNewTag, unrecordedMentions } from "./item-check.js";
+import { nowText, itemTexts } from "../book/item-views.js";
+import { asList, extractJsonObject, flag, parseChapterEnd, parseItemPatch, parseKeeperOutput, rawKeeperEntry, relativeOf, type KeeperHandles, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -72,8 +74,8 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 冷窗口的阈值：要补的笔记超过这么多章，就不当场补，按已有笔记 + 最近几章原文记账（笔记在后台补）。 */
 export const KEEPER_MAX_CATCH_UP = 10;
 
-/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 记东西一次 + 重写东西条目一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
-export const KEEPER_MAX_CALLS = 7;
+/** 记一章账单最多调几次模型（不含补笔记）：交账单一次 + 记东西一次 + 东西章末对一遍一次 + 重写东西条目一次 + 补摘原句一次 + 追问本章结尾一次 + 复核半夜到天亮一次 + 复核星期一次。额度算式用。 */
+export const KEEPER_MAX_CALLS = 9;
 
 /** 章里过了半夜 / 过了天亮：交账单、追问结尾两处同一句。 */
 const IN_CHAPTER_BOUNDARY =
@@ -141,12 +143,12 @@ export const ITEM_SPEC: readonly string[] = [
   "你只管这一章里的东西：正文里能拿、能放、能转手的实物（人、地方、抽象的不算）。逐句读上面的编号正文，把东西的去向一条条记下来。题材中立：只记正文真实写到的，不臆造、不补剧情。",
   "每条都写 unit：这件事写在第几句（正文前面的编号，一个数）。代码按编号取那一句当原句，不用抄原句。",
   "",
-  "- 本章写到的东西：是上面【已有的东西】里哪一样就写它的 I 号；那里没有、或拿不准是不是那一样的，当新的，在 newItems 里声明 N 号（N1、N2……），写 name（正文里一个叫法，挑最能把它和别的同类东西分开的那个：正文写着颜色、材料、主人这类分别的就带上；不加括号、不列别名；别的叫法写在各条的 as 里）、unit（头一回写到它那句）、by。同名不一定是同一样，看头回那句和现在在哪。一样东西一个号；一组东西（「借据、纸条和表」）分开声明、分开记，分不开就不记去向。items、members、inside 里用到的每个 N 号都要在 newItems 里声明，没声明的那条整条不收。",
+  "- 本章写到的东西：是上面【已有的东西】里哪一样就写它的 I 号；那里没有、或拿不准是不是那一样的，当新的，在 newItems 里声明 N 号（N1、N2……），写 name（正文里一个叫法，挑最能把它和别的同类东西分开的那个：正文写着颜色、材料、主人这类分别的就带上；不加括号、不列别名；别的叫法写在各条的 as 里）、unit（头一回写到它那句）、by。同名不一定是同一样，看头回那句、现在在哪、谁拿着：正文的叫法只和已有那样的泛称对上（盘、袋子、钥匙这种）不算认上，对不上就当新的；同一章里同名的两处，一处已经递给了别人、另一处还在原处的，是两样。一样东西一个号；一组东西（「借据、纸条和表」）分开声明、分开记，分不开就不记去向。items、members、inside 里用到的每个 N 号都要在 newItems 里声明，没声明的那条整条不收。",
   "- 上面有【这一章上次定稿时新记的东西】的：本章还写到其中哪样，就在 newItems 里照样声明它，tag 写那个 P 号（P1），不要另发 N 号。",
-  "- items 只记正文明写的去向，一处一条：此刻在哪写 op = at（顺带一句也算：挂在谁腰上、搁在哪儿）；被挪了（转手、放进、拿出、放下、捡到、带走）写 op = move，正文写了从哪来就填 from；丢了、被拿走不知去向写 op = gone、gone = lost（在某处找了没有，只说明它不在那儿，不算丢了，不记）；毁了、用光了写 gone = destroyed，note 一句话说怎么没的。正文清点某样东西里面有什么写 op = census，members 把正文列的每一样都写上（一样一个号，头回出现的先声明，unit 写清点那句）；正文明说「只有」「就剩」「别的没了」「空了」、而且 members 一样不少才写 complete: true，没明说或列不全就不写。",
+  "- items 只记正文明写的去向，一处一条：此刻在哪写 op = at（顺带一句也算：挂在谁腰上、搁在哪儿）；被挪了（转手、放进、拿出、放下、捡到、带走）写 op = move，正文写了从哪来就填 from；丢了、被拿走不知去向写 op = gone、gone = lost（在某处找了没有，只说明它不在那儿，不算丢了，不记）；毁了、用光了写 gone = destroyed，note 一句话说怎么没的。正文清点某样东西里面有什么写 op = census：item 写装东西的那一样（箱子、包、抽屉），它自己不算成员，装东西的那样还没记过就先在 newItems 里声明它；members 把正文列的每一样都写上（一样一个号，头回出现的先声明，unit 写清点那句）；正文明说「只有」「就剩」「别的没了」「空了」、而且 members 一样不少才写 complete: true，没明说或列不全就不写。",
   "- 拿起来又放下、揣进去又掏出来的，每一下都记：最后放到哪儿那句尤其不能漏，漏了后文就一直当它还在原处。只是拿在手里看、翻来覆去摆弄、嘴上提一句、没挪地方的，不记。",
   "- 去处 to、from 写成 {\"person\":\"正文里对这个人的称呼\"}（谁拿着、揣着、放在他随身的包里）、{\"place\":\"地方原样的字\"}、{\"inside\":\"I3\"}（在另一样东西里面）；正文明说不知道在哪了，to 写 \"unknown\"。to 是东西落到了哪儿：放到桌上、柜里、地上的写那个地方或那样东西，不写动手放的人；拿在手里、揣在身上的才写那个人。",
-  "- seq：全章按故事里发生的先后给每条 items 编号 1、2、3……（不是正文写的先后：倒叙里先写、后发生的照发生排）；正文没说清谁先谁后的几条写同一个号。同一句里挪了几次就记几条。",
+  "- seq：全章按故事里发生的先后给每条 items 编号 1、2、3……（不是正文写的先后：倒叙里先写、后发生的照发生排）；正文没说清谁先谁后的几条写同一个号。同一句里挪了几次就记几条，照写的先后编号（「他接过去又递给她」是两个号）。",
   "- 指东西的地方都可以写成 {\"item\":\"I3\",\"as\":\"本章正文怎么叫它\"}（主体的叫法写在这条的 as），照正文原样抄；不写就不写。",
   "- 每条 newItems、items 都写 by：叙述直接写的写 \"narration\"（「他把钥匙揣回兜里」是叙述，哪怕这句前后有人在说话）；只有人物嘴里说的才写 \"claim\"，再加 speaker（正文里对说话人的称呼）。梦里、回忆里的照常记，算不算现状由代码定。",
   "- 【现在有效的事实】里有说某样东西去向的旧事实（F 号），本章写到这样东西在哪：那条只说这一样的，这条 items 填 replaces（[\"F2\"]）；一句里还说了别的东西的，填 overlaps，不填 replaces。清点的成员写成 {\"item\":\"I3\",\"overlaps\":[\"F5\"]}。",
@@ -203,6 +205,8 @@ export type KeeperOutcome =
       readonly quoteRepair?: QuoteRepair;
       /** 东西条目写坏了、请记账员重写的那一问（和补摘原句同一种记法）。 */
       readonly itemRepair?: QuoteRepair;
+      /** 记东西那遍的「章末对一遍」（P4b 2.4）。 */
+      readonly itemCheck?: ItemEndCheck;
     })
   | (KeeperCommon & {
       readonly ok: false;
@@ -340,8 +344,7 @@ export function itemsWithUnitQuotes(text: string, draft: string, units: readonly
     const { unit: _unit, ...rest } = raw;
     return quote !== undefined ? { ...rest, quote } : raw;
   };
-  const list = (value: unknown): unknown => (Array.isArray(value) ? value.map(withQuote) : value);
-  return JSON.stringify({ newItems: list(root.newItems) ?? [], items: list(root.items) ?? [] });
+  return JSON.stringify({ newItems: asList(root.newItems).map(withQuote), items: asList(root.items).map(withQuote) });
 }
 
 /**
@@ -418,8 +421,25 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const units = splitUnits(input.draft);
   const itemTask = buildItemTask(input.chapter, numberedText(units), context.itemText);
   const mainCall = withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
-  const itemCall = withStep("记账员记东西", () => input.callModel([{ role: "user", content: itemTask }], { json: true })).then(
-    (reply) => ({ ok: true as const, reply }),
+  // 记东西那段对话：第一遍 → 章末对一遍（P4b 2.4），和记账员主对话并行。
+  // 这遍没成（模型报错、交回来读不了）再问一次，两次都没成才算这章东西没记上：第 1 章东西最多，整章丢了后面都跟着不知道。
+  const askItems = async (): Promise<string> => {
+    const ask = () => withStep("记账员记东西", () => input.callModel([{ role: "user", content: itemTask }], { json: true }));
+    try {
+      const reply = await ask();
+      if (itemsWithUnitQuotes(reply, input.draft, units) !== undefined) return reply;
+      input.onRawOutput?.(reply);
+    } catch (error) {
+      rethrowIfStopped(error);
+    }
+    return ask();
+  };
+  const itemCall = askItems().then(
+    async (reply) => {
+      input.onRawOutput?.(reply);
+      const checked = await checkItemEnds(reply, itemTask, context, input, units);
+      return { ok: true as const, ...checked };
+    },
     (error: unknown) => {
       rethrowIfStopped(error);
       return { ok: false as const, error };
@@ -440,7 +460,6 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
   }
   const itemResult = await itemCall;
-  if (itemResult.ok) input.onRawOutput?.(itemResult.reply);
   const itemJson = itemResult.ok ? itemsWithUnitQuotes(itemResult.reply, input.draft, units) : undefined;
   // 东西那遍以它为准：记账员那一遍顺手写的 newItems / items 不收（不然两遍各记一份）。
   const merged = JSON.stringify({ ...root, newItems: [], items: [], ...(itemJson ? JSON.parse(itemJson) : {}) });
@@ -451,7 +470,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     ? firstPass
     : { ...firstPass, drops: [...firstPass.drops, { where: "items", kind: "item", reason: itemResult.ok ? "记东西交回来的不是 JSON" : `记东西没成：${modelFailureText(itemResult.error)}` }] };
   const conversation: BrainMessage[] = [...window, { role: "user", content: task }, { role: "assistant", content: text }];
-  const itemConversation: BrainMessage[] = [{ role: "user", content: itemTask }, { role: "assistant", content: itemResult.ok ? itemResult.reply : "" }];
+  const itemConversation: BrainMessage[] = itemResult.ok ? itemResult.conversation : [{ role: "user", content: itemTask }, { role: "assistant", content: "" }];
   const rewritten = itemJson ? await repairItems(parsed, merged, context, input, itemConversation, units) : { parsed };
   const repaired = await repairQuotes(rewritten.parsed, input, conversation);
   const ended = await askChapterEnd(repaired.parsed, input, conversation);
@@ -465,8 +484,64 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     omittedItems: context.omittedItems,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
     ...(rewritten.repair ? { itemRepair: rewritten.repair } : {}),
+    ...(itemResult.ok && itemResult.check ? { itemCheck: itemResult.check } : {}),
     ...extra,
   };
+}
+
+/** 章末对一遍的结果：问了几样、补回几条；没成的写原因（照第一遍的交，不算缺账）。 */
+export interface ItemEndCheck {
+  readonly listed: number;
+  readonly added: number;
+  /** 替用了没声明的 N 号补的声明。 */
+  readonly declared: number;
+  readonly failed?: string;
+}
+
+/**
+ * 记东西第一遍交回来以后：按它交的条目问一遍章末（P4b 2.4），补的并进去；再替用了没声明的 N 号补声明（2.1）。
+ * 交回来的第一遍不是 JSON：不问，原样交下去（后面照「记东西交回来的不是 JSON」如实记）。
+ */
+async function checkItemEnds(
+  reply: string,
+  itemTask: string,
+  context: ReturnType<typeof buildKeeperContext>,
+  input: KeeperInput,
+  units: readonly TextUnit[],
+): Promise<{ readonly reply: string; readonly conversation: BrainMessage[]; readonly check?: ItemEndCheck }> {
+  const first: BrainMessage[] = [{ role: "user", content: itemTask }, { role: "assistant", content: reply }];
+  const raw = extractJsonObject(reply);
+  if (!raw) return { reply, conversation: first };
+  // 第一遍用了没声明的 N 号先替它声明：再发新号、并补问交回来的之前，第一遍的每个号都得先有主（外部审查 2026-11-11）。
+  const pre = declareUsedNewTags(raw);
+  const root = pre.root;
+  const texts = itemTexts(input.before.items);
+  const byId = new Map(input.before.items.map((item) => [item.id, item] as const));
+  const listed = listItemEnds(root, context.handleNames);
+  const used = new Set(listed.map((item) => item.handle));
+  const unrecorded = unrecordedMentions(input.before, context.itemHandles, context.handleNames, used, units, (id) => nowText(byId.get(id)?.now, texts));
+  const checkTask = buildItemCheckTask(listed, unrecorded, nextNewTag(root));
+  let merged: Record<string, unknown> = root;
+  let check: ItemEndCheck | undefined;
+  let conversation = first;
+  if (checkTask) {
+    try {
+      const answer = await withStep("记账员对章末", () => input.callModel([...first, { role: "user", content: checkTask }], { json: true }));
+      input.onRawOutput?.(answer);
+      const joined = mergeItemCheck(root, answer);
+      // 对出了要补的才把这一问留在对话里，后面重写那一问接着它；什么都没补就照第一遍那段对话接。
+      if (joined && joined.added > 0) conversation = [...first, { role: "user", content: checkTask }, { role: "assistant", content: answer }];
+      if (joined) merged = joined.root;
+      check = { listed: listed.length + unrecorded.length, added: joined?.added ?? 0, declared: 0, ...(joined ? {} : { failed: "交回来的不是 JSON" }) };
+    } catch (error) {
+      rethrowIfStopped(error);
+      check = { listed: listed.length + unrecorded.length, added: 0, declared: 0, failed: modelFailureText(error) };
+    }
+  }
+  const declared = declareUsedNewTags(merged);
+  const declaredCount = pre.declared.length + declared.declared.length;
+  if (declaredCount > 0) check = { ...(check ?? { listed: 0, added: 0 }), declared: declaredCount };
+  return { reply: JSON.stringify(declared.root), conversation, ...(check ? { check } : {}) };
 }
 
 /** 核得上的原句换成正文原字（模型常多打空格、少抄引号）：清单、账里、设定本给作者看的都是正文里那一段。 */

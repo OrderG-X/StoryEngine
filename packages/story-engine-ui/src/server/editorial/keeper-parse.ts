@@ -41,11 +41,14 @@ export interface KeeperDrop {
   readonly subject?: ItemRefInput;
 }
 
-/** 解析掉的东西那类条目缺的是哪几样：都认得出 → 那几样；有一条说不出 → undefined（整章东西当没记全）。 */
+/**
+ * 解析掉的东西那类条目缺的是哪几样：都认得出 → 那几样；有一条说不出 → undefined（整章东西当没记全）。
+ * 只算东西条目：带东西的事实丢了只缺事实那类，不扩大缺哪几样（P4b 2.1，外部审查 2026-11-11）。
+ */
 export function droppedItemRefs(drops: readonly KeeperDrop[]): ItemRefInput[] | undefined {
   const out: ItemRefInput[] = [];
   for (const drop of drops) {
-    if (drop.kind !== "item" && drop.kind !== "fact") continue;
+    if (drop.kind !== "item") continue;
     if (!drop.items) return undefined;
     out.push(...drop.items);
   }
@@ -283,7 +286,8 @@ function censusMembers(value: unknown): unknown[] | undefined | "unreadable" {
   return "unreadable";
 }
 
-function asList(value: unknown): unknown[] {
+/** 一列条目：数组照用；只交了一个对象当一条；别的当没有。记东西那遍、章末对一遍、解析共用这一把尺子。 */
+export function asList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (isRecord(value)) return [value];
   return [];
@@ -513,7 +517,7 @@ const sameRef = (a: ItemRefInput, b: ItemRefInput): boolean => ("id" in a && "id
  * 去处里写的「装在哪样里面」（没写 → undefined）。只写了 {"item":"I3"}、没写人也没写地方：去处只有人、地方、东西三种，
  * 写的是东西就是装在它里面（真机 2026-11-04：第一遍、重写都这么写，整条当「去处没写」丢掉，这章东西账没记全）。
  */
-const insideField = (raw: unknown): unknown => {
+export const insideField = (raw: unknown): unknown => {
   if (!isRecord(raw)) return undefined;
   // 多塞的空 inside（null / ""）当没写，照 kind / item 认（外部审查 2026-11-06）。
   if (raw.inside !== undefined && raw.inside !== null && raw.inside !== "") return raw.inside;

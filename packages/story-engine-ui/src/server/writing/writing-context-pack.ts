@@ -199,8 +199,10 @@ function buildHardConstraints(input: {
         : "本章从上一章结尾所在的地方接着写；换场要写出移动过程，不要编造与地点卡冲突的地点。",
     input.bans.length > 0 ? `一定不要写：${input.bans.join("；")}。` : undefined,
     "设定里写着还没揭开、不能说破的，本章不要揭开，也不要让不该知道的人知道。",
-    input.establishedFacts.length > 0 ? `不得改写或否认以下已确立事实：${input.establishedFacts.slice(0, 12).join("；")}。` : undefined,
-    input.hasItems ? "关键物件此刻在谁手里、放在哪，照 itemsWhere（东西在哪）接着写；那里写着「拿不准」「没核全」「没核实」的，别写成确定的。" : undefined,
+    input.establishedFacts.length > 0
+      ? `不得改写或否认以下已确立事实：${input.establishedFacts.slice(0, 12).join("；")}。${input.hasItems ? "这些是当时发生的事，东西现在在哪以 itemsWhere（东西在哪）为准。" : ""}`
+      : undefined,
+    input.hasItems ? "关键物件此刻在谁手里、放在哪，照 itemsWhere（东西在哪）接着写；那里写着「拿不准」「没核全」的，别写成确定的；「另：某某说……」只是有人这么说，正文没写。" : undefined,
     "设定本里没有的人、地点、物件、组织，不要凭空写成要紧的；需要时模糊处理。",
     "不要让主角突然开挂。",
     "不要把世界规矩一次性写成设定说明书。",

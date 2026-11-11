@@ -408,8 +408,11 @@ export function projectItems(
       const unlinked = own.filter((move) => move.from !== undefined && fromConnects(previous.place, move.from) === false);
       if (unlinked.length > 0) {
         for (const move of unlinked) issue("from", id, chapter, [previous.entry, move.entry]);
-        setNow(item, { kind: "uncertain", reason: "from", options: [settled, previous], chapter }, chapter);
-        return;
+        // 落到的地方和前一处是同一处：从哪来对不上照记问题，现在在哪没有两种说法（P4b 2.3）。
+        if (!sameOutcome(settled, previous)) {
+          setNow(item, { kind: "uncertain", reason: "from", options: [settled, previous], chapter }, chapter);
+          return;
+        }
       }
     }
     // 从里面拿出了有效完整清点里没有的：清点被反证，改记对不上（几处一起核完再改）。拿出来又放回同一个里面也算：它早就在里面、清点却没列它。

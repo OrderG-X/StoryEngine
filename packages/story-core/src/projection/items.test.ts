@@ -161,6 +161,14 @@ describe("去向按 seq 走", () => {
     expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["from", "from"]);
   });
 
+  it("从哪来接不上、但落到的就是前一处：照记问题，现在不算拿不准（P4b 2.3）", () => {
+    const ch1 = chapter(1, "信在甲手里。", [appear("N1", "信", "信在甲手里"), at(1, N("N1"), person("甲"), "信在甲手里")]);
+    const ch2 = chapter(2, "乙把信递回给甲。", [move(1, I("i1-1"), person("甲"), "乙把信递回给甲", { from: person("乙") })]);
+    const view = viewOf([ch1, ch2]);
+    expect(item(view, "i1-1").now).toMatchObject({ kind: "known", place: { name: "甲" }, chapter: 2 });
+    expect(view.itemIssues.map((issue) => issue.kind)).toEqual(["from"]);
+  });
+
   it("同号两处结果一样：每处都核（从哪来接不上、毁了又在），和数组里谁在前无关", () => {
     const ch1 = chapter(1, "表在甲手里。", [appear("N1", "表", "表在甲手里"), at(1, N("N1"), person("甲"), "表在甲手里")]);
     const a = at(1, I("i1-1"), person("丙"), "表到了丙手里");
