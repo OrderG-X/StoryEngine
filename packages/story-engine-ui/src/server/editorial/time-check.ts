@@ -197,6 +197,8 @@ export interface ReconcileInput {
   readonly material: TimeMaterial;
   readonly callModel: BrainCallModel;
   readonly impossible: NightCheck;
+  /** 本章前面有没有当下章：没有（第 1 章）开头就是起点，开头隔多久不比、不裁。 */
+  readonly hasPrevious: boolean;
   readonly onRawOutput?: (text: string) => void;
 }
 
@@ -290,7 +292,9 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
   if (main?.kind !== "time") return { parsed };
   if (typeof second === "string") return { parsed, check: { result: "kept", failed: second } };
   const mainReading = readingOf(main);
-  const secondReading = readingOf(second);
+  const read = readingOf(second);
+  // 第 1 章：开头是起点，隔多久不算数，只比章里。
+  const secondReading: TimeReading = !input.hasPrevious && read.present && mainReading.present ? { ...read, start: mainReading.start } : read;
   if (sameReading(mainReading, secondReading)) return { parsed, check: { result: "agreed" } };
   if (!mainReading.present || !secondReading.present) return { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
   if ("notPresent" in second) return { parsed, check: { result: "kept", failed: "两遍对本章在不在当下说的不一样，照主对话的" } };
@@ -313,7 +317,8 @@ export async function reconcileTime(parsed: KeeperParseResult, second: TimeCandi
   input.onRawOutput?.(reply);
   const judged = parseTimeCandidate(reply, input.draft, input.units);
   if (typeof judged === "string") return { parsed, check: { result: "kept", failed: `两遍对不上，裁定那遍${judged}，照主对话的` } };
-  const judgeReading = readingOf(judged);
+  const judgeRead = readingOf(judged);
+  const judgeReading: TimeReading = !input.hasPrevious && judgeRead.present ? { ...judgeRead, start: mainReading.start } : judgeRead;
   if (!judgeReading.present || "notPresent" in judged) return { parsed, check: { result: "kept", failed: "两遍对不上，裁定那遍说整章不在当下，照主对话的" } };
   const took = {
     start: pickField(mainReading.start as Worlds, secondReading.start as Worlds, judgeReading.start),

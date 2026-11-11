@@ -510,6 +510,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     callModel: input.callModel,
     // 裁出来的按两种换天规矩走不通，或主对话对得上写明的星期、裁出来的对不上：不用（证据在正文里）。
     impossible: (time) => nightIssue(time, where)?.kind === "impossible" || (!mainClash && weekdayClash(time, input.before, input.chapter)),
+    hasPrevious: where.exists,
     ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
   });
   return {

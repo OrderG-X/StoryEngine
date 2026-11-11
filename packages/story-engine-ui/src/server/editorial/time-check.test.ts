@@ -79,13 +79,14 @@ describe("两遍对一下", () => {
   const mainTime: TimeInput = { kind: "time", review: "auto", start: { offset: day(1), basis: "judged", quote: "傍晚，她出了门。" }, sameDay: true, timeOfDay: "傍晚", segments: [] };
   const parsedOf = (time: TimeInput): KeeperParseResult => ({ entries: [{ kind: "summary", review: "auto", text: "t", quote: "q" }, time], drops: [], adjusted: [] });
   const changed: TimeCandidate = { start: { offset: day(1), basis: "judged", quote: "傍晚，她出了门。" }, dayChanges: [{ offset: day(1), quote: sentence("第二天上午") }] };
-  const run = async (second: TimeCandidate | string, judge?: () => Promise<string>, impossible = false, main: TimeInput = mainTime) => {
+  const run = async (second: TimeCandidate | string, judge?: () => Promise<string>, impossible = false, main: TimeInput = mainTime, hasPrevious = true) => {
     const asked: BrainMessage[][] = [];
     const outcome = await reconcileTime(parsedOf(main), second, {
       draft,
       units,
       material,
       impossible: () => impossible,
+      hasPrevious,
       callModel: async (messages) => {
         asked.push([...messages]);
         if (!judge) throw new Error("不该裁");
@@ -155,9 +156,19 @@ describe("两遍对一下", () => {
     expect(notPresent.asked).toEqual([]);
   });
 
+  it("第 1 章：开头是起点，隔多久不比、不裁；章里照样比", async () => {
+    const startOnly = await run({ start: "unknown", sameDay: true }, undefined, false, mainTime, false);
+    expect(startOnly.check).toEqual({ result: "agreed" });
+    expect(startOnly.asked).toEqual([]);
+    const both = await run({ start: "unknown", dayChanges: [{ offset: day(1), quote: sentence("第二天上午") }] }, async () => JSON.stringify({ start: "unknown", dayChanges: [{ id: idOf("第二天上午"), offset: day(1) }] }), false, mainTime, false);
+    expect(both.check).toEqual({ result: "judged", took: { start: "main", end: "second" } });
+    expect(both.time).toMatchObject({ start: mainTime.start, dayChanges: [{ offset: day(1) }] });
+    expect(both.asked[0]?.at(-1)?.content).toContain("不一样的是：章里换没换天）");
+  });
+
   it("主对话没记上时间：不比", async () => {
     const parsed: KeeperParseResult = { entries: [], drops: [{ where: "time", reason: "时间里什么都没写" }], adjusted: [] };
-    const out = await reconcileTime(parsed, changed, { draft, units, material, impossible: () => false, callModel: async () => { throw new Error("不该调"); } });
+    const out = await reconcileTime(parsed, changed, { draft, units, material, impossible: () => false, hasPrevious: true, callModel: async () => { throw new Error("不该调"); } });
     expect(out).toEqual({ parsed });
   });
 });
