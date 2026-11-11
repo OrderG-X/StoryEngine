@@ -152,13 +152,45 @@ export function unrecordedMentions(
 const unitList = (units: readonly number[]): string =>
   units.length === 0 ? "" : `第 ${units.slice(0, UNITS_SHOWN).join("、")}${units.length > UNITS_SHOWN ? " 等" : ""} 句`;
 
-/** 交回来的 JSON 里写到的全部 N 号（声明的、只引用没声明的都算；哪儿写成号就算哪儿，多占几个号无妨）。 */
-function usedNewTags(value: unknown, out = new Set<string>()): Set<string> {
-  if (typeof value === "string") {
-    const handle = handleOf(value);
-    if (handle?.startsWith("N")) out.add(handle);
-  } else if (Array.isArray(value)) for (const item of value) usedNewTags(item, out);
-  else if (isRecord(value)) for (const item of Object.values(value)) usedNewTags(item, out);
+/**
+ * 只动写成东西号的那几处（声明的 tag、条目的 item、去处 / 从哪来里解析当成「装在哪样里面」的、清点成员），
+ * 和解析同一把尺子；人名、地方、叫法里碰巧写成「N1」的不碰。fn 返回换成的号（不换 → 原样）。
+ */
+function mapItemRefs(root: Raw, fn: (handle: string) => string): Raw {
+  const ref = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      const handle = handleOf(value);
+      return handle ? fn(handle) : value;
+    }
+    if (!isRecord(value)) return value;
+    const key = value.item !== undefined ? "item" : value.id !== undefined ? "id" : undefined;
+    return key ? { ...value, [key]: ref(value[key]) } : value;
+  };
+  const place = (value: unknown): unknown => {
+    if (!isRecord(value) || insideField(value) === undefined) return value;
+    return value.inside !== undefined && value.inside !== null && value.inside !== "" ? { ...value, inside: ref(value.inside) } : { ...value, item: ref(value.item) };
+  };
+  const list = (value: unknown, each: (raw: Raw) => Raw): unknown => (Array.isArray(value) ? value.map((raw) => (isRecord(raw) ? each(raw) : raw)) : isRecord(value) ? each(value) : value);
+  return {
+    ...root,
+    newItems: list(root.newItems, (raw) => (raw.tag !== undefined ? { ...raw, tag: ref(raw.tag) } : raw)),
+    items: list(root.items, (raw) => ({
+      ...raw,
+      ...(raw.item !== undefined ? { item: ref(raw.item) } : {}),
+      ...(raw.to !== undefined ? { to: place(raw.to) } : {}),
+      ...(raw.from !== undefined ? { from: place(raw.from) } : {}),
+      ...(raw.members !== undefined ? { members: Array.isArray(raw.members) ? raw.members.map(ref) : ref(raw.members) } : {}),
+    })),
+  };
+}
+
+/** 交回来的 JSON 里用到的全部 N 号（声明的、只引用没声明的都算；只看写东西号的那几处）。 */
+function usedNewTags(root: Raw): Set<string> {
+  const out = new Set<string>();
+  mapItemRefs(root, (handle) => {
+    if (handle.startsWith("N")) out.add(handle);
+    return handle;
+  });
   return out;
 }
 
@@ -220,7 +252,7 @@ export function mergeItemCheck(first: Raw, reply: string): { readonly root: Raw;
     rename.set(handle, `N${next}`);
     taken.add(`N${next}`);
   }
-  const renamed = rename.size > 0 ? (renameHandles(extra, rename) as Raw) : extra;
+  const renamed = rename.size > 0 ? mapItemRefs(extra, (handle) => rename.get(handle) ?? handle) : extra;
   const maxSeq = asList(first.items).reduce<number>((max, raw) => Math.max(max, isRecord(raw) ? (seqOf(raw) ?? 0) : 0), 0);
   const addedItems = asList(renamed.items).map((raw, index) => (isRecord(raw) ? { ...raw, seq: maxSeq + index + 1 } : raw));
   const addedNew = asList(renamed.newItems);
@@ -228,17 +260,6 @@ export function mergeItemCheck(first: Raw, reply: string): { readonly root: Raw;
     root: { ...first, newItems: [...asList(first.newItems), ...addedNew], items: [...asList(first.items), ...addedItems] },
     added: addedItems.length + addedNew.length,
   };
-}
-
-/** 把交回来的 JSON 里写成号的地方（值正好是那个号）换掉。 */
-function renameHandles(value: unknown, rename: ReadonlyMap<string, string>): unknown {
-  if (typeof value === "string") {
-    const handle = handleOf(value);
-    return handle && rename.has(handle) ? rename.get(handle) : value;
-  }
-  if (Array.isArray(value)) return value.map((item) => renameHandles(item, rename));
-  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renameHandles(item, rename)]));
-  return value;
 }
 
 /**

@@ -41,11 +41,14 @@ export interface KeeperDrop {
   readonly subject?: ItemRefInput;
 }
 
-/** 解析掉的东西那类条目缺的是哪几样：都认得出 → 那几样；有一条说不出 → undefined（整章东西当没记全）。 */
+/**
+ * 解析掉的东西那类条目缺的是哪几样：都认得出 → 那几样；有一条说不出 → undefined（整章东西当没记全）。
+ * 只算东西条目：带东西的事实丢了只缺事实那类，不扩大缺哪几样（P4b 2.1，外部审查 2026-11-11）。
+ */
 export function droppedItemRefs(drops: readonly KeeperDrop[]): ItemRefInput[] | undefined {
   const out: ItemRefInput[] = [];
   for (const drop of drops) {
-    if (drop.kind !== "item" && drop.kind !== "fact") continue;
+    if (drop.kind !== "item") continue;
     if (!drop.items) return undefined;
     out.push(...drop.items);
   }

@@ -19,7 +19,7 @@ import {
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { declareUsedNewTags, mergeItemCheck, nextNewTag } from "./item-check.js";
 import { buildKeeperContext } from "./keeper-context.js";
-import { parseKeeperOutput } from "./keeper-parse.js";
+import { droppedItemRefs, parseKeeperOutput } from "./keeper-parse.js";
 import { itemsWithUnitQuotes, runLedgerKeeper } from "./ledger-keeper.js";
 import { commitEntriesOf, prepareChapterCommit } from "./commit-flow.js";
 import type { BrainCallModel } from "./reader-window.js";
@@ -94,6 +94,25 @@ describe("章末对一遍并回去：号不串", () => {
     expect(view.items.find((item) => item.name === "铜钥匙")?.now).toMatchObject({ kind: "known", place: { text: "桌上" } });
   });
 
+  it("只换写东西号的那几处：人名碰巧写成「N1」不算占号、也不被换", () => {
+    const body = "# 第1章\n\nN1拿着铜钥匙。N1又捧起铁盒。";
+    const at = (word: string) => splitUnits(body).find((entry) => entry.text.includes(word))!.id;
+    const start = { newItems: [{ tag: "N9", name: "铜钥匙", unit: at("铜钥匙"), by: "narration" }], items: [{ seq: 1, item: "N9", op: "at", to: { person: "N1" }, unit: at("铜钥匙"), by: "narration" }] };
+    expect(nextNewTag(start)).toBe(10);
+    const merged = mergeItemCheck(start, JSON.stringify({
+      newItems: [{ tag: "N1", name: "铁盒", unit: at("铁盒"), by: "narration" }],
+      items: [{ item: "N1", op: "at", to: { person: "N1" }, unit: at("铁盒"), by: "narration" }],
+    }))!;
+    expect((merged.root.newItems as { tag: string }[]).map((entry) => entry.tag)).toEqual(["N9", "N1"]);
+    expect((merged.root.items as { to: unknown }[]).map((entry) => entry.to)).toEqual([{ person: "N1" }, { person: "N1" }]);
+    // 撞了号才换：换成没用过的号（持有人写的「N1」不算用过），持有人那处不动。
+    const clash = mergeItemCheck(start, JSON.stringify({
+      newItems: [{ tag: "N9", name: "铁盒", unit: at("铁盒"), by: "narration" }],
+      items: [{ item: "N9", op: "at", to: { person: "N1" }, unit: at("铁盒"), by: "narration" }],
+    }))!;
+    expect((clash.root.items as { item: string; to: unknown }[])[1]).toMatchObject({ item: "N1", to: { person: "N1" } });
+  });
+
   it("补问交单个对象当一条；交空的第一遍原样（第一遍只交了单个对象的也不丢）", () => {
     const extra = { item: "N1", op: "move", to: { person: "甲" }, by: "narration", unit: unit("铜钥匙") };
     const merged = mergeItemCheck(first, JSON.stringify({ items: extra }))!;
@@ -149,6 +168,13 @@ describe("跑一遍记账员：第一遍只交单个对象、章末对一遍没�
 });
 
 describe("缺账口径：带东西的事实没记上只缺事实（预览、核心同一把尺子）", () => {
+  it("解析掉的事实不扩大缺哪几样：只算东西条目的", () => {
+    expect(droppedItemRefs([
+      { where: "items 第 1 条", reason: "x", kind: "item", items: [{ id: "i1-1" }] },
+      { where: "facts 第 1 条", reason: "说的是哪样东西没写对，这条没记", kind: "fact" },
+    ])).toEqual([{ id: "i1-1" }]);
+  });
+
   it("核心尺子", () => {
     const fact = { kind: "fact", review: "auto", nature: "hard", item: { id: "i1-1" }, subject: "铜钥匙", attribute: "新旧", value: "旧", text: "铜钥匙很旧", quote: "x" } as EntryInput;
     const move = { kind: "item", review: "auto", op: "at", seq: 1, item: { id: "i1-1" }, to: { kind: "person", name: "甲" }, quote: "x", source: { kind: "narration" } } as EntryInput;
