@@ -117,14 +117,8 @@ export async function buildChapterLedger(
   const entries = stored.flatMap((item) => item.entries);
   const scenes = stored.flatMap((item) => item.scenes);
   const carried = previousOf(previous, file?.sha256);
-  // 东西条目有没收的：这章东西那类没记全（引用它的、按它算的去向都可能缺），不当记全了。
-  // 带东西的事实没收只缺事实：这里拼的账都是新记法（itemModel），东西在哪不记进事实（P4b 2.1）。
-  const itemMissing = new Set<"item" | "fact">();
-  for (const { entry } of checked.rejected) {
-    if (entry.kind === "item") itemMissing.add("item");
-    if (entry.kind === "fact" && entry.item !== undefined) itemMissing.add("fact");
-  }
-  const shortfall = itemShortfall(input.shortfall, [...itemMissing], missingItemRefs(checked.rejected.map((item) => item.entry).filter((entry) => entry.kind === "item")));
+  const itemMissing = rejectedItemMissing(checked.rejected.map((item) => item.entry));
+  const shortfall = itemShortfall(input.shortfall, itemMissing.kinds, itemMissing.items);
   const missingItems = shortfall?.status === "partial" && shortfall.missingKinds?.includes("item") ? storedMissingItems(shortfall.missingItems, assigned.itemTags, input.entries) : undefined;
 
   const ledger = newLedger({
@@ -208,6 +202,21 @@ export function itemShortfall(shortfall: LedgerShortfall | undefined, missing: r
     missingKinds: kinds,
     ...(scope && kinds.includes("item") ? { missingItems: scope } : {}),
   };
+}
+
+/**
+ * 没记上的这几条让这章缺哪几类（定稿预览、通读记账、核心定稿同一把尺子）：
+ * 东西条目没记上 → 缺东西那类（引用它的、按它算的去向都可能缺），items 是缺的那几样（说不出 → 不给，整章东西当没记全）；
+ * 带东西的事实没记上 → 只缺事实那类：新记法里东西在哪不记进事实（P4b 2.1）。
+ */
+export function rejectedItemMissing(entries: readonly EntryInput[]): { readonly kinds: ("item" | "fact")[]; readonly items?: ItemRefInput[] } {
+  const kinds = new Set<"item" | "fact">();
+  for (const entry of entries) {
+    if (entry.kind === "item") kinds.add("item");
+    if (entry.kind === "fact" && entry.item !== undefined) kinds.add("fact");
+  }
+  const items = kinds.has("item") ? missingItemRefs(entries.filter((entry) => entry.kind === "item")) : [];
+  return { kinds: [...kinds], ...(items ? { items } : {}) };
 }
 
 /**

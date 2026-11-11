@@ -8,12 +8,11 @@
  * 只动交回来的 JSON（自家格式），不判断正文意思：列哪几样、补不补都由模型对着原文定。
  */
 import type { BookProjection, TextUnit } from "@actalk/story-core";
-import { extractJsonObject } from "./keeper-parse.js";
+import { asList, extractJsonObject, insideField } from "./keeper-parse.js";
 
 type Raw = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is Raw => typeof value === "object" && value !== null && !Array.isArray(value);
-const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const str = (value: unknown): string | undefined => (typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined);
 const isDigit = (char: string): boolean => char >= "0" && char <= "9";
 
@@ -153,13 +152,20 @@ export function unrecordedMentions(
 const unitList = (units: readonly number[]): string =>
   units.length === 0 ? "" : `第 ${units.slice(0, UNITS_SHOWN).join("、")}${units.length > UNITS_SHOWN ? " 等" : ""} 句`;
 
-/** 下一个没用过的 N 号的数字。 */
+/** 交回来的 JSON 里写到的全部 N 号（声明的、只引用没声明的都算；哪儿写成号就算哪儿，多占几个号无妨）。 */
+function usedNewTags(value: unknown, out = new Set<string>()): Set<string> {
+  if (typeof value === "string") {
+    const handle = handleOf(value);
+    if (handle?.startsWith("N")) out.add(handle);
+  } else if (Array.isArray(value)) for (const item of value) usedNewTags(item, out);
+  else if (isRecord(value)) for (const item of Object.values(value)) usedNewTags(item, out);
+  return out;
+}
+
+/** 下一个没用过的 N 号的数字（第一遍用了没声明的也算用过）。 */
 export function nextNewTag(root: Raw): number {
   let max = 0;
-  for (const raw of asList(root.newItems)) {
-    const handle = isRecord(raw) ? handleOf(raw.tag) : undefined;
-    if (handle?.startsWith("N")) max = Math.max(max, Number(handle.slice(1)));
-  }
+  for (const handle of usedNewTags(root)) max = Math.max(max, Number(handle.slice(1)));
   return max + 1;
 }
 
@@ -195,29 +201,29 @@ export function buildItemCheckTask(
 }
 
 /**
- * 把章末对一遍交回来的并进第一遍：newItems 号撞上第一遍已声明的，整份交回来的里一起换成没用过的号；
- * items 接在本章已记的最大 seq 后面按交回来的先后编号。交回来的不是 JSON 对象 → undefined。
+ * 把章末对一遍交回来的并进第一遍：交回来的声明了第一遍用过的 N 号（声明过的、只引用的都算），整份交回来的里一起换成
+ * 两边都没用过的号；items 接在本章已记的最大 seq 后面按交回来的先后编号。写坏的条目（不是对象）原样并进去，
+ * 解析时照常记成丢了一条（这章东西没记全），不在这里悄悄滤掉。什么都没补 → 第一遍原样。交回来的不是 JSON 对象 → undefined。
  */
 export function mergeItemCheck(first: Raw, reply: string): { readonly root: Raw; readonly added: number } | undefined {
   const extra = extractJsonObject(reply);
   if (!extra) return undefined;
-  const taken = new Set(asList(first.newItems).flatMap((raw) => (isRecord(raw) && handleOf(raw.tag) ? [handleOf(raw.tag) as string] : [])));
-  let next = nextNewTag(first);
+  if (asList(extra.newItems).length === 0 && asList(extra.items).length === 0) return { root: first, added: 0 };
+  const firstUsed = usedNewTags(first);
+  const taken = new Set([...firstUsed, ...usedNewTags(extra)]);
+  let next = 1;
   const rename = new Map<string, string>();
   for (const raw of asList(extra.newItems)) {
     const handle = isRecord(raw) ? handleOf(raw.tag) : undefined;
-    if (!handle || !handle.startsWith("N") || !taken.has(handle) || rename.has(handle)) continue;
+    if (!handle || !handle.startsWith("N") || !firstUsed.has(handle) || rename.has(handle)) continue;
     while (taken.has(`N${next}`)) next += 1;
     rename.set(handle, `N${next}`);
     taken.add(`N${next}`);
-    next += 1;
   }
   const renamed = rename.size > 0 ? (renameHandles(extra, rename) as Raw) : extra;
   const maxSeq = asList(first.items).reduce<number>((max, raw) => Math.max(max, isRecord(raw) ? (seqOf(raw) ?? 0) : 0), 0);
-  const addedItems = asList(renamed.items)
-    .filter(isRecord)
-    .map((raw, index) => ({ ...raw, seq: maxSeq + index + 1 }));
-  const addedNew = asList(renamed.newItems).filter(isRecord);
+  const addedItems = asList(renamed.items).map((raw, index) => (isRecord(raw) ? { ...raw, seq: maxSeq + index + 1 } : raw));
+  const addedNew = asList(renamed.newItems);
   return {
     root: { ...first, newItems: [...asList(first.newItems), ...addedNew], items: [...asList(first.items), ...addedItems] },
     added: addedItems.length + addedNew.length,
@@ -237,7 +243,8 @@ function renameHandles(value: unknown, rename: ReadonlyMap<string, string>): unk
 
 /**
  * 用到了没声明的 N 号、那条写了 as（正文里的叫法）和 unit 的：按头一条替它声明（name = 那个叫法，unit = 那一句），
- * 不再整条丢（P4b 设计 2.1）。只认主体和「装在哪样里面」写成 {"item":"N3","as":"…"} 的。
+ * 不再整条丢（P4b 设计 2.1）。只认主体和解析时真当成「装在哪样里面」的那处（`insideField`，和解析同一把尺子：
+ * 写了 kind = person / place 的去处里多塞的 item 不算）。
  */
 export function declareUsedNewTags(root: Raw): { readonly root: Raw; readonly declared: readonly string[] } {
   const known = new Set(asList(root.newItems).flatMap((raw) => (isRecord(raw) && handleOf(raw.tag) ? [handleOf(raw.tag) as string] : [])));
@@ -256,8 +263,11 @@ export function declareUsedNewTags(root: Raw): { readonly root: Raw; readonly de
     consider(raw.item, raw.as, raw);
     for (const key of ["to", "from"] as const) {
       const place = raw[key];
-      if (isRecord(place) && isRecord(place.inside)) consider(place.inside, undefined, raw);
-      else if (isRecord(place) && place.person === undefined && place.place === undefined && place.as !== undefined) consider(place, undefined, raw);
+      const inside = insideField(place);
+      if (inside === undefined) continue;
+      // {"item":"N3","as":"木盒"}：叫法写在去处上；{"inside":{"item":"N3","as":"木盒"}}：写在它自己身上。
+      const fromItemField = isRecord(place) && (place.inside === undefined || place.inside === null || place.inside === "");
+      consider(inside, fromItemField && isRecord(place) ? place.as : undefined, raw);
     }
   }
   if (added.length === 0) return { root, declared: [] };

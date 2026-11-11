@@ -40,7 +40,7 @@ import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableItem, type ReopenableThread } from "./keeper-context.js";
 import { buildItemCheckTask, declareUsedNewTags, listItemEnds, mergeItemCheck, nextNewTag, unrecordedMentions } from "./item-check.js";
 import { nowText, itemTexts } from "../book/item-views.js";
-import { extractJsonObject, flag, parseChapterEnd, parseItemPatch, parseKeeperOutput, rawKeeperEntry, relativeOf, type KeeperHandles, type KeeperParseResult } from "./keeper-parse.js";
+import { asList, extractJsonObject, flag, parseChapterEnd, parseItemPatch, parseKeeperOutput, rawKeeperEntry, relativeOf, type KeeperHandles, type KeeperParseResult } from "./keeper-parse.js";
 import { modelFailureText } from "../lib/ai-errors.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -344,8 +344,7 @@ export function itemsWithUnitQuotes(text: string, draft: string, units: readonly
     const { unit: _unit, ...rest } = raw;
     return quote !== undefined ? { ...rest, quote } : raw;
   };
-  const list = (value: unknown): unknown => (Array.isArray(value) ? value.map(withQuote) : value);
-  return JSON.stringify({ newItems: list(root.newItems) ?? [], items: list(root.items) ?? [] });
+  return JSON.stringify({ newItems: asList(root.newItems).map(withQuote), items: asList(root.items).map(withQuote) });
 }
 
 /**
@@ -511,8 +510,11 @@ async function checkItemEnds(
   units: readonly TextUnit[],
 ): Promise<{ readonly reply: string; readonly conversation: BrainMessage[]; readonly check?: ItemEndCheck }> {
   const first: BrainMessage[] = [{ role: "user", content: itemTask }, { role: "assistant", content: reply }];
-  const root = extractJsonObject(reply);
-  if (!root) return { reply, conversation: first };
+  const raw = extractJsonObject(reply);
+  if (!raw) return { reply, conversation: first };
+  // 第一遍用了没声明的 N 号先替它声明：再发新号、并补问交回来的之前，第一遍的每个号都得先有主（外部审查 2026-11-11）。
+  const pre = declareUsedNewTags(raw);
+  const root = pre.root;
   const texts = itemTexts(input.before.items);
   const byId = new Map(input.before.items.map((item) => [item.id, item] as const));
   const listed = listItemEnds(root, context.handleNames);
@@ -537,7 +539,8 @@ async function checkItemEnds(
     }
   }
   const declared = declareUsedNewTags(merged);
-  if (declared.declared.length > 0) check = { ...(check ?? { listed: 0, added: 0 }), declared: declared.declared.length };
+  const declaredCount = pre.declared.length + declared.declared.length;
+  if (declaredCount > 0) check = { ...(check ?? { listed: 0, added: 0 }), declared: declaredCount };
   return { reply: JSON.stringify(declared.root), conversation, ...(check ? { check } : {}) };
 }
 

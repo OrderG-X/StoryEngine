@@ -14,7 +14,7 @@ import {
   canonicalJson,
   checkEntries,
   classifyForReview,
-  missingItemRefs,
+  rejectedItemMissing,
   project,
   readBookSnapshot,
   readChapterText,
@@ -46,6 +46,8 @@ export type RereadChapterOutcome =
       /** 东西条目有没记上的：这章东西那类（和连带的事实）记成没记全；missingItems：只缺这几样（不给 = 整章）。 */
       readonly itemMissing?: LedgerRereadArgs["itemMissing"];
       readonly missingItems?: LedgerRereadArgs["missingItems"];
+      /** 记东西那遍的章末对一遍没成（原因）：东西照第一遍记的，不算缺账，如实留一句（P4b 2.4）。 */
+      readonly itemCheckFailed?: string;
     }
   /** 这章的账单已经不是导入时那份空账单了（作者定稿过、记过了）：不记。 */
   | { readonly kind: "settled" }
@@ -89,21 +91,19 @@ export async function rereadChapter(projectDir: string, chapter: number, callMod
         const checked = checkEntries(keeper.parsed.entries, text, before);
         const plan = classifyForReview(checked.accepted, before, { chapter });
         const optIn = new Set(plan.review.filter((item) => touchesHardFact(item, before)).map((item) => item.index));
-        // 没记上的东西条目（核不上、解析掉、等作者看没记的）：东西那类没记全，带东西的事实再缺事实（和定稿同一个口径）。
-        const itemMissing = new Set<"item" | "fact">();
+        // 没记上的东西条目（核不上、解析掉、等作者看没记的）：东西那类没记全，带东西的事实只缺事实（和定稿同一把尺子）。
         const skippedEntries = [...checked.rejected.map((item) => item.entry), ...checked.accepted.filter((item) => optIn.has(item.index)).map((item) => item.entry)];
-        for (const entry of skippedEntries) {
-          if (entry.kind === "item") itemMissing.add("item");
-          if (entry.kind === "fact" && entry.item) itemMissing.add("item").add("fact");
-        }
-        for (const drop of keeper.parsed.drops) if (drop.kind === "item" || drop.kind === "fact") itemMissing.add("item").add(drop.kind);
-        const missingItems = unionItemRefs(missingItemRefs(skippedEntries), droppedItemRefs(keeper.parsed.drops));
+        const missing = rejectedItemMissing(skippedEntries);
+        const itemMissing = new Set<"item" | "fact">(missing.kinds);
+        for (const drop of keeper.parsed.drops) if (drop.kind === "item" || drop.kind === "fact") itemMissing.add(drop.kind);
+        const missingItems = unionItemRefs(missing.items, droppedItemRefs(keeper.parsed.drops));
         return {
           kind: "entries",
           entries: checked.accepted.filter((item) => !optIn.has(item.index)).map((item) => item.entry),
           skipped: checked.rejected.length + optIn.size + keeper.parsed.drops.length,
           digest: rereadInputDigest(snapshot.basis, chapter),
           ...(itemMissing.size > 0 ? { itemMissing: [...itemMissing], ...(missingItems ? { missingItems } : {}) } : {}),
+          ...(keeper.itemCheck?.failed ? { itemCheckFailed: keeper.itemCheck.failed } : {}),
         };
       }
       reason = keeper.reason;
