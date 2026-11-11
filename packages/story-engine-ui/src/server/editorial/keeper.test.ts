@@ -598,10 +598,16 @@ describe("记账员跑一章", () => {
         },
       });
       expect(outcome.ok).toBe(true);
-      // 补笔记、交账单、记东西（和交账单并行，只给本章编号正文和东西那几段）。
-      expect(calls).toHaveLength(3);
+      // 补笔记、交账单、记东西（和交账单并行，只给本章编号正文和东西那几段）、记时间（P5a，也并行：本章编号正文 + 前文原文 + 上一个当下章结尾）。
+      expect(calls).toHaveLength(4);
       expect(calls[2]).toHaveLength(1);
       expect(calls[2]?.[0]?.content).toContain("只记本章东西的去向");
+      expect(calls[3]?.map((message) => message.role)).toEqual(["system", "user"]);
+      const timeTask = calls[3]?.[1]?.content ?? "";
+      expect(timeTask).toContain("【第 2 章 正文（每句前面是编号）】\n[1]");
+      expect(timeTask).toContain("【前文原文：第 1 章");
+      expect(timeTask).toContain("【上一个当下章结尾（第 1 章）】");
+      expect(timeTask).toContain("请只记本章的时间");
       expect(calls[0]?.[0]).toMatchObject({ role: "system", content: LEDGER_ROLE.system });
       const task = calls[1]?.at(-1)?.content ?? "";
       expect(task).toContain("【第 2 章 正文（待定稿");
@@ -1055,6 +1061,7 @@ describe("记账员跑一章", () => {
             if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             const last = messages.at(-1)?.content ?? "";
             if (last.includes("对不上。请对照正文再看一遍")) { asks.push(last); return recheck(); }
+            if (last.includes("请只记本章的时间")) return "{}";
             return JSON.stringify({ time: { start: { offset: day(offset), basis: "judged", quote: "周三上午" }, weekday: "周三", sameDay: true } });
           },
         });
@@ -1084,6 +1091,58 @@ describe("记账员跑一章", () => {
       const agrees = run(2, async () => JSON.stringify({ offset: day(9) }));
       await agrees.outcome;
       expect(agrees.asks).toEqual([]);
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("记时间那遍（P5a）：和主对话并行记，对不上裁一次，结尾换成裁定认的那份；对得上不裁；裁出来和写明的星期对不上照主对话的", async () => {
+    const book = await makeHomeTempDir("keeper-time-pass-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      const monday = "# 第1章\n\n周一下午，面馆还没上客。";
+      await writeFile(join(book, "chapters/0001.md"), monday);
+      const day = (min: number) => ({ unit: "day" as const, min, max: min });
+      const before = project({ ledgers: [ledgerOf({ chapter: 1, text: monday, committedAt: "2026-10-17T00:00:00.000Z", entries: [{ kind: "time", review: "auto", start: { offset: day(0), basis: "text", quote: "周一下午" }, weekday: 0, sameDay: true }] })], decisions: [] });
+      const draft = "# 第2章\n\n第二天傍晚，她又来了。第二天一早，雨停了。";
+      const units = splitUnits(draft);
+      const nextId = units.find((unit) => draft.slice(unit.start, unit.end).includes("一早"))!.id;
+      const run = (mainTime: object, timePass: object, judge: object) => {
+        const asked: string[] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before, maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("只记本章东西的去向") || last.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
+            if (last.includes("两位记账员记这一章的时间")) { asked.push(last); return JSON.stringify(judge); }
+            if (last.includes("请只记本章的时间")) return JSON.stringify(timePass);
+            return JSON.stringify({ time: mainTime });
+          },
+        });
+        return { asked, outcome };
+      };
+      const start = { offset: day(1), basis: "text", quote: "第二天傍晚，她又来了。" };
+      const changed = { start: { offset: day(1), basis: "text", startId: 1 }, dayChanges: [{ id: nextId, offset: day(1) }] };
+
+      const judged = run({ start, sameDay: true }, changed, changed);
+      const done = await judged.outcome;
+      if (!done.ok) throw new Error(done.reason);
+      expect(done.parsed.entries.find((entry) => entry.kind === "time")).toMatchObject({ start: { offset: day(1), quote: "第二天傍晚，她又来了。" }, dayChanges: [{ offset: day(1), quote: "第二天一早，雨停了。" }] });
+      expect(done.timeCheck).toEqual({ result: "judged", took: { start: "main", end: "second" } });
+      expect(judged.asked[0]).toContain("不一样的是：章里换没换天");
+
+      const agreed = run({ start, sameDay: true }, { start: { offset: day(1), basis: "text", startId: 1 }, sameDay: true }, {});
+      const same = await agreed.outcome;
+      expect(same.ok && same.timeCheck).toEqual({ result: "agreed" });
+      expect(agreed.asked).toEqual([]);
+
+      // 主对话写的周二和开头隔 1 天对得上；裁出来隔 2 天就和周二对不上：不用。
+      const clash = run({ start, sameDay: true, weekday: "周二" }, { start: { offset: day(2), basis: "judged" }, sameDay: true }, { start: { offset: day(2), basis: "judged" }, sameDay: true });
+      const kept = await clash.outcome;
+      if (!kept.ok) throw new Error(kept.reason);
+      expect(kept.parsed.entries.find((entry) => entry.kind === "time")).toMatchObject({ start: { offset: day(1) }, weekday: 1 });
+      expect(kept.timeCheck).toMatchObject({ result: "kept", failed: expect.stringContaining("星期") });
     } finally {
       await rm(book, { recursive: true, force: true });
     }
@@ -1191,6 +1250,8 @@ describe("记账员跑一章", () => {
             if (messages.at(-1)?.content.includes("【对一遍章末】")) return JSON.stringify({ newItems: [], items: [] });
             const last = messages.at(-1)?.content ?? "";
             if (last.includes("按两种换天规矩对不上")) { asks.push(last); return recheck(); }
+            // 记时间那遍（P5a）这里不管：交回读不了的，照主对话的。
+            if (last.includes("请只记本章的时间")) return "{}";
             return JSON.stringify({ time: { start: { ...first, basis: "judged", quote: "凌晨四点，她醒了。" }, sameDay: true } });
           },
         });

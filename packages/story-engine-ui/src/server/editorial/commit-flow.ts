@@ -61,6 +61,7 @@ import { itemIssueTexts, itemTexts, type ItemTexts } from "../book/item-views.js
 import { reopenableItems } from "./keeper-context.js";
 import { droppedItemRefs, type KeeperDrop } from "./keeper-parse.js";
 import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
+import type { TimeCheck } from "./time-check.js";
 import type { ReaderWaited } from "./reader-progress.js";
 import type { BrainCallModel, ColdCoverage } from "./reader-window.js";
 
@@ -108,6 +109,8 @@ export interface CommitPreview {
   readonly waited?: ReaderWaited;
   /** 记东西那遍的章末对一遍没成（原因）：东西照第一遍记的，不算缺账，操作记录里如实留一句（P4b 2.4）。 */
   readonly itemCheckFailed?: string;
+  /** 记时间那遍和主对话对一下的结果（P5a 2.2）：只进操作记录，不给作者看。 */
+  readonly timeCheck?: TimeCheck;
 }
 
 export type PrepareFailureCode = "book_unsettled" | "basis_changed" | "not_imported" | "chapter_gap" | "keeper_failed" | "empty_text";
@@ -499,6 +502,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
     ...(missingKinds.length > 0 ? { missingKinds } : {}),
     ...(keeper.itemCheck?.failed ? { itemCheckFailed: keeper.itemCheck.failed } : {}),
+    ...(keeper.timeCheck ? { timeCheck: keeper.timeCheck } : {}),
     ...extra,
   };
 }
