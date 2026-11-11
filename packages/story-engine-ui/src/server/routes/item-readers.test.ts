@@ -123,6 +123,10 @@ describe("东西在哪：读的人拿到的材料", () => {
     expect(context.text).toMatch(/I\d 铁盒 · 现在：在樟木箱里/u);
     expect(context.text).toMatch(/ {3}F\d+ 盖上刻的数：一二七（第 2 章，不会变）/u);
     expect([...context.itemHandles.values()].sort()).toEqual(projection.items.map((item) => item.id).sort());
+    // 「最近」那句只给记东西那遍：主对话（时间、事实、线索）的材料不带它。
+    expect(context.itemText).toMatch(/I\d 借据 · 现在：[^\n]*· 头回：第 1 章「沈知秋怀里揣着借据」 · 最近：第 [23] 章「/u);
+    expect(context.text).not.toContain("最近：第");
+    expect(context.text).toMatch(/I\d 借据 · 现在：[^\n]*· 头回：第 1 章「沈知秋怀里揣着借据」\n/u);
   });
 
   it("数字核对：主体是东西的事实不核（正文那个数说的是哪一样拿不到绑定）", async () => {

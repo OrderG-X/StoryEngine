@@ -218,14 +218,14 @@ function itemSection(
   handles: Map<string, string>,
   factHandles: Map<string, string>,
   names: Map<string, string>,
-): { text: string; omitted: number } {
+): { text: string; itemText: string; omitted: number } {
   // 全书不超过上限全列；多了按本章正文的字、拿着它的人、最近动过的挑，带上装着它们的，同名整组留。
   const { picked, omitted } = pickItems(projection, { texts: [draft], recentChapters: ITEM_RECENT_CHAPTERS, listAllUpTo: MAX_PROMPT_ITEMS });
-  if (picked.length === 0) return { text: "", omitted: 0 };
+  if (picked.length === 0) return { text: "", itemText: "", omitted: 0 };
   const texts = itemTexts(projection.items);
   const facts = itemFacts(projection);
   let factNo = factHandles.size;
-  const lines = picked.flatMap((item, index) => {
+  const rows = picked.map((item, index) => {
     const handle = `I${index + 1}`;
     handles.set(handle, item.id);
     names.set(handle, texts.label(item.id));
@@ -233,20 +233,20 @@ function itemSection(
     // 最近一次写它在哪那句（和头回不是同一条才给）：同名的几样靠它分（P4b 2.5，「密封袋。」这种头回分不出）。
     const latest = [...item.history].reverse().find((step) => step.quote && step.entry !== item.firstSeen?.entry);
     const last = latest?.quote ? ` · 最近：第 ${latest.chapter} 章「${latest.quote}」` : "";
-    const head = `${handle} ${itemLine(item, texts)}${item.card ? " · 设定卡上有" : ""}${first}${last}`;
+    const head = `${handle} ${itemLine(item, texts)}${item.card ? " · 设定卡上有" : ""}${first}`;
     const under = (facts.get(item.id) ?? []).map((fact) => {
       const factHandle = `F${(factNo += 1)}`;
       factHandles.set(factHandle, fact.id);
       names.set(factHandle, fact.text);
       return `   ${factHandle} ${fact.attribute ?? ""}：${fact.value ?? fact.text}（第 ${fact.chapter} 章，${fact.nature === "hard" ? "不会变" : "会变"}）`;
     });
-    return [head, ...under];
+    return { head, last, under };
   });
   const more = omitted > 0 ? `\n（另有 ${omitted} 样东西没列：本章正文没出现它们的叫法、拿着它们的人也没出现、最近 ${ITEM_RECENT_CHAPTERS} 章没动过。本章写到的东西这里找不到的，当新的写进 newItems）` : "";
-  return {
-    text: `【已有的东西（本章写到的是其中哪样就写 I 号；同名不一定是同一样，看头回那句和现在在哪）】\n${lines.join("\n")}${more}`,
-    omitted,
-  };
+  const section = (withLast: boolean): string =>
+    `【已有的东西（本章写到的是其中哪样就写 I 号；同名不一定是同一样，看头回那句和现在在哪）】\n${rows.flatMap((row) => [`${row.head}${withLast ? row.last : ""}`, ...row.under]).join("\n")}${more}`;
+  // 「最近」那句只给记东西那遍：记账员主对话（时间、事实、线索）的材料和 P4b 之前一字不差（2026-11-11 评测：多了这句，时间那项一跑掉了）。
+  return { text: section(false), itemText: section(true), omitted };
 }
 
 function reopenItemSection(reopenable: readonly ReopenableItem[], handles: Map<string, string>, names: Map<string, string>): string {
@@ -290,7 +290,7 @@ export function buildKeeperContext(
   const reopenItemsText = reopenItemSection(reopenItems, reopenItemHandles, handleNames);
   const cast = [castSection(projection), cardCastSection(projection, cards)];
   const sections = [...cast, threads.text, reopen, facts.text, items.text, timelineSection(projection)].filter((part) => part.length > 0);
-  const itemSections = [...cast, facts.text, items.text, reopenItemsText].filter((part) => part.length > 0);
+  const itemSections = [...cast, facts.text, items.itemText, reopenItemsText].filter((part) => part.length > 0);
   return {
     text: sections.join("\n\n"),
     itemText: itemSections.join("\n\n"),
