@@ -1223,7 +1223,8 @@ function changesInSegment(time: TimeInput, draft: string): DayChange[] {
 /** 这几次换天主对话都记过（同一句、同样隔几天，记了几次算几次）。 */
 function withinChanges(changes: readonly DayChange[], main: readonly DayChange[]): boolean {
   const side = (offset: TimeOffset | undefined) => (offset ? [offset.unit, offset.min ?? null, offset.max ?? null] : null);
-  const keyOf = (change: DayChange): string => JSON.stringify([change.quote ?? "", side(change.offset), side(change.byBoundary?.midnight), side(change.byBoundary?.dawn)]);
+  // 只写一个 offset = 两种规矩一样：展开成两份再比（和 byBoundary 写两份一样的是同一条）。
+  const keyOf = (change: DayChange): string => JSON.stringify([change.quote ?? "", side(change.byBoundary?.midnight ?? change.offset), side(change.byBoundary?.dawn ?? change.offset)]);
   const left = new Map<string, number>();
   for (const change of main) left.set(keyOf(change), (left.get(keyOf(change)) ?? 0) + 1);
   return changes.every((change) => {

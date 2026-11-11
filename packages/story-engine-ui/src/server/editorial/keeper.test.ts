@@ -1224,6 +1224,13 @@ describe("记账员跑一章", () => {
         expect(more.time?.kind === "time" && more.time.dayChanges).toHaveLength(1);
         expect(more.check).toMatchObject({ result: "kept", failed: expect.stringContaining("段里") });
       }
+      // 同一句、同样隔一天，另一遍写成两种规矩各一份：就是主对话记过的那条，开头照常裁。
+      const sameChange = await run(twice, once, (units) => ({
+        start: { offset: day(0), basis: "text", startId: 1 },
+        dayChanges: [{ id: idOf(twice, units, "第二天", 0), byBoundary: { midnight: day(1), dawn: day(1) } }],
+      }));
+      expect(sameChange.check).toEqual({ result: "judged", took: { start: "second", end: "main" } });
+      expect(sameChange.time).toMatchObject({ start: { offset: day(0) }, dayChanges: [{ offset: day(1), quote: "第二天，雨停了。" }] });
 
       // 上一章结尾周一，正文写周二：隔 2～4 天一天也对不上。
       const tuesday = "# 第2章\n\n周二上午，她又来了。";
