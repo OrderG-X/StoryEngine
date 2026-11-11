@@ -163,7 +163,8 @@ function mapItemRefs(root: Raw, fn: (handle: string) => string): Raw {
       return handle ? fn(handle) : value;
     }
     if (!isRecord(value)) return value;
-    const key = value.item !== undefined ? "item" : value.id !== undefined ? "id" : undefined;
+    // 和解析 itemRefOf 同一个取法：item ?? id（item 写成 null 就看 id）。
+    const key = value.item !== undefined && value.item !== null ? "item" : value.id !== undefined && value.id !== null ? "id" : undefined;
     return key ? { ...value, [key]: ref(value[key]) } : value;
   };
   const place = (value: unknown): unknown => {

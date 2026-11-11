@@ -113,6 +113,18 @@ describe("章末对一遍并回去：号不串", () => {
     expect((clash.root.items as { item: string; to: unknown }[])[1]).toMatchObject({ item: "N1", to: { person: "N1" } });
   });
 
+  it("号写在 id 上、item 写成 null：和解析一样取 id，占号、换号都算它", () => {
+    const merged = mergeItemCheck(first, JSON.stringify({
+      newItems: [{ tag: "N1", name: "铁盒", unit: unit("铁盒"), by: "narration" }],
+      items: [{ item: { item: null, id: "N1", as: "铁盒" }, op: "at", to: { place: "柜里" }, unit: unit("铁盒"), by: "narration" }],
+    }))!;
+    const { checked, view } = projected(merged.root);
+    expect(checked.rejected).toEqual([]);
+    expect(view.items.find((item) => item.name === "铜钥匙")?.now).toMatchObject({ kind: "known", place: { text: "桌上" } });
+    expect(view.items.find((item) => item.name === "铁盒")?.now).toMatchObject({ kind: "known", place: { text: "柜里" } });
+    expect(nextNewTag({ items: [{ item: { item: null, id: "N7" }, op: "at" }] })).toBe(8);
+  });
+
   it("补问交单个对象当一条；交空的第一遍原样（第一遍只交了单个对象的也不丢）", () => {
     const extra = { item: "N1", op: "move", to: { person: "甲" }, by: "narration", unit: unit("铜钥匙") };
     const merged = mergeItemCheck(first, JSON.stringify({ items: extra }))!;
